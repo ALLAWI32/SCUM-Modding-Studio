@@ -17,6 +17,7 @@ public sealed partial class EditState
 {
     private readonly Dictionary<string, CloneAssetOp> _clones = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<(string Package, string Export, string Path), AssetValueOverride> _values = new(ValueKeyComparer.Instance);
+    private readonly Dictionary<string, string> _replacements = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Clones that exist, keyed by their new primary package.</summary>
     public IReadOnlyCollection<CloneAssetOp> AssetClones => _clones.Values;
@@ -28,9 +29,16 @@ public sealed partial class EditState
     public IReadOnlyList<string> ChangedAssets =>
         _clones.Values.SelectMany(c => c.Packages.Select(p => p.New))
             .Concat(_values.Values.Select(v => v.Package))
+            .Concat(_replacements.Keys)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
             .ToList();
+
+    /// <summary>Stock packages drawn as another one (see <see cref="ReplaceAssetOp"/>): package → its replacement.</summary>
+    public IReadOnlyDictionary<string, string> AssetReplacements => _replacements;
+
+    /// <summary>What replaces <paramref name="package"/>, or null when it is the game's own.</summary>
+    public string? GetReplacement(string package) => _replacements.GetValueOrDefault(package);
 
     /// <summary>The clone that created <paramref name="packagePath"/> (any package of the family), or null.</summary>
     public CloneAssetOp? FindCloneOf(string packagePath) =>
@@ -90,6 +98,18 @@ public sealed partial class EditState
                 }
 
                 return null;
+            case ReplaceAssetOp replace:
+                if (string.Equals(replace.Package, replace.With, StringComparison.OrdinalIgnoreCase))
+                {
+                    return $"{replace.Package} cannot replace itself.";
+                }
+
+                if (!string.Equals(GetReplacement(replace.Package), replace.Old, StringComparison.OrdinalIgnoreCase))
+                {
+                    return $"{replace.Package} is not replaced as expected (edit is out of date).";
+                }
+
+                return string.Equals(replace.Old, replace.With, StringComparison.OrdinalIgnoreCase) ? "Nothing changes." : null;
             default:
                 return $"Unsupported operation {op.GetType().Name}.";
         }
@@ -122,13 +142,25 @@ public sealed partial class EditState
                 }
 
                 break;
+            case ReplaceAssetOp replace:
+                if (replace.With is null)
+                {
+                    _replacements.Remove(replace.Package);
+                }
+                else
+                {
+                    _replacements[replace.Package] = replace.With;
+                }
+
+                break;
         }
     }
 
     private IEnumerable<string> DescribeAssets() =>
         _clones.Values.Select(c => $"clone {c.Template.ToLowerInvariant()} -> {c.NewPrimary.ToLowerInvariant()} ({c.Packages.Count})")
             .Concat(_values.Values.Select(v => string.Create(CultureInfo.InvariantCulture,
-                $"value {v.Package.ToLowerInvariant()}|{v.Export}|{v.Path} {v.Base} -> {v.Current}")));
+                $"value {v.Package.ToLowerInvariant()}|{v.Export}|{v.Path} {v.Base} -> {v.Current}")))
+            .Concat(_replacements.Select(r => $"replace {r.Key.ToLowerInvariant()} -> {r.Value.ToLowerInvariant()}"));
 
     private static TunableKind ParseKind(string kind) =>
         Enum.TryParse<TunableKind>(kind, ignoreCase: true, out var k) ? k : TunableKind.Text;

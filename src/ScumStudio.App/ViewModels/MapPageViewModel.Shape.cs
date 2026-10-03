@@ -542,9 +542,10 @@ public sealed partial class MapPageViewModel
             return;
         }
 
-        if (IsBuilding(mesh))
+        if (!IsLong(mesh))
         {
-            // Owner: houses and churches do not bend like bridges and roads (bending a church froze the app); they tilt.
+            // Owner: houses and churches do not bend like bridges and roads (bending a church froze the app); they tilt,
+            // and "Fit to ground" lays them on a slope.
             BendNote = Loc.T("Map.Shape.NoBendBuilding");
             return;
         }
@@ -587,11 +588,12 @@ public sealed partial class MapPageViewModel
     private static bool IsSingleMesh(ActorItemViewModel item) =>
         item.Actor.Kind == ActorKind.StaticMeshActor && item.Actor.StaticMeshPath is not null;
 
-    // ponytail: the game's building folder and a boxy footprint; a long wall piece kept in that folder still bends.
-    /// <summary>True for a house, church or hall: a mesh of the game's building folder that is not long and thin.</summary>
-    private bool IsBuilding(string mesh) =>
-        mesh.Contains("/Models/Buildings/", StringComparison.OrdinalIgnoreCase)
-        && (MeshBounds(mesh) is not { } b || MathF.Max(b.Size.X, b.Size.Y) < 4f * MathF.Min(b.Size.X, b.Size.Y));
+    // ponytail: proportions only. Owner: a house outside the game's building folder bent like a bridge; what bends is long
+    // and narrow (a wall, fence, pipe or bridge), and in the building folder only a long wall piece.
+    /// <summary>True for a mesh at least 2.5 times as long as it is wide (6 times in the game's building folder).</summary>
+    private bool IsLong(string mesh) =>
+        MeshBounds(mesh) is { } b
+        && MathF.Max(b.Size.X, b.Size.Y) >= (mesh.Contains("/Models/Buildings/", StringComparison.OrdinalIgnoreCase) ? 6f : 2.5f) * MathF.Min(b.Size.X, b.Size.Y);
 
     /// <summary>Bounds of a mesh the scene has (prepared with it or loaded later).</summary>
     private BoundingBox? MeshBounds(string? meshPath)
@@ -787,15 +789,9 @@ public sealed partial class MapPageViewModel
         var bends = new Dictionary<uint, IReadOnlyList<SplineMeshParams>>();
         if (_services.Projects.Current?.State is { Bends.Count: > 0 } state)
         {
-            var byReference = new Dictionary<ActorRef, ActorItemViewModel>(ActorRef.Comparer);
-            foreach (var a in AllActors)
-            {
-                byReference.TryAdd(a.Reference, a);
-            }
-
             foreach (var (actor, shape) in state.Bends)
             {
-                if (byReference.TryGetValue(actor, out var item) && MeshBounds(item.Actor.StaticMeshPath) is { } bounds)
+                if (ActorOf(actor) is { } item && MeshBounds(item.Actor.StaticMeshPath) is { } bounds)
                 {
                     bends[item.SelectableId] = BendShape.Pieces(bounds, CurrentRootTransform(item).Scale, shape);
                 }
@@ -809,7 +805,7 @@ public sealed partial class MapPageViewModel
         {
             foreach (var (actor, component, shape) in current.SegmentSways)
             {
-                if (AllActors.FirstOrDefault(a => ActorRef.Comparer.Equals(a.Reference, actor)) is { } item
+                if (ActorOf(actor) is { } item
                     && item.Actor.FindComponent(component) is { SplineMesh: { } spline } found)
                 {
                     pieces[InstanceKey.Of(item.SelectableId, found.Name, InstanceKey.Segment)] = SplineEnds.Shape(spline, shape.Sway1, shape.Sway2, shape.Start, shape.End);

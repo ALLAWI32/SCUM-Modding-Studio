@@ -159,11 +159,15 @@ public sealed class SceneNode
     public bool Remove(SceneNode child)
     {
         ArgumentNullException.ThrowIfNull(child);
-        if (!_children.Remove(child))
+
+        // From the end: what is taken out again is mostly what was added last (copies), not the level's own nodes.
+        var index = _children.LastIndexOf(child);
+        if (index < 0)
         {
             return false;
         }
 
+        _children.RemoveAt(index);
         child.Parent = null;
         Touch(structural: true);
         return true;

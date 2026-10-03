@@ -65,6 +65,12 @@ public static class DataTableRows
     /// The payload with a row added as a copy of <paramref name="sourceRow"/> (after the last row);
     /// the row name is <paramref name="newRowName"/> in the (possibly grown) name table <paramref name="names"/>.
     /// </summary>
+    /// <param name="package">The package the payload belongs to.</param>
+    /// <param name="payload">The DataTable export's payload.</param>
+    /// <param name="exportIndex">The DataTable export.</param>
+    /// <param name="sourceRow">The row to copy.</param>
+    /// <param name="newRowName">The copy's row name.</param>
+    /// <param name="names">The package's name table.</param>
     /// <param name="edit">Changes the copied row's bytes before it goes in (offsets: the source row's tag offsets minus its <see cref="DataTableRow.Offset"/>).</param>
     /// <exception cref="InvalidOperationException">The source row is missing or the new row exists.</exception>
     public static byte[] AddRowCopy(CookedPackage package, byte[] payload, int exportIndex, string sourceRow, FNameRef newRowName, IReadOnlyList<string> names,

@@ -67,6 +67,32 @@ public sealed record RemoveAssetCloneOp(string NewPrimary, EditOp Original) : Ed
 }
 
 /// <summary>
+/// Puts another stock asset in place of one (owner: snow, sand or dry grass on the ground, other trees on the map): the
+/// mod carries a copy of <paramref name="With"/> under <paramref name="Package"/>'s path, so everything that uses the
+/// package draws the other one. Same class only (a ground texture for a ground texture, a tree mesh for a tree mesh).
+/// </summary>
+/// <param name="Package">The stock package replaced.</param>
+/// <param name="Old">What replaced it before this edit (null: the game's own).</param>
+/// <param name="With">What replaces it now (null: the game's own again).</param>
+public sealed record ReplaceAssetOp(string Package, string? Old, string? With) : EditOp
+{
+    /// <inheritdoc />
+    public override EditOp Inverse() => this with { Old = With, With = Old };
+
+    /// <inheritdoc />
+    public override string Describe() => With is null ? $"Restore {Short(Package)}" : $"Replace {Short(Package)} with {Short(With)}";
+
+    /// <inheritdoc />
+    public override IReadOnlyList<string> GetTouchedLevels() => [];
+
+    /// <inheritdoc />
+    public override IReadOnlyList<string> GetTouchedAssets() => [Package];
+
+    /// <inheritdoc />
+    public override ActorRef? GetPrimaryTarget() => null;
+}
+
+/// <summary>
 /// Sets one stored value of a vehicle/item package (a <c>Tunable</c>: damage, rate of fire, wheel radius, weight, caption…).
 /// Values are invariant text; <paramref name="Old"/> is the value before this edit. The package is a stock package
 /// (overridden by the mod) or a package created by a <see cref="CloneAssetOp"/>.

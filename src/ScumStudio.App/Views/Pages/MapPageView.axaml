@@ -70,15 +70,17 @@
               <Button.Flyout>
                 <Flyout Placement="BottomEdgeAlignedLeft">
                   <StackPanel x:Name="ShapePanel" Spacing="8" Width="380">
-                    <Grid ColumnDefinitions="*,Auto">
+                    <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="6">
                       <TextBlock Text="{Tr Map.Shape}" Classes="h3" VerticalAlignment="Center" />
-                      <Button Grid.Column="1" Classes="small" Content="{Tr Map.Shape.Reset}" Command="{Binding ResetShapeCommand}" ToolTip.Tip="{Tr Map.Shape.Reset.Tip}" />
+                      <Button Grid.Column="1" Classes="small" x:Name="FitToGroundButton" Content="{Tr Map.Ground}" Command="{Binding FitToGroundCommand}"
+                              IsVisible="{Binding CanScale}" ToolTip.Tip="{Tr Map.Ground.Tip}" />
+                      <Button Grid.Column="2" Classes="small" Content="{Tr Map.Shape.Reset}" Command="{Binding ResetShapeCommand}" ToolTip.Tip="{Tr Map.Shape.Reset.Tip}" />
                     </Grid>
                     <StackPanel Spacing="2">
-                      <Grid ColumnDefinitions="70,*,58" ColumnSpacing="8" IsVisible="{Binding CanScale}">
+                      <Grid ColumnDefinitions="70,*,58" ColumnSpacing="8" IsVisible="{Binding CanBend}">
                         <TextBlock Text="{Tr Map.Shape.Bend}" Classes="caption" VerticalAlignment="Center" />
                         <Slider Grid.Column="1" x:Name="ShapeBendSlider" Minimum="-180" Maximum="180" SmallChange="1" LargeChange="15"
-                                Value="{Binding ShapeBend}" IsEnabled="{Binding CanBend}" ToolTip.Tip="{Tr Map.Shape.Bend.Tip}" />
+                                Value="{Binding ShapeBend}" ToolTip.Tip="{Tr Map.Shape.Bend.Tip}" />
                         <TextBlock Grid.Column="2" Text="{Binding ShapeBendText}" Classes="caption mono" VerticalAlignment="Center" HorizontalAlignment="Right" />
                       </Grid>
                       <Grid ColumnDefinitions="70,*,58" ColumnSpacing="8" IsVisible="{Binding CanSway}">
@@ -144,6 +146,59 @@
                     </StackPanel>
                     <TextBlock Text="{Tr Map.Shape.HandlesHint}" Classes="caption wrap" IsVisible="{Binding CanSway}" />
                     <TextBlock Text="{Binding BendNote}" Classes="caption wrap" IsVisible="{Binding HasBendNote}" />
+                  </StackPanel>
+                </Flyout>
+              </Button.Flyout>
+            </Button>
+            <!-- The Landscape menu: the whole island's ground look, tree swaps, objects laid on the ground -->
+            <Button Classes="ghost" Padding="8,4" x:Name="LandscapeButton" IsVisible="{Binding HasView}" ToolTip.Tip="{Tr Map.Landscape.Tip}">
+              <StackPanel Orientation="Horizontal" Spacing="5">
+                <c:GlyphIcon Kind="Icon.World" IconSize="13" />
+                <TextBlock Text="{Tr Map.Landscape}" />
+              </StackPanel>
+              <Button.Flyout>
+                <Flyout Placement="BottomEdgeAlignedLeft">
+                  <StackPanel x:Name="LandscapePanel" Spacing="10" Width="380">
+                    <StackPanel Spacing="4">
+                      <TextBlock Text="{Tr Map.Looks.Title}" Classes="h3" />
+                      <TextBlock Text="{Tr Map.Looks.Caption}" Classes="caption wrap" />
+                      <ItemsControl ItemsSource="{Binding GroundLookOptions}">
+                        <ItemsControl.ItemsPanel>
+                          <ItemsPanelTemplate><WrapPanel ItemSpacing="6" LineSpacing="6" /></ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                          <DataTemplate x:DataType="vm:GroundLookOption">
+                            <RadioButton GroupName="GroundLook" Content="{Binding Label}" IsChecked="{Binding IsCurrent, Mode=OneWay}" Command="{Binding Choose}" ToolTip.Tip="{Tr Map.Looks.Caption}" />
+                          </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                      </ItemsControl>
+                    </StackPanel>
+                    <Border Classes="hsep" />
+                    <StackPanel Spacing="6">
+                      <TextBlock Text="{Tr Map.Trees.Title}" Classes="h3" />
+                      <TextBlock Text="{Tr Map.Trees.Caption}" Classes="caption wrap" />
+                      <Grid ColumnDefinitions="*,Auto,*" ColumnSpacing="6">
+                        <ComboBox x:Name="TreeToSwapBox" ItemsSource="{Binding Trees}" SelectedItem="{Binding TreeToSwap}" PlaceholderText="{Tr Map.Trees.Pick}" HorizontalAlignment="Stretch" ToolTip.Tip="{Tr Map.Trees.Pick.Tip}" />
+                        <TextBlock Grid.Column="1" Text="→" VerticalAlignment="Center" />
+                        <ComboBox Grid.Column="2" x:Name="TreeSwapWithBox" ItemsSource="{Binding Trees}" SelectedItem="{Binding TreeSwapWith}" PlaceholderText="{Tr Map.Trees.PickWith}" HorizontalAlignment="Stretch" ToolTip.Tip="{Tr Map.Trees.PickWith.Tip}" />
+                      </Grid>
+                      <Button Classes="accent small" HorizontalAlignment="Right" Content="{Tr Map.Trees.Swap}" Command="{Binding SwapTreeCommand}" ToolTip.Tip="{Tr Map.Trees.Swap.Tip}" />
+                      <ItemsControl ItemsSource="{Binding TreeSwaps}" IsVisible="{Binding HasTreeSwaps}">
+                        <ItemsControl.ItemTemplate>
+                          <DataTemplate x:DataType="vm:TreeSwapRow">
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6" Margin="0,2">
+                              <TextBlock Text="{Binding Text}" Classes="caption mono" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                              <Button Grid.Column="1" Classes="small" Content="{Tr Map.Trees.PutBack}" Command="{Binding PutBack}" ToolTip.Tip="{Tr Map.Trees.PutBack.Tip}" />
+                            </Grid>
+                          </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                      </ItemsControl>
+                    </StackPanel>
+                    <Border Classes="hsep" />
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                      <TextBlock Text="{Tr Map.Ground.Tip}" Classes="caption wrap" VerticalAlignment="Center" />
+                      <Button Grid.Column="1" Classes="small" Content="{Tr Map.Ground}" Command="{Binding FitToGroundCommand}" VerticalAlignment="Center" ToolTip.Tip="{Tr Map.Ground.Tip}" />
+                    </Grid>
                   </StackPanel>
                 </Flyout>
               </Button.Flyout>
@@ -234,7 +289,7 @@
     </Border>
 
     <!-- ===== Body ===== -->
-    <Grid x:Name="MapBody" Margin="24,0,24,20" ColumnDefinitions="300,12,*,12,320">
+    <Grid x:Name="MapBody" Margin="24,0,24,20" ColumnDefinitions="250,12,*,12,320">
 
       <!-- World tree -->
       <Border Grid.Column="0" Classes="panel" x:Name="LeftPanel">

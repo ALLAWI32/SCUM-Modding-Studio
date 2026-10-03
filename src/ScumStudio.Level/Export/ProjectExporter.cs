@@ -956,7 +956,7 @@ public sealed class ProjectExporter
         var edits = state.AssetValueOverrides
             .GroupBy(v => v.Package, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => (IReadOnlyList<TunableEdit>)g.Select(v => new TunableEdit(v.Export, v.Path, v.Current)).ToList(), StringComparer.OrdinalIgnoreCase);
-        return new AssetModRequest(clones, edits);
+        return new AssetModRequest(clones, edits) { Replacements = new Dictionary<string, string>(state.AssetReplacements, StringComparer.OrdinalIgnoreCase) };
     }
 
     private static void ResetDirectory(string directory)

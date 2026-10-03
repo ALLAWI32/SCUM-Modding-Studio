@@ -138,22 +138,17 @@ public sealed partial class ProjectSession : ObservableObject, IDisposable
     {
         _services.Dispatcher.Invoke(() =>
         {
-            History.Clear();
             var project = Current;
             if (project is null)
             {
+                History.Clear();
                 CanUndo = CanRedo = false;
                 PendingLevelCount = 0;
                 HistorySummary = Localization.Loc.T("History.NoProject");
             }
             else
             {
-                var items = project.History;
-                for (var i = items.Count - 1; i >= 0; i--)
-                {
-                    History.Add(new HistoryItemViewModel(items[i]));
-                }
-
+                SyncHistory(project.History);
                 CanUndo = project.CanUndo;
                 CanRedo = project.CanRedo;
                 PendingLevelCount = project.PendingExportSet.Count;
@@ -177,6 +172,45 @@ public sealed partial class ProjectSession : ObservableObject, IDisposable
             rows.ForEach(History.Add);
             OnPropertyChanged(nameof(DisplayName));
         });
+    }
+
+    /// <summary>
+    /// Shows <paramref name="items"/> newest first, keeping the rows that did not change: an edit adds one row and an undo
+    /// changes one, where rebuilding a thousand rows after every edit froze the app (owner, ~980 edits).
+    /// </summary>
+    private void SyncHistory(IReadOnlyList<HistoryItem> items)
+    {
+        var shown = History.ToDictionary(h => h.Item.Seq);
+        var rows = new List<HistoryItemViewModel>(items.Count);
+        for (var i = items.Count - 1; i >= 0; i--)
+        {
+            var item = items[i];
+            rows.Add(shown.TryGetValue(item.Seq, out var row) && row.Item.Status == item.Status && ReferenceEquals(row.Item.Op, item.Op) // same project
+                ? row
+                : new HistoryItemViewModel(item));
+        }
+
+        var start = 0;
+        while (start < rows.Count && start < History.Count && ReferenceEquals(rows[start], History[start]))
+        {
+            start++;
+        }
+
+        var end = 0;
+        while (end < rows.Count - start && end < History.Count - start && ReferenceEquals(rows[^(end + 1)], History[History.Count - end - 1]))
+        {
+            end++;
+        }
+
+        for (var i = History.Count - end - 1; i >= start; i--)
+        {
+            History.RemoveAt(i);
+        }
+
+        for (var i = start; i < rows.Count - end; i++)
+        {
+            History.Insert(i, rows[i]);
+        }
     }
 
     private static string Summarize(Project project)

@@ -14,8 +14,11 @@ namespace ScumStudio.Modding;
 /// <param name="Edits">Package path → edits of that package (a clone's new path, or a stock package to override).</param>
 public sealed record AssetModRequest(IReadOnlyList<ClonePlan> Clones, IReadOnlyDictionary<string, IReadOnlyList<TunableEdit>> Edits)
 {
+    /// <summary>Stock package → the stock package written in its place (ground textures, tree meshes).</summary>
+    public IReadOnlyDictionary<string, string> Replacements { get; init; } = new Dictionary<string, string>();
+
     /// <summary>True when nothing is requested.</summary>
-    public bool IsEmpty => Clones.Count == 0 && Edits.Count == 0;
+    public bool IsEmpty => Clones.Count == 0 && Edits.Count == 0 && Replacements.Count == 0;
 }
 
 /// <summary>A finished package to stage under <c>SCUM/Content/…</c>.</summary>
@@ -103,6 +106,22 @@ public static class AssetModBuilder
         }
 
         AddTradeRows(catalog, request.Clones, built, warnings);
+
+        // Another stock asset under a stock path (owner: snow on the ground, pines where the oaks stand): a rename-copy.
+        foreach (var (target, with) in request.Replacements)
+        {
+            var path = PackageMap.Normalize(target);
+            try
+            {
+                var source = ModdableAssets.ReadPackage(catalog, with);
+                var copy = PackageCloner.Clone(source, with, new PackageMap([new KeyValuePair<string, string>(with, path)]));
+                built[path] = (CookedPackage.Parse(copy.Bytes.UAsset, copy.Bytes.UExp, copy.UBulk, path), copy.Bytes, false);
+            }
+            catch (Exception ex) when (ex is FileNotFoundException or FormatException or InvalidDataException or IOException or InvalidOperationException or ArgumentException)
+            {
+                warnings.Add($"{path}: not replaced with {with} ({ex.Message}).");
+            }
+        }
 
         var applied = new List<(string, string, string, string)>();
         foreach (var (packagePath, edits) in request.Edits)

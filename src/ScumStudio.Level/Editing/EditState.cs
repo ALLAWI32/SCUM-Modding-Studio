@@ -23,7 +23,7 @@ public sealed partial class EditState
     /// <summary>True when no operation has a net effect.</summary>
     public bool IsEmpty =>
         _deletedActors.Count == 0 && _deletedInstances.Count == 0 && _transforms.Count == 0 && _instanceTransforms.Count == 0 && _added.Count == 0
-        && _clones.Count == 0 && _values.Count == 0 && _bends.Count == 0 && _segmentSways.Count == 0;
+        && _clones.Count == 0 && _values.Count == 0 && _replacements.Count == 0 && _bends.Count == 0 && _segmentSways.Count == 0;
 
     /// <summary>Deleted actors (pristine or added).</summary>
     public IReadOnlyCollection<ActorRef> DeletedActors => _deletedActors;
@@ -196,7 +196,7 @@ public sealed partial class EditState
                 return IsDeleted(di.Target) ? $"{di.Target} is already deleted." : null;
             case RestoreInstanceOp ri:
                 return _deletedInstances.Contains(ri.Target) ? null : $"{ri.Target} is not deleted.";
-            case CloneAssetOp or RemoveAssetCloneOp or SetAssetValueOp:
+            case CloneAssetOp or RemoveAssetCloneOp or SetAssetValueOp or ReplaceAssetOp:
                 return ValidateAsset(op);
             case BatchOp batch:
                 if (batch.Ops.Count == 0)
@@ -308,7 +308,7 @@ public sealed partial class EditState
             case RestoreInstanceOp ri:
                 _deletedInstances.Remove(ri.Target);
                 break;
-            case CloneAssetOp or RemoveAssetCloneOp or SetAssetValueOp:
+            case CloneAssetOp or RemoveAssetCloneOp or SetAssetValueOp or ReplaceAssetOp:
                 ApplyAsset(op);
                 break;
             case BatchOp batch:

@@ -29,7 +29,7 @@ public sealed partial class MapPageViewModel
     /// <summary>Adds the object under a Ctrl+click to the multi-selection, or takes it out (the selected object joins first).</summary>
     public void ToggleGroup(uint id, InstanceKey? instance)
     {
-        if (AllActors.FirstOrDefault(a => a.SelectableId == id) is not { } item)
+        if (ActorOf(id) is not { } item)
         {
             return;
         }
@@ -72,19 +72,13 @@ public sealed partial class MapPageViewModel
             return;
         }
 
-        var byReference = new Dictionary<ActorRef, ActorItemViewModel>(ActorRef.Comparer);
-        foreach (var a in AllActors)
-        {
-            byReference.TryAdd(a.Reference, a);
-        }
-
-        _group.RemoveAll(m => !byReference.TryGetValue(m.Actor, out var a) || a.IsDeleted);
+        _group.RemoveAll(m => ActorOf(m.Actor) is not { IsDeleted: false });
         var ids = new List<uint>();
         var instances = new List<InstanceKey>();
         var worlds = new List<GroupWorld>();
         foreach (var member in _group)
         {
-            var item = byReference[member.Actor];
+            var item = ActorOf(member.Actor)!;
             if (member.Component is null)
             {
                 ids.Add(item.SelectableId);
@@ -116,7 +110,7 @@ public sealed partial class MapPageViewModel
         var result = new List<(GroupMember, ActorItemViewModel, SelectedInstance?)>();
         foreach (var member in _group)
         {
-            if (AllActors.FirstOrDefault(a => ActorRef.Comparer.Equals(a.Reference, member.Actor)) is not { } item)
+            if (ActorOf(member.Actor) is not { } item)
             {
                 continue;
             }
@@ -240,7 +234,7 @@ public sealed partial class MapPageViewModel
         {
             foreach (var (member, world) in members)
             {
-                if (AllActors.FirstOrDefault(a => ActorRef.Comparer.Equals(a.Reference, member.Actor)) is not { } item)
+                if (ActorOf(member.Actor) is not { } item)
                 {
                     continue;
                 }

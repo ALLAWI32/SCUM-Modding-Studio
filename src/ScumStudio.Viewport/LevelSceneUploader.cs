@@ -25,6 +25,8 @@ public sealed class LevelScene : IDisposable
     private readonly Dictionary<string, MeshHandle> _meshHandles;
     private readonly Dictionary<uint, List<ScenePlacement>> _byId;
     private readonly Dictionary<uint, List<(SceneNode Node, ScenePlacement? Source)>> _clones = [];
+    private readonly Dictionary<uint, (uint SourceId, string? MeshPath)> _cloneSources = [];
+    private Dictionary<uint, List<SceneNode>>? _nodesById;
     private readonly HashSet<uint> _movedActors = [];
     private readonly Dictionary<string, GpuTexture> _gpuTextures;
     private readonly Dictionary<string, PreparedMeshAsset> _extraAssets = new(StringComparer.OrdinalIgnoreCase);
@@ -114,7 +116,7 @@ public sealed class LevelScene : IDisposable
             return;
         }
 
-        var nodes = Scene.Nodes.Where(n => n.SelectableId == selectableId && n.Mesh is not null).Take(2).ToList();
+        var nodes = NodesOf(selectableId).Where(n => n.Mesh is not null).Take(2).ToList();
         if (nodes.Count != 1)
         {
             return; // not drawn, or more than one mesh: only single-mesh actors bend
@@ -192,9 +194,9 @@ public sealed class LevelScene : IDisposable
     /// </summary>
     public void SetActorTransform(uint selectableId, FTransform rootWorld)
     {
-        foreach (var node in Scene.Nodes)
+        foreach (var node in NodesOf(selectableId))
         {
-            if (node.SelectableId == selectableId && node.Tag is ScenePlacement placement)
+            if (node.Tag is ScenePlacement placement)
             {
                 node.LocalTransform = UeToGl.ModelMatrix(placement.World.GetRelativeTransform(placement.Actor.WorldTransform) * rootWorld);
             }
@@ -206,9 +208,9 @@ public sealed class LevelScene : IDisposable
     /// <summary>Puts the actor's placements back where the level stores them.</summary>
     public void ResetActorTransform(uint selectableId)
     {
-        foreach (var node in Scene.Nodes)
+        foreach (var node in NodesOf(selectableId))
         {
-            if (node.SelectableId == selectableId && node.Tag is ScenePlacement placement)
+            if (node.Tag is ScenePlacement placement)
             {
                 node.LocalTransform = placement.GlModel;
             }
@@ -218,12 +220,76 @@ public sealed class LevelScene : IDisposable
     }
 
     /// <summary>
+    /// The nodes drawing <paramref name="selectableId"/> (owner: a thousand moved objects froze the app for seconds, each
+    /// looked up by walking every node of the scene).
+    /// </summary>
+    private List<SceneNode> NodesOf(uint selectableId)
+    {
+        if (_nodesById is null)
+        {
+            _nodesById = [];
+            foreach (var node in Scene.Nodes)
+            {
+                if (node.SelectableId != 0)
+                {
+                    Index(node);
+                }
+            }
+        }
+
+        return _nodesById.TryGetValue(selectableId, out var nodes) ? nodes : [];
+    }
+
+    private void Index(SceneNode node)
+    {
+        if (_nodesById is null)
+        {
+            return; // built on first use
+        }
+
+        if (!_nodesById.TryGetValue(node.SelectableId, out var list))
+        {
+            _nodesById[node.SelectableId] = list = [];
+        }
+
+        list.Add(node);
+    }
+
+    /// <summary>
     /// Adds (or moves) a clone of the actor <paramref name="sourceId"/> under the id <paramref name="cloneId"/>, with its
     /// root at <paramref name="rootWorld"/>; the clone's nodes carry placements with the new id, so hiding and picking work.
     /// Returns the number of nodes the clone has (0 when the source has no drawable placement).
     /// </summary>
     public int AddClone(uint cloneId, uint sourceId, FTransform rootWorld, string name, string? meshPath = null)
     {
+        if (_clones.TryGetValue(cloneId, out var drawn) && _cloneSources.GetValueOrDefault(cloneId) == (sourceId, meshPath))
+        {
+            // The same copy somewhere else (a move, or every copy again after a drag): its nodes move, nothing is rebuilt.
+            var moved = new List<ScenePlacement>(drawn.Count);
+            foreach (var (node, source) in drawn)
+            {
+                if (source is null)
+                {
+                    node.LocalTransform = UeToGl.ModelMatrix(rootWorld);
+                    node.Name = name;
+                    continue;
+                }
+
+                var placement = CopyOf(source, cloneId, rootWorld, name);
+                node.LocalTransform = placement.GlModel;
+                node.Name = placement.Name;
+                node.Tag = placement;
+                moved.Add(placement);
+            }
+
+            if (sourceId != 0)
+            {
+                _byId[cloneId] = moved;
+            }
+
+            return drawn.Count;
+        }
+
         RemoveClone(cloneId);
         if (sourceId == 0)
         {
@@ -235,6 +301,8 @@ public sealed class LevelScene : IDisposable
 
             var meshNode = Scene.Add(meshHandle, UeToGl.ModelMatrix(rootWorld), cloneId, name);
             _clones[cloneId] = [(meshNode, null)];
+            _cloneSources[cloneId] = (sourceId, meshPath);
+            Index(meshNode);
             return 1;
         }
 
@@ -252,20 +320,27 @@ public sealed class LevelScene : IDisposable
                 continue;
             }
 
-            var world = source.World.GetRelativeTransform(source.Actor.WorldTransform) * rootWorld;
-            var model = UeToGl.ModelMatrix(world);
-            var slash = source.Name.IndexOf('/');
-            var placement = source with { GlModel = model, World = world, SelectableId = cloneId, Name = slash < 0 ? name : name + source.Name[slash..] };
-            var node = Scene.Add(handle, model, cloneId, placement.Name);
+            var placement = CopyOf(source, cloneId, rootWorld, name);
+            var node = Scene.Add(handle, placement.GlModel, cloneId, placement.Name);
             node.Tag = placement;
             node.MaxDrawDistance = LevelSceneUploader.DrawDistanceOf(placement);
             nodes.Add((node, source));
             placements.Add(placement);
+            Index(node);
         }
 
         _clones[cloneId] = nodes;
+        _cloneSources[cloneId] = (sourceId, meshPath);
         _byId[cloneId] = placements;
         return nodes.Count;
+    }
+
+    /// <summary>The placement of a copy of <paramref name="source"/> whose actor root is at <paramref name="rootWorld"/>.</summary>
+    private static ScenePlacement CopyOf(ScenePlacement source, uint cloneId, FTransform rootWorld, string name)
+    {
+        var world = source.World.GetRelativeTransform(source.Actor.WorldTransform) * rootWorld;
+        var slash = source.Name.IndexOf('/');
+        return source with { GlModel = UeToGl.ModelMatrix(world), World = world, SelectableId = cloneId, Name = slash < 0 ? name : name + source.Name[slash..] };
     }
 
     /// <summary>Moves a clone's root to <paramref name="rootWorld"/> without rebuilding its nodes (drag previews).</summary>
@@ -293,6 +368,8 @@ public sealed class LevelScene : IDisposable
             }
 
             _byId.Remove(cloneId);
+            _cloneSources.Remove(cloneId);
+            _nodesById?.Remove(cloneId);
         }
     }
 
@@ -487,12 +564,9 @@ public sealed class LevelScene : IDisposable
     /// <summary>Hides or shows every node of the actor with <paramref name="selectableId"/> (used to preview deletions).</summary>
     public void SetVisible(uint selectableId, bool visible)
     {
-        foreach (var node in Scene.Nodes)
+        foreach (var node in NodesOf(selectableId))
         {
-            if (node.SelectableId == selectableId)
-            {
-                node.Visible = visible;
-            }
+            node.Visible = visible;
         }
     }
 

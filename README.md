@@ -72,6 +72,7 @@ You need Windows 10 or 11 (x64), SCUM installed, and a graphics card with OpenGL
 | **Bridges, roads and walls** | The **Shape** menu bends a wall, bridge or road piece into a curve or an S, makes it longer, wider, taller, raises a ramp or a hump, lengthens a bridge pylon's legs under the water, and welds an end onto another piece. Pieces made much longer repeat copy after copy. Bent pieces get **real collision** built from the mesh (no invisible walls, no holes), on the client and the server. Houses and churches do not bend: they **tilt** front, back or sideways (up to 90°) and turn. |
 | **Spawns** | Vehicles, planes and boats: the fuel and battery they spawn with (Empty, Half, Full or any range), the chance each part is there, part condition and how many the server allows. Zombies and NPCs: all 73 threat zones (spawn chance, first spawn, cooldown, distance, which groups). Server: zombie and horde amounts, sentries on or off, drones, animals, written into `ServerSettings.ini`. |
 | **Traders** | Every outpost trader on the map, pinned where the NPC stands with the name the server's EconomyOverride.json uses. Move, copy or delete a trader with its counter. Clones of cars, weapons and items are sold by the same traders under their own names, at your price. |
+| **Landscape** | The whole island's ground as snow, desert, autumn or all grass (soft ground and the grass on it; roads and rocks stay), another tree everywhere the game has one, and **Fit to ground** to lay a house on a slope. |
 | **Import mods** | Load someone's pak mod (a map, a landscape, cars) into your project: the app reads it over the game, you edit on top of it, and your exported pak carries it. |
 | **Spawn places on the map** | Every loot point of the game, read from the game files (select one to see what spawns there: shelf food, hunting weapons, military gear …), loot zones, sentries with their patrol paths, bunker creature points, car-shop spots and drop zones show as coloured pins. Spawners move, copy and delete like any object. |
 | **Far view follows your edits** | Delete or move a building and it is cut out of the island's far-view models and the outposts' HLODs too, so it no longer shows from far away. |
@@ -182,6 +183,8 @@ included in this repository.</sub>
   - **Drone** (`Tab`): fly like the in-game drone.
   - **Frame all** / **Frame selection** (`F`), **Last object** (`Backspace`).
   - **Shape**: bend, lengthen, widen, raise, resize the selection (see below).
+  - **Landscape**: the ground look of the whole island (Game, Snow, Desert, Autumn, All grass), tree swaps (an oak
+    drawn as a pine everywhere) and **Fit to ground** for the selection.
   - **Extend** (`Ctrl+E`): lay a copy right after the selected wall, road or tunnel piece; press again to keep building.
   - **Add object**: type or paste an object path (copied from Assets) to place it in front of the camera.
 - **Shape** handles in the 3D view:
@@ -191,8 +194,9 @@ included in this repository.</sub>
     ramp). Brought close to another piece's end, an end **welds** onto it (`Alt`: no weld).
   - **Red squares** at the corners make that side wider or narrower.
   - **Orange arrow** under a pylon or tower: longer legs, the top stays where it is.
-  - **Tilt** and **Turn** sliders lean any object towards its front, back or sides (up to 90°) and turn it; houses,
-    churches and halls tilt instead of bending.
+  - **Tilt** and **Turn** sliders lean any object towards its front, back or sides (up to 90°) and turn it; only long,
+    narrow objects (walls, fences, pipes, bridges) bend; houses, churches and halls tilt instead.
+  - **Fit to ground** lays the object on the slope under it: tilted the way the ground runs, its bottom on the ground.
   - **Straighten** puts it back.
 - **Entities**: the actors of the loaded levels, with a filter; **Delete**, **Delete all…** (same mesh or same class).
 - **Properties**: location, rotation and scale of the selection with **Copy**, **Duplicate** and **Apply transform**.

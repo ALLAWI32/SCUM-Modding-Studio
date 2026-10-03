@@ -165,6 +165,11 @@
     <Setter Property="Background" Value="{DynamicResource StrokeBrush}" />
     <Setter Property="VerticalAlignment" Value="Center" />
   </Style>
+  <!-- Horizontal hairline between sections of a menu panel. -->
+  <Style Selector="Border.hsep">
+    <Setter Property="Height" Value="1" />
+    <Setter Property="Background" Value="{DynamicResource StrokeBrush}" />
+  </Style>
   <Style Selector="GridSplitter">
     <Setter Property="Background" Value="{DynamicResource Bg0Brush}" />
     <Setter Property="MinWidth" Value="1" />

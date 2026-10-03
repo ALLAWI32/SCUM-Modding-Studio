@@ -16,7 +16,7 @@
     <Company>ScumStudio</Company>
     <Product>SCUM Modding Studio</Product>
     <Copyright>Copyright (c) 2026 ALLAWI and contributors</Copyright>
-    <Version>0.2.4</Version>
+    <Version>0.2.5</Version>
     <NeutralLanguage>en</NeutralLanguage>
 
     <!-- XML docs are produced so public-API doc comments are checked; missing-comment warnings stay quiet. -->

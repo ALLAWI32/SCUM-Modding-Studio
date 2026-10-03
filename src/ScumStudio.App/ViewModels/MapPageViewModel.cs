@@ -290,6 +290,42 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
 
     private IReadOnlyList<ActorItemViewModel> _pristineActors = [];
 
+    // Owner: "with about 980 edits it freezes for seconds". Every edit looked actors up by scanning all of them, once per
+    // edited object; these find them at once.
+    private Dictionary<ActorRef, ActorItemViewModel> _pristineByRef = new(ActorRef.Comparer);
+    private Dictionary<ActorRef, ActorItemViewModel> _actorByRef = new(ActorRef.Comparer);
+    private Dictionary<uint, ActorItemViewModel> _actorById = [];
+
+    partial void OnAllActorsChanged(IReadOnlyList<ActorItemViewModel> value)
+    {
+        _actorByRef = ByReference(value);
+        _actorById = new Dictionary<uint, ActorItemViewModel>(value.Count);
+        foreach (var actor in value)
+        {
+            _actorById.TryAdd(actor.SelectableId, actor);
+        }
+    }
+
+    /// <summary>The loaded actor with this reference (the first, as a scan of <see cref="AllActors"/> finds it), or null.</summary>
+    private ActorItemViewModel? ActorOf(ActorRef reference) => _actorByRef.GetValueOrDefault(reference);
+
+    /// <summary>The loaded actor with this selectable id, or null.</summary>
+    private ActorItemViewModel? ActorOf(uint selectableId) => _actorById.GetValueOrDefault(selectableId);
+
+    /// <summary>The level's own actor (not one the project added) with this reference, or null.</summary>
+    private ActorItemViewModel? PristineOf(ActorRef reference) => _pristineByRef.GetValueOrDefault(reference);
+
+    private static Dictionary<ActorRef, ActorItemViewModel> ByReference(IReadOnlyList<ActorItemViewModel> actors)
+    {
+        var map = new Dictionary<ActorRef, ActorItemViewModel>(actors.Count, ActorRef.Comparer);
+        foreach (var actor in actors)
+        {
+            map.TryAdd(actor.Reference, actor);
+        }
+
+        return map;
+    }
+
     /// <summary>Properties of the selected actor.</summary>
     [ObservableProperty]
     private IReadOnlyList<PropertyRow> _actorProperties = [];
@@ -581,11 +617,12 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
         _pristineActors = prepared.Documents
             .SelectMany((d, i) => d.Actors.Select(a => new ActorItemViewModel(d, a, LevelScenePreparer.SelectableIdOf(i, a))))
             .ToList();
+        _pristineByRef = ByReference(_pristineActors);
         RefreshEdits();
         _restoringSelection = true;
         try
         {
-            if (keep is not null && AllActors.FirstOrDefault(a => ActorRef.Comparer.Equals(a.Reference, keep)) is { } again)
+            if (keep is not null && ActorOf(keep) is { } again)
             {
                 if (keepInstance is { } k)
                 {
@@ -646,7 +683,7 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
 
     partial void OnSelectedActorIdChanged(uint value)
     {
-        var item = value == 0 ? null : AllActors.FirstOrDefault(a => a.SelectableId == value);
+        var item = value == 0 ? null : ActorOf(value);
         if (!ReferenceEquals(item, SelectedActor))
         {
             SelectedActor = item;
@@ -712,12 +749,13 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
         _restoringSelection = true;
         try
         {
+            RefreshLooks();
             RefreshAddedActors();
             RefreshHiddenIds();
             RefreshTransforms();
             RefreshBends();
             RefreshGroup();
-            var again = keepId == 0 ? null : AllActors.FirstOrDefault(a => a.SelectableId == keepId);
+            var again = keepId == 0 ? null : ActorOf(keepId);
             if (again is null)
             {
                 SelectedActor = null;
@@ -748,7 +786,7 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
     public void ApplyDraggedTransform(uint selectableId, FTransform rootWorld)
     {
         // Dragging one object of the multi-selection moves them all (rigidly, scale untouched).
-        if (HasGroup && AllActors.FirstOrDefault(a => a.SelectableId == selectableId) is { } dragged)
+        if (HasGroup && ActorOf(selectableId) is { } dragged)
         {
             var key = SelectedInstanceKey is { } k && k.SelectableId == selectableId ? k : (InstanceKey?)null;
             var before = WorldOf(dragged, key is { } kk ? InstanceInfo(dragged, kk) : null) with { Scale3D = FVector.One };
@@ -763,7 +801,7 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
             return;
         }
 
-        if (AllActors.FirstOrDefault(a => a.SelectableId == selectableId) is not { } item)
+        if (ActorOf(selectableId) is not { } item)
         {
             return;
         }
@@ -834,7 +872,7 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
                 ActorItemViewModel? item = null;
                 switch (op)
                 {
-                    case DuplicateActorOp duplicate when _pristineActors.FirstOrDefault(a => ActorRef.Comparer.Equals(a.Reference, duplicate.Source)) is { } source:
+                    case DuplicateActorOp duplicate when PristineOf(duplicate.Source) is { } source:
                         var world = RootWorldOf(source, transform);
                         item = new ActorItemViewModel(document, source.Actor with { Name = duplicate.NewName, ExportIndex = -1 - (int)(id - AddedIdBase), WorldTransform = world }, id)
                         {
@@ -850,7 +888,7 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
                         };
                         item = new ActorItemViewModel(document, record, id) { IsAdded = true };
                         break;
-                    case AddBlueprintActorOp blueprint when _pristineActors.FirstOrDefault(a => ActorRef.Comparer.Equals(a.Reference, blueprint.Source)) is { } bpSource:
+                    case AddBlueprintActorOp blueprint when PristineOf(blueprint.Source) is { } bpSource:
                         // The source level is loaded too: draw the copy by cloning the source's placements.
                         item = new ActorItemViewModel(document, bpSource.Actor with { Name = blueprint.NewName, ExportIndex = -1 - (int)(id - AddedIdBase), WorldTransform = RootWorldOf(bpSource, transform) }, id)
                         {
@@ -1217,7 +1255,7 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
                     return EditOpFactory.AddStaticMeshActor(target, mesh.StaticMesh, transform, state, reserved) with { CollisionProfile = mesh.CollisionProfile };
                 case AddBlueprintActorOp blueprint:
                     return new AddBlueprintActorOp(target.PackagePath, EditOpFactory.UniqueActorName(target, BaseName(item) + "_Added", state, reserved), blueprint.ClassPath, blueprint.Source, transform);
-                case DuplicateActorOp duplicate when _pristineActors.FirstOrDefault(a => ActorRef.Comparer.Equals(a.Reference, duplicate.Source)) is { } source:
+                case DuplicateActorOp duplicate when PristineOf(duplicate.Source) is { } source:
                     item = source;
                     break;
                 default:
@@ -1510,7 +1548,7 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
         {
             var pick = _picks[i];
             if ((SelectedActor is not null && SamePick(pick, current))
-                || AllActors.FirstOrDefault(a => ActorRef.Comparer.Equals(a.Reference, pick.Actor)) is not { } item)
+                || ActorOf(pick.Actor) is not { } item)
             {
                 continue;
             }

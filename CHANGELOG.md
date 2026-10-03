@@ -3,6 +3,29 @@
 All notable changes are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [semantic versioning](https://semver.org/).
 
+## [0.2.5] - 2026-10-03
+
+### New in this release
+- **Landscape menu** on the Map page (the whole island, in the client and server paks):
+  - **Ground look**: Game, Snow, Desert, Autumn or All grass. Soft ground (grass, forest floor, fields, soil, beaches)
+    gets another ground texture of the game and the grass growing on it another grass type (snow plants, dry plants);
+    roads, rocks, rivers and the sea floor stay. Faraway ground keeps the game's colour.
+  - **Trees**: draw another tree everywhere the game has one (an oak becomes a pine, with the pine's collision);
+    **Put back** undoes one swap.
+  - **Fit to ground**: lays the selected building, or every object of the multi-selection, on the slope under it
+    (tilted the way the ground runs, its bottom on the ground). Also in the Shape menu.
+- A new edit, **replace asset**: the mod carries a copy of one game asset under another's path (what the ground looks
+  and tree swaps are made of).
+
+### Fixes
+- No more freezes with hundreds of edits: after every edit the 3D view walked all of the map's ~155,000 parts once
+  per moved object (seconds with ~980 edits). Moving the edited objects now takes 3 ms instead of 136 ms in the test
+  level, copies move in place, and the history panel adds one row instead of rebuilding a thousand.
+- Bending a house or church no longer drops the view to a few frames a second: only long, narrow objects (walls,
+  fences, pipes, bridges) bend; houses and other wide objects tilt, turn and fit to the ground. The bend slider is
+  hidden for them.
+- The World panel on the left is narrower.
+
 ## [0.2.4] - 2026-10-03
 
 ### New in this release

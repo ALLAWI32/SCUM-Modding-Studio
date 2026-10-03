@@ -28,6 +28,7 @@ namespace ScumStudio.Level.Editing;
 [JsonDerivedType(typeof(CloneAssetOp), "cloneAsset")]
 [JsonDerivedType(typeof(RemoveAssetCloneOp), "removeAssetClone")]
 [JsonDerivedType(typeof(SetAssetValueOp), "setAssetValue")]
+[JsonDerivedType(typeof(ReplaceAssetOp), "replaceAsset")]
 [JsonDerivedType(typeof(BatchOp), "batch")]
 [JsonDerivedType(typeof(BendActorOp), "bendActor")]
 [JsonDerivedType(typeof(SwaySegmentOp), "swaySegment")]

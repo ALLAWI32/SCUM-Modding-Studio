@@ -55,6 +55,9 @@ public sealed record ComponentRecord(
     string? StaticMeshPath,
     IReadOnlyList<FTransform> Instances)
 {
+    /// <summary>Item spawners: the places it puts loot (<c>SpawnerMarkers</c>, from the component or its Blueprint template).</summary>
+    public IReadOnlyList<SpawnMarker> SpawnMarkers { get; init; } = [];
+
     /// <summary>Full class path (e.g. <c>/Script/Engine.StaticMeshComponent</c>).</summary>
     public string ClassPath { get; init; } = string.Empty;
 
@@ -112,6 +115,14 @@ public sealed record ComponentRecord(
     /// <summary>Child actor components: export index of the child actor the level stores for it (a separate actor), or null.</summary>
     public int? ChildActor { get; init; }
 }
+
+/// <summary>One place an item spawner puts loot (an element of <c>ItemSpawnerComponent.SpawnerMarkers</c>).</summary>
+/// <param name="Local">Where, in the spawner component's space.</param>
+/// <param name="Preset">The loot preset's name (e.g. <c>World_Environment</c>: what can spawn there).</param>
+/// <param name="Probability">Chance that something spawns, in percent.</param>
+/// <param name="MinQuantity">Fewest items.</param>
+/// <param name="MaxQuantity">Most items.</param>
+public sealed record SpawnMarker(FTransform Local, string Preset, float Probability, int MinQuantity, int MaxQuantity);
 
 /// <summary>One instance of an instanced static mesh component, in world space.</summary>
 /// <param name="ComponentExportIndex">Export index of the owning ISM/HISM component.</param>
@@ -172,6 +183,9 @@ public sealed record ActorRecord(
     /// component; null otherwise.
     /// </summary>
     public int? ParentComponent { get; init; }
+
+    /// <summary>Sentry spawners: the patrol path, as points relative to the spawner (<c>PatrolPoints</c>).</summary>
+    public IReadOnlyList<FVector> PatrolPoints { get; init; } = [];
 
     /// <summary>Number of synthesized components (see <see cref="ComponentRecord.IsSynthesized"/>).</summary>
     public int SynthesizedComponentCount => Components.Count(c => c.IsSynthesized);

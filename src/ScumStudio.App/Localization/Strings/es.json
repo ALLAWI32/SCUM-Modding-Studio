@@ -935,5 +935,13 @@
   "Spawns.S.MaxAnimals": "Máximo de animales a la vez",
   "Spawns.S.MaxAnimals.Tip": "El servidor nunca tiene más animales a la vez.",
   "Map.Spawns": "Apariciones",
-  "Map.Spawns.Tip": "Muestra los lugares de aparición del juego como chinchetas. Dorado: botín, naranja: zonas de botín, rojo: centinelas, morado: criaturas de búnker, azul: vehículos del concesionario, verde: zonas de salto. Las chinchetas de generadores se mueven, copian y borran como objetos; los puntos de botín dentro de edificios se mueven con su edificio."
+  "Map.Spawns.Tip": "Muestra los lugares de aparición del juego como chinchetas leídas de los archivos del juego. Dorado: puntos de botín (al seleccionarlos verás qué aparece), naranja: zonas de botín, rojo: centinelas, rosa: rutas de patrulla de los centinelas, morado: criaturas de búnker, azul: vehículos del concesionario, verde: zonas de salto. Las chinchetas de generadores se mueven, copian y borran como objetos; los puntos de botín de los edificios se mueven con su edificio.",
+  "Map.Row.Spawn": "Apariciones",
+  "Spawn.Loot": "Generador de botín: {0} puntos de botín (chinchetas doradas), lo que aparece ahí: {1}. Muévelo y se mueven todos sus puntos.",
+  "Spawn.Building": "{0} puntos de botín dentro (chinchetas doradas pequeñas): {1}. Son parte del edificio y se mueven con él.",
+  "Spawn.LootZone": "Zona de botín: no es un lugar de aparición; los generadores de botín de dentro cambian de probabilidad o de tipo de botín.",
+  "Spawn.Sentry": "Generador de centinela: aquí está un centinela y patrulla {0} puntos (chinchetas rosas).",
+  "Spawn.Creature": "Punto de aparición de criaturas de búnker (Razor, kill box).",
+  "Spawn.PlayerDrop": "Zona de salto: donde los jugadores caen durante los eventos.",
+  "Spawn.CarShop": "Concesionario: {0} lugares donde aparecen los vehículos comprados (chinchetas azules)."
 }

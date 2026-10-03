@@ -935,5 +935,13 @@
   "Spawns.S.MaxAnimals": "Najviše životinja odjednom",
   "Spawns.S.MaxAnimals.Tip": "Server nikad nema više životinja u isto vrijeme.",
   "Map.Spawns": "Spawnovi",
-  "Map.Spawns.Tip": "Prikazuje mjesta pojavljivanja u igri kao pribadače. Zlatna: plijen, narandžasta: zone plijena, crvena: stražari, ljubičasta: stvorenja bunkera, plava: vozila salona, zelena: zone spuštanja. Pribadače spawnera se pomjeraju, kopiraju i brišu kao objekti; tačke plijena u zgradama idu sa svojom zgradom."
+  "Map.Spawns.Tip": "Prikazuje mjesta pojavljivanja iz fajlova igre kao pribadače. Zlatna: tačke plijena (kad izabereš jednu, vidiš šta se tu pojavljuje), narandžasta: zone plijena, crvena: stražari, roze: putanje patrola stražara, ljubičasta: stvorenja bunkera, plava: vozila salona, zelena: zone spuštanja. Pribadače spawnera se pomjeraju, kopiraju i brišu kao objekti; tačke plijena u zgradama idu sa svojom zgradom.",
+  "Map.Row.Spawn": "Spawn",
+  "Spawn.Loot": "Spawner plijena: {0} tačaka plijena (zlatne pribadače), šta se tu pojavljuje: {1}. Pomjeriš ga i sve tačke idu s njim.",
+  "Spawn.Building": "Unutra {0} tačaka plijena (male zlatne pribadače): {1}. Dio su zgrade i pomjeraju se s njom.",
+  "Spawn.LootZone": "Zona plijena: nije mjesto pojavljivanja; spawneri plijena unutra dobijaju drugu šansu ili vrstu plijena.",
+  "Spawn.Sentry": "Spawner stražara: ovdje stoji stražar i patrolira {0} tačaka (roze pribadače).",
+  "Spawn.Creature": "Tačka pojavljivanja stvorenja bunkera (Razor, kill box).",
+  "Spawn.PlayerDrop": "Zona spuštanja: gdje se igrači spuštaju tokom događaja.",
+  "Spawn.CarShop": "Salon automobila: {0} mjesta gdje se pojavljuju kupljena vozila (plave pribadače)."
 }

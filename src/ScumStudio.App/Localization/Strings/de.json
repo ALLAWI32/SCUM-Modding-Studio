@@ -935,5 +935,13 @@
   "Spawns.S.MaxAnimals": "Höchstens Tiere gleichzeitig",
   "Spawns.S.MaxAnimals.Tip": "Der Server hat nie mehr Tiere gleichzeitig.",
   "Map.Spawns": "Spawns",
-  "Map.Spawns.Tip": "Zeigt die Spawn-Orte des Spiels als Pins. Gold: Loot, Orange: Loot-Bereiche, Rot: Sentries, Lila: Bunker-Kreaturen, Blau: Fahrzeuge des Autohändlers, Grün: Absprungzonen. Pins von Spawnern lassen sich wie Objekte verschieben, kopieren und löschen; Loot-Punkte in Gebäuden bewegen sich mit ihrem Gebäude."
+  "Map.Spawns.Tip": "Zeigt die Spawn-Orte des Spiels als Pins, gelesen aus den Spieldateien. Gold: Loot-Punkte (was dort spawnt, siehst du bei Auswahl), Orange: Loot-Zonen, Rot: Sentries, Rosa: Patrouillenwege der Sentries, Lila: Bunker-Kreaturen, Blau: Fahrzeuge des Autohändlers, Grün: Absprungzonen. Spawner-Pins lassen sich wie Objekte verschieben, kopieren und löschen; Loot-Punkte in Gebäuden bewegen sich mit ihrem Gebäude.",
+  "Map.Row.Spawn": "Spawns",
+  "Spawn.Loot": "Loot-Spawner: {0} Loot-Punkte (goldene Pins), was dort spawnt: {1}. Verschiebst du ihn, wandern alle Punkte mit.",
+  "Spawn.Building": "{0} Loot-Punkte darin (kleine goldene Pins): {1}. Sie gehören zum Gebäude und bewegen sich mit ihm.",
+  "Spawn.LootZone": "Loot-Zone: kein Spawn-Ort; die Loot-Spawner darin bekommen eine andere Chance oder andere Beute.",
+  "Spawn.Sentry": "Sentry-Spawner: hier steht eine Sentry und patrouilliert {0} Punkte (rosa Pins).",
+  "Spawn.Creature": "Spawnpunkt für Bunker-Kreaturen (Razor, Kill-Box).",
+  "Spawn.PlayerDrop": "Absprungzone: wo Spieler bei Events abspringen.",
+  "Spawn.CarShop": "Autohändler: {0} Orte, an denen gekaufte Fahrzeuge erscheinen (blaue Pins)."
 }

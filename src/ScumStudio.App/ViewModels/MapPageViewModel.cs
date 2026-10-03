@@ -1287,6 +1287,12 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
             new(Localization.Loc.T("Map.Row.Kind"), a.Kind.ToString()),
             new(Localization.Loc.T("Map.Row.Components"), a.Components.Count.ToString(CultureInfo.InvariantCulture)),
         };
+        // What a spawner is, in plain words (loot points and their presets, a sentry's patrol, a car shop's spots).
+        if (SpawnMarkers.Describe(a) is { } spawn)
+        {
+            rows.Insert(1, new PropertyRow(Localization.Loc.T("Map.Row.Spawn"), Localization.Loc.F(spawn.Key, spawn.Args)));
+        }
+
         if (a.StaticMeshPath is { } mesh)
         {
             rows.Add(new PropertyRow(Localization.Loc.T("Map.Row.Mesh"), mesh));

@@ -13,8 +13,11 @@ project uses [semantic versioning](https://semver.org/).
   there, part condition, the server's limit per vehicle); zombies and NPCs (all 73 threat zones: spawn chance, first
   spawn, check interval, cooldown, distance, spread, group weights); server settings (zombie and horde multipliers,
   sentries, drones, dropships, animals) written straight into `ServerSettings.ini` with a backup.
-- **Spawn places on the map**: loot spawners and areas, sentry spawners, bunker creature points, car-shop spots and drop
-  zones as coloured pins that move, copy and delete like objects; a Spawns switch in the map header hides them.
+- **Spawn places on the map**: every loot point read from the game files (the properties panel says what spawns there),
+  loot zones, sentries with their patrol paths, bunker creature points, car-shop spots and drop zones as coloured pins;
+  spawners move, copy and delete like objects; a Spawns switch in the map header hides them.
+- **Placement accuracy is tested** against the game's own far-view models: on the levels checked, what the map draws
+  covers 99.8-100 % of the game's geometry.
 - **Far view follows your edits**: deleted or moved objects are cut out of the island's far-view models (towns,
   outposts, bridges) and the outposts' HLOD proxies, so they no longer show from far away.
 - **Faster map**: the whole-island terrain is cached (0.6 s instead of 15-17 s at every start) and the map reopens where

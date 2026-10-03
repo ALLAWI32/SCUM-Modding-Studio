@@ -338,6 +338,7 @@ public sealed class LevelDocument
                 RootInferred = inferred && root is not null,
                 PropertyNames = actor.PropertyNames,
                 ParentComponent = actor.ParentComponent is { } pc && _exports.ContainsKey(pc) ? pc : null,
+                PatrolPoints = actor.PatrolPoints ?? [],
             };
         }
 
@@ -367,6 +368,7 @@ public sealed class LevelDocument
                 InstanceEndCullDistance = c.InstanceEndCullDistance ?? 0,
                 SplineMesh = c.SplineMesh,
                 OverrideMaterials = c.OverrideMaterials,
+                SpawnMarkers = c.SpawnMarkers ?? [],
                 PropertyNames = c.PropertyNames,
                 UsesTemplateValues = c.UsesTemplateValues,
                 IsSynthesized = c.IsSynthesized,

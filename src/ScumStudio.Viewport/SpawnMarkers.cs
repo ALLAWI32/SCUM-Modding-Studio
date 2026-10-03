@@ -8,14 +8,17 @@ namespace ScumStudio.Viewport;
 /// <summary>What a spawn marker stands for.</summary>
 public enum SpawnKind
 {
-    /// <summary>Loot spawner (an item spawner group, a world item spawner, a loot point in a building).</summary>
+    /// <summary>A loot point: one place an item spawner puts loot (<see cref="SpawnMarker"/>).</summary>
     Loot,
 
-    /// <summary>Loot area (an item spawner volume).</summary>
-    LootArea,
+    /// <summary>A loot zone (item spawner volume): changes the chance and kind of loot of the spawners inside it.</summary>
+    LootZone,
 
-    /// <summary>Sentry spawner.</summary>
+    /// <summary>Sentry spawner: where a sentry stands.</summary>
     Sentry,
+
+    /// <summary>A point of a sentry's patrol path.</summary>
+    Patrol,
 
     /// <summary>Creature spawn point in the bunkers (Razors, kill boxes, tagged spawners).</summary>
     Creature,
@@ -45,8 +48,9 @@ public static class SpawnMarkers
     public static Vector4 Color(SpawnKind kind) => kind switch
     {
         SpawnKind.Loot => new(1f, 0.72f, 0.08f, 1f),
-        SpawnKind.LootArea => new(1f, 0.4f, 0.03f, 1f),
+        SpawnKind.LootZone => new(1f, 0.4f, 0.03f, 1f),
         SpawnKind.Sentry => new(1f, 0.1f, 0.08f, 1f),
+        SpawnKind.Patrol => new(1f, 0.38f, 0.6f, 1f),
         SpawnKind.Creature => new(0.62f, 0.18f, 1f, 1f),
         SpawnKind.Vehicle => new(0.08f, 0.78f, 1f, 1f),
         _ => new(0.2f, 1f, 0.35f, 1f),
@@ -58,14 +62,19 @@ public static class SpawnMarkers
     /// <summary>True for a marker mesh key.</summary>
     public static bool IsMarker(string meshPath) => meshPath.StartsWith(Prefix, StringComparison.Ordinal);
 
-    /// <summary>The spawn kind of an actor that only spawns things, or null.</summary>
+    /// <summary>True for an actor that is only a loot spawner (its loot points pick and move as the actor).</summary>
+    public static bool IsLootSpawner(ActorRecord actor) => actor.ClassName is "ItemSpawnerGroup" or "WorldItemSpawner";
+
+    /// <summary>
+    /// The spawn kind of an actor that only spawns things (a pin at the actor), or null. Loot spawners are not here: their
+    /// pins are their loot points.
+    /// </summary>
     public static SpawnKind? KindOf(ActorRecord actor)
     {
         ArgumentNullException.ThrowIfNull(actor);
         return actor.ClassName switch
         {
-            "ItemSpawnerGroup" or "WorldItemSpawner" => SpawnKind.Loot,
-            "ItemSpawnerVolume" => SpawnKind.LootArea,
+            "ItemSpawnerVolume" => SpawnKind.LootZone,
             "SentrySpawner2" => SpawnKind.Sentry,
             "BP_RazorSpawnPoint_C" or "BP_EasyKillBoxSpawnPoint_C" or "BP_KillBoxC4SpawnPoint_C" or "BP_TaggedSpawner_C" => SpawnKind.Creature,
             "BP_DropZoneLocationMarker_C" => SpawnKind.PlayerDrop,
@@ -73,15 +82,75 @@ public static class SpawnMarkers
         };
     }
 
-    /// <summary>The spawn kind of a spawn component inside another actor (a building's loot point), or null.</summary>
-    public static SpawnKind? KindOf(ComponentRecord component)
+    /// <summary>
+    /// Every pin of <paramref name="actor"/>: (kind, where, whether it picks as the actor, label). Loot points come from
+    /// the item spawners' markers (a spawner group's pick as the group; a building's only show), a sentry spawner adds its
+    /// patrol points, a car shop its vehicle boxes, the other spawners stand at the actor.
+    /// </summary>
+    public static IEnumerable<(SpawnKind Kind, FTransform Pin, bool PicksActor, string Label)> PinsOf(ActorRecord actor)
     {
-        ArgumentNullException.ThrowIfNull(component);
-        return component.ClassName switch
+        ArgumentNullException.ThrowIfNull(actor);
+        var lootSpawner = IsLootSpawner(actor);
+        var points = 0;
+        foreach (var component in actor.Components.Where(c => c.IsSceneComponent))
         {
-            "ItemSpawnerComponent" or "WorldItemSpawnerComponent" => SpawnKind.Loot,
-            "VehicleSpawnBoxComponent" => SpawnKind.Vehicle,
-            _ => null,
+            for (var i = 0; i < component.SpawnMarkers.Count; i++)
+            {
+                var m = component.SpawnMarkers[i];
+                points++;
+                yield return (SpawnKind.Loot, PinAt(m.Local * component.WorldTransform, SpawnKind.Loot, inside: !lootSpawner), lootSpawner,
+                    $"{actor.Name}/{component.Name} [{i}] {m.Preset} {m.Probability:0.#}% x{m.MinQuantity}-{m.MaxQuantity}");
+            }
+
+            if (component.ClassName == "VehicleSpawnBoxComponent")
+            {
+                yield return (SpawnKind.Vehicle, PinAt(component.WorldTransform, SpawnKind.Vehicle, inside: true), false, $"{actor.Name}/{component.Name}");
+            }
+        }
+
+        if (lootSpawner && points == 0)
+        {
+            yield return (SpawnKind.Loot, PinAt(actor.WorldTransform, SpawnKind.Loot), true, actor.Name);
+        }
+
+        if (KindOf(actor) is { } kind)
+        {
+            yield return (kind, PinAt(actor.WorldTransform, kind), true, actor.Name);
+            for (var i = 0; i < actor.PatrolPoints.Count; i++)
+            {
+                var at = new FTransform(actor.WorldTransform.TransformPosition(actor.PatrolPoints[i]));
+                yield return (SpawnKind.Patrol, PinAt(at, SpawnKind.Patrol, inside: true), true, $"{actor.Name} patrol {i + 1}");
+            }
+        }
+    }
+
+    /// <summary>
+    /// What a spawn actor is, for the properties panel: a text key and its arguments (<c>Spawn.Loot</c>: loot points and
+    /// presets, <c>Spawn.Building</c>, <c>Spawn.Sentry</c>: patrol points, ...), or null for other actors.
+    /// </summary>
+    public static (string Key, object[] Args)? Describe(ActorRecord actor)
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+        var markers = actor.Components.SelectMany(c => c.SpawnMarkers).ToList();
+        var presets = string.Join(", ", markers.GroupBy(m => m.Preset.Length > 0 ? m.Preset : "?").OrderByDescending(g => g.Count()).Select(g => $"{g.Key} x{g.Count()}"));
+        if (IsLootSpawner(actor))
+        {
+            return ("Spawn.Loot", [markers.Count, presets]);
+        }
+
+        if (markers.Count > 0)
+        {
+            return ("Spawn.Building", [markers.Count, presets]);
+        }
+
+        var boxes = actor.Components.Count(c => c.ClassName == "VehicleSpawnBoxComponent");
+        return KindOf(actor) switch
+        {
+            SpawnKind.LootZone => ("Spawn.LootZone", []),
+            SpawnKind.Sentry => ("Spawn.Sentry", [actor.PatrolPoints.Count]),
+            SpawnKind.Creature => ("Spawn.Creature", []),
+            SpawnKind.PlayerDrop => ("Spawn.PlayerDrop", []),
+            _ => boxes > 0 ? ("Spawn.CarShop", [boxes]) : null,
         };
     }
 

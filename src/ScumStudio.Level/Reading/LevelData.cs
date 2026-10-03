@@ -144,6 +144,12 @@ public sealed record LevelExportData
     /// </summary>
     public IReadOnlyList<string?>? OverrideMaterials { get; init; }
 
+    /// <summary>Item spawner components: <c>SpawnerMarkers</c> (where loot appears); null for other components.</summary>
+    public IReadOnlyList<SpawnMarker>? SpawnMarkers { get; init; }
+
+    /// <summary>Sentry spawner actors: <c>PatrolPoints</c> relative to the spawner; null for other actors.</summary>
+    public IReadOnlyList<FVector>? PatrolPoints { get; init; }
+
     /// <summary>True when the relative transform or instances were taken from the template instead of the export itself.</summary>
     public bool UsesTemplateValues { get; init; }
 

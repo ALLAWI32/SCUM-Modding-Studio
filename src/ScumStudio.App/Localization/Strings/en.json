@@ -935,5 +935,13 @@
   "Spawns.S.MaxAnimals": "Most animals at once",
   "Spawns.S.MaxAnimals.Tip": "The server never has more animals at the same time.",
   "Map.Spawns": "Spawns",
-  "Map.Spawns.Tip": "Shows the game's spawn places as pins. Gold: loot, orange: loot areas, red: sentries, purple: bunker creatures, blue: car shop vehicles, green: drop zones. Pins of spawners can be moved, copied and deleted like objects; loot points inside buildings move with their building."
+  "Map.Spawns.Tip": "Shows the game's spawn places as pins, read from the game files. Gold: loot points (what spawns there is shown when you select one), orange: loot zones, red: sentries, pink: sentry patrol paths, purple: bunker creatures, blue: car shop vehicles, green: drop zones. Spawner pins move, copy and delete like objects; loot points inside buildings move with their building.",
+  "Map.Row.Spawn": "Spawns",
+  "Spawn.Loot": "Loot spawner: {0} loot points (gold pins), what spawns there: {1}. Move it and all its points move.",
+  "Spawn.Building": "{0} loot points inside (small gold pins): {1}. They are part of the building and move with it.",
+  "Spawn.LootZone": "Loot zone: not a spawn place; the loot spawners inside it get a different chance or kind of loot.",
+  "Spawn.Sentry": "Sentry spawner: a sentry stands here and patrols {0} points (pink pins).",
+  "Spawn.Creature": "Bunker creature spawn point (Razor, kill box).",
+  "Spawn.PlayerDrop": "Drop zone: where players can drop in during events.",
+  "Spawn.CarShop": "Car shop: {0} places where bought vehicles appear (blue pins)."
 }

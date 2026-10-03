@@ -70,7 +70,7 @@ You need Windows 10 or 11 (x64), SCUM installed, and a graphics card with OpenGL
 | **3D map editor** | Fly over the whole island (levels stream in around the camera) or open one cell or sublevel. Click any object, move and turn it with the mouse, snap it to the ground or to other pieces, delete it, copy it anywhere (`Ctrl+C` / `Ctrl+V`), select every object of the same kind (`Ctrl+A`), or pick single trees and rocks. |
 | **Bridges, roads and walls** | The **Shape** menu bends a wall, bridge or road piece into a curve or an S, makes it longer, wider, taller, raises a ramp or a hump, lengthens a bridge pylon's legs under the water, and welds an end onto another piece. Pieces made much longer repeat copy after copy. Bent pieces get **real collision** built from the mesh (no invisible walls, no holes), on the client and the server. |
 | **Spawns** | Vehicles, planes and boats: the fuel and battery they spawn with (Empty, Half, Full or any range), the chance each part is there, part condition and how many the server allows. Zombies and NPCs: all 73 threat zones (spawn chance, first spawn, cooldown, distance, which groups). Server: zombie and horde amounts, sentries on or off, drones, animals, written into `ServerSettings.ini`. |
-| **Spawn places on the map** | Loot spawners and areas, sentry spawners, bunker creature points, car-shop spots and drop zones show as coloured pins: move, copy or delete them like any object. |
+| **Spawn places on the map** | Every loot point of the game, read from the game files (select one to see what spawns there: shelf food, hunting weapons, military gear …), loot zones, sentries with their patrol paths, bunker creature points, car-shop spots and drop zones show as coloured pins. Spawners move, copy and delete like any object. |
 | **Far view follows your edits** | Delete or move a building and it is cut out of the island's far-view models and the outposts' HLODs too, so it no longer shows from far away. |
 | **Objects browser** | Every placeable object of the game in categories (buildings, furniture, nature, vehicles, items …) with thumbnails, plus building sets: all walls, all roads, all bridges. Place one in front of the camera with a click. |
 | **Vehicles and weapons** | Change the stored values (damage, rate of fire, range, handling, mass, capacity, names …) or clone a vehicle or item under a new name, ready to spawn with `#SpawnItem` / `#SpawnVehicle`. |
@@ -161,9 +161,10 @@ included in this repository.</sub>
 - Toolbar:
   - **Maximize** (`F11`) and **Pop out**: give the 3D view the whole page or its own window (second monitor).
   - **Quality**: Performance, Balanced, High or Ultra (how far and how detailed the view draws).
-  - **Spawns**: show or hide the game's spawn places as pins. Gold: loot, orange: loot areas, red: sentries, purple:
-    bunker creatures, blue: car-shop vehicles, green: drop zones. Spawner pins move, copy and delete like objects; loot
-    points inside buildings move with their building.
+  - **Spawns**: show or hide the game's spawn places as pins. Gold: loot points (the properties panel says what spawns
+    there), orange: loot zones, red: sentries, pink: sentry patrol paths, purple: bunker creatures, blue: car-shop
+    vehicles, green: drop zones. Spawner pins move, copy and delete like objects; loot points inside buildings move with
+    their building.
   - **Snap**: pieces dragged near each other join end to end, or side by side with level tops; fences stand on edges.
     Hold `Alt` to place freely.
   - **Drone** (`Tab`): fly like the in-game drone.

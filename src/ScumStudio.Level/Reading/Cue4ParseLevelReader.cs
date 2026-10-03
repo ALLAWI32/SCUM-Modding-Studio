@@ -13,6 +13,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using ScumStudio.Assets.Catalog;
 using ScumStudio.Core.Mathematics;
+using ScumStudio.Level.Model;
 using ScumStudio.Level.World;
 using UeMatrix = CUE4Parse.UE4.Objects.Core.Math.FMatrix;
 using UeQuat = CUE4Parse.UE4.Objects.Core.Math.FQuat;
@@ -375,8 +376,15 @@ public sealed partial class Cue4ParseLevelReader : ILevelReader
         }
 
         var root = ResolveComponentReference(package, actor, "RootComponent", own, out _);
+        List<FVector>? patrol = null;
+        if (header.ClassName == "SentrySpawner2" && actor.TryGetValue(out FStructFallback[] points, "PatrolPoints"))
+        {
+            patrol = points.Select(p => p.TryGetValue(out UeVector v, "LocationRelativeToSentry") ? new FVector(v.X, v.Y, v.Z) : FVector.Zero).ToList();
+        }
+
         return header with
         {
+            PatrolPoints = patrol,
             IsLoaded = true,
             PropertyNames = PropertyNames(actor),
             RootComponent = root,
@@ -478,8 +486,54 @@ public sealed partial class Cue4ParseLevelReader : ILevelReader
                       || instances is not null || childActorClass is not null || classChain.Any(IsSceneClassName);
         var isComponent = obj is UActorComponent || isScene
                           || classChain.Any(c => c.EndsWith("Component", StringComparison.Ordinal) || c.EndsWith("Component_C", StringComparison.Ordinal));
+        // Item spawners (groups, world spawners, the loot points of Blueprint buildings): where loot appears.
+        var markers = classChain.Any(c => c is "ItemSpawnerComponent" or "WorldItemSpawnerComponent") ? ReadSpawnMarkers(templates) : null;
+        // A world item spawner puts one fixed item (a lathe, a workbench) where it stands.
+        if (markers is null && classChain.Contains("WorldItemSpawnerComponent", StringComparer.Ordinal)
+            && TryGetProperty(templates, "_item", out FSoftObjectPath item, ref ignored) && SoftPathText(item) is { Length: > 0 } itemPath)
+        {
+            var itemName = itemPath[(itemPath.LastIndexOf('.') + 1)..];
+            markers = [new SpawnMarker(FTransform.Identity, itemName.EndsWith("_C", StringComparison.Ordinal) ? itemName[..^2] : itemName, 100, 1, 1)];
+        }
+
         return new ComponentValues(location, rotation, scale, absLocation, absRotation, absScale, mesh, instances, isInstancedClass,
-            isMesh, isScene, isComponent, visible, childActorClass, spline, fromTemplate, endCullDistance, overrides);
+            isMesh, isScene, isComponent, visible, childActorClass, spline, fromTemplate, endCullDistance, overrides, markers);
+    }
+
+    private IReadOnlyList<SpawnMarker>? ReadSpawnMarkers(TemplateChain templates)
+    {
+        var ignored = false;
+        if (!TryGetProperty(templates, "SpawnerMarkers", out FStructFallback[] markers, ref ignored))
+        {
+            return null;
+        }
+
+        var result = new List<SpawnMarker>(markers.Length);
+        foreach (var marker in markers)
+        {
+            var local = marker.TryGetValue(out FStructFallback transform, "Transform") ? ReadTransformStruct(transform) : FTransform.Identity;
+            string preset = string.Empty;
+            float probability = 100;
+            int min = 1, max = 1;
+            if (marker.TryGetValue(out FStructFallback spawner, "SpawnerPreset"))
+            {
+                if (spawner.TryGetValue(out FPackageIndex presetIndex, "Preset") && !presetIndex.IsNull)
+                {
+                    preset = presetIndex.Name.EndsWith("_C", StringComparison.Ordinal) ? presetIndex.Name[..^2] : presetIndex.Name;
+                }
+
+                probability = spawner.TryGetValue(out float p, "Probability") ? p : probability;
+                if (spawner.TryGetValue(out FStructFallback quantity, "Quantity"))
+                {
+                    min = quantity.TryGetValue(out int lo, "Min") ? lo : min;
+                    max = quantity.TryGetValue(out int hi, "Max") ? hi : max;
+                }
+            }
+
+            result.Add(new SpawnMarker(local, preset, probability, min, max));
+        }
+
+        return result;
     }
 
     private IReadOnlyList<FTransform> ReadInstances(TemplateChain templates, string name, string className, List<string> warnings, ref bool fromTemplate)

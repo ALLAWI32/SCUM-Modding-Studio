@@ -935,5 +935,13 @@
   "Spawns.S.MaxAnimals": "Aynı anda en fazla hayvan",
   "Spawns.S.MaxAnimals.Tip": "Sunucuda aynı anda asla daha fazla hayvan olmaz.",
   "Map.Spawns": "Doğma yerleri",
-  "Map.Spawns.Tip": "Oyunun doğma yerlerini iğne olarak gösterir. Altın: ganimet, turuncu: ganimet alanları, kırmızı: nöbetçiler, mor: sığınak yaratıkları, mavi: araç satıcısı araçları, yeşil: iniş bölgeleri. Doğurucu iğneleri nesneler gibi taşınır, kopyalanır ve silinir; binaların içindeki ganimet noktaları binalarıyla birlikte taşınır."
+  "Map.Spawns.Tip": "Oyunun doğma yerlerini oyun dosyalarından okunan iğnelerle gösterir. Altın: ganimet noktaları (birini seçince orada ne doğduğu görünür), turuncu: ganimet bölgeleri, kırmızı: nöbetçiler, pembe: nöbetçi devriye yolları, mor: sığınak yaratıkları, mavi: araç satıcısı araçları, yeşil: iniş bölgeleri. Doğurucu iğneleri nesneler gibi taşınır, kopyalanır ve silinir; binaların içindeki ganimet noktaları binalarıyla birlikte taşınır.",
+  "Map.Row.Spawn": "Doğma",
+  "Spawn.Loot": "Ganimet doğurucu: {0} ganimet noktası (altın iğneler), orada doğanlar: {1}. Onu taşırsan tüm noktaları da taşınır.",
+  "Spawn.Building": "İçinde {0} ganimet noktası (küçük altın iğneler): {1}. Binanın parçasıdır ve onunla taşınır.",
+  "Spawn.LootZone": "Ganimet bölgesi: doğma yeri değil; içindeki ganimet doğurucular farklı bir şans ya da ganimet türü alır.",
+  "Spawn.Sentry": "Nöbetçi doğurucu: burada bir nöbetçi durur ve {0} noktada devriye gezer (pembe iğneler).",
+  "Spawn.Creature": "Sığınak yaratığı doğma noktası (Razor, ölüm odası).",
+  "Spawn.PlayerDrop": "İniş bölgesi: etkinliklerde oyuncuların indiği yer.",
+  "Spawn.CarShop": "Araç satıcısı: satın alınan araçların çıktığı {0} yer (mavi iğneler)."
 }

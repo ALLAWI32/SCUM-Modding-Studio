@@ -361,25 +361,12 @@ public sealed class LevelScenePreparer
                     $"{actor.Name}/{component.Name}", documentIndex, actor, component, null));
             }
 
-            // Spawn places: a pin for an actor that only spawns (picks and moves as the actor), and pins for the loot points
-            // and vehicle boxes inside other actors (their own ids pick nothing: they move with their building).
-            if (SpawnMarkers.KindOf(actor) is { } actorKind)
+            // Spawn places (see SpawnMarkers.PinsOf): pins that pick as the actor use its id; the loot points and vehicle
+            // boxes inside buildings get an id of their own (bit 19), which picks nothing: they move with their building.
+            foreach (var (kind, pin, picksActor, label) in SpawnMarkers.PinsOf(actor))
             {
-                var pin = SpawnMarkers.PinAt(actor.WorldTransform, actorKind);
-                placements.Add(new ScenePlacement(SpawnMarkers.MeshKey(actorKind), UeToGl.ModelMatrix(pin), pin, id, actor.Name, documentIndex, actor, null, null));
-            }
-            else
-            {
-                foreach (var component in actor.Components)
-                {
-                    if (component.IsSceneComponent && SpawnMarkers.KindOf(component) is { } kind)
-                    {
-                        var pin = SpawnMarkers.PinAt(component.WorldTransform, kind, inside: true);
-                        var pinId = ((uint)documentIndex << options.DocumentIdShift) | (uint)(component.ExportIndex + 1);
-                        placements.Add(new ScenePlacement(SpawnMarkers.MeshKey(kind), UeToGl.ModelMatrix(pin), pin, pinId,
-                            $"{actor.Name}/{component.Name}", documentIndex, actor, component, null));
-                    }
-                }
+                var pinId = picksActor ? id : id | (1u << (options.DocumentIdShift - 1));
+                placements.Add(new ScenePlacement(SpawnMarkers.MeshKey(kind), UeToGl.ModelMatrix(pin), pin, pinId, label, documentIndex, actor, null, null));
             }
 
             if (!options.IncludeInstances)

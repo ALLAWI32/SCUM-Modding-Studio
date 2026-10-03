@@ -372,7 +372,8 @@ public sealed partial class Cue4ParseLevelReader
         SplineMeshParams? SplineMesh,
         bool FromTemplate,
         int? InstanceEndCullDistance,
-        IReadOnlyList<string?>? OverrideMaterials = null)
+        IReadOnlyList<string?>? OverrideMaterials = null,
+        IReadOnlyList<SpawnMarker>? SpawnMarkers = null)
     {
         public LevelExportData ApplyTo(LevelExportData header) => header with
         {
@@ -394,6 +395,7 @@ public sealed partial class Cue4ParseLevelReader
             ChildActorClassPath = ChildActorClassPath,
             SplineMesh = SplineMesh,
             OverrideMaterials = OverrideMaterials,
+            SpawnMarkers = SpawnMarkers,
         };
     }
 

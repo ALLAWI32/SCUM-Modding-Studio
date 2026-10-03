@@ -62,7 +62,7 @@ public static class DataTableRows
     }
 
     /// <summary>
-    /// The payload with row <paramref name="newRow"/> added as a copy of <paramref name="sourceRow"/> (after the last row);
+    /// The payload with a row added as a copy of <paramref name="sourceRow"/> (after the last row);
     /// the row name is <paramref name="newRowName"/> in the (possibly grown) name table <paramref name="names"/>.
     /// </summary>
     /// <exception cref="InvalidOperationException">The source row is missing or the new row exists.</exception>

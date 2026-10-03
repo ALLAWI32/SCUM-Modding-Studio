@@ -339,6 +339,7 @@ public sealed class LevelDocument
                 PropertyNames = actor.PropertyNames,
                 ParentComponent = actor.ParentComponent is { } pc && _exports.ContainsKey(pc) ? pc : null,
                 PatrolPoints = actor.PatrolPoints ?? [],
+                TraderMarkers = actor.TraderMarkers ?? [],
             };
         }
 

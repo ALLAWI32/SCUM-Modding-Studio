@@ -973,6 +973,12 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
     public bool AddMeshActor(string meshObjectPath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(meshObjectPath);
+        if (ScumStudio.Level.Export.FarModels.IsFarViewMesh(meshObjectPath))
+        {
+            _services.Notifications.Warning(Localization.Loc.T("Map.FarModel"), Localization.Loc.F("Map.FarModelDetail", meshObjectPath[(meshObjectPath.LastIndexOf('/') + 1)..]));
+            return false;
+        }
+
         if (PreparedScene is not { } scene || scene.Documents.Count == 0)
         {
             _services.Notifications.Warning(Localization.Loc.T("Map.NoLevelLoaded"), Localization.Loc.T("Map.NoLevelLoadedDetail"));

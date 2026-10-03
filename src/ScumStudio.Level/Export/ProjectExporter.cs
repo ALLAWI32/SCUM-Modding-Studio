@@ -49,6 +49,9 @@ public sealed record ExportOptions
     /// the client's for the server export: a dedicated server's cook has no render geometry to build collision from.
     /// </summary>
     public Func<string, BendMesh?>? BendMeshes { get; init; }
+
+    /// <summary>Imported mods' folders (<see cref="ProjectMods"/>): their files go into the pak, under what the export rewrote.</summary>
+    public IReadOnlyList<string> Mods { get; init; } = [];
 }
 
 /// <summary>One rewritten level.</summary>
@@ -383,7 +386,15 @@ public sealed class ProjectExporter
                 built.Packages.Count, built.Applied.Count, built.Registered.Count);
         }
 
-        if (levels.Count == 0 && assets.Count == 0)
+        // Imported mods (someone's pak unpacked into the project) go in too, under what this export rewrote from them.
+        var carried = ProjectMods.CarryInto(options.Mods, staging, catalog.ProjectName);
+        if (carried > 0)
+        {
+            _logger.LogInformation("Imported mods: {Files} file(s) carried into the pak.", carried);
+            writeRegistry |= File.Exists(Path.Combine([staging, .. AssetModBuilder.AssetRegistryPath.Split('/')]));
+        }
+
+        if (levels.Count == 0 && assets.Count == 0 && carried == 0)
         {
             throw new InvalidOperationException("Nothing was exported. " + string.Join(" ", warnings));
         }
@@ -638,6 +649,11 @@ public sealed class ProjectExporter
                     copies.Add(new ActorCopy(duplicate.Source.Actor, duplicate.NewName, state.GetAddedTransform(added), sourceRoot));
                     break;
                 case AddStaticMeshActorOp meshActor:
+                    if (FarModels.IsFarViewMesh(meshActor.StaticMesh))
+                    {
+                        warnings.Add($"{added}: {meshActor.StaticMesh} is a far-view model (low detail, blurred, merged with what stood around it, no collision); delete it and copy the real building instead.");
+                    }
+
                     meshAdds.Add(new StaticMeshActorAdd(meshActor.NewName, meshActor.StaticMesh, state.GetAddedTransform(added) ?? meshActor.Transform)
                     {
                         CollisionProfile = meshActor.CollisionProfile ?? StandingTreeProfile(meshActor.StaticMesh, bendMeshes),

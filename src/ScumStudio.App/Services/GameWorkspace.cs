@@ -80,6 +80,28 @@ public sealed partial class GameWorkspace : ObservableObject, IDisposable
     [ObservableProperty]
     private bool _isLoose;
 
+    /// <summary>Imported mods (the open project's, see <see cref="Level.Projects.ProjectMods"/>) read over the game files.</summary>
+    public IReadOnlyList<string> ModFolders { get; private set; } = [];
+
+    /// <summary>
+    /// Reads <paramref name="folders"/> over the game files from now on: re-opens the game paks when they are open and the
+    /// list changed.
+    /// </summary>
+    public async Task UseModsAsync(IReadOnlyList<string> folders, IProgressSink progress, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(folders);
+        if (folders.SequenceEqual(ModFolders, StringComparer.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        ModFolders = folders.ToList();
+        if (Catalog is not null && !IsLoose)
+        {
+            await ConnectAsync(progress, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
     /// <summary>
     /// Opens the configured game paks folder with the stored key. Leaves the workspace <see cref="WorkspaceState.NotConfigured"/>
     /// when no folder is set.
@@ -191,9 +213,15 @@ public sealed partial class GameWorkspace : ObservableObject, IDisposable
             return AssetCatalog.OpenLoose(folder, new AssetCatalogOptions { Logger = _logger });
         }
 
-        // The key is only held for the duration of the mount and is never logged.
+        // The key is only held for the duration of the mount and is never logged. Imported mods are read over the game.
         _keys.TryGet(out var key);
-        return AssetCatalog.OpenPaks(folder, new AssetCatalogOptions { AesKey = key, Logger = _logger });
+        var mods = ModFolders.Where(Directory.Exists).ToList();
+        if (mods.Count > 0)
+        {
+            _logger.LogInformation("Reading {Count} imported mod(s) over the game files.", mods.Count);
+        }
+
+        return AssetCatalog.OpenPaks(folder, new AssetCatalogOptions { AesKey = key, Logger = _logger, LooseOverlays = mods });
     }
 
     private Task ReplaceAsync(AssetCatalog? catalog, WorkspaceState state, string status, string? source, bool loose)

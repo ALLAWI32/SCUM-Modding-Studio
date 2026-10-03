@@ -47,6 +47,9 @@ public enum SpawnKind
 
     /// <summary>The outline of a hunting area (its circle).</summary>
     AnimalRing,
+
+    /// <summary>Where a trader (an outpost NPC that buys and sells) stands; picks as its trade post.</summary>
+    Trader,
 }
 
 /// <summary>
@@ -78,6 +81,7 @@ public static class SpawnMarkers
         SpawnKind.Zombie => new(0.55f, 1f, 0.05f, 1f),
         SpawnKind.Zone or SpawnKind.ZoneRing => new(1f, 0.05f, 0.35f, 1f),
         SpawnKind.Animal or SpawnKind.AnimalRing => new(0.3f, 0.15f, 0.05f, 1f), // brown, apart from the orange loot zones
+        SpawnKind.Trader => new(0f, 1f, 0.72f, 1f),
         _ => new(0.2f, 1f, 0.35f, 1f),
     };
 
@@ -145,6 +149,12 @@ public static class SpawnMarkers
             }
         }
 
+        // A trade post's traders stand where its NPCs do; the pins pick the trade post (move, copy, delete it whole).
+        foreach (var trader in actor.TraderMarkers)
+        {
+            yield return (SpawnKind.Trader, PinAt(trader.Local * actor.WorldTransform, SpawnKind.Trader), true, $"{trader.Name} ({trader.Type})", null);
+        }
+
         if (lootSpawner && points == 0)
         {
             yield return (SpawnKind.Loot, PinAt(actor.WorldTransform, SpawnKind.Loot), true, actor.Name, null);
@@ -192,6 +202,12 @@ public static class SpawnMarkers
             return ("Spawn.Building", [markers.Count, presets]);
         }
 
+        if (actor.TraderMarkers.Count > 0)
+        {
+            return ("Spawn.Trader", [string.Join(", ", actor.TraderMarkers.Select(t => $"{t.Name} ({t.Type})")),
+                string.Join(", ", actor.TraderMarkers.Select(t => NpcName(t.NpcClass)))]);
+        }
+
         var boxes = actor.Components.Count(c => c.ClassName == "VehicleSpawnBoxComponent");
         var (sizeX, sizeY) = SpawnPlaces.SizeOf(actor.WorldTransform.Scale3D);
         return KindOf(actor) switch
@@ -214,8 +230,15 @@ public static class SpawnMarkers
     /// </summary>
     public static FTransform PinAt(FTransform world, SpawnKind kind, bool inside = false)
     {
-        var size = kind == SpawnKind.PlayerDrop ? 4f : kind is SpawnKind.Zone or SpawnKind.Animal ? 3f : inside ? 0.7f : 1f;
+        var size = kind == SpawnKind.PlayerDrop ? 4f : kind is SpawnKind.Zone or SpawnKind.Animal ? 3f : kind == SpawnKind.Trader ? 1.6f : inside ? 0.7f : 1f;
         return new(FQuat.Identity, world.Translation, new FVector(size, size, size));
+    }
+
+    /// <summary>The NPC's Blueprint name from its class path (<c>BP_ArmsDealer_01</c>).</summary>
+    public static string NpcName(string npcClass)
+    {
+        var name = npcClass[(npcClass.LastIndexOf('.') + 1)..];
+        return name.EndsWith("_C", StringComparison.Ordinal) ? name[..^2] : name;
     }
 
     /// <summary>The marker mesh for <paramref name="kind"/>: a pin (point down at the spawn place) in its colour.</summary>

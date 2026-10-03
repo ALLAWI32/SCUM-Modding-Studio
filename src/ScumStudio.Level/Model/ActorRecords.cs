@@ -137,6 +137,18 @@ public sealed record SpawnMarker(FTransform Local, string Preset, float Probabil
     public string? PresetPath { get; init; }
 }
 
+/// <summary>
+/// One trader of a trade post (an element of its class's <c>_traderMarkers</c>): who it is (its personality: the name the
+/// server's EconomyOverride.json uses, e.g. <c>A_0_Armory</c>, and its type, which decides what it sells), the NPC that
+/// stands there and where.
+/// </summary>
+/// <param name="Local">Where the NPC stands, in the trade post's space.</param>
+/// <param name="Name">The trader's name (<c>HumanReadableTraderName</c>).</param>
+/// <param name="Type">The trader type without its enum prefix (<c>Armorer</c>, <c>Mechanic</c>, <c>GeneralGoods</c> …).</param>
+/// <param name="NpcClass">Class path of the NPC (<c>…/BP_ArmsDealer_01.BP_ArmsDealer_01_C</c>), or empty.</param>
+/// <param name="PersonalityPath">Object path of the personality data asset, or empty.</param>
+public sealed record TraderMarker(FTransform Local, string Name, string Type, string NpcClass, string PersonalityPath);
+
 /// <summary>One instance of an instanced static mesh component, in world space.</summary>
 /// <param name="ComponentExportIndex">Export index of the owning ISM/HISM component.</param>
 /// <param name="ComponentName">Name of that component.</param>
@@ -199,6 +211,9 @@ public sealed record ActorRecord(
 
     /// <summary>Sentry spawners: the patrol path, as points relative to the spawner (<c>PatrolPoints</c>).</summary>
     public IReadOnlyList<FVector> PatrolPoints { get; init; } = [];
+
+    /// <summary>Trade posts: the traders they place (<c>_traderMarkers</c> of the class); empty for other actors.</summary>
+    public IReadOnlyList<TraderMarker> TraderMarkers { get; init; } = [];
 
     /// <summary>Number of synthesized components (see <see cref="ComponentRecord.IsSynthesized"/>).</summary>
     public int SynthesizedComponentCount => Components.Count(c => c.IsSynthesized);

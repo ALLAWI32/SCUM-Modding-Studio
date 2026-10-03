@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using Microsoft.Extensions.Logging;
 using ScumStudio.App.ViewModels;
+using ScumStudio.Core.Abstractions;
 using ScumStudio.Level.Editing;
 using ScumStudio.Level.Projects;
 
@@ -216,5 +217,46 @@ public sealed partial class ProjectSession : ObservableObject, IDisposable
         }
 
         Refresh();
+        _ = UseModsAsync();
+    }
+
+    /// <summary>The open project's imported mods (folders, oldest first); empty without a project.</summary>
+    public IReadOnlyList<string> Mods => Current is { } project ? ProjectMods.Folders(project.DirectoryPath) : [];
+
+    /// <summary>
+    /// Imports someone's mod pak into the open project (unpacked into its <c>mods</c> folder) and reads it over the game
+    /// files from now on; the export carries it.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">No project is open.</exception>
+    /// <exception cref="InvalidDataException">The pak could not be opened.</exception>
+    public async Task<(string Folder, int Files)> ImportModAsync(string pakPath, CancellationToken cancellationToken = default)
+    {
+        var project = Current ?? throw new InvalidOperationException(Localization.Loc.T("History.NoProject"));
+        _services.Keys.TryGet(out var key);
+        var result = await Task.Run(() => ProjectMods.ImportAsync(project.DirectoryPath, pakPath, key, cancellationToken), cancellationToken).ConfigureAwait(false);
+        _logger.LogInformation("Imported mod {Pak}: {Files} file(s).", Path.GetFileName(pakPath), result.Files);
+        await UseModsAsync().ConfigureAwait(false);
+        return result;
+    }
+
+    /// <summary>Removes an imported mod from the open project.</summary>
+    public async Task RemoveModAsync(string folder)
+    {
+        ProjectMods.Remove(folder);
+        await UseModsAsync().ConfigureAwait(false);
+    }
+
+    private async Task UseModsAsync()
+    {
+        try
+        {
+            await _services.Workspace.UseModsAsync(Mods, ProgressSink.Null).ConfigureAwait(false);
+            _services.Dispatcher.Invoke(() => Changed?.Invoke(this, EventArgs.Empty));
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or InvalidOperationException or DirectoryNotFoundException)
+        {
+            _logger.LogWarning("Imported mods not read: {Message}", ex.Message);
+            _services.Notifications.Warning(Localization.Loc.T("Mods.NotRead"), ex.Message);
+        }
     }
 }

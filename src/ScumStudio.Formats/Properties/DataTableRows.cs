@@ -65,8 +65,10 @@ public static class DataTableRows
     /// The payload with a row added as a copy of <paramref name="sourceRow"/> (after the last row);
     /// the row name is <paramref name="newRowName"/> in the (possibly grown) name table <paramref name="names"/>.
     /// </summary>
+    /// <param name="edit">Changes the copied row's bytes before it goes in (offsets: the source row's tag offsets minus its <see cref="DataTableRow.Offset"/>).</param>
     /// <exception cref="InvalidOperationException">The source row is missing or the new row exists.</exception>
-    public static byte[] AddRowCopy(CookedPackage package, byte[] payload, int exportIndex, string sourceRow, FNameRef newRowName, IReadOnlyList<string> names)
+    public static byte[] AddRowCopy(CookedPackage package, byte[] payload, int exportIndex, string sourceRow, FNameRef newRowName, IReadOnlyList<string> names,
+        Func<byte[], DataTableRow, byte[]>? edit = null)
     {
         ArgumentNullException.ThrowIfNull(package);
         ArgumentNullException.ThrowIfNull(payload);
@@ -83,6 +85,10 @@ public static class DataTableRows
         var entry = payload.AsSpan(source.Offset, source.End - source.Offset).ToArray();
         BinaryPrimitives.WriteInt32LittleEndian(entry, newRowName.Index);
         BinaryPrimitives.WriteInt32LittleEndian(entry.AsSpan(4), newRowName.Number);
+        if (edit is not null)
+        {
+            entry = edit(entry, source);
+        }
         var at = rows[^1].End;
         var result = new byte[payload.Length + entry.Length];
         payload.AsSpan(0, at).CopyTo(result);

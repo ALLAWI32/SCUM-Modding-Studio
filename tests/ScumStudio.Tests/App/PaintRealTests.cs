@@ -128,6 +128,60 @@ public sealed class PaintRealTests
     }
 
     /// <summary>Owner: "weapons: change their colours exactly like the car". The AK-47 is tinted gold and the mod carries it.</summary>
+    /// <summary>
+    /// Owner: "some weapons can change colour and some cannot; the magazine paints the whole AK". A weapon material that
+    /// leaves its tint to the weapon master (the knives, the MP5) and a knife on the object master (the baton) can be
+    /// painted; a magazine (it wears its gun's material) has no paint panel.
+    /// </summary>
+    [AvaloniaFact]
+    public async Task EveryWeaponCanBePaintedAndMagazinesAreLeftAlone()
+    {
+        if (Environment.GetEnvironmentVariable("SCUM_PAKS") is not { Length: > 0 } paks || !Directory.Exists(paks))
+        {
+            return; // not asked for
+        }
+
+        using var ctx = AppTestContext.Create(inline: false);
+        ctx.Services.Keys.Set(AesKeyText.FromEnvironmentOrStore()!);
+        ctx.Services.UpdateSettings(s => s with { GamePaksFolder = paks });
+        var (window, vm) = HeadlessUi.ShowMainWindow(ctx.Services, 1600, 900);
+        try
+        {
+            await ctx.Services.Workspace.ConnectAsync(ProgressSink.Null);
+            await ctx.Services.Projects.CreateAsync(ctx.Combine("projects"), "Gold knife");
+            var weapons = (WeaponsPageViewModel)vm.NavigateTo("weapons")!;
+            await weapons.LoadCompletion;
+            foreach (var name in new[] { "Weapon_MP5", "1H_Police_Baton", "1H_KitchenKnife" })
+            {
+                Assert.True(await weapons.SelectAsync(name));
+                await weapons.PreviewCompletion;
+                Assert.True(HeadlessUi.PumpUntil(() => weapons.HasPaints, TimeSpan.FromSeconds(30)), name + " has no paint");
+                Assert.All(weapons.Paints, p => Assert.True(p.IsTint));
+            }
+
+            var knife = weapons.Paints.First();
+            knife.ApplyFinishCommand.Execute(PaintFinish.All.Single(f => f.Key == "Gold"));
+            weapons.ApplyPaintCommand.Execute(null);
+
+            var magazine = weapons.AllItems.First(i => i.Asset.Kind == ScumStudio.Modding.Catalog.ModdableKind.Magazine);
+            Assert.True(await weapons.SelectAsync(magazine.Name));
+            await weapons.PreviewCompletion;
+            Assert.False(HeadlessUi.PumpUntil(() => weapons.HasPaints, TimeSpan.FromSeconds(3)), magazine.Name + " offers paint");
+
+            var result = await new ProjectExporter().ExportAsync(ctx.Services.Projects.Current!, ctx.Services.Workspace.Catalog!,
+                new ExportOptions { OutputDirectory = ctx.Combine("out"), WritePak = false });
+            using var written = AssetCatalog.OpenLoose(result.StagingDirectory);
+            var tint = new ScumStudio.Assets.Materials.MaterialInspector(written).Inspect(knife.MaterialPath).Vectors.Single(v => v.Name == "Difuse_Colorization").Value;
+            Assert.InRange(tint.X, 0.9f, 1.01f); // gold, added to a material that stored no tint of its own
+            Assert.InRange(tint.Z, 0.01f, 0.1f);
+        }
+        finally
+        {
+            window.Close();
+            vm.Dispose();
+        }
+    }
+
     [AvaloniaFact]
     public async Task TheAkCanBePaintedGoldAndTheModCarriesIt()
     {

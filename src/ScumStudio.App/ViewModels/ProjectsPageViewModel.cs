@@ -34,6 +34,36 @@ public sealed class RecentProjectViewModel
     public IAsyncRelayCommand<string?> OpenCommand { get; }
 }
 
+/// <summary>A mod imported into the open project (see <see cref="ProjectMods"/>).</summary>
+public sealed partial class ImportedModViewModel
+{
+    private readonly Func<ImportedModViewModel, Task> _remove;
+
+    /// <summary>Creates the entry for the unpacked mod in <paramref name="folder"/>.</summary>
+    public ImportedModViewModel(string folder, Func<ImportedModViewModel, Task> remove)
+    {
+        Folder = folder;
+        _remove = remove;
+        Name = System.IO.Path.GetFileName(folder);
+        var files = Directory.Exists(folder) ? Directory.EnumerateFiles(folder, "*", SearchOption.AllDirectories).ToList() : [];
+        Summary = Loc.F("Mods.Summary", files.Count(f => f.EndsWith(".umap", StringComparison.OrdinalIgnoreCase)),
+            files.Count(f => f.EndsWith(".uasset", StringComparison.OrdinalIgnoreCase)));
+    }
+
+    /// <summary>The unpacked mod's folder.</summary>
+    public string Folder { get; }
+
+    /// <summary>The mod's name (its pak name).</summary>
+    public string Name { get; }
+
+    /// <summary>"3 maps, 120 assets".</summary>
+    public string Summary { get; }
+
+    /// <summary>Takes the mod out of the project.</summary>
+    [RelayCommand]
+    private Task RemoveAsync() => _remove(this);
+}
+
 /// <summary>Projects page: create/open projects, recent list, the open project's manifest and the mod export.</summary>
 public sealed partial class ProjectsPageViewModel : PageViewModel, IDisposable
 {
@@ -134,6 +164,7 @@ public sealed partial class ProjectsPageViewModel : PageViewModel, IDisposable
     /// <summary>Re-reads recent projects and the open project.</summary>
     public void Refresh()
     {
+        ImportedMods = _services.Projects.Mods.Select(f => new ImportedModViewModel(f, RemoveModAsync)).ToList();
         var open = OpenRecentCommand;
         RecentProjects = _services.Settings.Load().RecentProjects.Select(p => new RecentProjectViewModel(p, open)).ToList();
         var project = _services.Projects.Current;
@@ -280,6 +311,45 @@ public sealed partial class ProjectsPageViewModel : PageViewModel, IDisposable
 
     [RelayCommand]
     private void Close() => _services.Projects.Close();
+
+    /// <summary>Mods made by others imported into the open project (read over the game files, carried by the export).</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasImportedMods))]
+    private IReadOnlyList<ImportedModViewModel> _importedMods = [];
+
+    /// <summary>True when the open project has imported mods.</summary>
+    public bool HasImportedMods => ImportedMods.Count > 0;
+
+    /// <summary>Imports someone's mod pak into the open project (owner: "add other people's mods, their cars, their map").</summary>
+    [RelayCommand]
+    private async Task ImportModAsync()
+    {
+        if (!_services.Projects.HasProject)
+        {
+            _services.Notifications.Warning(Loc.T("History.NoProject"), Loc.T("Mods.NeedProject"));
+            return;
+        }
+
+        if (await _services.Dialogs.OpenFileAsync(Loc.T("Mods.Pick"), "pak", Loc.T("Mods.PakFiles")).ConfigureAwait(true) is not { } pak)
+        {
+            return;
+        }
+
+        var (ok, result) = await _services.Operations.RunAsync(Loc.F("Mods.Importing", System.IO.Path.GetFileName(pak)),
+            (_, ct) => _services.Projects.ImportModAsync(pak, ct)).ConfigureAwait(true);
+        if (ok)
+        {
+            _services.Notifications.Success(Loc.T("Mods.Imported"), Loc.F("Mods.ImportedDetail", System.IO.Path.GetFileName(pak), result.Files));
+        }
+
+        Refresh();
+    }
+
+    private async Task RemoveModAsync(ImportedModViewModel mod)
+    {
+        await _services.Projects.RemoveModAsync(mod.Folder).ConfigureAwait(true);
+        Refresh();
+    }
 
     /// <summary>Builds the mod pak(s) from the open project's edits into <see cref="ExportFolder"/>.</summary>
     [RelayCommand(CanExecute = nameof(CanExport))]

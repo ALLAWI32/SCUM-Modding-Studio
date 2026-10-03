@@ -1,6 +1,7 @@
 using ScumStudio.Assets.Catalog;
 using ScumStudio.Formats.AssetRegistry;
 using ScumStudio.Formats.Packages;
+using ScumStudio.Formats.Properties;
 using ScumStudio.Modding.Catalog;
 using ScumStudio.Modding.Cloning;
 using ScumStudio.Modding.Registry;
@@ -101,6 +102,8 @@ public static class AssetModBuilder
             }
         }
 
+        AddTradeRows(catalog, request.Clones, built, warnings);
+
         var applied = new List<(string, string, string, string)>();
         foreach (var (packagePath, edits) in request.Edits)
         {
@@ -184,6 +187,51 @@ public static class AssetModBuilder
             .ToList();
         return new AssetModBuildResult(packages, registryBytes, registered, applied, warnings);
     }
+
+    /// <summary>
+    /// A clone of something the traders sell (a car the mechanic has, a gun the armorer has) gets its template's row in
+    /// <c>Table_TradeableDesc</c> under its own class and name, so it is sold too (owner: "sell my modded cars").
+    /// </summary>
+    private static void AddTradeRows(AssetCatalog catalog, IReadOnlyList<ClonePlan> clones,
+        Dictionary<string, (CookedPackage Package, PackageBytes Bytes, bool IsClone)> built, List<string> warnings)
+    {
+        if (clones.Count == 0)
+        {
+            return;
+        }
+
+        var path = DataTableEdits.TradeableTable;
+        try
+        {
+            var table = built.TryGetValue(path, out var kept) ? kept.Package : ModdableAssets.ReadPackage(catalog, path);
+            var index = Enumerable.Range(0, table.Exports.Count).First(i => table.GetExportClassName(i) == "DataTable");
+            var rows = DataTableRows.Read(table, index).Select(r => r.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var copies = clones
+                .Select(c => (Template: PackageMap.Leaf(c.Template) + "_C", Leaf: PackageMap.Leaf(c.NewPrimary), c.NewPrimary))
+                .Where(c => rows.Contains(c.Template))
+                .Select(c => new RowCopy(c.Template, c.Leaf + "_C")
+                {
+                    SoftPath = ("TradeableClass", $"{c.NewPrimary}.{c.Leaf}_C"),
+                    Caption = ("TradingEntryCaption", TradeCaption(c.Leaf)),
+                })
+                .ToList();
+            if (copies.Count == 0)
+            {
+                return;
+            }
+
+            var bytes = DataTableEdits.AddRowCopies(table, copies);
+            built[path] = (CookedPackage.Parse(bytes.UAsset, bytes.UExp, table.UBulk, path), bytes, false);
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or FormatException or InvalidDataException or IOException or InvalidOperationException)
+        {
+            warnings.Add($"{path}: the clones are not sold by the traders ({ex.Message}).");
+        }
+    }
+
+    /// <summary>The name a clone shows in the trade menu: <c>BPC_RagerGold</c> → <c>RagerGold</c>, underscores as spaces.</summary>
+    public static string TradeCaption(string leaf) =>
+        (leaf.StartsWith("BPC_", StringComparison.OrdinalIgnoreCase) ? leaf[4..] : leaf).Replace('_', ' ');
 
     /// <summary>The expression guids of a material instance's parent material (empty, with a warning, when unreadable).</summary>
     private static IReadOnlyDictionary<string, byte[]> ParentGuids(AssetCatalog catalog, CookedPackage instance, List<string> warnings)

@@ -49,6 +49,23 @@ public sealed class AvaloniaDialogService : IDialogService
     }
 
     /// <inheritdoc />
+    public async Task<string?> OpenFileAsync(string title, string extension, string filterName)
+    {
+        if (_topLevel()?.StorageProvider is not { CanOpen: true } storage)
+        {
+            return null;
+        }
+
+        var files = await storage.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = title,
+            AllowMultiple = false,
+            FileTypeFilter = [new FilePickerFileType(filterName) { Patterns = ["*." + extension] }],
+        }).ConfigureAwait(true);
+        return files.Count > 0 ? files[0].TryGetLocalPath() : null;
+    }
+
+    /// <inheritdoc />
     public async Task SetClipboardTextAsync(string text)
     {
         if (_topLevel()?.Clipboard is { } clipboard)

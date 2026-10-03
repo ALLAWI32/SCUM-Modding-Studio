@@ -385,6 +385,7 @@ public sealed partial class Cue4ParseLevelReader : ILevelReader
         return header with
         {
             PatrolPoints = patrol,
+            TraderMarkers = ReadTraderMarkers(actor),
             IsLoaded = true,
             PropertyNames = PropertyNames(actor),
             RootComponent = root,
@@ -506,6 +507,71 @@ public sealed partial class Cue4ParseLevelReader : ILevelReader
 
         return new ComponentValues(location, rotation, scale, absLocation, absRotation, absScale, mesh, instances, isInstancedClass,
             isMesh, isScene, isComponent, visible, childActorClass, spline, fromTemplate, endCullDistance, overrides, markers, collision);
+    }
+
+    private readonly Dictionary<string, (string Name, string Type)> _personalities = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// A trade post's traders (<c>_traderMarkers</c>, stored on the class): each with its personality's name and type, the
+    /// NPC class and where it stands. Null for other actors.
+    /// </summary>
+    private IReadOnlyList<TraderMarker>? ReadTraderMarkers(UObject actor)
+    {
+        var ignored = false;
+        if (!TryGetProperty(actor, "_traderMarkers", out FStructFallback[] markers, ref ignored) || markers.Length == 0)
+        {
+            return null;
+        }
+
+        var result = new List<TraderMarker>(markers.Length);
+        foreach (var marker in markers)
+        {
+            var local = marker.TryGetValue(out FStructFallback transform, "SpawnTransform") ? ReadTransformStruct(transform) : FTransform.Identity;
+            var npc = marker.TryGetValue(out FSoftObjectPath npcPath, "SedentaryNPCClass") ? SoftPathText(npcPath) : string.Empty;
+            var personality = marker.TryGetValue(out FPackageIndex index, "TraderPersonality") && !index.IsNull ? ObjectPathOf(index) : string.Empty;
+            var (name, type) = Personality(personality);
+            result.Add(new TraderMarker(local, name, type, npc, personality));
+        }
+
+        return result;
+    }
+
+    /// <summary>The trader name and type a personality asset holds (read once per asset).</summary>
+    private (string Name, string Type) Personality(string path)
+    {
+        if (path.Length == 0)
+        {
+            return (string.Empty, string.Empty);
+        }
+
+        lock (_personalities)
+        {
+            if (_personalities.TryGetValue(path, out var known))
+            {
+                return known;
+            }
+        }
+
+        var found = (Name: path[(path.LastIndexOf('.') + 1)..], Type: string.Empty);
+        try
+        {
+            if (_catalog.TryLoadObject<UObject>(path, out var asset))
+            {
+                found = (asset.TryGetValue(out string name, "HumanReadableTraderName") && name.Length > 0 ? name : found.Name,
+                    asset.TryGetValue(out FName type, "TraderType") ? type.Text[(type.Text.IndexOf("::", StringComparison.Ordinal) + 2)..] : string.Empty);
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogDebug("Trader personality {Path}: {Message}", path, ex.Message);
+        }
+
+        lock (_personalities)
+        {
+            _personalities[path] = found;
+        }
+
+        return found;
     }
 
     private IReadOnlyList<SpawnMarker>? ReadSpawnMarkers(TemplateChain templates)

@@ -80,9 +80,10 @@ public sealed partial class AssetsPageViewModel
             byPath.TryAdd(e.PackagePath, e);
         }
 
-        // The catalogue knows each package's class: no header reads before a tile can draw its picture.
+        // The catalogue knows each package's class: no header reads before a tile can draw its picture. Far-view models
+        // look like buildings but are blurred, merged with their surroundings and have no collision: never listed.
         _objects = AssetDumper.Packages
-            .Where(p => IsObjectClass(p.ClassName) && byPath.ContainsKey(p.PackagePath))
+            .Where(p => IsObjectClass(p.ClassName) && byPath.ContainsKey(p.PackagePath) && !ScumStudio.Level.Export.FarModels.IsFarViewMesh(p.PackagePath))
             .Select(p => (p, byPath[p.PackagePath] is { ClassName: null } e ? e with { ClassName = p.ClassName } : byPath[p.PackagePath]))
             .ToList();
 

@@ -71,6 +71,8 @@ You need Windows 10 or 11 (x64), SCUM installed, and a graphics card with OpenGL
 | **3D map editor** | Fly over the whole island (levels stream in around the camera) or open one cell or sublevel. Click any object, move and turn it with the mouse, snap it to the ground or to other pieces, delete it, copy it anywhere (`Ctrl+C` / `Ctrl+V`), select every object of the same kind (`Ctrl+A`), or pick single trees and rocks. With **Parts** on (or `Alt+click`) a click picks one part of a building (a hangar's wall, shelf or lamp) to move, copy or delete it alone. The **Brush** selects everything under a circle you paint with the mouse. |
 | **Bridges, roads and walls** | The **Shape** menu bends a wall, bridge or road piece into a curve or an S, makes it longer, wider, taller, raises a ramp or a hump, lengthens a bridge pylon's legs under the water, and welds an end onto another piece. Pieces made much longer repeat copy after copy. Bent pieces get **real collision** built from the mesh (no invisible walls, no holes), on the client and the server. Houses and churches do not bend: they **tilt** front, back or sideways (up to 90°) and turn. |
 | **Spawns** | Vehicles, planes and boats: the fuel and battery they spawn with (Empty, Half, Full or any range), the chance each part is there, part condition and how many the server allows. Zombies and NPCs: all 73 threat zones (spawn chance, first spawn, cooldown, distance, which groups). Server: zombie and horde amounts, sentries on or off, drones, animals, written into `ServerSettings.ini`. |
+| **Traders** | Every outpost trader on the map, pinned where the NPC stands with the name the server's EconomyOverride.json uses. Move, copy or delete a trader with its counter. Clones of cars, weapons and items are sold by the same traders under their own names, at your price. |
+| **Import mods** | Load someone's pak mod (a map, a landscape, cars) into your project: the app reads it over the game, you edit on top of it, and your exported pak carries it. |
 | **Spawn places on the map** | Every loot point of the game, read from the game files (select one to see what spawns there: shelf food, hunting weapons, military gear …), loot zones, sentries with their patrol paths, bunker creature points, car-shop spots and drop zones show as coloured pins. Spawners move, copy and delete like any object. |
 | **Far view follows your edits** | Delete or move a building and it is cut out of the island's far-view models and the outposts' HLODs too, so it no longer shows from far away. |
 | **Objects browser** | Every placeable object of the game in categories (buildings, furniture, nature, vehicles, items …) with thumbnails, plus building sets: all walls, all roads, all bridges. Place one in front of the camera with a click. |
@@ -173,6 +175,8 @@ included in this repository.</sub>
   - **Brush**: hold the left mouse button and move over the map; everything inside the yellow circle joins the
     selection (the slider sets its size). Turn it off and the selection stays: `Ctrl+click` what you want to keep, then
     `Delete` removes the rest.
+  - **Traders** (in the Colours legend): outpost traders pinned where the NPC stands; the pin selects the trade post
+    to move, copy or delete it.
   - **Snap**: pieces dragged near each other join end to end, or side by side with level tops; fences stand on edges.
     Hold `Alt` to place freely.
   - **Drone** (`Tab`): fly like the in-game drone.
@@ -207,6 +211,8 @@ included in this repository.</sub>
   for an even colour. `Ctrl+Z` steps back; **Game colours** puts the stock paint back; **Apply paint** records it,
   **Export mod** writes it into the client pak. Weapons get the same panel. The panel's edge drags it wider or narrower.
   A clone has its own paint: painting it leaves the original as it is.
+- **Trader**: what the traders ask for it (price, sale price, fame points, can be bought or sold); a clone is sold
+  by the same trader under its own name.
 - **Hit damage** (knives, axes, bats): the weapon's row in the game's weapon table (damage per hit, stamina, cutting
   and stabbing). **Engine power** (vehicles): the torque at each rpm; more torque, faster acceleration and top speed.
 - The part picker (vehicle, chassis, doors, entity setup …) and **Key stats** (only gameplay values, or everything).
@@ -238,6 +244,7 @@ included in this repository.</sub>
 
 - **Create project**, **Open project**, recent projects.
 - **Export mod**: mod name, output folder, also the server pak; the last export with its report.
+- **Imported mods**: **Import mod…** unpacks someone's pak into the project; the app reads it over the game and the export carries it; **Remove** takes it out.
 - **Dump…**: extract whole categories of game files (weapons, vehicles, buildings, trees, sounds …) to a folder.
 
 ### Settings

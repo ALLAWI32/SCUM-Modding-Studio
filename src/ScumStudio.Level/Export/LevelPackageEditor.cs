@@ -25,7 +25,8 @@ public sealed record SplinePatch(string Actor, string Component, SplineMeshParam
 /// <summary>
 /// One ISM/HISM instance to rewrite inside its component's <c>PerInstanceSMData</c>. A null <paramref name="Local"/>
 /// "deletes" the instance by collapsing it in place (scale 0.0001), which keeps the array length, the HISM cluster tree
-/// and every other instance index valid.
+/// and every other instance index valid. The cooked copy the game draws is rebuilt from the array (see
+/// <see cref="InstanceRenderData"/>).
 /// </summary>
 /// <param name="Actor">Owning actor name.</param>
 /// <param name="Component">ISM/HISM component name.</param>
@@ -166,6 +167,7 @@ public static partial class LevelPackageEditor
 
         var actors = RemoveActors(package, levelIndex, request.DeleteActors, addedIndices, warnings);
         data[levelIndex] = actors.Payload;
+        ForgetTradePosts(package, actors.Removed, data);
 
         var patched = new List<string>();
         foreach (var patch in request.Transforms)
@@ -253,6 +255,48 @@ public static partial class LevelPackageEditor
         }
 
         return first >= 0 ? first : throw new InvalidDataException($"{package.BasePath ?? "The package"} has no Level export (not a level package).");
+    }
+
+    /// <summary>
+    /// A deleted trade post (a trader) leaves its outpost's list: the outpost manager's <c>_assignedTradePosts</c> entry for
+    /// it becomes empty (same size), so the manager never reaches for an actor the level no longer has.
+    /// </summary>
+    private static void ForgetTradePosts(CookedPackage package, IReadOnlyList<string> removed, IList<ReadOnlyMemory<byte>> data)
+    {
+        if (removed.Count == 0)
+        {
+            return;
+        }
+
+        var gone = new HashSet<string>(removed, StringComparer.OrdinalIgnoreCase);
+        for (var i = 0; i < package.Exports.Count; i++)
+        {
+            if (!package.GetExportClassName(i).Contains("TradeOutpostManager", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var payload = data[i].ToArray();
+            if (PropertyReader.ReadPayload(package, payload, i).Find("_assignedTradePosts")?.Value is not ArrayValue posts)
+            {
+                continue;
+            }
+
+            var changed = false;
+            foreach (var post in posts.Items.OfType<ObjectValue>())
+            {
+                if (post.Index > 0 && post.Index <= package.Exports.Count && gone.Contains(package.ResolveName(package.Exports[post.Index - 1].ObjectName)))
+                {
+                    System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(post.Offset), 0);
+                    changed = true;
+                }
+            }
+
+            if (changed)
+            {
+                data[i] = payload;
+            }
+        }
     }
 
     private static (ReadOnlyMemory<byte> Payload, int Before, int After, IReadOnlyList<string> Removed) RemoveActors(
@@ -523,6 +567,7 @@ public static partial class LevelPackageEditor
             }
 
             var (dataOffset, elementSize) = location.Value;
+            var moves = new List<(int Index, FTransform From, FTransform To)>();
             foreach (var patch in group)
             {
                 if (patch.Index < 0 || patch.Index >= hint.Instances.Count)
@@ -541,10 +586,11 @@ public static partial class LevelPackageEditor
                 else
                 {
                     moved++;
+                    moves.Add((patch.Index, pristine, transform));
                 }
             }
 
-            data[componentIndex] = payload;
+            data[componentIndex] = InstanceRenderData.Refresh(payload, block, dataOffset + (elementSize * hint.Instances.Count), hint.Instances.Count, moves);
         }
 
         return (deleted, moved);

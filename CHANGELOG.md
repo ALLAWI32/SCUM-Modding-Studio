@@ -3,6 +3,26 @@
 All notable changes are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [semantic versioning](https://semver.org/).
 
+## [0.2.4] - 2026-10-03
+
+### New in this release
+- **Traders on the map**: every outpost trader (armorer, mechanic, doctor, barber, bartender, general goods, boat
+  shop) is pinned where the NPC stands, with the name the server's EconomyOverride.json uses (`A_0_Armory` …). The pin
+  selects the trade post: move it, copy it (`Ctrl+C` / `Ctrl+V`) or delete it like any object; a deleted one also
+  leaves its outpost's list.
+- **Traders sell your clones**: a clone of a car, weapon or item the traders sell gets its own trade row (its own
+  name in the trade menu); the new **Trader** part sets its price, sale price and the fame points needed.
+- **Import mods**: Projects page → **Imported mods** → **Import mod…** takes someone's pak (a map, a landscape,
+  cars). The app reads it over the game, you edit on top of it, and Export mod carries it in your pak.
+- **Paint for every weapon**: knives, axes, bats, the MP5, the AS Val and the other weapons that had no paint panel.
+  Magazines have no panel any more (they wear their gun's material). **Default colours** is a highlighted button.
+
+### Fixes
+- Moved or deleted trees are drawn where the edit put them in the game (they stayed visible where they were, with
+  no collision, so you walked through them).
+- The game's far-view models (a blurred church merged with a car and walls, no collision) are no longer offered as
+  objects; the export warns about ones placed before.
+
 ## [0.2.3] - 2026-10-03
 
 ### New in this release

@@ -144,6 +144,37 @@
         </StackPanel>
       </Border>
 
+      <Border Classes="card" x:Name="ModsCard">
+        <StackPanel Spacing="8">
+          <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12">
+            <Border Grid.Column="0" Classes="iconTile"><c:GlyphIcon Kind="Icon.Download" IconSize="20" HorizontalAlignment="Center" VerticalAlignment="Center" /></Border>
+            <StackPanel Grid.Column="1" VerticalAlignment="Center">
+              <TextBlock Text="{Tr Mods.Title}" Classes="h2" />
+              <TextBlock Text="{Tr Mods.Caption}" Classes="caption wrap" />
+            </StackPanel>
+            <Button Grid.Column="2" VerticalAlignment="Center" x:Name="ImportModButton" Command="{Binding ImportModCommand}" IsEnabled="{Binding Session.HasProject}" ToolTip.Tip="{Tr Mods.Import.Tip}">
+              <StackPanel Orientation="Horizontal" Spacing="6">
+                <c:GlyphIcon Kind="Icon.Plus" IconSize="14" />
+                <TextBlock Text="{Tr Mods.Import}" />
+              </StackPanel>
+            </Button>
+          </Grid>
+          <ItemsControl ItemsSource="{Binding ImportedMods}" IsVisible="{Binding HasImportedMods}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="vm:ImportedModViewModel">
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8" Margin="0,2">
+                  <StackPanel>
+                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
+                    <TextBlock Text="{Binding Summary}" Classes="caption" />
+                  </StackPanel>
+                  <Button Grid.Column="1" Classes="ghost small" Content="{Tr Mods.Remove}" Command="{Binding RemoveCommand}" ToolTip.Tip="{Tr Mods.Remove.Tip}" VerticalAlignment="Center" />
+                </Grid>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </StackPanel>
+      </Border>
+
       <Border Classes="card" x:Name="DumpCard">
         <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12">
           <Border Grid.Column="0" Classes="iconTile"><c:GlyphIcon Kind="Icon.Download" IconSize="20" HorizontalAlignment="Center" VerticalAlignment="Center" /></Border>

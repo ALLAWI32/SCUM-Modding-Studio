@@ -45,6 +45,14 @@ public static class FarModels
     /// <summary>The persistent level holding the <c>DistantLevelManager</c>.</summary>
     public const string IslandLevel = "/Game/ConZ_Files/Maps/The_Island/The_Island";
 
+    /// <summary>
+    /// True for a far-view model (a merged <c>Distant_Models</c> LOD of a place or an HLOD proxy): low detail, one blurred
+    /// texture, no collision, and it carries whatever stands around the place (cars, walls). Never an object to place: the
+    /// owner placed the C_3 church's far model as a church and walked through it.
+    /// </summary>
+    public static bool IsFarViewMesh(string path) =>
+        path.Contains("/Distant_Models/", StringComparison.OrdinalIgnoreCase) || path.Contains("/HLOD/", StringComparison.OrdinalIgnoreCase);
+
     /// <summary>How far past an object's bounds a far-model vertex still counts as the object's (far models are simplified).</summary>
     public const float Margin = 50f;
 

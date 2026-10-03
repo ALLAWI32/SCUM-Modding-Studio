@@ -185,4 +185,22 @@ public sealed class MapInstanceTests
         Assert.Equal(new FVector(100f, 200f, 300f), add.Transform.Location);
         Assert.Empty(map.AddObjectText);
     }
+
+    /// <summary>Owner placed the C_3 church's far-view model as a church: blurred, merged with a car, no collision. Refused.</summary>
+    [Fact]
+    public async Task AFarViewModelIsNotPlaced()
+    {
+        using var ctx = AppTestContext.Create();
+        var game = ctx.Combine("game");
+        SyntheticLevels.WriteContent(game, withBlueprintPackage: true);
+        using var map = new MapPageViewModel(ctx.Services);
+        await ctx.Services.Workspace.OpenLooseAsync(game, ProgressSink.Null);
+        await map.LoadCompletion;
+        await ctx.Services.Projects.CreateAsync(ctx.Combine("projects"), "Far");
+        await map.LoadLevelsAsync([SyntheticLevels.LevelPath]);
+
+        Assert.False(map.AddMeshActor("/Game/ConZ_Files/Landscape/Distant_Models/C_3/C_3_Church/SM_C_3_Church_Distant_LOD_01.SM_C_3_Church_Distant_LOD_01"));
+        Assert.Empty(ctx.Services.Projects.Current!.Journal.Applied);
+        Assert.True(map.AddMeshActor(SyntheticLevels.RockPackage + ".SM_Rock")); // a real object still goes in
+    }
 }

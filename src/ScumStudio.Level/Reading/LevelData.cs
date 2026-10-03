@@ -153,6 +153,9 @@ public sealed record LevelExportData
     /// <summary>Sentry spawner actors: <c>PatrolPoints</c> relative to the spawner; null for other actors.</summary>
     public IReadOnlyList<FVector>? PatrolPoints { get; init; }
 
+    /// <summary>Trade post actors: their traders (<c>_traderMarkers</c>, usually from the class); null for other actors.</summary>
+    public IReadOnlyList<TraderMarker>? TraderMarkers { get; init; }
+
     /// <summary>True when the relative transform or instances were taken from the template instead of the export itself.</summary>
     public bool UsesTemplateValues { get; init; }
 

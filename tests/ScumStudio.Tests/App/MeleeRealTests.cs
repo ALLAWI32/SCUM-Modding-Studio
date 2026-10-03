@@ -40,7 +40,7 @@ public sealed class MeleeRealTests
             await weapons.CreateCloneAsync();
             Assert.Equal("StrongKnife", weapons.SelectedItem!.Name);
 
-            var damagePart = Assert.Single(weapons.Parts, p => p.Row is not null);
+            var damagePart = Assert.Single(weapons.Parts, p => p.PackagePath == DataTableEdits.WeaponDescTable);
             Assert.Equal("1H_KitchenKnife", damagePart.RowFrom);
             weapons.SelectedPart = damagePart;
             await weapons.ValuesCompletion;

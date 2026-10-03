@@ -80,6 +80,9 @@ public static class ModExportService
 
             // Bent pieces' collision is built from the client's meshes for both cooks (the server cook has no geometry).
             BendMeshes = new BendSupport(catalog).Describe,
+
+            // Imported mods go into both paks (the server needs a modded map's levels too).
+            Mods = ProjectMods.Folders(request.Project.DirectoryPath),
         };
         var exporter = new ProjectExporter(services.Logger);
         var results = new List<ExportResult>(2);
@@ -122,7 +125,7 @@ public static class ModExportService
                 {
                     progress.Report(Localization.Loc.T("Export.OpeningServer"), 0, 0);
                     services.Keys.TryGet(out var key);
-                    using var server = AssetCatalog.OpenPaks(serverFolder, new AssetCatalogOptions { AesKey = key, Logger = services.Logger });
+                    using var server = AssetCatalog.OpenPaks(serverFolder, new AssetCatalogOptions { AesKey = key, Logger = services.Logger, LooseOverlays = options.Mods });
                     progress.Report(Localization.Loc.T("Export.ServerPak"), 0, 0);
                     results.Add(await exporter.ExportAsync(request.Project, server, options, ProjectSourceRole.Server,
                         new StepProgress(progress), cancellationToken).ConfigureAwait(false));

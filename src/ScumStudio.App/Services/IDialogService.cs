@@ -13,6 +13,12 @@ public interface IDialogService
     /// <param name="filterName">File type name shown in the dialog, e.g. "PNG image".</param>
     Task<string?> SaveFileAsync(string title, string suggestedName, string extension, string filterName);
 
+    /// <summary>Asks for a file to open; returns its local path or null when cancelled.</summary>
+    /// <param name="title">Dialog title.</param>
+    /// <param name="extension">Extension without dot, e.g. <c>pak</c>.</param>
+    /// <param name="filterName">File type name shown in the dialog.</param>
+    Task<string?> OpenFileAsync(string title, string extension, string filterName);
+
     /// <summary>Copies text to the clipboard (no-op when unavailable).</summary>
     Task SetClipboardTextAsync(string text);
 }
@@ -25,6 +31,9 @@ public sealed class NullDialogService : IDialogService
 
     /// <inheritdoc />
     public Task<string?> SaveFileAsync(string title, string suggestedName, string extension, string filterName) => Task.FromResult<string?>(null);
+
+    /// <inheritdoc />
+    public Task<string?> OpenFileAsync(string title, string extension, string filterName) => Task.FromResult<string?>(null);
 
     /// <inheritdoc />
     public Task SetClipboardTextAsync(string text) => Task.CompletedTask;

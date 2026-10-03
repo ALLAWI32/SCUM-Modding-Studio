@@ -110,7 +110,8 @@ public abstract partial class ModulePageViewModel
         _paintHistory.Clear();
         _paintShown.Clear();
         PaintPendingCount = 0;
-        if (!IsVehicleModule && item.Asset.Kind is not (ScumStudio.Modding.Catalog.ModdableKind.Weapon or ScumStudio.Modding.Catalog.ModdableKind.Magazine))
+        // Not magazines: an AK's magazine wears the AK's own material, so painting it painted the whole gun (owner).
+        if (!IsVehicleModule && item.Asset.Kind is not ScumStudio.Modding.Catalog.ModdableKind.Weapon)
         {
             return;
         }
@@ -138,7 +139,8 @@ public abstract partial class ModulePageViewModel
             var own = item.IsClone && _services.Projects.Current?.State.FindCloneOf(item.PackagePath) is { } clone
                 ? clone.Packages.ToDictionary(p => p.Old, p => p.New, StringComparer.OrdinalIgnoreCase)
                 : null;
-            var sources = await Task.Run(() => materials.Select(m => ReadPaint(catalog, m, !known.Contains(m), own)).OfType<PaintSource>().ToList()).ConfigureAwait(true);
+            var weaponItem = !IsVehicleModule;
+            var sources = await Task.Run(() => materials.Select(m => ReadPaint(catalog, m, !known.Contains(m), own, weaponItem)).OfType<PaintSource>().ToList()).ConfigureAwait(true);
             if (!ReferenceEquals(SelectedItem, item) || load != _paintLoads)
             {
                 return;
@@ -210,6 +212,15 @@ public abstract partial class ModulePageViewModel
     private sealed record PaintSource(string MaterialPath, string Name, PaintValue Colour, PaintValue? Second, PaintValue? Metal, PaintValue? ClearCoat,
         PaintValue? Added, TextureImage? Mask, PaintValue? Diffuse = null, bool Tint = false);
 
+    /// <summary>A master material's tint, metal and colour texture parameters (texture null: no even finish).</summary>
+    private sealed record TintParameters(string Colour, string Metal, string? Texture);
+
+    /// <summary>M_Weapons_Master: Difuse_Colorization multiplies the texture.</summary>
+    private static readonly TintParameters WeaponTint = new("Difuse_Colorization", "MetallicAmount", "Color");
+
+    /// <summary>M_ObjectsSkinMaster (a few knives, the baton, the flare gun): its texture holds roughness too, so no even finish.</summary>
+    private static readonly TintParameters ObjectTint = new("Diffuse Colorization Global", "Metalness Max", null);
+
     /// <summary>
     /// How much a weapon's tint is lifted so the colour comes out as picked over its own (dark) texture: the texture's mean
     /// linear luminance brought to about that of a mid-grey, between 1 and 6 times.
@@ -242,7 +253,8 @@ public abstract partial class ModulePageViewModel
     /// <param name="materialPath">The material instance a preview part is drawn with (the stock one).</param>
     /// <param name="readMask">Decode its colour mask too.</param>
     /// <param name="own">A clone's stock → copy package map: the paint is edited in the copy, and a material without one is not offered.</param>
-    private PaintSource? ReadPaint(AssetCatalog catalog, string materialPath, bool readMask, IReadOnlyDictionary<string, string>? own = null)
+    /// <param name="weaponItem">The material is a weapon's (the object master's tint counts as its paint too).</param>
+    private PaintSource? ReadPaint(AssetCatalog catalog, string materialPath, bool readMask, IReadOnlyDictionary<string, string>? own = null, bool weaponItem = false)
     {
         if (!catalog.TryLoadObject<UMaterialInstanceConstant>(materialPath, out var mi))
         {
@@ -259,11 +271,15 @@ public abstract partial class ModulePageViewModel
         var vectors = mi.VectorParameterValues.Select(v => v.ParameterInfo.Name.Text).ToList();
         var scalars = mi.ScalarParameterValues.Select(v => v.ParameterInfo.Name.Text).ToList();
         var colourIndex = vectors.IndexOf("Base Color A") is >= 0 and var a ? a : vectors.IndexOf("Paint Color");
-        // A weapon's or magazine's material (M_Weapons_Master) ages with rust and takes a tint.
-        var weapon = vectors.Contains("Rust Colorization") || scalars.Contains("MetallicAmount");
+        // A weapon's material takes a tint: told by its master, not by what it stores (124 weapon materials leave both
+        // the tint and the metal to M_Weapons_Master: the knives, the MP5, the AS Val had no paint; owner).
+        var chain = new MaterialInspector(catalog).Inspect(mi).ParentChain;
+        var weapon = chain.Any(p => p.Contains("/M_Weapons_Master.", StringComparison.OrdinalIgnoreCase)) ? WeaponTint
+            : weaponItem && chain.Any(p => p.Contains("/M_ObjectsSkinMaster_MainShader.", StringComparison.OrdinalIgnoreCase)) ? ObjectTint
+            : null;
         // A body paint is dirtied (lights, dashboards' emissive parts and interiors are not paint). A dirtied car paint
         // material without a colour of its own (the armour) gets one added.
-        if (!weapon && !vectors.Contains("Dirt Color") && (colourIndex < 0 || vectors[colourIndex] == "Base Color A"))
+        if (weapon is null && !vectors.Contains("Dirt Color") && (colourIndex < 0 || vectors[colourIndex] == "Base Color A"))
         {
             return null;
         }
@@ -292,7 +308,7 @@ public abstract partial class ModulePageViewModel
 
         var leaf = materialPath[(materialPath.LastIndexOf('.') + 1)..];
         var name = (leaf.StartsWith("MI_", StringComparison.Ordinal) ? leaf[3..] : leaf).Replace('_', ' ');
-        if (weapon)
+        if (weapon is not null)
         {
             // By name (the export patches a stored entry or adds one); "as the game has it" is what this material stores.
             PaintValue Keyed(string array, string param, TunableKind kind, string stock)
@@ -305,13 +321,13 @@ public abstract partial class ModulePageViewModel
                 names.IndexOf(param) is >= 0 and var i && tunables.FirstOrDefault(t => t.Path == $"{array}[{i}].ParameterValue") is { } t ? t.Value : string.Empty;
 
             var textures = mi.TextureParameterValues.Select(v => v.ParameterInfo.Name.Text).ToList();
-            var texture = textures.Contains("Color")
-                ? new MaterialInspector(catalog).Inspect(mi).Textures.FirstOrDefault(t => t.Name == "Color")?.TexturePath ?? string.Empty
+            var texture = weapon.Texture is { } param && textures.Contains(param)
+                ? new MaterialInspector(catalog).Inspect(mi).Textures.FirstOrDefault(t => t.Name == param)?.TexturePath ?? string.Empty
                 : string.Empty;
             return new PaintSource(materialPath, name,
-                Keyed("VectorParameterValues", "Difuse_Colorization", TunableKind.Color, Stored("VectorParameterValues", vectors, "Difuse_Colorization")), null,
-                Keyed("ScalarParameterValues", "MetallicAmount", TunableKind.Float, Stored("ScalarParameterValues", scalars, "MetallicAmount")), null,
-                null, null, Keyed("TextureParameterValues", "Color", TunableKind.Text, texture), Tint: true);
+                Keyed("VectorParameterValues", weapon.Colour, TunableKind.Color, Stored("VectorParameterValues", vectors, weapon.Colour)), null,
+                Keyed("ScalarParameterValues", weapon.Metal, TunableKind.Float, Stored("ScalarParameterValues", scalars, weapon.Metal)), null,
+                null, null, weapon.Texture is { } flat ? Keyed("TextureParameterValues", flat, TunableKind.Text, texture) : null, Tint: true);
         }
 
         if (colourIndex < 0)

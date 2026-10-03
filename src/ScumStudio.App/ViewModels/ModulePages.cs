@@ -18,6 +18,7 @@ public sealed class VehiclesPageViewModel : ModulePageViewModel
         "_inWaterDestructionTimeInSeconds", "_explosionDamageRatio", "_shouldVehicleBurnWhenDestroyed", "Caption", "Description",
         "_displayName", "Weight", "MaxTorque", "MaxPower", "_maxHealth", "_health", "MaxHealth", "Health", "FuelCapacity",
         "_fuelCapacity", "_maxFuel", "TopSpeed", "MaxSpeed", "bAutoReverse", "bAutoBrake", "StopThreshold",
+        "BasePurchasePrice", "BaseSalePrice", "RequiredFamePoints", "CanBePurchasedByPlayer", "CanBeSoldByPlayer", "MaxAmountPurchasedAtOnce",
     };
 
     /// <summary>Creates the page.</summary>
@@ -53,6 +54,7 @@ public sealed class WeaponsPageViewModel : ModulePageViewModel
         "PitchMin", "PitchMax", "YawMin", "YawMax", "IsCarriedWithTwoHands", "_spawnRotationRandomization",
         "Urban", "Rural", "Industrial", "Police", "MilitaryMedium", "MilitaryAdvanced", "Sport", "Market", "GasStation",
         "Damage", "Energy", "SharpnessSlash", "SharpnessPierce", "CombatAnimationPlayRateModifier", "DamageOnUse",
+        "BasePurchasePrice", "BaseSalePrice", "RequiredFamePoints", "CanBePurchasedByPlayer", "CanBeSoldByPlayer", "MaxAmountPurchasedAtOnce",
     };
 
     /// <summary>Creates the page.</summary>

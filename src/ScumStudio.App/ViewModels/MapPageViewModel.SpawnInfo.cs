@@ -35,6 +35,7 @@ public sealed partial class MapPageViewModel
         var hidden = _services.UiState.Current.HiddenSpawnLayers;
         var layers = new (string Key, SpawnKind[] Kinds)[]
         {
+            ("Traders", [SpawnKind.Trader]),
             ("Loot", [SpawnKind.Loot]),
             ("Vehicles", [SpawnKind.VehiclePlace]),
             ("Zombies", [SpawnKind.Zombie]),
@@ -213,6 +214,7 @@ public sealed partial class SpawnLayerViewModel : ObservableObject
     /// <summary>Name in the legend.</summary>
     public string Name => Key switch
     {
+        "Traders" => Loc.T("Spawn.Layer.Traders"),
         "Loot" => Loc.T("Spawn.Layer.Loot"),
         "Vehicles" => Loc.T("Spawn.Layer.Vehicles"),
         "Zombies" => Loc.T("Spawn.Layer.Zombies"),
@@ -228,6 +230,7 @@ public sealed partial class SpawnLayerViewModel : ObservableObject
     /// <summary>What the pins are, in a sentence.</summary>
     public string Description => Key switch
     {
+        "Traders" => Loc.T("Spawn.Layer.Traders.Tip"),
         "Loot" => Loc.T("Spawn.Layer.Loot.Tip"),
         "Vehicles" => Loc.T("Spawn.Layer.Vehicles.Tip"),
         "Zombies" => Loc.T("Spawn.Layer.Zombies.Tip"),

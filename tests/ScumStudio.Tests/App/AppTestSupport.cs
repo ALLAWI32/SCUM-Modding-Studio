@@ -83,6 +83,11 @@ internal sealed class ScriptedDialogService : IDialogService
     public Task<string?> SaveFileAsync(string title, string suggestedName, string extension, string filterName) =>
         Task.FromResult(SaveFiles.Count > 0 ? SaveFiles.Dequeue() : null);
 
+    public Queue<string?> OpenFiles { get; } = new();
+
+    public Task<string?> OpenFileAsync(string title, string extension, string filterName) =>
+        Task.FromResult(OpenFiles.Count > 0 ? OpenFiles.Dequeue() : null);
+
     public Task SetClipboardTextAsync(string text)
     {
         Clipboard.Add(text);

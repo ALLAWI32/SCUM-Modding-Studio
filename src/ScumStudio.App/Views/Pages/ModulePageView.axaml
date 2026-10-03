@@ -317,7 +317,7 @@
                   <StackPanel DockPanel.Dock="Top" Margin="12,10,12,4" Spacing="2">
                     <Grid ColumnDefinitions="*,Auto">
                       <TextBlock Text="{Tr Paint.Title}" Classes="h2" />
-                      <Button Grid.Column="1" x:Name="PaintAllOriginalButton" Classes="ghost small" Content="{Tr Paint.AllOriginal}" Command="{Binding AllOriginalPaintCommand}"
+                      <Button Grid.Column="1" x:Name="PaintAllOriginalButton" Classes="accent small" Content="{Tr Paint.AllOriginal}" Command="{Binding AllOriginalPaintCommand}"
                               VerticalAlignment="Center" ToolTip.Tip="{Tr Paint.AllOriginal.Tip}" />
                     </Grid>
                     <TextBlock Text="{Binding PaintCaption}" Classes="caption wrap" />

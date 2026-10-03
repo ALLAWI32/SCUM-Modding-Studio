@@ -848,6 +848,17 @@ public abstract partial class ModulePageViewModel : PageViewModel, ISearchablePa
             });
         }
 
+        // What the traders ask for it and whether they sell it: its Table_TradeableDesc row (a clone gets its template's, see AssetModBuilder).
+        var tradeRow = PackageMap.Leaf(item.CloneOf ?? item.PackagePath) + "_C";
+        if ((await Task.Run(() => TradeableRows(catalog)).ConfigureAwait(true)).Contains(tradeRow))
+        {
+            parts.Add(new ModulePart(Loc.T("Module.Part.Trade"), DataTableEdits.TradeableTable, Loc.T("Module.Part.Trade.Tip"))
+            {
+                Row = item.Name + "_C",
+                RowFrom = item.IsClone ? tradeRow : null,
+            });
+        }
+
         if (item.Asset.Kind == ModdableKind.Vehicle)
         {
             // Owner: "make the car faster". Its engine's pull is an external torque curve (Curves/<Token>_EngineTorqueCurve; a clone has its own copy).
@@ -876,6 +887,32 @@ public abstract partial class ModulePageViewModel : PageViewModel, ISearchablePa
                 Caption = caption ?? string.Empty;
             }
         }
+    }
+
+    private (AssetCatalog Catalog, HashSet<string> Rows)? _tradeRows;
+
+    /// <summary>The row names of the game's tradeable table (what the traders sell), read once per catalog; empty when unreadable.</summary>
+    private HashSet<string> TradeableRows(AssetCatalog catalog)
+    {
+        if (_tradeRows is { } kept && ReferenceEquals(kept.Catalog, catalog))
+        {
+            return kept.Rows;
+        }
+
+        var rows = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            var table = ModdableAssets.ReadPackage(catalog, DataTableEdits.TradeableTable);
+            var index = Enumerable.Range(0, table.Exports.Count).First(i => table.GetExportClassName(i) == "DataTable");
+            rows.UnionWith(DataTableRows.Read(table, index).Select(r => r.Name));
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or FormatException or InvalidDataException or IOException or InvalidOperationException)
+        {
+            _services.Logger.LogDebug("Tradeable table: {Message}", ex.Message);
+        }
+
+        _tradeRows = (catalog, rows);
+        return rows;
     }
 
     /// <summary>The vehicle's engine torque curve package (a clone's own copy), or null.</summary>
@@ -1001,7 +1038,7 @@ public abstract partial class ModulePageViewModel : PageViewModel, ISearchablePa
         var from = DataTableRows.PathOf(part.RowFrom ?? row, string.Empty);
         var to = DataTableRows.PathOf(row, string.Empty);
         return tunables.Where(t => t.Path.StartsWith(from, StringComparison.OrdinalIgnoreCase))
-            .Select(t => t with { Path = to + t.Path[from.Length..], Group = Loc.T("Module.Part.Damage") })
+            .Select(t => t with { Path = to + t.Path[from.Length..], Group = part.Label })
             .ToList();
     }
 

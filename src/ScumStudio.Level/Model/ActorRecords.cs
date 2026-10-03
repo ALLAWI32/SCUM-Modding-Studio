@@ -58,6 +58,12 @@ public sealed record ComponentRecord(
     /// <summary>Item spawners: the places it puts loot (<c>SpawnerMarkers</c>, from the component or its Blueprint template).</summary>
     public IReadOnlyList<SpawnMarker> SpawnMarkers { get; init; } = [];
 
+    /// <summary>
+    /// The collision profile the component sets (<c>BodyInstance.CollisionProfileName</c>, stored or from a template): a
+    /// tree's foliage <c>SCUM_TreeStump</c> while its mesh's own default lets players through. Null when not set.
+    /// </summary>
+    public string? CollisionProfile { get; init; }
+
     /// <summary>Full class path (e.g. <c>/Script/Engine.StaticMeshComponent</c>).</summary>
     public string ClassPath { get; init; } = string.Empty;
 
@@ -122,7 +128,14 @@ public sealed record ComponentRecord(
 /// <param name="Probability">Chance that something spawns, in percent.</param>
 /// <param name="MinQuantity">Fewest items.</param>
 /// <param name="MaxQuantity">Most items.</param>
-public sealed record SpawnMarker(FTransform Local, string Preset, float Probability, int MinQuantity, int MaxQuantity);
+public sealed record SpawnMarker(FTransform Local, string Preset, float Probability, int MinQuantity, int MaxQuantity)
+{
+    /// <summary>
+    /// Class path of the preset (<c>/Game/.../Airfield_Hangar/World_Shelf.World_Shelf_C</c>; many folders have a
+    /// <c>World_Shelf</c>), or null for a world spawner's fixed item.
+    /// </summary>
+    public string? PresetPath { get; init; }
+}
 
 /// <summary>One instance of an instanced static mesh component, in world space.</summary>
 /// <param name="ComponentExportIndex">Export index of the owning ISM/HISM component.</param>

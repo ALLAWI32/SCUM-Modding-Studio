@@ -105,11 +105,12 @@ public abstract partial class ModulePageViewModel
         }
 
         _previewBase = model;
+        CloneSharesPaint = false;
         var load = ++_paintLoads;
         _paintHistory.Clear();
         _paintShown.Clear();
         PaintPendingCount = 0;
-        if (!IsVehicleModule)
+        if (!IsVehicleModule && item.Asset.Kind is not (ScumStudio.Modding.Catalog.ModdableKind.Weapon or ScumStudio.Modding.Catalog.ModdableKind.Magazine))
         {
             return;
         }
@@ -132,24 +133,29 @@ public abstract partial class ModulePageViewModel
         {
             var materials = model.Parts.Select(p => p.Material).Where(m => m.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
             var known = _paintMasks.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase);
-            var sources = await Task.Run(() => materials.Select(m => ReadPaint(catalog, m, !known.Contains(m))).OfType<PaintSource>().ToList()).ConfigureAwait(true);
+            // A clone paints its own copies of the materials (owner: "paint Rager 1 and Rager 2, the default stays"); one made
+            // without copies would paint the stock vehicle too, so it gets none.
+            var own = item.IsClone && _services.Projects.Current?.State.FindCloneOf(item.PackagePath) is { } clone
+                ? clone.Packages.ToDictionary(p => p.Old, p => p.New, StringComparer.OrdinalIgnoreCase)
+                : null;
+            var sources = await Task.Run(() => materials.Select(m => ReadPaint(catalog, m, !known.Contains(m), own)).OfType<PaintSource>().ToList()).ConfigureAwait(true);
             if (!ReferenceEquals(SelectedItem, item) || load != _paintLoads)
             {
                 return;
             }
+
+            CloneSharesPaint = own is not null && sources.Count == 0;
 
             foreach (var source in sources.Where(s => s.Mask is not null))
             {
                 _paintMasks[source.MaterialPath] = source.Mask!;
             }
 
-            var body = BodyBrightness(model, sources);
             var paints = new List<PaintMaterialViewModel>();
             foreach (var s in sources)
             {
-                // An added paint matches the body: over its own (darker) print, or over the plain white finish.
-                var gain = s.Added is null ? 1f : Math.Clamp(body / Math.Max(1e-4f, Brightness(model, s.MaterialPath, null)), 1f, 8f);
-                var paint = new PaintMaterialViewModel(s.MaterialPath, s.Name, s.Colour, s.Second, s.Metal, s.ClearCoat, s.Added, gain, s.Diffuse, Math.Clamp(body, 0.05f, 1f));
+                var paint = new PaintMaterialViewModel(s.MaterialPath, s.Name, s.Colour, s.Second, s.Metal, s.ClearCoat, s.Added, s.Diffuse,
+                    s.Tint, s.Tint ? TintGain(model, s.MaterialPath) : 1f);
                 if (_paintCarry is { } carry && carry.TryGetValue(paint.MaterialPath, out var kept))
                 {
                     kept.ApplyTo(paint); // another armour kit: the paint chosen so far stays
@@ -184,12 +190,68 @@ public abstract partial class ModulePageViewModel
     }
 
     /// <summary>What <see cref="ReadPaint"/> found for one material (the view model is made on the UI thread).</summary>
-    private sealed record PaintSource(string MaterialPath, string Name, PaintValue Colour, PaintValue? Second, PaintValue? Metal, PaintValue? ClearCoat,
-        PaintValue? Added, TextureImage? Mask, PaintValue? Diffuse = null);
+    /// <summary>Every part back to the game's own paint (one undo step; Apply paint records it).</summary>
+    [RelayCommand]
+    private void AllOriginalPaint()
+    {
+        foreach (var paint in Paints)
+        {
+            paint.OriginalCommand.Execute(null);
+        }
+    }
 
-    private PaintSource? ReadPaint(AssetCatalog catalog, string materialPath, bool readMask)
+    /// <summary>What the paint panel is about: a vehicle's body paint or a weapon's colour.</summary>
+    public string PaintCaption => IsVehicleModule ? Loc.T("Paint.Caption") : Loc.T("Paint.Caption.Weapon");
+
+    /// <summary>Who gets the paint in game: every one of the model, or only a clone (its own spawn command).</summary>
+    public string PaintNote => SelectedItem?.IsClone == true ? Loc.F("Paint.Note.Clone", SpawnCommandText)
+        : IsVehicleModule ? Loc.T("Paint.Note") : Loc.T("Paint.Note.Weapon");
+
+    private sealed record PaintSource(string MaterialPath, string Name, PaintValue Colour, PaintValue? Second, PaintValue? Metal, PaintValue? ClearCoat,
+        PaintValue? Added, TextureImage? Mask, PaintValue? Diffuse = null, bool Tint = false);
+
+    /// <summary>
+    /// How much a weapon's tint is lifted so the colour comes out as picked over its own (dark) texture: the texture's mean
+    /// linear luminance brought to about that of a mid-grey, between 1 and 6 times.
+    /// </summary>
+    private static float TintGain(PreviewModel model, string material)
+    {
+        var path = model.Parts.FirstOrDefault(p => string.Equals(p.Material, material, StringComparison.OrdinalIgnoreCase) && p.TexturePath is not null)?.TexturePath;
+        if (path is null || !model.Textures.TryGetValue(path, out var image))
+        {
+            return 1f;
+        }
+
+        double sum = 0;
+        var n = 0;
+        for (var i = 0; i < image.Rgba.Length; i += 64)
+        {
+            var l = PaintMaterialViewModel.ToLinear(Avalonia.Media.Color.FromRgb(image.Rgba[i], image.Rgba[i + 1], image.Rgba[i + 2]));
+            sum += (0.2126 * l.X) + (0.7152 * l.Y) + (0.0722 * l.Z);
+            n++;
+        }
+
+        return n == 0 ? 1f : Math.Clamp(0.3f / Math.Max(1e-3f, (float)(sum / n)), 1f, 6f);
+    }
+
+    /// <summary>A clone without its own copies of the paint (made before clones had them): painting it is off.</summary>
+    [ObservableProperty]
+    private bool _cloneSharesPaint;
+
+    /// <param name="catalog">The game files.</param>
+    /// <param name="materialPath">The material instance a preview part is drawn with (the stock one).</param>
+    /// <param name="readMask">Decode its colour mask too.</param>
+    /// <param name="own">A clone's stock → copy package map: the paint is edited in the copy, and a material without one is not offered.</param>
+    private PaintSource? ReadPaint(AssetCatalog catalog, string materialPath, bool readMask, IReadOnlyDictionary<string, string>? own = null)
     {
         if (!catalog.TryLoadObject<UMaterialInstanceConstant>(materialPath, out var mi))
+        {
+            return null;
+        }
+
+        var stockPackage = materialPath[..materialPath.LastIndexOf('.')];
+        var package = own is null ? stockPackage : own.GetValueOrDefault(stockPackage);
+        if (package is null)
         {
             return null;
         }
@@ -197,14 +259,15 @@ public abstract partial class ModulePageViewModel
         var vectors = mi.VectorParameterValues.Select(v => v.ParameterInfo.Name.Text).ToList();
         var scalars = mi.ScalarParameterValues.Select(v => v.ParameterInfo.Name.Text).ToList();
         var colourIndex = vectors.IndexOf("Base Color A") is >= 0 and var a ? a : vectors.IndexOf("Paint Color");
+        // A weapon's or magazine's material (M_Weapons_Master) ages with rust and takes a tint.
+        var weapon = vectors.Contains("Rust Colorization") || scalars.Contains("MetallicAmount");
         // A body paint is dirtied (lights, dashboards' emissive parts and interiors are not paint). A dirtied car paint
         // material without a colour of its own (the armour) gets one added.
-        if (!vectors.Contains("Dirt Color") && (colourIndex < 0 || vectors[colourIndex] == "Base Color A"))
+        if (!weapon && !vectors.Contains("Dirt Color") && (colourIndex < 0 || vectors[colourIndex] == "Base Color A"))
         {
             return null;
         }
 
-        var package = materialPath[..materialPath.LastIndexOf('.')];
         var editing = ReadForEditing(catalog, package);
         var tunables = TunableReader.Read(editing);
         var export = TunableReader.ExportKeys(editing)[0];
@@ -229,6 +292,28 @@ public abstract partial class ModulePageViewModel
 
         var leaf = materialPath[(materialPath.LastIndexOf('.') + 1)..];
         var name = (leaf.StartsWith("MI_", StringComparison.Ordinal) ? leaf[3..] : leaf).Replace('_', ' ');
+        if (weapon)
+        {
+            // By name (the export patches a stored entry or adds one); "as the game has it" is what this material stores.
+            PaintValue Keyed(string array, string param, TunableKind kind, string stock)
+            {
+                var path = MaterialParameters.PathOf(array, param);
+                return new PaintValue(package, new Tunable(export, path, kind, stock), state?.GetAssetValue(package, export, path)?.Current ?? stock);
+            }
+
+            string Stored(string array, List<string> names, string param) =>
+                names.IndexOf(param) is >= 0 and var i && tunables.FirstOrDefault(t => t.Path == $"{array}[{i}].ParameterValue") is { } t ? t.Value : string.Empty;
+
+            var textures = mi.TextureParameterValues.Select(v => v.ParameterInfo.Name.Text).ToList();
+            var texture = textures.Contains("Color")
+                ? new MaterialInspector(catalog).Inspect(mi).Textures.FirstOrDefault(t => t.Name == "Color")?.TexturePath ?? string.Empty
+                : string.Empty;
+            return new PaintSource(materialPath, name,
+                Keyed("VectorParameterValues", "Difuse_Colorization", TunableKind.Color, Stored("VectorParameterValues", vectors, "Difuse_Colorization")), null,
+                Keyed("ScalarParameterValues", "MetallicAmount", TunableKind.Float, Stored("ScalarParameterValues", scalars, "MetallicAmount")), null,
+                null, null, Keyed("TextureParameterValues", "Color", TunableKind.Text, texture), Tint: true);
+        }
+
         if (colourIndex < 0)
         {
             return new PaintSource(materialPath, name,
@@ -259,39 +344,6 @@ public abstract partial class ModulePageViewModel
             _services.Logger.LogDebug("Colour mask of {Material}: {Message}", mi.Name, ex.Message);
             return null;
         }
-    }
-
-    /// <summary>How bright the body paint's diffuse is where the paint goes (linear luminance), the level added paints match.</summary>
-    private float BodyBrightness(PreviewModel model, IReadOnlyList<PaintSource> sources)
-    {
-        var levels = sources.Where(s => s.Added is null && _paintMasks.ContainsKey(s.MaterialPath))
-            .Select(s => Brightness(model, s.MaterialPath, _paintMasks[s.MaterialPath])).Where(b => b > 0).ToList();
-        return levels.Count == 0 ? 0.4f : levels.Average();
-    }
-
-    /// <summary>Mean linear luminance of <paramref name="material"/>'s diffuse in the preview (weighted by the mask's green).</summary>
-    private static float Brightness(PreviewModel model, string material, TextureImage? mask)
-    {
-        var path = model.Parts.FirstOrDefault(p => string.Equals(p.Material, material, StringComparison.OrdinalIgnoreCase) && p.TexturePath is not null)?.TexturePath;
-        if (path is null || !model.Textures.TryGetValue(path, out var image))
-        {
-            return 0f;
-        }
-
-        double sum = 0, weight = 0;
-        for (var y = 0; y < image.Height; y += 4)
-        {
-            for (var x = 0; x < image.Width; x += 4)
-            {
-                var i = ((y * image.Width) + x) * 4;
-                var w = mask is null ? 1.0 : mask.Rgba[((Math.Min(mask.Height - 1, y * mask.Height / image.Height) * mask.Width) + Math.Min(mask.Width - 1, x * mask.Width / image.Width)) * 4 + 1] / 255.0;
-                var l = PaintMaterialViewModel.ToLinear(Avalonia.Media.Color.FromRgb(image.Rgba[i], image.Rgba[i + 1], image.Rgba[i + 2]));
-                sum += w * ((0.2126 * l.X) + (0.7152 * l.Y) + (0.0722 * l.Z));
-                weight += w;
-            }
-        }
-
-        return weight > 0 ? (float)(sum / weight) : 0f;
     }
 
     partial void OnArmourChanged(PaintArmourChoice? value)
@@ -391,20 +443,25 @@ public abstract partial class ModulePageViewModel
             {
                 parts.Add(part with { TexturePath = null, Tint = paint.LinearColour, Surface = surface }); // the plain white finish, painted
             }
-            else if (part.TexturePath is { } path && model.Textures.TryGetValue(path, out var diffuse) && !paint.IsAdded && _paintMasks.TryGetValue(paint.MaterialPath, out var mask))
+            else if (!paint.IsTint && part.TexturePath is { } path && model.Textures.TryGetValue(path, out var diffuse)
+                     && (paint.IsAdded ? WhiteMask : _paintMasks.GetValueOrDefault(paint.MaterialPath)) is { } mask)
             {
+                // Through the colour mask; an added paint (armour) is paint all over, its plate print adding the scratches.
                 var key = "#paint/" + paint.MaterialPath;
                 textures[key] = Baked(paint, diffuse, mask);
                 parts.Add(part with { TexturePath = key, Tint = null, Surface = surface });
             }
             else
             {
-                parts.Add(part with { Tint = paint.LinearColour, Surface = surface }); // paint all over (an added paint's mask is white)
+                parts.Add(part with { Tint = paint.LinearColour, Surface = surface }); // a weapon's tint times its own texture
             }
         }
 
         Preview = model with { Parts = parts, Textures = textures };
     }
+
+    /// <summary>The export's white colour mask on an added paint (<see cref="PaintMaterialViewModel.WhiteMask"/>): paint everywhere.</summary>
+    private static readonly TextureImage WhiteMask = new("WhiteMask", 1, 1, [255, 255, 255, 255], "PF_B8G8R8A8", 0, 1, 1, false, false);
 
     /// <summary>The painted texture of <paramref name="paint"/>, baked again only when its colours changed.</summary>
     private TextureImage Baked(PaintMaterialViewModel paint, TextureImage diffuse, TextureImage mask)

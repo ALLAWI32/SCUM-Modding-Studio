@@ -217,6 +217,7 @@ public sealed class ProjectExporter
         var placed = new List<(string Level, string File, HashSet<string> Actors)>();
         var cuts = new List<CutBox>();
         var proxies = new List<FarModels.Candidate>();
+        var spawnPlaces = new List<ExportedAsset>();
         foreach (var level in state.ChangedLevels)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -224,6 +225,17 @@ public sealed class ProjectExporter
             if (!catalog.TryGetPackageFile(level, out var file))
             {
                 warnings.Add($"{level}: not found in {catalog.DisplayName}; skipped.");
+                continue;
+            }
+
+            // The island's spawn places are not a level: their edits rewrite the static data asset that holds them.
+            if (Spawns.SpawnPlaces.IsStaticData(level))
+            {
+                if (await WriteSpawnPlacesAsync(state, catalog, file, staging, warnings, cancellationToken).ConfigureAwait(false) is { } placesAsset)
+                {
+                    spawnPlaces.Add(placesAsset);
+                }
+
                 continue;
             }
 
@@ -328,7 +340,7 @@ public sealed class ProjectExporter
         }
 
         // Vehicles and items: clones (renamed families) and stored-value edits, plus the merged AssetRegistry.bin.
-        var assets = new List<ExportedAsset>();
+        var assets = new List<ExportedAsset>(spawnPlaces);
         var registered = new List<RegisteredAsset>();
         var assetValues = new List<(string, string, string, string)>();
         var writeRegistry = false;
@@ -503,6 +515,21 @@ public sealed class ProjectExporter
     public static LevelEditRequest PlanLevel(EditState state, string level, LevelDocument? document, List<string> warnings) =>
         PlanLevel(state, level, document, warnings, null, null);
 
+    /// <summary>The profile SCUM's standing trees collide as (its tree foliage uses it; players and cars stop at the trunk).</summary>
+    public const string StandingTree = "SCUM_TreeStump";
+
+    /// <summary>
+    /// For a mesh copy that does not know what it was copied from (made before copies kept it): a tree whose mesh's own
+    /// default collision lets players and vehicles through (<c>SCUM_Foliage</c>) collides as the game's tree foliage does
+    /// (<see cref="StandingTree"/>); null otherwise. The owner's copied cypresses, pines and acacias had no collision.
+    /// </summary>
+    // ponytail: by folder (Foliage/.../Trees/) and default profile; a copy made now carries its source's own profile.
+    public static string? StandingTreeProfile(string mesh, Func<string, BendMesh?>? meshes) =>
+        mesh.Contains("/Foliage/", StringComparison.OrdinalIgnoreCase) && mesh.Contains("/Trees/", StringComparison.OrdinalIgnoreCase)
+        && meshes?.Invoke(mesh)?.DefaultProfile is "SCUM_Foliage"
+            ? StandingTree
+            : null;
+
     /// <summary>
     /// <see cref="PlanLevel(EditState, string, LevelDocument?, List{string})"/> with access to other levels, so Blueprint
     /// actors added from another level (<see cref="AddBlueprintActorOp"/>) can be copied: <paramref name="sourcePackages"/>
@@ -611,7 +638,10 @@ public sealed class ProjectExporter
                     copies.Add(new ActorCopy(duplicate.Source.Actor, duplicate.NewName, state.GetAddedTransform(added), sourceRoot));
                     break;
                 case AddStaticMeshActorOp meshActor:
-                    meshAdds.Add(new StaticMeshActorAdd(meshActor.NewName, meshActor.StaticMesh, state.GetAddedTransform(added) ?? meshActor.Transform));
+                    meshAdds.Add(new StaticMeshActorAdd(meshActor.NewName, meshActor.StaticMesh, state.GetAddedTransform(added) ?? meshActor.Transform)
+                    {
+                        CollisionProfile = meshActor.CollisionProfile ?? StandingTreeProfile(meshActor.StaticMesh, bendMeshes),
+                    });
                     break;
                 case AddBlueprintActorOp blueprint when sourcePackages is not null:
                     var sourcePackage = sourcePackages(blueprint.Source.Level);
@@ -875,6 +905,28 @@ public sealed class ProjectExporter
         var uexp = uexpFile.Read();
         var ubulk = catalog.Provider.Files.TryGetValue(stem + ".ubulk", out var ubulkFile) ? ubulkFile.Read() : null;
         return (uasset, uexp, ubulk);
+    }
+
+    /// <summary>Writes the spawn place edits of <paramref name="state"/> into the island's static data, staged next to the levels.</summary>
+    private async Task<ExportedAsset?> WriteSpawnPlacesAsync(EditState state, AssetCatalog catalog, CUE4Parse.FileProvider.Objects.GameFile file, string staging, List<string> warnings, CancellationToken cancellationToken)
+    {
+        var request = Spawns.SpawnPlacesEditor.Plan(state, warnings);
+        if (request.IsEmpty)
+        {
+            return null;
+        }
+
+        var (uasset, uexp, ubulk) = ReadPackageFiles(catalog, file);
+        var package = CookedPackage.Parse(uasset, uexp, ubulk, Spawns.SpawnPlaces.StaticDataPath);
+        var (bytes, report) = Spawns.SpawnPlacesEditor.Apply(package, request);
+        var virtualPath = file.Path.Replace('\\', '/');
+        var dot = virtualPath.LastIndexOf('.');
+        var target = Path.Combine([staging, .. virtualPath[..dot].Split('/', StringSplitOptions.RemoveEmptyEntries)]);
+        Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+        await bytes.WriteAsync(target, virtualPath[dot..], cancellationToken).ConfigureAwait(false);
+        warnings.AddRange(report.Warnings.Select(w => $"Spawn places: {w}"));
+        _logger.LogInformation("Spawn places: {Deleted} removed, {Moved} moved, {Added} added.", report.Deleted, report.Moved, report.Added);
+        return new ExportedAsset(Spawns.SpawnPlaces.StaticDataPath, virtualPath, false);
     }
 
     /// <summary>The vehicle/item part of <paramref name="state"/>: clone plans and the current value of every override.</summary>

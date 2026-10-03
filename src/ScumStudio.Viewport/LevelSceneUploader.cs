@@ -13,6 +13,12 @@ namespace ScumStudio.Viewport;
 /// <summary>A level scene living on the GPU: the scene graph, its bounds and the id → placement lookup for picking.</summary>
 public sealed class LevelScene : IDisposable
 {
+    /// <summary>Where the upload that built this scene spent its time.</summary>
+    public UploadTimings? UploadTimings { get; internal set; }
+
+    /// <summary>The cache that owns this scene's meshes and terrain (null: the scene owns them).</summary>
+    internal GpuMeshCache? Cache { get; set; }
+
     private readonly SceneRenderer _renderer;
     private readonly List<MeshHandle> _handles;
     private readonly List<GpuTexture> _textures;
@@ -345,14 +351,22 @@ public sealed class LevelScene : IDisposable
         for (var i = 0; i < _terrainParts.Count; i++)
         {
             var part = _terrainParts[i];
+
+            // A cached component is about to change: this scene takes it over (the cache must not hand out a mesh that now
+            // draws another scene's texture).
+            if (Cache?.ReleaseTerrain(Prepared.Terrain[i]) is { } owned)
+            {
+                _handles.Add(owned.Handle);
+                _textures.AddRange(new[] { owned.Texture, owned.Weights }.OfType<GpuTexture>());
+            }
+
             var image = i < albedo.Count ? albedo[i] : null;
             var texture = image is null ? null : LevelSceneUploader.CreateTerrainTexture(_renderer, image);
             _renderer.SetMeshTexture(part.Handle, texture);
             part.Node.Tint = texture is null ? LevelSceneUploader.TerrainTint : Vector4.One;
-            if (part.Texture is { } old)
+            if (part.Texture is { } old && _textures.Remove(old))
             {
-                _textures.Remove(old);
-                old.Dispose();
+                old.Dispose(); // only what this scene owns
             }
 
             if (texture is not null)
@@ -536,6 +550,13 @@ public sealed record LevelUploadOptions
     public float SeaMarginCm { get; init; } = 2_000_000f;
 }
 
+/// <summary>Where an upload's time went (milliseconds on the render thread), and how many meshes it sent to the GPU.</summary>
+public sealed record UploadTimings(double TexturesMs, double MeshesMs, double NodesMs, double TerrainMs, int MeshesUploaded)
+{
+    /// <summary>The whole upload.</summary>
+    public double TotalMs => TexturesMs + MeshesMs + NodesMs + TerrainMs;
+}
+
 /// <summary>Uploads a <see cref="PreparedLevelScene"/> into a <see cref="SceneRenderer"/> (render thread, GL context current).</summary>
 public static class LevelSceneUploader
 {
@@ -560,6 +581,8 @@ public static class LevelSceneUploader
         ArgumentNullException.ThrowIfNull(prepared);
         options ??= new LevelUploadOptions();
         cache?.Begin();
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        double texturesMs, meshesMs, nodesMs;
 
         var handles = new List<MeshHandle>();
         var textures = new List<GpuTexture>();
@@ -577,6 +600,7 @@ public static class LevelSceneUploader
             textures.Add(texture);
         }
 
+        texturesMs = clock.Elapsed.TotalMilliseconds;
         var meshHandles = new Dictionary<string, MeshHandle>(StringComparer.OrdinalIgnoreCase);
         foreach (var (path, asset) in prepared.Meshes)
         {
@@ -591,6 +615,7 @@ public static class LevelSceneUploader
             handles.Add(handle);
         }
 
+        meshesMs = clock.Elapsed.TotalMilliseconds - texturesMs;
         var scene = new Scene();
         var bounds = BoundingBox.Empty;
         var byId = new Dictionary<uint, List<ScenePlacement>>();
@@ -615,23 +640,46 @@ public static class LevelSceneUploader
             placed++;
         }
 
+        nodesMs = clock.Elapsed.TotalMilliseconds - texturesMs - meshesMs;
         var terrainBounds = BoundingBox.Empty;
         var parts = new List<TerrainPart>();
         var layerTextures = new Dictionary<string, GpuTexture>(StringComparer.OrdinalIgnoreCase);
         foreach (var terrain in prepared.Terrain)
         {
-            var texture = terrain.Albedo is { } albedo ? CreateTerrainTexture(renderer, albedo) : null;
-            if (texture is not null)
+            MeshHandle handle;
+            GpuTexture? texture;
+            if (cache is not null)
             {
-                textures.Add(texture);
+                // Kept on the GPU while the tile stays around: only components the camera brings in are sent.
+                (handle, texture) = cache.Terrain(terrain, () =>
+                {
+                    var made = terrain.Albedo is { } albedo ? CreateTerrainTexture(renderer, albedo) : null;
+                    var mesh = renderer.AddMesh(terrain.Mesh, MeshSpace.Unreal, 1f, made);
+                    var weights = new List<GpuTexture>(1);
+                    if (made is not null && TerrainDetailFor(renderer, terrain, prepared, cache, layerTextures, weights) is { } cachedDetail)
+                    {
+                        renderer.SetMeshTerrainDetail(mesh, cachedDetail);
+                    }
+
+                    return (mesh, made, weights.FirstOrDefault());
+                });
+            }
+            else
+            {
+                texture = terrain.Albedo is { } albedo ? CreateTerrainTexture(renderer, albedo) : null;
+                if (texture is not null)
+                {
+                    textures.Add(texture);
+                }
+
+                handle = renderer.AddMesh(terrain.Mesh, MeshSpace.Unreal, 1f, texture);
+                handles.Add(handle);
+                if (texture is not null && TerrainDetailFor(renderer, terrain, prepared, cache, layerTextures, textures) is { } detail)
+                {
+                    renderer.SetMeshTerrainDetail(handle, detail);
+                }
             }
 
-            var handle = renderer.AddMesh(terrain.Mesh, MeshSpace.Unreal, 1f, texture);
-            handles.Add(handle);
-            if (texture is not null && TerrainDetailFor(renderer, terrain, prepared, cache, layerTextures, textures) is { } detail)
-            {
-                renderer.SetMeshTerrainDetail(handle, detail);
-            }
             var node = scene.Add(handle, Matrix4x4.Identity, 0, $"{terrain.LevelName}/{terrain.Name}");
             node.Tint = texture is null ? TerrainTint : Vector4.One;
             terrainBounds = terrainBounds.Union(handle.Bounds);
@@ -656,6 +704,8 @@ public static class LevelSceneUploader
         bounds = bounds.Union(terrainBounds);
         var level = new LevelScene(renderer, prepared, scene, bounds, terrainBounds, byId, meshHandles, handles, textures, placed, gpuTextures);
         level.AttachTerrain(parts, sea, prepared.Ground);
+        level.Cache = cache;
+        level.UploadTimings =new UploadTimings(texturesMs, meshesMs, nodesMs, clock.Elapsed.TotalMilliseconds - texturesMs - meshesMs - nodesMs, cache?.LastUploaded ?? meshHandles.Count);
         return level;
     }
 
@@ -729,14 +779,15 @@ public static class LevelSceneUploader
         {
             var path = top[k].Style.DiffuseTexture!;
             var image = images.Images[path];
-            if (!layerTextures.TryGetValue(path, out var layer))
+            GpuTexture? layer;
+            if (cache is not null)
             {
-                layer = cache is not null ? cache.Texture(renderer, path, image) : renderer.CreateTexture(image.Width, image.Height, image.Rgba, image.IsSrgb);
-                if (cache is null)
-                {
-                    owned.Add(layer);
-                }
-
+                layer = cache.Texture(renderer, path, image); // through the cache every time: it notes what this terrain draws with
+            }
+            else if (!layerTextures.TryGetValue(path, out layer))
+            {
+                layer = renderer.CreateTexture(image.Width, image.Height, image.Rgba, image.IsSrgb);
+                owned.Add(layer);
                 layerTextures[path] = layer;
             }
 

@@ -23,6 +23,7 @@ public partial class MapPageView : UserControl
         InitializeComponent();
         DataContextChanged += (_, _) => Attach(DataContext as MapPageViewModel);
         Viewport3d.PickToggled += (_, pick) => _viewModel?.ToggleGroup(pick.Id, pick.Instance);
+        Viewport3d.BrushPainted += (_, at) => _viewModel?.BrushAt(at);
         // Shape handles dragged in the view: live preview, journaled when let go.
         Viewport3d.ShapeHandleDragged += (_, drag) =>
         {

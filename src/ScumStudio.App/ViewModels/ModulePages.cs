@@ -52,6 +52,7 @@ public sealed class WeaponsPageViewModel : ModulePageViewModel
         "GridInventoryColumnSpan", "_rarity", "_noiseLevel", "_damageOverTime", "Multiplier", "AddImpulseOnHit",
         "PitchMin", "PitchMax", "YawMin", "YawMax", "IsCarriedWithTwoHands", "_spawnRotationRandomization",
         "Urban", "Rural", "Industrial", "Police", "MilitaryMedium", "MilitaryAdvanced", "Sport", "Market", "GasStation",
+        "Damage", "Energy", "SharpnessSlash", "SharpnessPierce", "CombatAnimationPlayRateModifier", "DamageOnUse",
     };
 
     /// <summary>Creates the page.</summary>
@@ -77,6 +78,11 @@ public sealed class WeaponsPageViewModel : ModulePageViewModel
             if (items.Any(i => i.Asset.Kind == kind))
             {
                 filters.Add(new ModuleFilter(label, kind, null));
+            }
+
+            if (kind == ModdableKind.Weapon && items.Any(i => i.Asset.Category == ModdableAssets.MeleeCategory))
+            {
+                filters.Add(new ModuleFilter(Localization.Loc.T("Module.Filter.Melee"), kind, ModdableAssets.MeleeCategory));
             }
         }
 

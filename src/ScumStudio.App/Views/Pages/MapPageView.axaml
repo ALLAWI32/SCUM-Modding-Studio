@@ -2,6 +2,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:ScumStudio.App.ViewModels"
              xmlns:c="using:ScumStudio.App.Controls"
+             xmlns:conv="using:ScumStudio.App.Converters"
              x:Class="ScumStudio.App.Views.Pages.MapPageView"
              x:DataType="vm:MapPageViewModel">
   <DockPanel>
@@ -28,7 +29,39 @@
                 <TextBlock Text="{Tr Map.Spawns}" />
               </StackPanel>
             </ToggleButton>
+            <!-- The legend: what every pin colour is, each kind on or off -->
+            <Button Classes="ghost" Padding="6,4" x:Name="SpawnLegendButton" IsVisible="{Binding HasView}" ToolTip.Tip="{Tr Map.SpawnLegend.Tip}">
+              <TextBlock Text="{Tr Map.SpawnLegend}" />
+              <Button.Flyout>
+                <Flyout Placement="BottomEdgeAlignedLeft">
+                  <StackPanel x:Name="SpawnLegendPanel" Spacing="6" Width="400">
+                    <TextBlock Text="{Tr Map.SpawnLegend.Title}" Classes="h3" />
+                    <TextBlock Text="{Tr Map.SpawnLegend.Hint}" Classes="caption" TextWrapping="Wrap" />
+                    <ItemsControl ItemsSource="{Binding SpawnLayers}">
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:SpawnLayerViewModel">
+                          <Grid ColumnDefinitions="Auto,Auto,*" ColumnSpacing="8" Margin="0,3">
+                            <CheckBox Grid.Column="0" IsChecked="{Binding IsVisible}" VerticalAlignment="Top" MinWidth="0" Padding="0" ToolTip.Tip="{Binding Description}" />
+                            <Border Grid.Column="1" Width="14" Height="14" CornerRadius="7" Margin="0,3,0,0" VerticalAlignment="Top"
+                                    Background="{Binding Hex, Converter={x:Static conv:HexBrushConverter.Instance}}" />
+                            <StackPanel Grid.Column="2" Spacing="1">
+                              <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
+                              <TextBlock Text="{Binding Description}" Classes="caption" TextWrapping="Wrap" />
+                            </StackPanel>
+                          </Grid>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                  </StackPanel>
+                </Flyout>
+              </Button.Flyout>
+            </Button>
             <ToggleButton Classes="ghost" Padding="8,4" x:Name="PartsButton" Content="{Tr Map.Parts}" IsChecked="{Binding PickParts}" ToolTip.Tip="{Tr Map.Parts.Tip}" IsVisible="{Binding HasView}" />
+            <ToggleButton Classes="ghost" Padding="8,4" x:Name="BrushButton" Content="{Tr Map.Brush}" IsChecked="{Binding BrushSelect}" ToolTip.Tip="{Tr Map.Brush.Tip}" IsVisible="{Binding HasView}" />
+            <StackPanel Orientation="Horizontal" Spacing="4" IsVisible="{Binding BrushSelect}">
+              <Slider x:Name="BrushRadiusSlider" Width="90" Minimum="1" Maximum="100" SmallChange="1" LargeChange="10" Value="{Binding BrushRadius}" VerticalAlignment="Center" ToolTip.Tip="{Tr Map.Brush.Size.Tip}" />
+              <TextBlock Text="{Binding BrushRadiusText}" Classes="caption mono" VerticalAlignment="Center" MinWidth="38" />
+            </StackPanel>
             <ToggleButton Classes="ghost" Padding="8,4" x:Name="SnapButton" Content="{Tr Map.Snap}" IsChecked="{Binding #Viewport3d.AutoSnap}" ToolTip.Tip="{Tr Map.Snap.Tip}" IsVisible="{Binding HasView}" />
             <Button Classes="ghost" Padding="8,4" x:Name="DroneButton" Content="{Tr Map.Drone}" Click="OnDroneClick" ToolTip.Tip="{Tr Map.Drone.Tip}" IsVisible="{Binding HasView}" />
             <Button Classes="ghost" Padding="8,4" Content="{Tr Map.FrameAll}" Click="OnFrameAllClick" ToolTip.Tip="{Tr Map.FrameAll.Tip}" IsVisible="{Binding HasScene}" />
@@ -90,6 +123,24 @@
                                 Value="{Binding ShapeSize}" ToolTip.Tip="{Tr Map.Shape.Size.Tip}" />
                         <TextBlock Grid.Column="2" Text="{Binding ShapeSizeText}" Classes="caption mono" VerticalAlignment="Center" HorizontalAlignment="Right" />
                       </Grid>
+                      <Grid ColumnDefinitions="70,*,58" ColumnSpacing="8" IsVisible="{Binding CanScale}">
+                        <TextBlock Text="{Tr Map.Shape.TiltFront}" Classes="caption" VerticalAlignment="Center" />
+                        <Slider Grid.Column="1" x:Name="ShapeTiltFrontSlider" Minimum="-90" Maximum="90" SmallChange="1" LargeChange="5"
+                                Value="{Binding ShapePitch}" ToolTip.Tip="{Tr Map.Shape.TiltFront.Tip}" />
+                        <TextBlock Grid.Column="2" Text="{Binding ShapePitchText}" Classes="caption mono" VerticalAlignment="Center" HorizontalAlignment="Right" />
+                      </Grid>
+                      <Grid ColumnDefinitions="70,*,58" ColumnSpacing="8" IsVisible="{Binding CanScale}">
+                        <TextBlock Text="{Tr Map.Shape.TiltSide}" Classes="caption" VerticalAlignment="Center" />
+                        <Slider Grid.Column="1" x:Name="ShapeTiltSideSlider" Minimum="-90" Maximum="90" SmallChange="1" LargeChange="5"
+                                Value="{Binding ShapeRoll}" ToolTip.Tip="{Tr Map.Shape.TiltSide.Tip}" />
+                        <TextBlock Grid.Column="2" Text="{Binding ShapeRollText}" Classes="caption mono" VerticalAlignment="Center" HorizontalAlignment="Right" />
+                      </Grid>
+                      <Grid ColumnDefinitions="70,*,58" ColumnSpacing="8" IsVisible="{Binding CanScale}">
+                        <TextBlock Text="{Tr Map.Shape.Turn}" Classes="caption" VerticalAlignment="Center" />
+                        <Slider Grid.Column="1" x:Name="ShapeTurnSlider" Minimum="-180" Maximum="180" SmallChange="1" LargeChange="15"
+                                Value="{Binding ShapeYaw}" ToolTip.Tip="{Tr Map.Shape.Turn.Tip}" />
+                        <TextBlock Grid.Column="2" Text="{Binding ShapeYawText}" Classes="caption mono" VerticalAlignment="Center" HorizontalAlignment="Right" />
+                      </Grid>
                     </StackPanel>
                     <TextBlock Text="{Tr Map.Shape.HandlesHint}" Classes="caption wrap" IsVisible="{Binding CanSway}" />
                     <TextBlock Text="{Binding BendNote}" Classes="caption wrap" IsVisible="{Binding HasBendNote}" />
@@ -118,34 +169,36 @@
                       </Button.Flyout>
                     </Button>
           </WrapPanel>
-          <WrapPanel x:Name="ViewStatus" ItemSpacing="6" LineSpacing="4">
-            <Border Classes="chip" IsVisible="{Binding HasScene}" ToolTip.Tip="{Binding LoadStatus}">
+          <!-- One line of fixed height that never wraps: a wrapping status (loading text, live frame stats) made the header
+               grow and shrink and the 3D view below it jump (owner: "the view shakes while it loads"). -->
+          <Grid x:Name="ViewStatus" Height="24" ClipToBounds="True" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,*" ColumnSpacing="6">
+            <Border Classes="chip" IsVisible="{Binding HasScene}" ToolTip.Tip="{Binding LoadStatus}" MaxWidth="300">
               <StackPanel Orientation="Horizontal" Spacing="6">
                 <c:GlyphIcon Kind="Icon.Cube3d" IconSize="13" VerticalAlignment="Center" />
-                <TextBlock Text="{Binding LoadedLevelsCaption}" />
+                <TextBlock Text="{Binding LoadedLevelsCaption}" TextTrimming="CharacterEllipsis" />
               </StackPanel>
             </Border>
-            <Border Classes="chip" IsVisible="{Binding IsWorldMode}">
-              <TextBlock Text="{Binding WorldStatus}" />
+            <Border Grid.Column="1" Classes="chip" IsVisible="{Binding IsWorldMode}" MaxWidth="240">
+              <TextBlock Text="{Binding WorldStatus}" TextTrimming="CharacterEllipsis" />
             </Border>
-            <Border Classes="chip" IsVisible="{Binding HasKindSelection}" BorderBrush="{DynamicResource AccentBrush}">
+            <Border Grid.Column="2" Classes="chip" IsVisible="{Binding HasKindSelection}" BorderBrush="{DynamicResource AccentBrush}">
               <TextBlock Text="{Binding KindSelectionText}" />
             </Border>
-            <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding HasKindRadius}">
+            <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="6" IsVisible="{Binding HasKindRadius}">
               <Slider x:Name="KindRadiusSlider" Width="150" Minimum="0" Maximum="500" SmallChange="5" LargeChange="25" TickFrequency="5" IsSnapToTickEnabled="True"
                       Value="{Binding KindRadius}" VerticalAlignment="Center" ToolTip.Tip="{Tr Map.Kind.Radius.Tip}" />
               <TextBlock Text="{Binding KindRadiusText}" Classes="caption mono" VerticalAlignment="Center" MinWidth="44" />
             </StackPanel>
-            <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding IsLoadingLevel}">
-              <ProgressBar IsIndeterminate="True" Width="90" VerticalAlignment="Center" />
-              <TextBlock Text="{Binding LoadStatus}" Classes="caption" MaxWidth="420" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+            <StackPanel Grid.Column="4" Orientation="Horizontal" Spacing="8" Width="300">
+              <ProgressBar IsIndeterminate="True" Width="90" VerticalAlignment="Center" IsVisible="{Binding IsLoadingLevel}" />
+              <TextBlock Text="{Binding LoadStatus}" Classes="caption" Width="200" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" IsVisible="{Binding IsLoadingLevel}" />
             </StackPanel>
-            <TextBlock Classes="caption" VerticalAlignment="Center" IsVisible="{Binding HasView}" ToolTip.Tip="{Binding #Viewport3d.GpuName}">
+            <TextBlock Grid.Column="5" Classes="caption" VerticalAlignment="Center" IsVisible="{Binding HasView}" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding #Viewport3d.GpuName}">
               <Run Text="{Binding #Viewport3d.SpeedText}" />
               <Run Text=" · " />
               <Run Text="{Binding #Viewport3d.FrameInfo}" />
             </TextBlock>
-          </WrapPanel>
+          </Grid>
         </StackPanel>
         <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
           <Border Classes="chip" IsVisible="{Binding Session.HasProject}" VerticalAlignment="Center">
@@ -256,7 +309,7 @@
         <Border Grid.Row="0" Classes="panel" x:Name="Viewport">
           <Panel x:Name="ViewportContent">
             <c:ViewportGrid Background="{DynamicResource ViewportBrush}" AxisXBrush="{DynamicResource AxisXBrush}" AxisYBrush="{DynamicResource AxisYBrush}" IsVisible="{Binding !HasView}" />
-            <c:LevelViewport x:Name="Viewport3d" Scene="{Binding PreparedScene}" PickParts="{Binding PickParts}" SelectedId="{Binding SelectedActorId, Mode=TwoWay}" SelectedInstance="{Binding SelectedInstanceKey, Mode=TwoWay}" Backdrop="{Binding WorldBackdrop}" KeepCamera="{Binding IsWorldMode}" Quality="{Binding RenderQuality}" KindIds="{Binding KindSelectionIds}" KindInstances="{Binding KindSelectionInstances}" InstanceTransforms="{Binding InstanceTransforms}"
+            <c:LevelViewport x:Name="Viewport3d" Scene="{Binding PreparedScene}" PickParts="{Binding PickParts}" BrushMode="{Binding BrushSelect}" BrushRadius="{Binding BrushRadius}" SelectedId="{Binding SelectedActorId, Mode=TwoWay}" SelectedInstance="{Binding SelectedInstanceKey, Mode=TwoWay}" Backdrop="{Binding WorldBackdrop}" KeepCamera="{Binding IsWorldMode}" Quality="{Binding RenderQuality}" KindIds="{Binding KindSelectionIds}" KindInstances="{Binding KindSelectionInstances}" InstanceTransforms="{Binding InstanceTransforms}"
                              HiddenIds="{Binding HiddenActorIds}" HiddenInstances="{Binding HiddenInstanceKeys}"
                              ActorTransforms="{Binding ActorTransforms}" Clones="{Binding Clones}"
                              SelectedRootWorld="{Binding SelectedRootWorld}" TranslationSnap="{Binding TranslationSnap}" RotationSnap="{Binding RotationSnap}"
@@ -366,8 +419,12 @@
               </TextBlock>
               <ScrollViewer IsVisible="{Binding HasSelectedActor}">
                 <StackPanel Margin="12,8" Spacing="6">
+                  <!-- One part of a building is selected: one click back to the whole building -->
+                  <Button Classes="small" x:Name="SelectWholeButton" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Command="{Binding SelectWholeCommand}" IsVisible="{Binding HasSelectedPart}" ToolTip.Tip="{Tr Map.Part.Whole.Tip}">
+                    <TextBlock Text="{Tr Map.Part.Whole}" TextTrimming="CharacterEllipsis" />
+                  </Button>
                   <!-- Transform editor: the selected actor's root, written to the journal with Apply -->
-                  <Grid ColumnDefinitions="92,*" ColumnSpacing="8" RowDefinitions="Auto,Auto,Auto" RowSpacing="4">
+                  <Grid ColumnDefinitions="92,*" ColumnSpacing="8" RowDefinitions="Auto,Auto,Auto" RowSpacing="4" IsVisible="{Binding !IsLootPointSelected}">
                     <TextBlock Grid.Row="0" Grid.Column="0" Text="{Tr Map.LocationCm}" Classes="caption" VerticalAlignment="Center" />
                     <TextBox Grid.Row="0" Grid.Column="1" x:Name="EditLocationBox" Text="{Binding EditLocation}" Classes="mono" FontSize="12" Padding="6,3" Watermark="x, y, z" ToolTip.Tip="{Tr Map.EditLocation.Tip}" />
                     <TextBlock Grid.Row="1" Grid.Column="0" Text="{Tr Map.RotationDeg}" Classes="caption" VerticalAlignment="Center" />
@@ -375,7 +432,7 @@
                     <TextBlock Grid.Row="2" Grid.Column="0" Text="{Tr Map.Scale}" Classes="caption" VerticalAlignment="Center" />
                     <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding EditScale}" Classes="mono" FontSize="12" Padding="6,3" Watermark="x, y, z" ToolTip.Tip="{Tr Map.EditScale.Tip}" />
                   </Grid>
-                  <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Right">
+                  <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Right" IsVisible="{Binding !IsLootPointSelected}">
                     <Button Classes="small" x:Name="CopyButton" Command="{Binding CopySelectedCommand}" ToolTip.Tip="{Tr Map.Copy.Tip}">
                       <TextBlock Text="{Tr Common.Copy}" />
                     </Button>
@@ -403,6 +460,37 @@
                       </DataTemplate>
                     </ItemsControl.ItemTemplate>
                   </ItemsControl>
+                  <!-- What can spawn at the selection: loot presets with their groups and items, or a vehicle group's vehicles -->
+                  <StackPanel x:Name="SpawnInfoPanel" Spacing="2" IsVisible="{Binding HasSpawnInfo}">
+                    <Separator Margin="0,4" />
+                    <TextBlock Text="{Tr SpawnInfo.Title}" Classes="h3" />
+                    <TextBlock Text="{Tr SpawnInfo.Hint}" Classes="caption" TextWrapping="Wrap" Margin="0,0,0,2" />
+                    <ItemsControl ItemsSource="{Binding SpawnInfo}">
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:SpawnInfoRow">
+                          <StackPanel>
+                            <StackPanel IsVisible="{Binding IsHeader}" Margin="0,8,0,2" Spacing="1">
+                              <TextBlock Text="{Binding Text}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                              <TextBlock Text="{Binding Detail}" Classes="caption" TextWrapping="Wrap" IsVisible="{Binding HasDetail}" />
+                            </StackPanel>
+                            <Grid IsVisible="{Binding IsGroup}" ColumnDefinitions="*,Auto" ColumnSpacing="8" Margin="0,6,0,2">
+                              <TextBlock Text="{Binding Text}" FontSize="12" FontWeight="SemiBold" TextWrapping="Wrap" />
+                              <TextBlock Grid.Column="1" Text="{Binding RarityText}" FontSize="11" VerticalAlignment="Center"
+                                         Foreground="{Binding RarityHex, Converter={x:Static conv:HexBrushConverter.Instance}}" />
+                            </Grid>
+                            <Grid IsVisible="{Binding IsItem}" ColumnDefinitions="*,Auto" ColumnSpacing="8" Margin="10,1,0,1">
+                              <StackPanel>
+                                <TextBlock Text="{Binding Text}" FontSize="12" TextWrapping="Wrap" />
+                                <TextBlock Text="{Binding Detail}" Classes="caption" FontSize="10" TextWrapping="Wrap" IsVisible="{Binding HasDetail}" />
+                              </StackPanel>
+                              <TextBlock Grid.Column="1" Text="{Binding RarityText}" FontSize="11" VerticalAlignment="Center"
+                                         Foreground="{Binding RarityHex, Converter={x:Static conv:HexBrushConverter.Instance}}" />
+                            </Grid>
+                          </StackPanel>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                  </StackPanel>
                 </StackPanel>
               </ScrollViewer>
               <ScrollViewer IsVisible="{Binding HasSelectedPackage}">

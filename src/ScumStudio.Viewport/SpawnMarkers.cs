@@ -2,6 +2,7 @@ using System.Numerics;
 using ScumStudio.Core.Geometry;
 using ScumStudio.Core.Mathematics;
 using ScumStudio.Level.Model;
+using ScumStudio.Level.Spawns;
 
 namespace ScumStudio.Viewport;
 
@@ -28,6 +29,24 @@ public enum SpawnKind
 
     /// <summary>Where players can drop in (event drop zones).</summary>
     PlayerDrop,
+
+    /// <summary>A world vehicle spawn point of the island (cars, bikes, boats, planes; <see cref="SpawnPlaceKind.Vehicle"/>).</summary>
+    VehiclePlace,
+
+    /// <summary>A zombie / NPC spawn point of the island.</summary>
+    Zombie,
+
+    /// <summary>The centre of a threat zone.</summary>
+    Zone,
+
+    /// <summary>The outline of a threat zone (its ellipse).</summary>
+    ZoneRing,
+
+    /// <summary>The centre of a hunting area.</summary>
+    Animal,
+
+    /// <summary>The outline of a hunting area (its circle).</summary>
+    AnimalRing,
 }
 
 /// <summary>
@@ -41,8 +60,10 @@ public static class SpawnMarkers
     /// <summary>Prefix of the marker mesh keys.</summary>
     public const string Prefix = "#spawn/";
 
-    private const float Width = 110f;
-    private const float Height = 260f;
+    // Small pins (owner: "a small pin, not a big one"): a hand wide, a bit over a metre tall.
+    private const float Width = 40f;
+    private const float Height = 120f;
+    private const float RingRadius = 100f;
 
     /// <summary>Bright pin colours per kind (linear RGBA), never white.</summary>
     public static Vector4 Color(SpawnKind kind) => kind switch
@@ -53,6 +74,10 @@ public static class SpawnMarkers
         SpawnKind.Patrol => new(1f, 0.38f, 0.6f, 1f),
         SpawnKind.Creature => new(0.62f, 0.18f, 1f, 1f),
         SpawnKind.Vehicle => new(0.08f, 0.78f, 1f, 1f),
+        SpawnKind.VehiclePlace => new(0.05f, 0.45f, 1f, 1f),
+        SpawnKind.Zombie => new(0.55f, 1f, 0.05f, 1f),
+        SpawnKind.Zone or SpawnKind.ZoneRing => new(1f, 0.05f, 0.35f, 1f),
+        SpawnKind.Animal or SpawnKind.AnimalRing => new(0.3f, 0.15f, 0.05f, 1f), // brown, apart from the orange loot zones
         _ => new(0.2f, 1f, 0.35f, 1f),
     };
 
@@ -72,6 +97,17 @@ public static class SpawnMarkers
     public static SpawnKind? KindOf(ActorRecord actor)
     {
         ArgumentNullException.ThrowIfNull(actor);
+        if (SpawnPlaces.KindOfClass(actor.ClassName) is { } place)
+        {
+            return place switch
+            {
+                SpawnPlaceKind.Vehicle => SpawnKind.VehiclePlace,
+                SpawnPlaceKind.Zone => SpawnKind.Zone,
+                SpawnPlaceKind.Animal => SpawnKind.Animal,
+                _ => SpawnKind.Zombie,
+            };
+        }
+
         return actor.ClassName switch
         {
             "ItemSpawnerVolume" => SpawnKind.LootZone,
@@ -83,11 +119,12 @@ public static class SpawnMarkers
     }
 
     /// <summary>
-    /// Every pin of <paramref name="actor"/>: (kind, where, whether it picks as the actor, label). Loot points come from
-    /// the item spawners' markers (a spawner group's pick as the group; a building's only show), a sentry spawner adds its
-    /// patrol points, a car shop its vehicle boxes, the other spawners stand at the actor.
+    /// Every pin of <paramref name="actor"/>: (kind, where, whether it picks as the actor, label, and for a building's loot
+    /// point its spawner component and marker index). Loot points come from the item spawners' markers (a spawner group's
+    /// pick as the group; a building's pick as themselves), a sentry spawner adds its patrol points, a car shop its vehicle
+    /// boxes, the other spawners stand at the actor.
     /// </summary>
-    public static IEnumerable<(SpawnKind Kind, FTransform Pin, bool PicksActor, string Label)> PinsOf(ActorRecord actor)
+    public static IEnumerable<(SpawnKind Kind, FTransform Pin, bool PicksActor, string Label, (string Component, int Index)? Marker)> PinsOf(ActorRecord actor)
     {
         ArgumentNullException.ThrowIfNull(actor);
         var lootSpawner = IsLootSpawner(actor);
@@ -99,30 +136,42 @@ public static class SpawnMarkers
                 var m = component.SpawnMarkers[i];
                 points++;
                 yield return (SpawnKind.Loot, PinAt(m.Local * component.WorldTransform, SpawnKind.Loot, inside: !lootSpawner), lootSpawner,
-                    $"{actor.Name}/{component.Name} [{i}] {m.Preset} {m.Probability:0.#}% x{m.MinQuantity}-{m.MaxQuantity}");
+                    $"{actor.Name}/{component.Name} [{i}] {m.Preset} {m.Probability:0.#}% x{m.MinQuantity}-{m.MaxQuantity}", lootSpawner ? null : (component.Name, i));
             }
 
             if (component.ClassName == "VehicleSpawnBoxComponent")
             {
-                yield return (SpawnKind.Vehicle, PinAt(component.WorldTransform, SpawnKind.Vehicle, inside: true), false, $"{actor.Name}/{component.Name}");
+                yield return (SpawnKind.Vehicle, PinAt(component.WorldTransform, SpawnKind.Vehicle, inside: true), false, $"{actor.Name}/{component.Name}", null);
             }
         }
 
         if (lootSpawner && points == 0)
         {
-            yield return (SpawnKind.Loot, PinAt(actor.WorldTransform, SpawnKind.Loot), true, actor.Name);
+            yield return (SpawnKind.Loot, PinAt(actor.WorldTransform, SpawnKind.Loot), true, actor.Name, null);
         }
 
         if (KindOf(actor) is { } kind)
         {
-            yield return (kind, PinAt(actor.WorldTransform, kind), true, actor.Name);
+            yield return (kind, PinAt(actor.WorldTransform, kind), true, actor.Name, null);
+            if (kind is SpawnKind.Zone or SpawnKind.Animal)
+            {
+                // The zone's ellipse (the root's scale is its size in metres) or the area's circle, flat around the centre.
+                var t = actor.WorldTransform;
+                var yaw = FQuat.MakeFromEuler(new FVector(0f, 0f, t.Rotation.Rotator().Yaw));
+                yield return (kind == SpawnKind.Zone ? SpawnKind.ZoneRing : SpawnKind.AnimalRing, new FTransform(yaw, t.Translation, new FVector(t.Scale3D.X, t.Scale3D.Y, 1f)), true, actor.Name, null);
+            }
+
             for (var i = 0; i < actor.PatrolPoints.Count; i++)
             {
                 var at = new FTransform(actor.WorldTransform.TransformPosition(actor.PatrolPoints[i]));
-                yield return (SpawnKind.Patrol, PinAt(at, SpawnKind.Patrol, inside: true), true, $"{actor.Name} patrol {i + 1}");
+                yield return (SpawnKind.Patrol, PinAt(at, SpawnKind.Patrol, inside: true), true, $"{actor.Name} patrol {i + 1}", null);
             }
         }
     }
+
+    /// <summary>The kind a marker mesh key draws (<see cref="MeshKey"/>), or null for any other mesh.</summary>
+    public static SpawnKind? KindOfMesh(string meshPath) =>
+        IsMarker(meshPath) && Enum.TryParse<SpawnKind>(meshPath[Prefix.Length..], out var kind) ? kind : null;
 
     /// <summary>
     /// What a spawn actor is, for the properties panel: a text key and its arguments (<c>Spawn.Loot</c>: loot points and
@@ -144,8 +193,13 @@ public static class SpawnMarkers
         }
 
         var boxes = actor.Components.Count(c => c.ClassName == "VehicleSpawnBoxComponent");
+        var (sizeX, sizeY) = SpawnPlaces.SizeOf(actor.WorldTransform.Scale3D);
         return KindOf(actor) switch
         {
+            SpawnKind.VehiclePlace => ("Spawn.VehiclePlace", [actor.ClassPath]),
+            SpawnKind.Zombie => ("Spawn.Zombie", [actor.ClassPath]),
+            SpawnKind.Zone => ("Spawn.Zone", [actor.ClassPath, Math.Round(sizeX / 100f), Math.Round(sizeY / 100f)]),
+            SpawnKind.Animal => ("Spawn.Animal", [actor.ClassPath, Math.Round(sizeX / 100f)]),
             SpawnKind.LootZone => ("Spawn.LootZone", []),
             SpawnKind.Sentry => ("Spawn.Sentry", [actor.PatrolPoints.Count]),
             SpawnKind.Creature => ("Spawn.Creature", []),
@@ -160,7 +214,7 @@ public static class SpawnMarkers
     /// </summary>
     public static FTransform PinAt(FTransform world, SpawnKind kind, bool inside = false)
     {
-        var size = kind == SpawnKind.PlayerDrop ? 4f : inside ? 0.5f : 1f;
+        var size = kind == SpawnKind.PlayerDrop ? 4f : kind is SpawnKind.Zone or SpawnKind.Animal ? 3f : inside ? 0.7f : 1f;
         return new(FQuat.Identity, world.Translation, new FVector(size, size, size));
     }
 
@@ -168,7 +222,7 @@ public static class SpawnMarkers
     public static PreparedMeshAsset Asset(SpawnKind kind)
     {
         var key = MeshKey(kind);
-        var mesh = Pin(key);
+        var mesh = kind is SpawnKind.ZoneRing or SpawnKind.AnimalRing ? Ring(key) : Pin(key);
         return new PreparedMeshAsset(key, mesh, null)
         {
             MaterialSlots = [key],
@@ -179,6 +233,27 @@ public static class SpawnMarkers
     /// <summary>The asset for a marker mesh key, or null when it is none.</summary>
     public static PreparedMeshAsset? AssetFor(string meshPath) =>
         IsMarker(meshPath) && Enum.TryParse<SpawnKind>(meshPath[Prefix.Length..], out var kind) ? Asset(kind) : null;
+
+    // An upright band around the centre, radius 1 m (scaled to the zone's size), from 1 m below to 3 m above it so it
+    // shows over hills and hollows; both sides drawn.
+    private static MeshData Ring(string material)
+    {
+        const int segments = 96;
+        var faces = new List<(Vector3 A, Vector3 B, Vector3 C)>();
+        for (var i = 0; i < segments; i++)
+        {
+            var a0 = i * MathF.Tau / segments;
+            var a1 = (i + 1) * MathF.Tau / segments;
+            Vector3 p0 = new(MathF.Cos(a0) * RingRadius, MathF.Sin(a0) * RingRadius, -100f), p1 = new(MathF.Cos(a1) * RingRadius, MathF.Sin(a1) * RingRadius, -100f);
+            Vector3 q0 = p0 with { Z = 300f }, q1 = p1 with { Z = 300f };
+            faces.Add((p0, p1, q1));
+            faces.Add((p0, q1, q0));
+            faces.Add((p0, q1, p1));
+            faces.Add((p0, q0, q1));
+        }
+
+        return Build("SpawnRing", faces, material, new BoundingBox(new Vector3(-RingRadius, -RingRadius, -100f), new Vector3(RingRadius, RingRadius, 300f)));
+    }
 
     // A stretched octahedron: tip on the spawn place, widest at two thirds of the height; flat faces (own vertices).
     private static MeshData Pin(string material)
@@ -195,6 +270,11 @@ public static class SpawnMarkers
             faces.Add((top, a, b));
         }
 
+        return Build("SpawnPin", faces, material, new BoundingBox(new Vector3(-w, -w, 0), new Vector3(w, w, Height)));
+    }
+
+    private static MeshData Build(string name, List<(Vector3 A, Vector3 B, Vector3 C)> faces, string material, BoundingBox bounds)
+    {
         var positions = new float[faces.Count * 9];
         var normals = new float[faces.Count * 9];
         var indices = new uint[faces.Count * 3];
@@ -215,7 +295,6 @@ public static class SpawnMarkers
             }
         }
 
-        return new MeshData("SpawnPin", positions, normals, [], indices, [new MeshSection(material, 0, indices.Length)],
-            new BoundingBox(new Vector3(-w, -w, 0), new Vector3(w, w, Height)));
+        return new MeshData(name, positions, normals, [], indices, [new MeshSection(material, 0, indices.Length)], bounds);
     }
 }

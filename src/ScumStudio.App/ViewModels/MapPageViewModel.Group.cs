@@ -255,7 +255,8 @@ public sealed partial class MapPageViewModel
                 {
                     // One tree or rock becomes a mesh actor of its own.
                     var placed = TransformValue.FromTransform(world);
-                    ops.Add(EditOpFactory.AddStaticMeshActor(item.Level, mesh, placed with { Location = placed.Location + offset }, project.State, reserved));
+                    ops.Add(EditOpFactory.AddStaticMeshActor(item.Level, mesh, placed with { Location = placed.Location + offset }, project.State, reserved)
+                        with { CollisionProfile = sel.Component.CollisionProfile }); // it collides as what it was copied from
                 }
             }
         }
@@ -362,6 +363,104 @@ public sealed partial class MapPageViewModel
         }
 
         RefreshEdits();
+    }
+
+    /// <summary>
+    /// Brush selection (owner request): while on, holding the left mouse button over the map paints a circle that adds
+    /// everything under it to the multi-selection. Turning it off keeps the selection; Ctrl+click then takes out what
+    /// should stay and Delete removes the rest.
+    /// </summary>
+    [ObservableProperty]
+    private bool _brushSelect;
+
+    /// <summary>Radius of the brush circle in metres.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(BrushRadiusText))]
+    private double _brushRadius = 10;
+
+    /// <summary><see cref="BrushRadius"/> as text ("10 m").</summary>
+    public string BrushRadiusText => string.Create(CultureInfo.CurrentCulture, $"{BrushRadius:0} m");
+
+    /// <summary>Adds every object drawn within the brush circle around <paramref name="centre"/> (UE world) to the multi-selection.</summary>
+    public void BrushAt(FVector centre)
+    {
+        var radius = (float)BrushRadius * 100f;
+        var height = MathF.Max(radius, 1000f); // a cylinder: a house's walls above the ground still count, a bunker far below does not
+        bool Inside(FVector at)
+        {
+            var dx = at.X - centre.X;
+            var dy = at.Y - centre.Y;
+            return (dx * dx) + (dy * dy) <= radius * radius && MathF.Abs(at.Z - centre.Z) <= height;
+        }
+
+        var have = new HashSet<GroupMember>(_group);
+        var added = false;
+        void Add(ActorItemViewModel item, InstanceKey? key)
+        {
+            if (MemberOf(item, key) is { } member && have.Add(member))
+            {
+                _group.Add(member);
+                added = true;
+            }
+        }
+
+        FVector Where(InstanceKey key, FVector stored) => InstanceTransforms.TryGetValue(key, out var moved) ? moved.Translation : stored;
+
+        foreach (var item in AllActors)
+        {
+            if (item.IsDeleted || HiddenActorIds.Contains(item.SelectableId))
+            {
+                continue;
+            }
+
+            // One tree, rock or plank of a foliage/ISM actor at a time.
+            foreach (var i in item.Actor.InstanceTransforms)
+            {
+                var key = InstanceKey.Of(item.SelectableId, i.ComponentName, i.InstanceIndex);
+                if (!HiddenInstanceKeys.Contains(key) && Inside(Where(key, i.WorldTransform.Translation)))
+                {
+                    Add(item, key);
+                }
+            }
+
+            if (IsImmovable(item))
+            {
+                continue;
+            }
+
+            // A Blueprint's parts and a road's pieces count on their own (parts only in part mode, as a click does).
+            var holders = item.Actor.InstanceTransforms.Select(i => i.ComponentName).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var meshes = item.Actor.Components.Where(c => c.StaticMeshPath is not null && !holders.Contains(c.Name)).ToList();
+            var pieces = meshes.Where(c => c.SplineMesh is not null
+                || (PickParts && !c.IsSynthesized && c.ExportIndex >= 0 && c.ExportIndex != item.Actor.RootComponent)).ToList();
+            if (pieces.Count > 0)
+            {
+                foreach (var c in pieces)
+                {
+                    var key = InstanceKey.Of(item.SelectableId, c.Name, c.SplineMesh is not null ? InstanceKey.Segment : InstanceKey.Part);
+                    if (!HiddenInstanceKeys.Contains(key) && Inside(Where(key, c.WorldTransform.Translation)))
+                    {
+                        Add(item, key);
+                    }
+                }
+
+                continue;
+            }
+
+            // Anything else joins whole when one of its meshes is in the circle (a moved actor: where it is now).
+            if (meshes.Count > 0 && (ActorTransforms.TryGetValue(item.SelectableId, out var movedActor)
+                    ? Inside(movedActor.Translation)
+                    : meshes.Any(c => Inside(c.WorldTransform.Translation))))
+            {
+                Add(item, null);
+            }
+        }
+
+        if (added)
+        {
+            _kindMesh = null; // a hand-made set replaces "all of this kind"
+            RefreshGroup();
+        }
     }
 
     /// <summary>One object of the multi-selection: a whole actor (Component null) or one instance / road piece of it.</summary>

@@ -32,7 +32,9 @@ public sealed class SpawnsRealTests
             var spawns = (SpawnsPageViewModel)vm.NavigateTo("spawns")!;
             HeadlessUi.Pump();
 
-            // A world-spawn Rager: fuel 0..10 %, battery, parts, and the server's limits for Ragers.
+            // A world-spawn Rager: fuel 0..10 %, battery, parts, and the server's limits for Ragers (the list loads in the
+            // background: under a full test run it is not there right away).
+            Assert.True(HeadlessUi.PumpUntil(() => spawns.Entries.Any(e => e.PackagePath.EndsWith("/AutomaticSpawn/RagerSpawnPreset", StringComparison.Ordinal)), TimeSpan.FromSeconds(60)));
             spawns.SelectedEntry = spawns.Entries.First(e => e.PackagePath.EndsWith("/AutomaticSpawn/RagerSpawnPreset", StringComparison.Ordinal));
             Assert.True(HeadlessUi.PumpUntil(() => spawns.DetailCards.Count > 0, TimeSpan.FromSeconds(30)));
             var fuel = spawns.DetailCards.SelectMany(c => c.Rows).OfType<SpawnRangeViewModel>().First();

@@ -163,11 +163,13 @@
                 <Border Grid.Column="0" Classes="iconTile" Width="40" Height="40">
                   <c:GlyphIcon Kind="{Binding SelectedItem.IconKey, FallbackValue=Icon.Weapon}" IconSize="20" HorizontalAlignment="Center" VerticalAlignment="Center" />
                 </Border>
-                <StackPanel Grid.Column="1" Spacing="2" VerticalAlignment="Center">
-                  <StackPanel Orientation="Horizontal" Spacing="8">
-                    <TextBlock Text="{Binding SelectedTitle}" Classes="h2" />
-                    <TextBlock Text="{Binding Caption}" Classes="muted" VerticalAlignment="Bottom" Margin="0,0,0,2" />
-                  </StackPanel>
+                <StackPanel Grid.Column="1" Spacing="2" VerticalAlignment="Center" ClipToBounds="True">
+                  <!-- Name and caption share the row and trim: a long caption ran under the tabs and the spawn chip. -->
+                  <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
+                    <TextBlock Text="{Binding SelectedTitle}" Classes="h2" TextTrimming="CharacterEllipsis" MaxWidth="320" />
+                    <TextBlock Grid.Column="1" Text="{Binding Caption}" Classes="muted" VerticalAlignment="Bottom" Margin="0,0,0,2" TextTrimming="CharacterEllipsis"
+                               ToolTip.Tip="{Binding Caption}" />
+                  </Grid>
                   <TextBlock Text="{Binding SelectedItem.PackagePath, FallbackValue=''}" Classes="caption" TextTrimming="PrefixCharacterEllipsis" />
                 </StackPanel>
                 <Border Grid.Column="2" Classes="segmented">
@@ -187,7 +189,7 @@
                   </StackPanel>
                 </Border>
                 <Border Grid.Column="3" Classes="chip" VerticalAlignment="Center" ToolTip.Tip="{Tr Module.SpawnChip.Tip}">
-                  <TextBlock Text="{Binding SpawnCommandText}" Classes="mono" />
+                  <TextBlock Text="{Binding SpawnCommandText}" Classes="mono" MaxWidth="240" TextTrimming="CharacterEllipsis" />
                 </Border>
               </Grid>
             </Border>
@@ -279,18 +281,23 @@
               </DockPanel>
 
               <!-- 3D tab: the asset's mesh (vehicles with their default attachments on their sockets) -->
-              <Grid IsVisible="{Binding ShowPreviewTab}" ColumnDefinitions="*,Auto">
+              <Grid x:Name="PreviewBody" IsVisible="{Binding ShowPreviewTab}" ColumnDefinitions="*,0,0">
               <Border Margin="6" CornerRadius="{DynamicResource SmallCornerRadius}" ClipToBounds="True" Background="{DynamicResource ViewportBrush}">
                 <Panel>
                   <c:ViewportGrid Background="{DynamicResource ViewportBrush}" AxisXBrush="{DynamicResource AxisXBrush}" AxisYBrush="{DynamicResource AxisYBrush}" IsVisible="{Binding !HasPreview}" />
                   <c:MeshPreview x:Name="ItemPreview" Model="{Binding Preview}" IsVisible="{Binding HasPreview}" />
                   <ProgressBar IsIndeterminate="True" IsVisible="{Binding IsPreviewLoading}" VerticalAlignment="Top" Margin="8,6" />
-                  <Border Classes="hud" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="8" IsHitTestVisible="False"
-                          IsVisible="{Binding PreviewText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
-                    <TextBlock Text="{Binding PreviewText}" TextTrimming="CharacterEllipsis" />
-                  </Border>
-                  <Border Classes="hud" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="8" IsHitTestVisible="False" IsVisible="{Binding HasPreview}">
-                    <TextBlock Text="{Tr Module.PreviewHint}" />
+                  <!-- The model's name (left) and the mouse hint (right) share the bottom line; the name trims instead of running under the hint. -->
+                  <Grid VerticalAlignment="Bottom" Margin="8" ColumnDefinitions="*,Auto" ColumnSpacing="8" IsHitTestVisible="False">
+                    <Border Classes="hud" HorizontalAlignment="Left" IsVisible="{Binding PreviewText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                      <TextBlock Text="{Binding PreviewText}" TextTrimming="CharacterEllipsis" />
+                    </Border>
+                    <Border Grid.Column="1" Classes="hud" IsVisible="{Binding HasPreview}">
+                      <TextBlock Text="{Tr Module.PreviewHint}" MaxWidth="420" TextTrimming="CharacterEllipsis" />
+                    </Border>
+                  </Grid>
+                  <Border Classes="hud" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="8,30,8,8" MaxWidth="460" IsHitTestVisible="False" IsVisible="{Binding CloneSharesPaint}">
+                    <TextBlock Text="{Tr Paint.CloneShared}" TextWrapping="Wrap" />
                   </Border>
                   <Border Classes="hud" HorizontalAlignment="Center" VerticalAlignment="Top" Margin="8" IsHitTestVisible="False"
                           IsVisible="{Binding #ItemPreview.SelectedPart, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
@@ -302,12 +309,18 @@
                 </Panel>
               </Border>
 
-              <!-- Paint (vehicles): the body paints, shown on the model as they are chosen -->
-              <Border Grid.Column="1" Width="300" Margin="0,6,6,6" IsVisible="{Binding HasPaints}" Classes="panel">
+              <!-- Paint (vehicles, weapons): shown on the model as it is chosen; the splitter makes the panel wider or narrower -->
+              <GridSplitter Grid.Column="1" x:Name="PaintSplitter" ResizeDirection="Columns" Background="Transparent" IsVisible="{Binding HasPaints}"
+                            ToolTip.Tip="{Tr Common.Splitter.Tip}" />
+              <Border Grid.Column="2" Margin="0,6,6,6" IsVisible="{Binding HasPaints}" Classes="panel">
                 <DockPanel>
                   <StackPanel DockPanel.Dock="Top" Margin="12,10,12,4" Spacing="2">
-                    <TextBlock Text="{Tr Paint.Title}" Classes="h2" />
-                    <TextBlock Text="{Tr Paint.Caption}" Classes="caption wrap" />
+                    <Grid ColumnDefinitions="*,Auto">
+                      <TextBlock Text="{Tr Paint.Title}" Classes="h2" />
+                      <Button Grid.Column="1" x:Name="PaintAllOriginalButton" Classes="ghost small" Content="{Tr Paint.AllOriginal}" Command="{Binding AllOriginalPaintCommand}"
+                              VerticalAlignment="Center" ToolTip.Tip="{Tr Paint.AllOriginal.Tip}" />
+                    </Grid>
+                    <TextBlock Text="{Binding PaintCaption}" Classes="caption wrap" />
                     <Grid ColumnDefinitions="*,Auto" Margin="0,6,0,0">
                       <TextBlock Text="{Tr Paint.Together}" VerticalAlignment="Center" TextWrapping="Wrap" />
                       <ToggleSwitch x:Name="PaintTogetherSwitch" Grid.Column="1" IsChecked="{Binding PaintTogether}" OnContent="" OffContent="" MinWidth="0"
@@ -321,7 +334,7 @@
                   </StackPanel>
                   <Border DockPanel.Dock="Bottom" Padding="12,8" BorderThickness="0,1,0,0" BorderBrush="{DynamicResource StrokeSubtleBrush}">
                     <StackPanel Spacing="6">
-                      <TextBlock Classes="caption wrap" Text="{Tr Paint.Note}" />
+                      <TextBlock Classes="caption wrap" Text="{Binding PaintNote}" />
                       <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Right">
                         <Button Classes="ghost" Content="{Tr Paint.Discard}" Command="{Binding DiscardPaintCommand}" ToolTip.Tip="{Tr Paint.Discard.Tip}" />
                         <Button x:Name="ApplyPaintButton" Classes="accent" Content="{Tr Paint.Apply}" Command="{Binding ApplyPaintCommand}" ToolTip.Tip="{Tr Paint.Apply.Tip}" />
@@ -334,9 +347,13 @@
                         <DataTemplate x:DataType="vm:PaintMaterialViewModel">
                           <StackPanel Spacing="6" Margin="0,8,0,4">
                             <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
-                            <TextBlock Text="{Tr Paint.Added}" Classes="caption wrap" IsVisible="{Binding IsAdded}" />
-                            <CheckBox IsChecked="{Binding Plain}" IsVisible="{Binding HasPlain}" ToolTip.Tip="{Tr Paint.Plain.Tip}">
+                            <TextBlock Text="{Tr Paint.Added}" Classes="caption wrap" IsVisible="{Binding IsArmour}" />
+                            <TextBlock Text="{Tr Paint.Tint}" Classes="caption wrap" IsVisible="{Binding IsTint}" />
+                            <CheckBox IsChecked="{Binding Plain}" IsVisible="{Binding IsArmour}" ToolTip.Tip="{Tr Paint.Plain.Tip}">
                               <TextBlock Text="{Tr Paint.Plain}" TextWrapping="Wrap" />
+                            </CheckBox>
+                            <CheckBox IsChecked="{Binding Plain}" IsVisible="{Binding IsTint}" ToolTip.Tip="{Tr Paint.Even.Tip}">
+                              <TextBlock Text="{Tr Paint.Even}" TextWrapping="Wrap" />
                             </CheckBox>
                             <StackPanel Orientation="Horizontal" Spacing="8">
                               <ColorPicker Color="{Binding Colour}" IsAlphaEnabled="False" IsAlphaVisible="False" ToolTip.Tip="{Tr Paint.Colour.Tip}" />

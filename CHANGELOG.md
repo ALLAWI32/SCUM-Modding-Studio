@@ -3,6 +3,31 @@
 All notable changes are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [semantic versioning](https://semver.org/).
 
+## [0.2.3] - 2026-10-03
+
+### New in this release
+- **Brush select** on the map: hold the mouse and paint a circle; everything under it joins the selection. Turn the
+  brush off, `Ctrl+click` what should stay, and `Delete` removes the rest.
+- **Tilt buildings**: houses, churches and halls no longer bend like bridges; the Shape menu leans any object front,
+  back or sideways (up to 90°) and turns it.
+- **Melee weapons** on the Weapons page (Melee filter) with their **hit damage**: the game's weapon table row
+  (damage, stamina, cutting, stabbing). A cloned knife gets its own row, so it can be stronger than the original.
+- **Engine power** for vehicles: the torque at each rpm. A clone has its own engine; the stock vehicle stays.
+- **Paint for weapons and planes**, a **Game colours** button that puts the stock paint back, a resizable paint panel,
+  and clones with a paint of their own.
+- **What spawns at a pin**: click a loot pin to see the items that can spawn there and how rare they are; the
+  **Colours** legend explains every pin colour and switches each kind on or off.
+- **Island spawn places**: vehicle, zombie, threat-zone and hunting-area places of the whole island on the map.
+- A click on a building picks the part under the cursor by default; **Select the whole building** goes back to it.
+
+### Fixes
+- The app no longer freezes after flying over the map for a while; streaming keeps the ground on the GPU.
+- Buildings that come back into view keep their textures (a church drew plain white).
+- `Delete` removes the whole `Ctrl+click` selection, not only the last object.
+- Copied trees and objects collide in the game like the original.
+- Planes show and take their paint like the game draws it.
+- The map header stays still while loading; no overlapping text on the Vehicles page.
+
 ## [0.2.1] - 2026-10-03
 
 ### New in this release

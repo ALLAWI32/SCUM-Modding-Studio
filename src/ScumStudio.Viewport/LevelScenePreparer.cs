@@ -106,6 +106,7 @@ public sealed record ScenePlacement(
     /// mode; null otherwise (the root component: that is the actor itself).
     /// </summary>
     public InstanceKey? InstanceKey => Instance is { } i ? Viewport.InstanceKey.Of(SelectableId, i.ComponentName, i.InstanceIndex)
+        : LootMarker is { } m ? Viewport.InstanceKey.Of(SelectableId, m.Component, Viewport.InstanceKey.LootPoint - m.Index)
         : Component is { SplineMesh: not null } c ? Viewport.InstanceKey.Of(SelectableId, c.Name, Viewport.InstanceKey.Segment)
         : Component is { IsSynthesized: false, ExportIndex: >= 0 } part && part.ExportIndex != Actor.RootComponent
             ? Viewport.InstanceKey.Of(SelectableId, part.Name, Viewport.InstanceKey.Part)
@@ -113,6 +114,9 @@ public sealed record ScenePlacement(
 
     /// <summary>Distance (cm) beyond which the game does not draw this placement (HISM/foliage <c>InstanceEndCullDistance</c>); 0 = always drawn.</summary>
     public float CullDistance { get; init; }
+
+    /// <summary>The pin of one loot point of a building (its item spawner component and marker index), or null.</summary>
+    public (string Component, int Index)? LootMarker { get; init; }
 }
 
 /// <summary>
@@ -129,6 +133,18 @@ public readonly record struct InstanceKey(uint SelectableId, string Component, i
 
     /// <summary><see cref="InstanceIndex"/> of one component of an actor (a part of a Blueprint building), picked in part mode.</summary>
     public const int Part = -2;
+
+    /// <summary>
+    /// <see cref="InstanceIndex"/> of the first loot point of an item spawner component (a building's shelf): point <c>i</c>
+    /// is <c>LootPoint - i</c>. Picked on its own to show what spawns there; it moves with its building.
+    /// </summary>
+    public const int LootPoint = -1000;
+
+    /// <summary>True for a loot point key (see <see cref="LootPoint"/>).</summary>
+    public bool IsLootPoint => InstanceIndex <= LootPoint;
+
+    /// <summary>The marker index of a loot point key.</summary>
+    public int Marker => LootPoint - InstanceIndex;
 
     /// <summary>Creates a key, normalising the component name.</summary>
     public static InstanceKey Of(uint selectableId, string component, int instanceIndex) =>
@@ -369,12 +385,13 @@ public sealed class LevelScenePreparer
                     $"{actor.Name}/{component.Name}", documentIndex, actor, component, null));
             }
 
-            // Spawn places (see SpawnMarkers.PinsOf): pins that pick as the actor use its id; the loot points and vehicle
-            // boxes inside buildings get an id of their own (bit 19), which picks nothing: they move with their building.
-            foreach (var (kind, pin, picksActor, label) in SpawnMarkers.PinsOf(actor))
+            // Spawn places (see SpawnMarkers.PinsOf): pins that pick as the actor use its id; a building's loot point picks as
+            // itself (the building's id with its own key: what spawns there, owner: "the pin tells me nothing"); vehicle boxes
+            // inside buildings get an id of their own (bit 19), which picks nothing. Both move with their building.
+            foreach (var (kind, pin, picksActor, label, marker) in SpawnMarkers.PinsOf(actor))
             {
-                var pinId = picksActor ? id : id | (1u << (options.DocumentIdShift - 1));
-                placements.Add(new ScenePlacement(SpawnMarkers.MeshKey(kind), UeToGl.ModelMatrix(pin), pin, pinId, label, documentIndex, actor, null, null));
+                var pinId = picksActor || marker is not null ? id : id | (1u << (options.DocumentIdShift - 1));
+                placements.Add(new ScenePlacement(SpawnMarkers.MeshKey(kind), UeToGl.ModelMatrix(pin), pin, pinId, label, documentIndex, actor, null, null) { LootMarker = marker });
             }
 
             if (!options.IncludeInstances)
@@ -992,6 +1009,20 @@ public sealed class LevelScenePreparer
 
                 look = new MaterialLook(texturePath, clip, tint);
                 materials[slot.MaterialPath] = look;
+            }
+            else if (look.Texture is { } kept && !textures.ContainsKey(kept))
+            {
+                // The prepare cache dropped the image (no kept mesh drew with it) but kept the material's look: a church
+                // streamed in again drew white (owner: "no textures, like San Andreas"). Decode it again.
+                try
+                {
+                    textures[kept] = TextureDecoder.Decode(_catalog.LoadObject<UTexture2D>(kept), maxSize: maxSize);
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    _logger.LogDebug("Material {Material}: texture {Texture} could not be decoded again ({Message}).", slot.MaterialPath, kept, ex.Message);
+                    look = look with { Texture = null };
+                }
             }
 
             if (look.Texture is not null)

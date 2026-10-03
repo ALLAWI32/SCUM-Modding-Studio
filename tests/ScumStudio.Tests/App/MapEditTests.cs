@@ -258,6 +258,39 @@ public sealed class MapEditTests
         Assert.Equal(2, map.ShapeLength, 3);
     }
 
+    /// <summary>Owner: lean a house towards its front or side (up to 90°) instead of bending it; Straighten stands it up again.</summary>
+    [Fact]
+    public async Task TiltSlidersLeanTheHouseAndStraightenStandsItUp()
+    {
+        using var ctx = AppTestContext.Create();
+        var game = ctx.Combine("game");
+        SyntheticLevels.WriteContent(game, withBlueprintPackage: true);
+        using var map = new MapPageViewModel(ctx.Services);
+        await ctx.Services.Workspace.OpenLooseAsync(game, ProgressSink.Null);
+        await map.LoadCompletion;
+        await ctx.Services.Projects.CreateAsync(ctx.Combine("projects"), "Tilt");
+        await map.LoadLevelsAsync([SyntheticLevels.LevelPath]);
+
+        var house = map.AllActors.Single(a => a.Name == "StaticMeshActor_1");
+        map.SelectedActor = house;
+        var yaw = map.ShapeYaw;
+        map.IsShapeDragging = true;
+        map.ShapePitch = 30;
+        map.ShapeRoll = -20;
+        map.IsShapeDragging = false;
+        map.CommitShape();
+        var state = ctx.Services.Projects.Current!.State;
+        var turned = state.GetTransformOverride(house.Reference)!.Value.Rotation.GetNormalized();
+        Assert.Equal(30f, turned.Pitch, 0.1f);
+        Assert.Equal(-20f, turned.Roll, 0.1f);
+        Assert.Equal((float)yaw, turned.Yaw, 0.1f);
+        Assert.Equal(2, map.ShapeLength, 3); // the size did not change
+
+        map.ResetShapeCommand.Execute(null);
+        Assert.Null(state.GetTransformOverride(house.Reference)); // upright as the level has it
+        Assert.Equal(0, map.ShapePitch, 1);
+    }
+
     [Fact]
     public async Task CtrlClickSelectsSeveralObjectsThatMoveCopyAndDeleteTogether()
     {

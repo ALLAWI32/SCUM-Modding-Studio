@@ -27,6 +27,18 @@ public sealed record UiState
     /// <summary>The map shows the game's spawn places as pins.</summary>
     public bool ShowSpawnPoints { get; init; } = true;
 
+    /// <summary>
+    /// A click on a Blueprint building picks the part under the cursor (Shift+click: the whole building). On by default:
+    /// owner and Igor both clicked a hangar's shell to move it alone and the whole building came along.
+    /// </summary>
+    public bool PickParts { get; init; } = true;
+
+    /// <summary>
+    /// Spawn pin layers switched off in the map's legend (<c>Loot</c>, <c>Vehicles</c>, <c>Zones</c>, ...). The two big circle
+    /// kinds start off: the owner found the rings everywhere confusing before they were explained.
+    /// </summary>
+    public IReadOnlyList<string> HiddenSpawnLayers { get; init; } = ["Zones", "Animals"];
+
     /// <summary>Where the map camera was last (the map reopens there), or null.</summary>
     public MapView? MapView { get; init; }
 }

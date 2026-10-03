@@ -73,6 +73,7 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
         _rotationSnap = ui.RotationSnapDegrees;
         _renderQuality = ui.RenderQuality;
         _showSpawns = services.UiState.Current.ShowSpawnPoints;
+        _pickParts = services.UiState.Current.PickParts;
         _services = services;
         _openSetup = openSetup ?? (() => { });
         _services.Workspace.CatalogChanged += OnCatalogChanged;
@@ -634,6 +635,13 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
         }
 
         ShowSelection(value);
+        OnPropertyChanged(nameof(HasSelectedPart)); // the part key comes first, its building right after
+        OnPropertyChanged(nameof(IsLootPointSelected));
+        SelectWholeCommand.NotifyCanExecuteChanged();
+        DeleteSelectedCommand.NotifyCanExecuteChanged();
+        CopySelectedCommand.NotifyCanExecuteChanged();
+        DuplicateSelectedCommand.NotifyCanExecuteChanged();
+        ApplyTransformCommand.NotifyCanExecuteChanged();
     }
 
     partial void OnSelectedActorIdChanged(uint value)
@@ -679,11 +687,8 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
             }
         }
 
-        // Spawn pins off: every pin's id (the spawn-only actors' and the pins inside buildings) is hidden.
-        if (!ShowSpawns && PreparedScene is { } scene)
-        {
-            hidden.UnionWith(scene.Placements.Where(p => SpawnMarkers.IsMarker(p.MeshPath)).Select(p => p.SelectableId));
-        }
+        // Spawn pins off (all of them, or the kinds switched off in the legend).
+        HideSpawnPins(hidden, hiddenInstances);
 
         HiddenActorIds = hidden;
         HiddenInstanceKeys = hiddenInstances;
@@ -1083,7 +1088,7 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
         return true;
     }
 
-    private bool CanApplyTransform() => SelectedActor is { IsDeleted: false };
+    private bool CanApplyTransform() => SelectedActor is { IsDeleted: false } && !IsLootPointSelected;
 
     /// <summary>Writes the edited location/rotation/scale of the selected actor's root into the project.</summary>
     [RelayCommand(CanExecute = nameof(CanApplyTransform))]
@@ -1116,7 +1121,7 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
         ApplyRootTransform(item, value, Localization.Loc.T("Map.Moved"));
     }
 
-    private bool CanCopySelected() => SelectedActor is not null;
+    private bool CanCopySelected() => SelectedActor is not null && !IsLootPointSelected;
 
     /// <summary>Remembers the selected actor (or instance) for Paste.</summary>
     [RelayCommand(CanExecute = nameof(CanCopySelected))]
@@ -1203,7 +1208,7 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
             switch (state.AddedActors.GetValueOrDefault(item.Reference))
             {
                 case AddStaticMeshActorOp mesh:
-                    return EditOpFactory.AddStaticMeshActor(target, mesh.StaticMesh, transform, state, reserved);
+                    return EditOpFactory.AddStaticMeshActor(target, mesh.StaticMesh, transform, state, reserved) with { CollisionProfile = mesh.CollisionProfile };
                 case AddBlueprintActorOp blueprint:
                     return new AddBlueprintActorOp(target.PackagePath, EditOpFactory.UniqueActorName(target, BaseName(item) + "_Added", state, reserved), blueprint.ClassPath, blueprint.Source, transform);
                 case DuplicateActorOp duplicate when _pristineActors.FirstOrDefault(a => ActorRef.Comparer.Equals(a.Reference, duplicate.Source)) is { } source:
@@ -1221,7 +1226,7 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
         }
 
         return item.Actor.Kind == ActorKind.StaticMeshActor && item.Actor.StaticMeshPath is { } meshPath
-            ? EditOpFactory.AddStaticMeshActor(target, meshPath, transform, state, reserved)
+            ? EditOpFactory.AddStaticMeshActor(target, meshPath, transform, state, reserved) with { CollisionProfile = item.Actor.Root?.CollisionProfile }
             : new AddBlueprintActorOp(target.PackagePath, EditOpFactory.UniqueActorName(target, BaseName(item) + "_Added", state, reserved), item.Actor.ClassPath, item.Reference, transform);
     }
 
@@ -1236,7 +1241,7 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
         SelectedActor = AllActors.FirstOrDefault(a => a.IsAdded && created is not null && ActorRef.Comparer.Equals(a.Reference, created)) ?? SelectedActor;
     }
 
-    private bool CanDuplicateSelected() => SelectedActor is { IsDeleted: false };
+    private bool CanDuplicateSelected() => SelectedActor is { IsDeleted: false } && !IsLootPointSelected;
 
     /// <summary>Copies the selected pristine actor 2 m along +X (the copy is exported as a copy of the source's exports).</summary>
     [RelayCommand(CanExecute = nameof(CanDuplicateSelected))]
@@ -1318,19 +1323,29 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
         static string Fmt(FormattableString s) => s.ToString(CultureInfo.InvariantCulture);
     }
 
-    private bool CanDeleteSelected() => SelectedActor is { IsDeleted: false };
+    private bool CanDeleteSelected() => HasKindSelection || (SelectedActor is { IsDeleted: false } && !IsLootPointSelected); // a loot point moves with its building
+
+    partial void OnKindSelectionTextChanged(string? value) => DeleteSelectedCommand.NotifyCanExecuteChanged(); // a brushed set has no single selected object
 
     [RelayCommand(CanExecute = nameof(CanDeleteSelected))]
     private void DeleteSelected()
     {
-        if (SelectedActor is not { } item)
-        {
-            return;
-        }
-
         if (!_services.Projects.HasProject)
         {
             _services.Notifications.Warning(Localization.Loc.T("History.NoProject"), Localization.Loc.T("Map.NoProject.Deletes"));
+            return;
+        }
+
+        // A multi-selection (Ctrl+click, brush) or "all of this kind" goes as a whole, whichever Delete is pressed
+        // (owner: "I select several with Ctrl and Delete removes only the last one").
+        if (HasKindSelection)
+        {
+            _ = DeleteKindSelectionAsync();
+            return;
+        }
+
+        if (SelectedActor is not { } item)
+        {
             return;
         }
 

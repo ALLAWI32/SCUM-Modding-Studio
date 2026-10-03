@@ -45,7 +45,7 @@ public static class TunableReader
             }
 
             var group = FriendlyExport(keys[i]);
-            foreach (var (path, tag) in block.EnumerateAll())
+            foreach (var (path, tag) in EnumerateAll(package, i, block))
             {
                 if (SkippedNames.Contains(tag.Name) || ToTunable(package, keys[i], className, group, path, tag) is not { } t)
                 {
@@ -57,6 +57,48 @@ public static class TunableReader
         }
 
         return result;
+    }
+
+    /// <summary>The export's tagged values, then a DataTable's row members as <c>Rows[Row].Member</c> (see <see cref="DataTableRows"/>).</summary>
+    internal static IEnumerable<(string Path, PropertyTag Tag)> EnumerateAll(CookedPackage package, int exportIndex, PropertyBlock block)
+    {
+        IReadOnlyList<DataTableRow> rows;
+        try
+        {
+            rows = DataTableRows.Read(package, exportIndex);
+        }
+        catch (Exception ex) when (ex is FormatException or InvalidDataException or EndOfStreamException or ArgumentOutOfRangeException)
+        {
+            rows = [];
+        }
+
+        var all = block.EnumerateAll().Concat(rows.SelectMany(r => r.EnumerateAll().Select(m => (Path: DataTableRows.PathOf(r.Name, m.Path), m.Tag)))).ToList();
+        return all.Concat(all.SelectMany(x => NativeFloats(x.Path, x.Tag)));
+    }
+
+    /// <summary>
+    /// The float fields of natively serialized struct items (a curve's <c>Keys[i].Value</c>: SCUM's engine torque curves)
+    /// as tags of their own, so they read and patch like any stored float.
+    /// </summary>
+    private static IEnumerable<(string Path, PropertyTag Tag)> NativeFloats(string path, PropertyTag tag)
+    {
+        if (tag.Value is not ArrayValue array)
+        {
+            yield break;
+        }
+
+        for (var i = 0; i < array.Items.Count; i++)
+        {
+            if (array.Items[i] is not NativeStructValue item)
+            {
+                continue;
+            }
+
+            foreach (var field in item.Fields.Where(f => f.Value is FloatValue))
+            {
+                yield return ($"{path}[{i}].{field.Name}", new PropertyTag { Name = field.Name, Type = "FloatProperty", Size = 4, ValueOffset = field.Value.Offset, Value = field.Value });
+            }
+        }
     }
 
     /// <summary>Export keys: object name, with <c>#n</c> for the n-th repeat (n ≥ 1) of the same name.</summary>

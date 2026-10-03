@@ -27,7 +27,11 @@ public sealed record CollisionBox(FVector Center, FRotator Rotation, FVector Siz
 /// <c>CachedMeshBodySetupGuid</c> differs rebuilds its collision from the mesh when it loads, replacing its own.
 /// </param>
 public sealed record MeshCollisionInfo(IReadOnlyList<CollisionBox> Boxes, int Convex, int BoxElements, int Spheres, int Capsules, string TraceFlag,
-    (uint A, uint B, uint C, uint D) BodySetupGuid = default);
+    (uint A, uint B, uint C, uint D) BodySetupGuid = default)
+{
+    /// <summary>The collision profile a component gets by default (<c>DefaultInstance.CollisionProfileName</c>), or null.</summary>
+    public string? DefaultProfile { get; init; }
+}
 
 /// <summary>Reads a static mesh's simple collision (see <see cref="MeshCollisionInfo"/>).</summary>
 public static class MeshCollision
@@ -83,8 +87,10 @@ public static class MeshCollision
 
         var flag = setup.Properties.FirstOrDefault(p => p.Name.Text == "CollisionTraceFlag")?.Tag?.GenericValue?.ToString() ?? string.Empty;
         var g = setup.BodySetupGuid;
+        var profile = setup.TryGetValue(out CUE4Parse.UE4.Assets.Objects.FStructFallback def, "DefaultInstance")
+                      && def.TryGetValue(out CUE4Parse.UE4.Objects.UObject.FName name, "CollisionProfileName") && !name.IsNone ? name.Text : null;
         return new MeshCollisionInfo(boxes, geom?.ConvexElems?.Length ?? 0, geom?.BoxElems?.Length ?? 0, geom?.SphereElems?.Length ?? 0, geom?.SphylElems?.Length ?? 0, flag,
-            (g.A, g.B, g.C, g.D));
+            (g.A, g.B, g.C, g.D)) { DefaultProfile = profile };
     }
 
     private static FVector V(CUE4Parse.UE4.Objects.Core.Math.FVector v) => new(v.X, v.Y, v.Z);

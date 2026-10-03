@@ -83,6 +83,60 @@ public sealed class MapInstanceTests
         Assert.DoesNotContain(lamp.SelectableId, map.HiddenActorIds);
     }
 
+    /// <summary>Owner: "I select several with Ctrl and Delete removes only the last one" (the Delete button took the selected object alone).</summary>
+    [Fact]
+    public async Task TheDeleteButtonRemovesTheWholeCtrlClickSelection()
+    {
+        using var ctx = AppTestContext.Create();
+        var game = ctx.Combine("game");
+        SyntheticLevels.WriteContent(game, withBlueprintPackage: true);
+        using var map = new MapPageViewModel(ctx.Services);
+        await ctx.Services.Workspace.OpenLooseAsync(game, ProgressSink.Null);
+        await map.LoadCompletion;
+        await ctx.Services.Projects.CreateAsync(ctx.Combine("projects"), "Group delete");
+        await map.LoadLevelsAsync([SyntheticLevels.LevelPath]);
+
+        var rocks = map.AllActors.Single(a => a.Name == "Rocks_Actor");
+        map.SelectedInstanceKey = InstanceKey.Of(rocks.SelectableId, "Rocks", 0);
+        map.SelectedActorId = rocks.SelectableId;
+        map.ToggleGroup(rocks.SelectableId, InstanceKey.Of(rocks.SelectableId, "Rocks", 1)); // Ctrl+click a second rock
+        Assert.True(map.HasGroup);
+
+        map.DeleteSelectedCommand.Execute(null);
+        Assert.Contains(InstanceKey.Of(rocks.SelectableId, "Rocks", 0), map.HiddenInstanceKeys);
+        Assert.Contains(InstanceKey.Of(rocks.SelectableId, "Rocks", 1), map.HiddenInstanceKeys);
+        Assert.False(map.HasGroup);
+    }
+
+    /// <summary>Owner: hold the mouse and a circle selects everything under it; Ctrl+click keeps one; Delete removes the rest.</summary>
+    [Fact]
+    public async Task TheBrushSelectsWhatIsInsideTheCircleAndCtrlClickKeepsOne()
+    {
+        using var ctx = AppTestContext.Create();
+        var game = ctx.Combine("game");
+        SyntheticLevels.WriteContent(game, withBlueprintPackage: true);
+        using var map = new MapPageViewModel(ctx.Services);
+        await ctx.Services.Workspace.OpenLooseAsync(game, ProgressSink.Null);
+        await map.LoadCompletion;
+        await ctx.Services.Projects.CreateAsync(ctx.Combine("projects"), "Brush");
+        await map.LoadLevelsAsync([SyntheticLevels.LevelPath]);
+
+        var rocks = map.AllActors.Single(a => a.Name == "Rocks_Actor");
+        var rock0 = InstanceKey.Of(rocks.SelectableId, "Rocks", 0);
+        var rock1 = InstanceKey.Of(rocks.SelectableId, "Rocks", 1);
+        map.BrushSelect = true;
+        map.BrushRadius = 3; // 3 m around the rocks: the house (10 m away) and the lamp stay out
+        map.BrushAt(new FVector(50f, 0f, 100f));
+        Assert.Equal([rock0, rock1], map.KindSelectionInstances.OrderBy(k => k.InstanceIndex));
+        Assert.Empty(map.KindSelectionIds);
+
+        map.BrushSelect = false; // the selection stays
+        map.ToggleGroup(rocks.SelectableId, rock0); // Ctrl+click: keep this one
+        map.DeleteSelectedCommand.Execute(null);
+        Assert.Contains(rock1, map.HiddenInstanceKeys);
+        Assert.DoesNotContain(rock0, map.HiddenInstanceKeys);
+    }
+
     [Fact]
     public async Task CtrlASelectsEveryInstanceOfTheKindAndDeleteRemovesThemAll()
     {

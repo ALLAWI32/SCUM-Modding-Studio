@@ -369,6 +369,7 @@ public sealed class LevelDocument
                 SplineMesh = c.SplineMesh,
                 OverrideMaterials = c.OverrideMaterials,
                 SpawnMarkers = c.SpawnMarkers ?? [],
+                CollisionProfile = c.CollisionProfile,
                 PropertyNames = c.PropertyNames,
                 UsesTemplateValues = c.UsesTemplateValues,
                 IsSynthesized = c.IsSynthesized,

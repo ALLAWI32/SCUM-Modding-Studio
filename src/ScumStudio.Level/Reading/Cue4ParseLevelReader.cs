@@ -496,8 +496,16 @@ public sealed partial class Cue4ParseLevelReader : ILevelReader
             markers = [new SpawnMarker(FTransform.Identity, itemName.EndsWith("_C", StringComparison.Ordinal) ? itemName[..^2] : itemName, 100, 1, 1)];
         }
 
+        // What it collides as (SCUM's tree foliage blocks players as SCUM_TreeStump while the tree mesh's own default does not).
+        string? collision = null;
+        if (isMesh && TryGetProperty(templates, "BodyInstance", out FStructFallback body, ref ignored)
+            && body.TryGetValue(out FName profile, "CollisionProfileName") && !profile.IsNone)
+        {
+            collision = profile.Text;
+        }
+
         return new ComponentValues(location, rotation, scale, absLocation, absRotation, absScale, mesh, instances, isInstancedClass,
-            isMesh, isScene, isComponent, visible, childActorClass, spline, fromTemplate, endCullDistance, overrides, markers);
+            isMesh, isScene, isComponent, visible, childActorClass, spline, fromTemplate, endCullDistance, overrides, markers, collision);
     }
 
     private IReadOnlyList<SpawnMarker>? ReadSpawnMarkers(TemplateChain templates)
@@ -513,6 +521,7 @@ public sealed partial class Cue4ParseLevelReader : ILevelReader
         {
             var local = marker.TryGetValue(out FStructFallback transform, "Transform") ? ReadTransformStruct(transform) : FTransform.Identity;
             string preset = string.Empty;
+            string? presetPath = null;
             float probability = 100;
             int min = 1, max = 1;
             if (marker.TryGetValue(out FStructFallback spawner, "SpawnerPreset"))
@@ -520,6 +529,7 @@ public sealed partial class Cue4ParseLevelReader : ILevelReader
                 if (spawner.TryGetValue(out FPackageIndex presetIndex, "Preset") && !presetIndex.IsNull)
                 {
                     preset = presetIndex.Name.EndsWith("_C", StringComparison.Ordinal) ? presetIndex.Name[..^2] : presetIndex.Name;
+                    presetPath = ObjectPathOf(presetIndex);
                 }
 
                 probability = spawner.TryGetValue(out float p, "Probability") ? p : probability;
@@ -530,7 +540,7 @@ public sealed partial class Cue4ParseLevelReader : ILevelReader
                 }
             }
 
-            result.Add(new SpawnMarker(local, preset, probability, min, max));
+            result.Add(new SpawnMarker(local, preset, probability, min, max) { PresetPath = presetPath });
         }
 
         return result;

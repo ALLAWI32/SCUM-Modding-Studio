@@ -96,10 +96,10 @@
             </Border>
           </Panel>
 
-          <!-- Update (a newer release is out) and the project. -->
+          <!-- Updates (always there: "Up to date", or lit up when a newer release is out) and the project. -->
           <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center" Margin="0,0,6,0">
-            <Button x:Name="UpdateButton" Classes="accent" Padding="10,3" Margin="0,0,10,0" IsVisible="{Binding HasUpdate}"
-                    Command="{Binding OpenUpdateCommand}" ToolTip.Tip="{Tr Update.Button.Tip}">
+            <Button x:Name="UpdateButton" Classes.accent="{Binding HasUpdate}" Classes.ghost="{Binding !HasUpdate}" Padding="10,3" Margin="0,0,10,0"
+                    IsVisible="{Binding CanCheckUpdates}" Command="{Binding OpenUpdateCommand}" ToolTip.Tip="{Binding UpdateButtonTip}">
               <StackPanel Orientation="Horizontal" Spacing="6">
                 <c:GlyphIcon Kind="Icon.Download" IconSize="13" />
                 <TextBlock Text="{Binding UpdateButtonText}" FontSize="12" />

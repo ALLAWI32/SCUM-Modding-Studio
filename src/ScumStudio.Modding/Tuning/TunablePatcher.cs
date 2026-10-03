@@ -39,7 +39,7 @@ public static class TunablePatcher
             }
 
             var block = package.ReadProperties(exportIndex);
-            var byPath = block.EnumerateAll().GroupBy(x => x.Path, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.First().Tag, StringComparer.Ordinal);
+            var byPath = TunableReader.EnumerateAll(package, exportIndex, block).GroupBy(x => x.Path, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.First().Tag, StringComparer.Ordinal);
 
             // Same-size edits first (offsets are those of the original payload), then text edits from the back so earlier offsets stay valid.
             var textEdits = new List<(PropertyTag Tag, TunableEdit Edit, string Old)>();

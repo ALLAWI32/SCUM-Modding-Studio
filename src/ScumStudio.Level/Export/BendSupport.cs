@@ -13,6 +13,9 @@ namespace ScumStudio.Level.Export;
 /// <param name="BodySetupGuid">The mesh's <c>BodySetupGuid</c>: written as each piece's <c>CachedMeshBodySetupGuid</c> so the game keeps the boxes.</param>
 public sealed record BendMesh(BoundingBox Bounds, string? FlatMaterial = null, IReadOnlyList<CollisionBox>? Boxes = null, Formats.FGuid? BodySetupGuid = null)
 {
+    /// <summary>The collision profile the mesh gives a component by default (<see cref="MeshCollisionInfo.DefaultProfile"/>), or null.</summary>
+    public string? DefaultProfile { get; init; }
+
     /// <summary>Why the mesh stays straight in an export, or null.</summary>
     public string? Problem => FlatMaterial is null ? null : $"its material {FlatMaterial[(FlatMaterial.LastIndexOf('/') + 1)..]} cannot be drawn bent in the game";
 }
@@ -91,7 +94,7 @@ public sealed class BendSupport(AssetCatalog catalog)
             boxes = simple is { Boxes.Count: > 0 } && simple.TraceFlag != "CTF_UseComplexAsSimple" ? simple.Boxes : null;
         }
 
-        return new BendMesh(info.Bounds, flat, boxes, guid);
+        return new BendMesh(info.Bounds, flat, boxes, guid) { DefaultProfile = simple?.DefaultProfile };
     }
 
     private bool BendsInGame(string materialPath)

@@ -125,6 +125,14 @@ public sealed partial class LevelViewport : OpenGlControlBase
     public static readonly StyledProperty<bool> PickPartsProperty =
         AvaloniaProperty.Register<LevelViewport, bool>(nameof(PickParts));
 
+    /// <summary>Brush mode: a circle follows the cursor and holding the left button raises <see cref="BrushPainted"/> where it is.</summary>
+    public static readonly StyledProperty<bool> BrushModeProperty =
+        AvaloniaProperty.Register<LevelViewport, bool>(nameof(BrushMode));
+
+    /// <summary>Radius of the brush circle in metres.</summary>
+    public static readonly StyledProperty<double> BrushRadiusProperty =
+        AvaloniaProperty.Register<LevelViewport, double>(nameof(BrushRadius), 10d);
+
     /// <summary>One-line statistics of the last frame (read-only).</summary>
     public static readonly StyledProperty<string> FrameInfoProperty =
         AvaloniaProperty.Register<LevelViewport, string>(nameof(FrameInfo), string.Empty);
@@ -171,6 +179,9 @@ public sealed partial class LevelViewport : OpenGlControlBase
     private DragPreview? _dragPreview;
     private bool _previewApplied;
     private (int X, int Y)? _pendingPick;
+    private (int X, int Y, bool Paint)? _pendingBrush;
+    private Vector3? _brushPointGl;
+    private bool _brushing;
     private Point _lastPointer;
     private Point _pressPointer;
     private bool _looking;
@@ -450,6 +461,23 @@ public sealed partial class LevelViewport : OpenGlControlBase
         get => GetValue(PickPartsProperty);
         set => SetValue(PickPartsProperty, value);
     }
+
+    /// <inheritdoc cref="BrushModeProperty" />
+    public bool BrushMode
+    {
+        get => GetValue(BrushModeProperty);
+        set => SetValue(BrushModeProperty, value);
+    }
+
+    /// <inheritdoc cref="BrushRadiusProperty" />
+    public double BrushRadius
+    {
+        get => GetValue(BrushRadiusProperty);
+        set => SetValue(BrushRadiusProperty, value);
+    }
+
+    /// <summary>Raised on the UI thread while the brush paints: the UE world point under the circle's centre.</summary>
+    public event EventHandler<FVector>? BrushPainted;
 
     /// <summary>How close (cm) a neighbour's face must come for auto-snap to take it.</summary>
     public float SnapReach { get; set; } = 30f;
@@ -929,6 +957,15 @@ public sealed partial class LevelViewport : OpenGlControlBase
 
             BuildGizmoOverlay(_renderer, preview?.Root ?? SelectedRootWorld);
             DrawShapeHandles(_renderer);
+            if (BrushMode && _brushPointGl is { } brushAt)
+            {
+                var ring = GizmoMath.RingPoints(brushAt, (float)BrushRadius * 100f, 64);
+                for (var i = 1; i < ring.Length; i++)
+                {
+                    _renderer.Overlay.Add(new OverlayLine(ring[i - 1], ring[i], new Vector4(1f, 0.8f, 0.2f, 1f)));
+                }
+            }
+
             if (_snappedTo is not null && preview is not null && _snapPiece is { } snapped)
             {
                 // Locked onto a neighbour: the piece's box glows green (Alt while dragging lets go).
@@ -1010,6 +1047,20 @@ public sealed partial class LevelViewport : OpenGlControlBase
                 ActorPicked?.Invoke(this, id);
             });
             }
+        }
+
+        if (_pendingBrush is { } brush && _level is { } brushed)
+        {
+            _pendingBrush = null;
+            var hit = _renderer.Pick(_target, brushed.Scene, _camera, brush.X, brush.Y);
+            _brushPointGl = hit?.WorldPosition;
+            if (brush.Paint && hit is not null)
+            {
+                var ue = UeToGl.ToUePoint(hit.WorldPosition);
+                Dispatcher.UIThread.Post(() => BrushPainted?.Invoke(this, ue));
+            }
+
+            RequestNextFrameRendering(); // the circle is drawn where the cursor now is
         }
 
         RenderStats stats;
@@ -1107,6 +1158,12 @@ public sealed partial class LevelViewport : OpenGlControlBase
     protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
     {
         base.OnPropertyChanged(change);
+        if (change.Property == BrushModeProperty || change.Property == BrushRadiusProperty)
+        {
+            RequestNextFrameRendering(); // the circle shows, hides or changes size
+            return;
+        }
+
         if (change.Property != IsVisibleProperty)
         {
             return;
@@ -1159,6 +1216,15 @@ public sealed partial class LevelViewport : OpenGlControlBase
         }
 
         _lastPointer = _pressPointer = point.Position;
+        if (BrushMode && point.Properties.IsLeftButtonPressed && !e.KeyModifiers.HasFlag(KeyModifiers.Control))
+        {
+            // Brush: holding the button paints; nothing is grabbed or moved (Ctrl+click still takes one object out).
+            _brushing = true;
+            QueueBrush(point.Position, paint: true);
+            e.Pointer.Capture(this);
+            return;
+        }
+
         if (point.Properties.IsLeftButtonPressed && TryBeginHandleDrag(point.Position, shift: e.KeyModifiers.HasFlag(KeyModifiers.Shift)))
         {
             e.Pointer.Capture(this);
@@ -1234,6 +1300,16 @@ public sealed partial class LevelViewport : OpenGlControlBase
 
         _snapHeld = e.KeyModifiers.HasFlag(KeyModifiers.Control);
         _altHeld = e.KeyModifiers.HasFlag(KeyModifiers.Alt);
+        if (BrushMode && !_panning)
+        {
+            QueueBrush(position, paint: _brushing);
+            if (_brushing)
+            {
+                e.Handled = true;
+                return;
+            }
+        }
+
         if (IsHandleDragging)
         {
             DragHandle(position);
@@ -1293,6 +1369,14 @@ public sealed partial class LevelViewport : OpenGlControlBase
     protected override void OnPointerReleased(PointerReleasedEventArgs e)
     {
         base.OnPointerReleased(e);
+        if (_brushing && e.InitialPressMouseButton == MouseButton.Left)
+        {
+            _brushing = false;
+            e.Pointer.Capture(null);
+            e.Handled = true;
+            return;
+        }
+
         if (IsHandleDragging)
         {
             e.Pointer.Capture(null);
@@ -1552,6 +1636,18 @@ public sealed partial class LevelViewport : OpenGlControlBase
 
         var radius = Frustum.TransformBounds(mesh.Bounds, node.WorldTransform).Extent.Length();
         return Math.Clamp(radius * 20f, MaxPickDistance, MathF.Max(MaxPickDistance, MaxPickDistanceLarge));
+    }
+
+    private void QueueBrush(Point position, bool paint)
+    {
+        if (!paint && _pendingBrush is { Paint: true })
+        {
+            return; // a dab not yet taken by a frame is not replaced by a plain hover
+        }
+
+        var scaling = RenderScaling();
+        _pendingBrush = ((int)(position.X * scaling), (int)(position.Y * scaling), paint);
+        RequestNextFrameRendering();
     }
 
     private void QueuePick(Point position, bool grab, bool whole = false, bool toggle = false, bool part = false)

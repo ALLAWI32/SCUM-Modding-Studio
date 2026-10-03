@@ -8,6 +8,7 @@ using ScumStudio.App.Localization;
 using ScumStudio.App.Services;
 using ScumStudio.Assets.Catalog;
 using ScumStudio.Formats.Packages;
+using ScumStudio.Formats.Properties;
 using ScumStudio.Level.Editing;
 using ScumStudio.Modding.Catalog;
 using ScumStudio.Modding.Cloning;
@@ -541,6 +542,7 @@ public abstract partial class ModulePageViewModel : PageViewModel, ISearchablePa
         _previewBase = null;
         Paints = [];
         ClearArmour();
+        OnPropertyChanged(nameof(PaintNote));
         PreviewText = string.Empty;
         UpdateClonePreview();
         if (value is not null && _catalog is { } catalog)
@@ -836,8 +838,24 @@ public abstract partial class ModulePageViewModel : PageViewModel, ISearchablePa
             parts.Add(new ModulePart(Loc.T("Module.Part.EntitySetup"), es, Loc.T("Module.Part.EntitySetup.Tip")));
         }
 
+        if (ModdableAssets.IsMelee(item.CloneOf ?? item.PackagePath))
+        {
+            // A knife's or axe's hit damage is the WeaponDesc_Table row named after it (a clone gets its template's row, see AssetModBuilder).
+            parts.Add(new ModulePart(Loc.T("Module.Part.Damage"), DataTableEdits.WeaponDescTable, Loc.T("Module.Part.Damage.Tip"))
+            {
+                Row = item.Name,
+                RowFrom = item.IsClone ? PackageMap.Leaf(item.CloneOf!) : null,
+            });
+        }
+
         if (item.Asset.Kind == ModdableKind.Vehicle)
         {
+            // Owner: "make the car faster". Its engine's pull is an external torque curve (Curves/<Token>_EngineTorqueCurve; a clone has its own copy).
+            if (await Task.Run(() => TorqueCurve(catalog, item)).ConfigureAwait(true) is { } curve)
+            {
+                parts.Add(new ModulePart(Loc.T("Module.Part.Engine"), curve, Loc.T("Module.Part.Engine.Tip")) { IsTorqueCurve = true });
+            }
+
             var attachments = await Task.Run(() => VehicleAttachments(catalog, item)).ConfigureAwait(true);
             parts.AddRange(attachments);
         }
@@ -858,6 +876,15 @@ public abstract partial class ModulePageViewModel : PageViewModel, ISearchablePa
                 Caption = caption ?? string.Empty;
             }
         }
+    }
+
+    /// <summary>The vehicle's engine torque curve package (a clone's own copy), or null.</summary>
+    private string? TorqueCurve(AssetCatalog catalog, ModuleItemViewModel item)
+    {
+        var candidates = item.IsClone && _services.Projects.Current?.State.FindCloneOf(item.PackagePath) is { } clone
+            ? clone.Packages.Select(p => p.New)
+            : ModdableAssets.ReadImportedPackages(catalog, item.PackagePath).Where(catalog.PackageExists);
+        return candidates.FirstOrDefault(p => PackageMap.Leaf(p).EndsWith("TorqueCurve", StringComparison.OrdinalIgnoreCase));
     }
 
     private List<ModulePart> VehicleAttachments(AssetCatalog catalog, ModuleItemViewModel item)
@@ -912,7 +939,7 @@ public abstract partial class ModulePageViewModel : PageViewModel, ISearchablePa
         IsLoadingValues = true;
         try
         {
-            var tunables = await Task.Run(() => TunableReader.Read(ReadForEditing(catalog, part.PackagePath))).ConfigureAwait(true);
+            var tunables = await Task.Run(() => RowFilter(part, TunableReader.Read(ReadForEditing(catalog, part.PackagePath)))).ConfigureAwait(true);
             if (!ReferenceEquals(SelectedPart, part))
             {
                 return;
@@ -945,6 +972,37 @@ public abstract partial class ModulePageViewModel : PageViewModel, ISearchablePa
         {
             IsLoadingValues = false;
         }
+    }
+
+    /// <summary>
+    /// A DataTable part shows its one row (<see cref="ModulePart.Row"/>); a clone's row is not in the stock table yet, so it
+    /// shows its template's values under its own row name, which the mod adds.
+    /// </summary>
+    private static IReadOnlyList<Tunable> RowFilter(ModulePart part, IReadOnlyList<Tunable> tunables)
+    {
+        if (part.IsTorqueCurve)
+        {
+            // Each key's torque, named by the rpm it applies at (its Time): "Torque at 3250 rpm".
+            var times = tunables.Where(t => t.Name == "Time").ToDictionary(t => t.Path[..^"Time".Length], t => t.Value, StringComparer.Ordinal);
+            return tunables.Where(t => t.Name == "Value" && times.ContainsKey(t.Path[..^"Value".Length]))
+                .Select(t => t with
+                {
+                    Name = Loc.F("Module.Torque.At", TunableValue.ParseFloat(times[t.Path[..^"Value".Length]]).ToString("0", CultureInfo.CurrentCulture)),
+                    Group = Loc.T("Module.Part.Engine"),
+                })
+                .ToList();
+        }
+
+        if (part.Row is not { } row)
+        {
+            return tunables;
+        }
+
+        var from = DataTableRows.PathOf(part.RowFrom ?? row, string.Empty);
+        var to = DataTableRows.PathOf(row, string.Empty);
+        return tunables.Where(t => t.Path.StartsWith(from, StringComparison.OrdinalIgnoreCase))
+            .Select(t => t with { Path = to + t.Path[from.Length..], Group = Loc.T("Module.Part.Damage") })
+            .ToList();
     }
 
     /// <summary>The package as the mod starts from: stock from the catalog, or the in-memory rename-clone of its template.</summary>

@@ -108,6 +108,35 @@ public sealed partial class MapPageViewModel
         ShapeLegs = Math.Clamp(_legsDragFrom.Value + (downCm / 100.0), 0, 300);
     }
 
+    /// <summary>Lean towards its front or back, degrees (the object's pitch; owner: a house tilted like a slope, up to 90° either way).</summary>
+    [ObservableProperty]
+    private double _shapePitch;
+
+    /// <summary>Lean to its left or right, degrees (the object's roll).</summary>
+    [ObservableProperty]
+    private double _shapeRoll;
+
+    /// <summary>Which way it faces, degrees (the object's yaw).</summary>
+    [ObservableProperty]
+    private double _shapeYaw;
+
+    /// <summary><see cref="ShapePitch"/> as text.</summary>
+    public string ShapePitchText => string.Create(CultureInfo.CurrentCulture, $"{ShapePitch:0}°");
+
+    /// <summary><see cref="ShapeRoll"/> as text.</summary>
+    public string ShapeRollText => string.Create(CultureInfo.CurrentCulture, $"{ShapeRoll:0}°");
+
+    /// <summary><see cref="ShapeYaw"/> as text.</summary>
+    public string ShapeYawText => string.Create(CultureInfo.CurrentCulture, $"{ShapeYaw:0}°");
+
+    partial void OnShapePitchChanged(double value) => ShapeChanged(nameof(ShapePitchText));
+
+    partial void OnShapeRollChanged(double value) => ShapeChanged(nameof(ShapeRollText));
+
+    partial void OnShapeYawChanged(double value) => ShapeChanged(nameof(ShapeYawText));
+
+    private FRotator ShapeRotation() => new((float)ShapePitch, (float)ShapeYaw, (float)ShapeRoll);
+
     /// <summary>The selected single object's scale handles (longer, shorter, bigger, smaller) when it has no curve handles.</summary>
     [ObservableProperty]
     private ScaleHandleInfo? _scaleHandles;
@@ -281,7 +310,8 @@ public sealed partial class MapPageViewModel
             return;
         }
 
-        if (textProperty is not (nameof(ShapeBendText) or nameof(ShapeSway1Text) or nameof(ShapeSway2Text) or nameof(ShapeLegsText)))
+        if (textProperty is not (nameof(ShapeBendText) or nameof(ShapeSway1Text) or nameof(ShapeSway2Text) or nameof(ShapeLegsText)
+            or nameof(ShapePitchText) or nameof(ShapeRollText) or nameof(ShapeYawText)))
         {
             _syncingShape = true;
             ShapeSize = Math.Cbrt(ShapeLength * ShapeWidth * ShapeHeight);
@@ -326,6 +356,9 @@ public sealed partial class MapPageViewModel
             ShapeLength = _shapeAlongY ? original.Y : original.X;
             ShapeWidth = _shapeAlongY ? original.X : original.Y;
             ShapeHeight = original.Z;
+            var stood = OriginalRotation().GetNormalized(); // upright again; which way it faces stays
+            ShapePitch = stood.Pitch;
+            ShapeRoll = stood.Roll;
             ShapeSize = Math.Cbrt(Math.Abs(ShapeLength * ShapeWidth * ShapeHeight));
         }
         finally
@@ -379,6 +412,7 @@ public sealed partial class MapPageViewModel
                 ShapeLegs = 0;
                 (_shapeStart, _shapeEnd) = (piece.Start, piece.End);
                 ShapeBend = 0;
+                ShapePitch = ShapeRoll = ShapeYaw = 0;
                 CanScale = false;
                 CanSway = true;
                 CanBend = false;
@@ -396,6 +430,8 @@ public sealed partial class MapPageViewModel
             ShapeWidth = _shapeAlongY ? t.Scale.X : t.Scale.Y;
             ShapeHeight = t.Scale.Z;
             ShapeSize = Math.Cbrt(Math.Abs(ShapeLength * ShapeWidth * ShapeHeight));
+            var turned = t.Rotation.GetNormalized();
+            (ShapePitch, ShapeRoll, ShapeYaw) = (turned.Pitch, turned.Roll, turned.Yaw);
             var shape = sel is null ? _services.Projects.Current?.State.GetBendValue(item!.Reference) ?? default : default;
             ShapeBend = shape.Degrees;
             ShapeSway1 = shape.Sway1 / 100.0;
@@ -475,7 +511,7 @@ public sealed partial class MapPageViewModel
         if (_shapeInstance is { Instance: not null } sel)
         {
             var current = CurrentInstanceTransform(sel);
-            var value = current with { Scale = ShapeScale(), Location = _shapePlace ?? current.Location };
+            var value = current with { Scale = ShapeScale(), Location = _shapePlace ?? current.Location, Rotation = ShapeRotation() };
             return MeshBounds(MeshOf(sel)) is { } b ? new ScaleHandleInfo(value.ToTransform() * SpaceOf(sel), b) : null;
         }
 
@@ -483,7 +519,7 @@ public sealed partial class MapPageViewModel
         if (_shapeInstance is null && item.Actor.Kind == ActorKind.StaticMeshActor && MeshBounds(item.Actor.StaticMeshPath) is { } bounds)
         {
             var current = CurrentRootTransform(item);
-            return new ScaleHandleInfo(RootWorldOf(item, current with { Scale = ShapeScale(), Location = _shapePlace ?? current.Location }), bounds);
+            return new ScaleHandleInfo(RootWorldOf(item, current with { Scale = ShapeScale(), Location = _shapePlace ?? current.Location, Rotation = ShapeRotation() }), bounds);
         }
 
         return null;
@@ -503,6 +539,13 @@ public sealed partial class MapPageViewModel
         if (!IsSingleMesh(item) || item.Actor.StaticMeshPath is not { } mesh)
         {
             BendNote = Loc.T("Map.Shape.NoBendKind");
+            return;
+        }
+
+        if (IsBuilding(mesh))
+        {
+            // Owner: houses and churches do not bend like bridges and roads (bending a church froze the app); they tilt.
+            BendNote = Loc.T("Map.Shape.NoBendBuilding");
             return;
         }
 
@@ -544,6 +587,12 @@ public sealed partial class MapPageViewModel
     private static bool IsSingleMesh(ActorItemViewModel item) =>
         item.Actor.Kind == ActorKind.StaticMeshActor && item.Actor.StaticMeshPath is not null;
 
+    // ponytail: the game's building folder and a boxy footprint; a long wall piece kept in that folder still bends.
+    /// <summary>True for a house, church or hall: a mesh of the game's building folder that is not long and thin.</summary>
+    private bool IsBuilding(string mesh) =>
+        mesh.Contains("/Models/Buildings/", StringComparison.OrdinalIgnoreCase)
+        && (MeshBounds(mesh) is not { } b || MathF.Max(b.Size.X, b.Size.Y) < 4f * MathF.Min(b.Size.X, b.Size.Y));
+
     /// <summary>Bounds of a mesh the scene has (prepared with it or loaded later).</summary>
     private BoundingBox? MeshBounds(string? meshPath)
     {
@@ -561,24 +610,29 @@ public sealed partial class MapPageViewModel
     }
 
     /// <summary>The selection's scale before any edit: the level's, or the one it was added with.</summary>
-    private FVector OriginalScale()
+    private FVector OriginalScale() => OriginalTransform().Scale;
+
+    private FRotator OriginalRotation() => OriginalTransform().Rotation;
+
+    /// <summary>The selection's transform before any edit: the level's, or the one it was added with.</summary>
+    private TransformValue OriginalTransform()
     {
         if (_shapeInstance is { Instance: { } instance })
         {
-            return TransformValue.FromTransform(instance.LocalTransform).Scale;
+            return TransformValue.FromTransform(instance.LocalTransform);
         }
 
         if (_shapeItem is not { } item)
         {
-            return FVector.One;
+            return TransformValue.Identity;
         }
 
         return _services.Projects.Current?.State.AddedActors.GetValueOrDefault(item.Reference) switch
         {
-            AddStaticMeshActorOp add => add.Transform.Scale,
-            DuplicateActorOp copy => copy.Transform.Scale,
-            AddBlueprintActorOp blueprint => blueprint.Transform.Scale,
-            _ => item.Actor.Root?.Relative.Scale ?? FVector.One,
+            AddStaticMeshActorOp add => add.Transform,
+            DuplicateActorOp copy => copy.Transform,
+            AddBlueprintActorOp blueprint => blueprint.Transform,
+            _ => item.Actor.Root?.Relative ?? TransformValue.Identity,
         };
     }
 
@@ -588,7 +642,7 @@ public sealed partial class MapPageViewModel
 
     private ShapeChange? PendingShape() =>
         _shapePending && _shapeItem is { } item
-            ? new ShapeChange(item, _shapeInstance, ShapeScale(), (float)Math.Round(ShapeBend, 1), (float)Math.Round(ShapeSway1 * 100, 1), (float)Math.Round(ShapeSway2 * 100, 1),
+            ? new ShapeChange(item, _shapeInstance, ShapeScale(), ShapeRotation(), (float)Math.Round(ShapeBend, 1), (float)Math.Round(ShapeSway1 * 100, 1), (float)Math.Round(ShapeSway2 * 100, 1),
                 _shapeStart, _shapeEnd, _shapePlace, (float)Math.Round(ShapeLegs * 100, 1))
             : null;
 
@@ -626,7 +680,7 @@ public sealed partial class MapPageViewModel
             var current = CurrentInstanceTransform(sel);
             InstanceTransforms = new Dictionary<InstanceKey, FTransform>(InstanceTransforms)
             {
-                [key] = (current with { Scale = scale, Location = _shapePlace ?? current.Location }).ToTransform() * SpaceOf(sel),
+                [key] = (current with { Scale = scale, Location = _shapePlace ?? current.Location, Rotation = ShapeRotation() }).ToTransform() * SpaceOf(sel),
             };
             UpdateShapeHandles();
             return;
@@ -635,7 +689,7 @@ public sealed partial class MapPageViewModel
         var bend = (float)ShapeBend;
         var curved = bend != 0 || ShapeSway1 != 0 || ShapeSway2 != 0 || !_shapeStart.IsNone || !_shapeEnd.IsNone || ShapeLegs != 0;
         var root = CurrentRootTransform(item);
-        var value = root with { Scale = curved ? FVector.One : scale, Location = _shapePlace ?? root.Location }; // a bent actor carries its scale in the curve
+        var value = root with { Scale = curved ? FVector.One : scale, Location = _shapePlace ?? root.Location, Rotation = ShapeRotation() }; // a bent actor carries its scale in the curve
         var world = RootWorldOf(item, value);
         if (item.IsAdded)
         {
@@ -687,7 +741,7 @@ public sealed partial class MapPageViewModel
             else if (change.Instance is { } sel)
             {
                 var current = CurrentInstanceTransform(sel);
-                var value = current with { Scale = change.Scale, Location = change.Place ?? current.Location };
+                var value = current with { Scale = change.Scale, Location = change.Place ?? current.Location, Rotation = Turned(current.Rotation, change.Rotation) };
                 if (!value.IsNearlyEqual(current) && sel.Instance is { } instance)
                 {
                     ops.Add(EditOpFactory.SetInstanceTransform(sel.Item.Level, sel.Item.Actor, instance.ComponentName, instance.InstanceIndex, value, project.State));
@@ -697,7 +751,7 @@ public sealed partial class MapPageViewModel
             {
                 var item = change.Item;
                 var current = CurrentRootTransform(item);
-                var value = current with { Scale = change.Scale, Location = change.Place ?? current.Location };
+                var value = current with { Scale = change.Scale, Location = change.Place ?? current.Location, Rotation = Turned(current.Rotation, change.Rotation) };
                 if (!value.IsNearlyEqual(current))
                 {
                     ops.Add(item.IsAdded
@@ -772,6 +826,12 @@ public sealed partial class MapPageViewModel
     /// <summary>The root transform the viewport draws an actor with.</summary>
     private TransformValue Drawn(ActorItemViewModel item, TransformValue relative) => IsBent(item) ? relative with { Scale = FVector.One } : relative;
 
-    private sealed record ShapeChange(ActorItemViewModel Item, SelectedInstance? Instance, FVector Scale, float Bend, float Sway1, float Sway2,
+    /// <summary>The sliders' rotation, or the current one when they show the same turn (no edit from a float round trip).</summary>
+    private static FRotator Turned(FRotator current, FRotator wanted) =>
+        (current.GetNormalized() - wanted.GetNormalized()).GetNormalized() is var d && MathF.Abs(d.Pitch) < 0.01f && MathF.Abs(d.Yaw) < 0.01f && MathF.Abs(d.Roll) < 0.01f
+            ? current
+            : wanted;
+
+    private sealed record ShapeChange(ActorItemViewModel Item, SelectedInstance? Instance, FVector Scale, FRotator Rotation, float Bend, float Sway1, float Sway2,
         SplineEnd Start, SplineEnd End, FVector? Place, float Legs);
 }

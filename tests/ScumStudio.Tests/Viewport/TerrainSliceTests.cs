@@ -211,4 +211,37 @@ public sealed class TerrainSliceTests
         var layers = harness.Pixel(harness.Target.ReadColorRgba(), 48, 48);
         TerrainAlbedoBakerTests.AssertNear(TerrainLayerCatalog.Default.Resolve("Beach_Sand").DebugColor, new TerrainColor(layers[0], layers[1], layers[2]), 6);
     }
+
+    /// <summary>
+    /// Owner: "flying a few seconds, the app freezes". Streaming re-uploads the same ground through the GPU cache: a cached
+    /// component sends nothing, and its layer textures (sand, grass...) were trimmed while it still drew with them.
+    /// </summary>
+    [Fact]
+    public void CellA0_StreamedAgainThroughTheGpuCache_KeepsItsLayerTexturesAlive()
+    {
+        if (GlTestEnvironment.SkipReason is not null || Environment.GetEnvironmentVariable("SCUM_PAKS") is not { Length: > 0 } paks || !Directory.Exists(paks))
+        {
+            return; // needs the real game files and OpenGL
+        }
+
+        using var catalog = AssetCatalog.OpenPaks(paks, new AssetCatalogOptions { AesKey = ScumStudio.Pak.AesKeyText.FromEnvironmentOrStore() });
+        var prepared = PrepareA0(catalog, new LevelSceneOptions { LandscapeStep = 8, IncludeInstances = false, TextureSize = 0 });
+        Assert.NotNull(prepared.LayerTextures);
+
+        using var harness = GlHarness.Create(64, 64);
+        var cache = new GpuMeshCache();
+        var camera = new FlyCamera();
+        camera.SetClipRange(10f, 3_000_000f);
+        LevelScene? level = null;
+        for (var step = 0; step < GpuMeshCache.KeepUploads + 2; step++)
+        {
+            level?.Dispose(); // the viewport's order: old scene out, new one in, then trim
+            level = LevelSceneUploader.Upload(harness.Renderer, prepared, cache: cache);
+            cache.Trim(harness.Renderer);
+            camera.Orbit(level.TerrainBounds.Center, 0f, -60f, 50_000f);
+            harness.Renderer.Render(harness.Target, level.Scene, camera); // threw "Cannot access a disposed object: GpuTexture"
+        }
+
+        level!.Dispose();
+    }
 }

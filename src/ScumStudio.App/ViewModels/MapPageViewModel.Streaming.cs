@@ -192,6 +192,13 @@ public sealed partial class MapPageViewModel
                 }
             }
 
+            // The island's spawn places (vehicles, zombies, zones, hunting areas) live in one asset; those over the loaded
+            // area come in as a level of their own.
+            if (SpawnPlacesOver(catalog, world, packagePaths, documents) is { } places)
+            {
+                documents.Add(places);
+            }
+
             foreach (var old in _documents.Where(d => d.Value.Used < _readGeneration - LevelPrepareCache.KeepGenerations).Select(d => d.Key).ToList())
             {
                 _documents.Remove(old);

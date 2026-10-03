@@ -85,6 +85,22 @@ public static class AssetModBuilder
             }
         }
 
+        // A cloned melee weapon looks its hit damage up in WeaponDesc_Table by its own name: it gets a copy of its template's row.
+        foreach (var plan in request.Clones.Where(c => ModdableAssets.IsMelee(c.Template)))
+        {
+            var table = DataTableEdits.WeaponDescTable;
+            try
+            {
+                var package = built.TryGetValue(table, out var kept) ? kept.Package : ModdableAssets.ReadPackage(catalog, table);
+                var bytes = DataTableEdits.AddRowCopies(package, [(PackageMap.Leaf(plan.Template), PackageMap.Leaf(plan.NewPrimary))]);
+                built[table] = (CookedPackage.Parse(bytes.UAsset, bytes.UExp, package.UBulk, table), bytes, false);
+            }
+            catch (Exception ex) when (ex is FileNotFoundException or FormatException or InvalidDataException or IOException or InvalidOperationException)
+            {
+                warnings.Add($"{plan.NewPrimary}: no damage row of its own in {table} ({ex.Message}).");
+            }
+        }
+
         var applied = new List<(string, string, string, string)>();
         foreach (var (packagePath, edits) in request.Edits)
         {

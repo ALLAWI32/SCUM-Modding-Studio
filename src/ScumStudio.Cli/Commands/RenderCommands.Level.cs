@@ -59,10 +59,11 @@ internal sealed partial class RenderCommands
             "Baked ground texture size per terrain component in realistic mode (0 = 1024 when the layer textures are in the source, else one texel per height sample).");
         var target = new Option<string?>("--target", "Orbit this UE point 'X,Y,Z' (cm) instead of the scene centre (use with --dist for close-ups).");
         var island = new Option<bool>("--island", "Also draw the whole island's terrain behind the levels, as the app's whole-island mode does (all landscape tiles, coarse).");
+        var spawnPlaces = new Option<bool>("--spawn-places", "Also draw the island's spawn places around the levels (vehicle and zombie spawn points, threat zones, hunting areas), as the app's Spawns switch does.");
         var command = new Command("level", "Render whole cooked sublevels (all placed static meshes, plus terrain for landscape tiles) to PNG.")
         {
             source, sublevel, aes, output, size, yaw, pitch, dist, lod, lods, viewDistance, cullPixels, noTexture, textureSize, noInstances, noLandscape, landscapeStep, filter, noGrid, frames,
-            ground, sea, noSea, groundTexture, target, island,
+            ground, sea, noSea, groundTexture, target, island, spawnPlaces,
         };
         command.SetHandler(async (InvocationContext ctx) =>
         {
@@ -116,6 +117,12 @@ internal sealed partial class RenderCommands
                 var clock = Stopwatch.StartNew();
                 var reader = new Cue4ParseLevelReader(catalog, new Cue4ParseLevelReaderOptions(), logger);
                 var documents = packagePaths.Distinct(StringComparer.OrdinalIgnoreCase).Select(p => LevelDocument.Load(reader, p, ct)).ToList();
+                if (parse.GetValueForOption(spawnPlaces) && Level.Spawns.SpawnPlaces.AreaAround(documents, 5_000f) is { } area
+                    && Level.Spawns.SpawnPlaces.Over(Level.Spawns.SpawnPlaces.ReadFrom(catalog), [area]) is { } places)
+                {
+                    documents.Add(places);
+                    logger.LogInformation("Spawn places: {Count} around the levels.", places.Actors.Count);
+                }
                 var readMs = clock.Elapsed.TotalMilliseconds;
 
                 var options = new LevelSceneOptions

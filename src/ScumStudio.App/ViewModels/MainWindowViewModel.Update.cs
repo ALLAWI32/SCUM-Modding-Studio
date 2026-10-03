@@ -24,10 +24,24 @@ public sealed partial class MainWindowViewModel
     /// <summary>Closes the app (after an update was put in place and the new version started).</summary>
     public Action? RequestShutdown { get; set; }
 
+    /// <summary>How often the app asks GitHub again while it runs (a release published meanwhile shows up).</summary>
+    private static readonly TimeSpan RecheckEvery = TimeSpan.FromMinutes(30);
+
     /// <summary>A newer release, or null.</summary>
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(HasUpdate), nameof(UpdateButtonText), nameof(UpdateTitle), nameof(UpdateNotes))]
+    [NotifyPropertyChangedFor(nameof(HasUpdate), nameof(UpdateButtonText), nameof(UpdateButtonTip), nameof(UpdateTitle), nameof(UpdateNotes))]
     private ReleaseInfo? _update;
+
+    /// <summary>Asking GitHub right now.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(UpdateButtonText), nameof(UpdateButtonTip))]
+    [NotifyCanExecuteChangedFor(nameof(OpenUpdateCommand))]
+    private bool _isCheckingUpdate;
+
+    /// <summary>The last check could not reach GitHub.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(UpdateButtonText), nameof(UpdateButtonTip))]
+    private bool _updateCheckFailed;
 
     /// <summary>The update card is open.</summary>
     [ObservableProperty]
@@ -54,8 +68,19 @@ public sealed partial class MainWindowViewModel
     /// <summary>True when a newer release is out.</summary>
     public bool HasUpdate => Update is not null;
 
-    /// <summary>"Update 0.2.0".</summary>
-    public string UpdateButtonText => Update is { } u ? Loc.F("Update.Button", u.Version.ToString(3)) : string.Empty;
+    /// <summary>The header's update button shows (always, where the app can check).</summary>
+    public bool CanCheckUpdates => UpdateCheck is not null;
+
+    /// <summary>"Update 0.2.2", "Checking …", "Up to date · 0.2.1" or "Updates" (GitHub not reached).</summary>
+    public string UpdateButtonText => Update is { } u ? Loc.F("Update.Button", u.Version.ToString(3))
+        : IsCheckingUpdate ? Loc.T("Update.Checking")
+        : UpdateCheckFailed ? Loc.T("Update.Offline")
+        : Loc.F("Update.UpToDate", Updater.Current.ToString(3));
+
+    /// <summary>What the update button does now.</summary>
+    public string UpdateButtonTip => Update is not null ? Loc.T("Update.Button.Tip")
+        : UpdateCheckFailed ? Loc.T("Update.Offline.Tip")
+        : Loc.F("Update.UpToDate.Tip", Updater.Current.ToString(3));
 
     /// <summary>"Version 0.2.0 is available".</summary>
     public string UpdateTitle => Update is { } u ? Loc.F("Update.Title", u.Version.ToString(3)) : string.Empty;
@@ -92,15 +117,33 @@ public sealed partial class MainWindowViewModel
             Services.Logger.LogWarning("Update clean-up: {Message}", ex.Message);
         }
 
-        if (UpdateCheck is not { } check)
+        if (UpdateCheck is null)
         {
             return;
         }
 
+        OnPropertyChanged(nameof(CanCheckUpdates));
+        await Task.Delay(TimeSpan.FromSeconds(3)).ConfigureAwait(true);
+        while (true)
+        {
+            await CheckForUpdateAsync().ConfigureAwait(true);
+            await Task.Delay(RecheckEvery).ConfigureAwait(true);
+        }
+    }
+
+    /// <summary>Asks GitHub for a newer release (the header button shows the answer).</summary>
+    private async Task CheckForUpdateAsync()
+    {
+        if (UpdateCheck is not { } check || IsCheckingUpdate)
+        {
+            return;
+        }
+
+        IsCheckingUpdate = true;
         try
         {
-            await Task.Delay(TimeSpan.FromSeconds(3)).ConfigureAwait(true);
             Update = await check(CancellationToken.None).ConfigureAwait(true);
+            UpdateCheckFailed = false;
             if (Update is { } found)
             {
                 Services.Logger.LogInformation("Update available: {Version} ({Page}).", found.Version, found.PageUrl);
@@ -108,12 +151,28 @@ public sealed partial class MainWindowViewModel
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or System.Text.Json.JsonException)
         {
+            UpdateCheckFailed = true;
             Services.Logger.LogInformation("Update check skipped: {Message}", ex.Message);
+        }
+        finally
+        {
+            IsCheckingUpdate = false;
         }
     }
 
-    [RelayCommand]
-    private void OpenUpdate() => IsUpdateOpen = Update is not null;
+    private bool CanOpenUpdate() => !IsCheckingUpdate;
+
+    /// <summary>The header button: the update card when a newer release is out, else a new check.</summary>
+    [RelayCommand(CanExecute = nameof(CanOpenUpdate))]
+    private async Task OpenUpdateAsync()
+    {
+        if (Update is null)
+        {
+            await CheckForUpdateAsync().ConfigureAwait(true);
+        }
+
+        IsUpdateOpen = Update is not null;
+    }
 
     [RelayCommand]
     private void CloseUpdate()

@@ -12,6 +12,9 @@ public sealed record VehicleCloneOptions
 
     /// <summary>Also clone the manual spawn presets that reference the vehicle (what <c>#SpawnVehicle</c> uses).</summary>
     public bool IncludeSpawnPresets { get; init; } = true;
+
+    /// <summary>Give the clone its own paint: copies of the meshes that wear paint and of that paint (see <see cref="CloneFamilyPlanner.PaintPackages"/>).</summary>
+    public bool IncludePaint { get; init; } = true;
 }
 
 /// <summary>The packages a clone creates: old → new package paths, ordered with the primary asset first.</summary>
@@ -39,9 +42,12 @@ public static partial class CloneFamilyPlanner
     /// <summary>True when <paramref name="name"/> is a valid new asset name (letters, digits, '_' and '-', starts with a letter).</summary>
     public static bool IsValidName(string? name) => name is not null && ValidName().IsMatch(name);
 
-    /// <summary>Plans an item clone (weapon, magazine, ammunition, projectile): the item and its <c>_ES</c>.</summary>
+    /// <summary>
+    /// Plans an item clone (weapon, magazine, ammunition, projectile): the item and its <c>_ES</c>, and with
+    /// <paramref name="includePaint"/> the meshes it shows that wear paint and that paint (the clone's colour is its own).
+    /// </summary>
     /// <exception cref="ArgumentException">Invalid or already used name.</exception>
-    public static ClonePlan PlanItem(AssetCatalog catalog, string itemPackage, string newName)
+    public static ClonePlan PlanItem(AssetCatalog catalog, string itemPackage, string newName, bool includePaint = true)
     {
         ArgumentNullException.ThrowIfNull(catalog);
         var template = PackageMap.Normalize(itemPackage);
@@ -57,6 +63,13 @@ public static partial class CloneFamilyPlanner
         if (catalog.PackageExists(es))
         {
             packages.Add(new(es, newPrimary + "_ES"));
+        }
+
+        if (includePaint)
+        {
+            var leaf = PackageMap.Leaf(template);
+            packages.AddRange(PaintPackages(catalog, packages.Select(p => p.Key))
+                .Select(p => new KeyValuePair<string, string>(p, PackageMap.Folder(p) + "/" + RenameLeaf(PackageMap.Leaf(p), leaf, newName))));
         }
 
         Validate(catalog, template, packages);
@@ -135,11 +148,92 @@ public static partial class CloneFamilyPlanner
         }
 
         var newPrimary = $"{folder}/BPC_{newToken}";
+        if (options.IncludePaint)
+        {
+            members.AddRange(PaintPackages(catalog, members));
+        }
+
         var packages = members
             .Select(m => new KeyValuePair<string, string>(m, PackageMap.Folder(m) + "/" + RenameLeaf(PackageMap.Leaf(m), token, newToken)))
             .ToList();
         Validate(catalog, template, packages);
         return new ClonePlan(template, newPrimary, packages);
+    }
+
+    /// <summary>The materials a clone's paint lives in (car paint and weapon materials); their instances are what it copies.</summary>
+    private static readonly string[] PaintMasters =
+    [
+        ModdableAssets.ConZ + "Materials/Car/M_Car_01",
+        ModdableAssets.ConZ + "Materials/M_Weapons_Master",
+    ];
+
+    /// <summary>
+    /// The meshes the <paramref name="family"/> shows that wear paint (a material instance of <see cref="PaintMasters"/>),
+    /// and those material instances: meshes and materials live outside the family's folder and are shared with the stock
+    /// asset, so a clone that is to be painted on its own needs copies of both (the copied meshes then use the copied paint,
+    /// the copied Blueprints the copied meshes). Meshes without paint stay shared.
+    /// </summary>
+    public static IReadOnlyList<string> PaintPackages(AssetCatalog catalog, IEnumerable<string> family)
+    {
+        ArgumentNullException.ThrowIfNull(catalog);
+        ArgumentNullException.ThrowIfNull(family);
+        var result = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var paintCache = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+        foreach (var member in family.ToList())
+        {
+            foreach (var imported in ModdableAssets.ReadImportedPackages(catalog, member))
+            {
+                if (!seen.Add(imported) || !IsMesh(catalog, imported))
+                {
+                    continue;
+                }
+
+                var paints = ModdableAssets.ReadImportedPackages(catalog, imported).Where(m => IsPaint(catalog, m, paintCache, 0)).ToList();
+                if (paints.Count == 0)
+                {
+                    continue;
+                }
+
+                result.Add(imported);
+                result.AddRange(paints.Where(p => !result.Contains(p, StringComparer.OrdinalIgnoreCase)));
+            }
+        }
+
+        return result;
+    }
+
+    private static bool IsMesh(AssetCatalog catalog, string package)
+    {
+        try
+        {
+            return catalog.GetExports(package).Any(e => e.ClassName is "SkeletalMesh" or "StaticMesh");
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or FileNotFoundException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>A material instance whose parent chain reaches a paint master (up to three instances deep).</summary>
+    private static bool IsPaint(AssetCatalog catalog, string package, Dictionary<string, bool> cache, int depth)
+    {
+        if (cache.TryGetValue(package, out var known))
+        {
+            return known;
+        }
+
+        var leaf = PackageMap.Leaf(package);
+        var result = false;
+        if (depth < 3 && leaf.StartsWith("MI_", StringComparison.OrdinalIgnoreCase) && package.StartsWith("/Game/", StringComparison.Ordinal))
+        {
+            var imports = ModdableAssets.ReadImportedPackages(catalog, package);
+            result = imports.Any(i => PaintMasters.Contains(i, StringComparer.OrdinalIgnoreCase))
+                     || imports.Any(i => PackageMap.Leaf(i).StartsWith("MI_", StringComparison.OrdinalIgnoreCase) && IsPaint(catalog, i, cache, depth + 1));
+        }
+
+        cache[package] = result;
+        return result;
     }
 
     /// <summary>Manual spawn presets whose header refers to <paramref name="vehiclePackage"/> (import or soft path).</summary>

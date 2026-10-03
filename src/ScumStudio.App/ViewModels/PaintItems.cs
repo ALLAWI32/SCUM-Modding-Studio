@@ -53,8 +53,12 @@ public sealed record PaintFinish(string Key, Color Colour, double? Metal, double
 /// <remarks>
 /// An <em>added</em> paint belongs to a material that leaves paint to its parent (the armour, <c>MI_WW_Armor</c>): its
 /// values are by-name parameters the export adds (colour A and B, metal, clear coat and the white colour mask, so the
-/// plate is paint all over), or none of them while it is not painted. Its colour is scaled by <see cref="Gain"/> so a dark
-/// plate comes out as bright as the body paint it should match.
+/// plate is paint all over), or none of them while it is not painted. Like every car paint it shows its colour itself, the
+/// plate's print only adding scratches, so the same colour matches the body.
+/// <para>A <em>tint</em> belongs to a weapon or magazine (<c>M_Weapons_Master</c>): <c>Difuse_Colorization</c> multiplies the
+/// weapon's own texture (the game itself lifts the dark MP5 with 3, 3, 3), so the colour is stored times <see cref="Gain"/>
+/// to come out as picked; the even finish swaps the texture (<c>Color</c>) for flat white instead. It is an added paint:
+/// left alone it keeps the weapon as the game has it.</para>
 /// </remarks>
 public sealed partial class PaintMaterialViewModel : ObservableObject
 {
@@ -64,8 +68,7 @@ public sealed partial class PaintMaterialViewModel : ObservableObject
     /// <summary>The game's flat white colour texture: an added paint's plain finish (the plate keeps its shape, not its scrap-metal print).</summary>
     public const string FlatDiffuse = "/Game/ConZ_Files/Textures/Basic/T_FlatWhiteColor_Dummy_01.T_FlatWhiteColor_Dummy_01";
 
-    private readonly float _texturedGain;
-    private readonly float _plainGain;
+    private readonly float _tintGain;
     private readonly bool _committedPlain;
     private readonly Color _committedColour;
     private readonly Color? _committedSecond;
@@ -82,15 +85,15 @@ public sealed partial class PaintMaterialViewModel : ObservableObject
     /// <param name="metal">Metal, or null.</param>
     /// <param name="clearCoat">Clear coat, or null.</param>
     /// <param name="mask">The colour mask of an added paint (null for a material with its own paint).</param>
-    /// <param name="gain">Brightness of an added paint's colour over its own diffuse (1 = as picked).</param>
     /// <param name="diffuse">An added paint's diffuse texture (for the plain finish), or null.</param>
-    /// <param name="plainGain">Brightness of an added paint's colour in the plain finish.</param>
+    /// <param name="tint">A weapon's tint (see the remarks).</param>
+    /// <param name="tintGain">How much a tint is lifted over the weapon's own texture.</param>
     public PaintMaterialViewModel(string materialPath, string name, PaintValue colour, PaintValue? second, PaintValue? metal, PaintValue? clearCoat,
-        PaintValue? mask = null, float gain = 1f, PaintValue? diffuse = null, float plainGain = 1f)
+        PaintValue? mask = null, PaintValue? diffuse = null, bool tint = false, float tintGain = 1f)
     {
-        DiffuseValue = mask is null ? null : diffuse;
-        _texturedGain = gain;
-        _plainGain = plainGain;
+        IsTint = tint;
+        _tintGain = tintGain;
+        DiffuseValue = mask is null && !tint ? null : diffuse;
         MaterialPath = materialPath;
         Name = name;
         ColourValue = colour;
@@ -98,8 +101,8 @@ public sealed partial class PaintMaterialViewModel : ObservableObject
         MetalValue = metal;
         ClearCoatValue = clearCoat;
         MaskValue = mask;
-        _committedPainted = !IsAdded || colour.Committed.Length > 0;
-        _committedPlain = _committedPainted ? DiffuseValue is { Committed.Length: > 0 } : HasPlain;
+        _committedPainted = !IsAdded || colour.Committed != colour.Tunable.Value;
+        _committedPlain = _committedPainted ? DiffuseValue?.Committed == FlatDiffuse : HasPlain;
         _committedColour = _committedPainted ? ToSrgb(colour.Committed, GainFor(_committedPlain)) : Colors.White;
         _committedSecond = second is null || IsAdded ? null : ToSrgb(second.Committed);
         _committedMetal = Committed(metal);
@@ -131,17 +134,23 @@ public sealed partial class PaintMaterialViewModel : ObservableObject
     /// <summary>The colour mask of an added paint, or null.</summary>
     public PaintValue? MaskValue { get; }
 
-    /// <summary>True when the material has no paint of its own and the export adds it (armour).</summary>
-    public bool IsAdded => MaskValue is not null;
+    /// <summary>True when the material has no paint of its own and the export adds it (armour, a weapon's tint).</summary>
+    public bool IsAdded => MaskValue is not null || IsTint;
+
+    /// <summary>True for armour (an added car paint with a white colour mask).</summary>
+    public bool IsArmour => MaskValue is not null;
+
+    /// <summary>True for a weapon's tint.</summary>
+    public bool IsTint { get; }
+
+    /// <summary>How much the stored colour is lifted over the texture (a tint over the weapon's own texture; 1 otherwise).</summary>
+    public float Gain => GainFor(Plain);
 
     /// <summary>An added paint's diffuse texture parameter (plain finish), or null.</summary>
     public PaintValue? DiffuseValue { get; }
 
     /// <summary>The plain finish is offered (an added paint whose diffuse can be swapped).</summary>
     public bool HasPlain => DiffuseValue is not null;
-
-    /// <summary>Brightness of an added paint's colour (the body's diffuse over this material's, so both look alike).</summary>
-    public float Gain => GainFor(Plain);
 
     /// <summary>A second colour is offered.</summary>
     public bool HasSecond => SecondValue is not null && !IsAdded;
@@ -182,7 +191,7 @@ public sealed partial class PaintMaterialViewModel : ObservableObject
 
     /// <summary>Plain finish of an added paint: an even colour instead of the paint over the part's own printed texture.</summary>
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(IsPending), nameof(Gain))]
+    [NotifyPropertyChangedFor(nameof(IsPending))]
     private bool _plain;
 
     /// <summary>"80 %".</summary>
@@ -194,15 +203,8 @@ public sealed partial class PaintMaterialViewModel : ObservableObject
     /// <summary>Changed since the last apply.</summary>
     public bool IsPending => Changes().Any();
 
-    /// <summary>The main colour as the 3D view draws it (linear RGBA, with the added paint's gain).</summary>
-    public System.Numerics.Vector4 LinearColour
-    {
-        get
-        {
-            var l = ToLinear(Colour);
-            return new(l.X * Gain, l.Y * Gain, l.Z * Gain, 1f);
-        }
-    }
+    /// <summary>The main colour as the 3D view draws it (linear RGBA).</summary>
+    public System.Numerics.Vector4 LinearColour => ToLinear(Colour) * new System.Numerics.Vector4(Gain, Gain, Gain, 1f);
 
     /// <summary>True when the paint is the game's own (what Original gives).</summary>
     public bool IsOriginal => IsAdded
@@ -234,11 +236,19 @@ public sealed partial class PaintMaterialViewModel : ObservableObject
         Changed?.Invoke(this, EventArgs.Empty);
     }
 
-    /// <summary>Applies a finish (colour, and metal and clear coat where offered).</summary>
+    /// <summary>
+    /// Applies a finish (colour, and metal and clear coat where offered). A two-tone body takes it in both colours: "gold"
+    /// is a gold plane, wings included; the second colour's swatch can change them afterwards.
+    /// </summary>
     [RelayCommand]
     private void ApplyFinish(PaintFinish finish)
     {
         Colour = finish.Colour;
+        if (HasSecond)
+        {
+            Second = finish.Colour;
+        }
+
         if (finish.Metal is { } m && HasMetal)
         {
             Metal = m;
@@ -256,7 +266,8 @@ public sealed partial class PaintMaterialViewModel : ObservableObject
     {
         if (IsAdded)
         {
-            Set(Colors.White, default, 0, 0, painted: false, Plain);
+            // A weapon keeps the metal its material stores (a colour picked afterwards does not make the gun matte).
+            Set(Colors.White, default, MetalValue is { Tunable.Value.Length: > 0 } stock ? ParseFloat(stock.Tunable.Value) : 0, 0, painted: false, Plain);
             return;
         }
 
@@ -320,7 +331,7 @@ public sealed partial class PaintMaterialViewModel : ObservableObject
             {
                 foreach (var value in new[] { ColourValue, SecondValue, MetalValue, ClearCoatValue, MaskValue, DiffuseValue })
                 {
-                    Diff(value, string.Empty);
+                    Diff(value, value?.Tunable.Value ?? string.Empty); // as the game has it (nothing added, a stored value kept)
                 }
 
                 return edits;
@@ -335,7 +346,7 @@ public sealed partial class PaintMaterialViewModel : ObservableObject
             }
 
             Diff(MaskValue, WhiteMask);
-            Diff(DiffuseValue, Plain ? FlatDiffuse : string.Empty);
+            Diff(DiffuseValue, Plain ? FlatDiffuse : DiffuseValue?.Tunable.Value ?? string.Empty);
             if (repainted || metalChanged)
             {
                 Diff(MetalValue, Number(Metal));
@@ -351,12 +362,12 @@ public sealed partial class PaintMaterialViewModel : ObservableObject
 
         if (Colour != _committedColour)
         {
-            edits.Add((ColourValue, LinearText(Colour, ColourValue.Committed, 1f)));
+            edits.Add((ColourValue, LinearText(Colour, ColourValue.Committed)));
         }
 
         if (SecondValue is { } s && _committedSecond is { } cs && Second != cs)
         {
-            edits.Add((s, LinearText(Second, s.Committed, 1f)));
+            edits.Add((s, LinearText(Second, s.Committed)));
         }
 
         if (metalChanged)
@@ -397,14 +408,14 @@ public sealed partial class PaintMaterialViewModel : ObservableObject
         return new(Channel(c.R), Channel(c.G), Channel(c.B), 1f);
     }
 
-    private static string LinearText(Color c, string? committed, float gain)
+    private static string LinearText(Color c, string? committed, float gain = 1f)
     {
         var l = ToLinear(c);
         var alpha = committed is { Length: > 0 } ? TunableValue.ParseFloats(committed, 4)[3] : 1f;
         return TunableValue.Format(l.X * gain, l.Y * gain, l.Z * gain, alpha);
     }
 
-    private float GainFor(bool plain) => !IsAdded ? 1f : plain && HasPlain ? _plainGain : _texturedGain;
+    private float GainFor(bool plain) => IsTint && !(plain && HasPlain) ? _tintGain : 1f;
 
     private static string Number(double v) => v.ToString("0.###", CultureInfo.InvariantCulture);
 

@@ -26,7 +26,14 @@ namespace ScumStudio.Level.Export;
 /// triangles in a cooked game), so with the guid the boxes stay.
 /// </param>
 public sealed record StaticMeshActorAdd(string NewName, string StaticMesh, TransformValue Transform, SplineMeshParams? Spline = null,
-    IReadOnlyList<Assets.Meshes.CollisionBox>? Collision = null, FGuid? MeshBodySetupGuid = null);
+    IReadOnlyList<Assets.Meshes.CollisionBox>? Collision = null, FGuid? MeshBodySetupGuid = null)
+{
+    /// <summary>
+    /// A collision profile to collide as (what the copied tree or rock used), written as <c>BodyInstance.CollisionProfileName</c>
+    /// with <c>bUseDefaultCollision</c> off; null collides as the mesh does by default.
+    /// </summary>
+    public string? CollisionProfile { get; init; }
+}
 
 /// <summary>
 /// Creating <c>StaticMeshActor</c>s from scratch in a cooked level: two exports (the actor and its
@@ -113,6 +120,14 @@ public static partial class LevelPackageEditor
             if (spline is not null)
             {
                 WriteSplineParams(component, Name, spline);
+            }
+
+            if (bodySetupIndex == 0 && add.CollisionProfile is { Length: > 0 } profile)
+            {
+                // Collide as the copied object did: SCUM's tree foliage blocks players as SCUM_TreeStump, the tree mesh's own
+                // default (SCUM_Foliage) does not, and a StaticMeshActor uses its mesh's default unless told otherwise.
+                WriteBoolTag(component, Name, "bUseDefaultCollision", false);
+                WriteCollisionProfileTag(component, Name, profile);
             }
 
             if (bodySetupIndex != 0)
@@ -409,6 +424,31 @@ public static partial class LevelPackageEditor
 
         data[componentIndex] = payload;
         return true;
+    }
+
+    /// <summary>
+    /// A <c>BodyInstance</c> holding only its <c>CollisionProfileName</c>: loading it, the game takes the profile's object
+    /// type, collision and responses (<c>FBodyInstance::LoadProfileData</c>).
+    /// </summary>
+    private static void WriteCollisionProfileTag(ByteWriter w, Func<string, FNameRef> name, string profile)
+    {
+        var inner = new ByteWriter(48);
+        inner.FName(name("CollisionProfileName"));
+        inner.FName(name("NameProperty"));
+        inner.I32(8);
+        inner.I32(0);
+        inner.U8(0);
+        inner.FName(name(profile));
+        inner.FName(name("None"));
+        var data = inner.ToArray();
+        w.FName(name("BodyInstance"));
+        w.FName(name(StructPropertyType));
+        w.I32(data.Length);
+        w.I32(0);
+        w.FName(name("BodyInstance"));
+        w.Guid(default);
+        w.U8(0);
+        w.Raw(data);
     }
 
     private static void WriteFloatTag(ByteWriter w, Func<string, FNameRef> name, string property, float value)

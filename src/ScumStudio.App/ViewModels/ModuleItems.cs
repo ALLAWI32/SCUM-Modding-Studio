@@ -101,6 +101,15 @@ public sealed partial class ModuleItemViewModel : ThumbnailItem
 /// <param name="Description">What the part holds.</param>
 public sealed record ModulePart(string Label, string PackagePath, string Description)
 {
+    /// <summary>For a DataTable part: the row shown (a melee weapon's <c>WeaponDesc_Table</c> row, named after it), else null.</summary>
+    public string? Row { get; init; }
+
+    /// <summary>The row whose values a clone's new row starts from (its template's), or null when the row exists.</summary>
+    public string? RowFrom { get; init; }
+
+    /// <summary>True for a vehicle's engine torque curve: only the torque of each key is shown, labelled with its rpm.</summary>
+    public bool IsTorqueCurve { get; init; }
+
     /// <inheritdoc />
     public override string ToString() => Label;
 }
@@ -129,7 +138,7 @@ public sealed partial class TunableRowViewModel : ObservableObject
     public Tunable Tunable { get; }
 
     /// <summary>Readable name (<c>DamagePerShot</c> → "Damage per shot").</summary>
-    public string Label => Humanize(Tunable.Name);
+    public string Label => Tunable.Name.Contains(' ', StringComparison.Ordinal) ? Tunable.Name : Humanize(Tunable.Name); // a name with spaces is already words ("Torque at 3250 rpm")
 
     /// <summary>Raw property path (tooltip).</summary>
     public string PathText => $"{Tunable.Export} › {Tunable.Path} ({Tunable.Kind})";

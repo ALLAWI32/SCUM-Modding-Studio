@@ -42,6 +42,14 @@ public static class ModdableAssets
     /// <summary>Root of SCUM's game folders.</summary>
     public const string ConZ = "/Game/ConZ_Files/";
 
+    /// <summary>Category of the melee weapons (<c>Items/Weapons/New_Melee/1H_*</c>, <c>2H_*</c>).</summary>
+    public const string MeleeCategory = "Melee";
+
+    private const string MeleeFolder = "New_Melee";
+
+    /// <summary>True for a melee weapon (its hit damage is the row of <c>WeaponDesc_Table</c> named after it).</summary>
+    public static bool IsMelee(string packagePath) => Classify(packagePath) is { Kind: ModdableKind.Weapon, Category: MeleeCategory };
+
     /// <summary>Every moddable asset of <paramref name="catalog"/>, sorted by kind then name.</summary>
     public static IReadOnlyList<ModdableAsset> Find(AssetCatalog catalog)
     {
@@ -95,6 +103,13 @@ public static class ModdableAssets
         {
             if (parts[1].Equals("Weapons", StringComparison.OrdinalIgnoreCase))
             {
+                // Knives, axes, bats (owner: "a strong knife"): their hit damage is a row of WeaponDesc_Table.
+                if (parts.Length == 4 && parts[2].Equals(MeleeFolder, StringComparison.OrdinalIgnoreCase)
+                    && (leaf.StartsWith("1H_", StringComparison.OrdinalIgnoreCase) || leaf.StartsWith("2H_", StringComparison.OrdinalIgnoreCase)))
+                {
+                    return new ModdableAsset(ModdableKind.Weapon, p, MeleeCategory);
+                }
+
                 if (leaf.StartsWith("Weapon_", StringComparison.OrdinalIgnoreCase))
                 {
                     return new ModdableAsset(ModdableKind.Weapon, p, parts.Length > 3 ? parts[2] : "Weapons");

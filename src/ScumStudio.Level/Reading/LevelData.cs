@@ -147,6 +147,9 @@ public sealed record LevelExportData
     /// <summary>Item spawner components: <c>SpawnerMarkers</c> (where loot appears); null for other components.</summary>
     public IReadOnlyList<SpawnMarker>? SpawnMarkers { get; init; }
 
+    /// <summary>Primitive components: <c>BodyInstance.CollisionProfileName</c> as stored (or in a template), or null.</summary>
+    public string? CollisionProfile { get; init; }
+
     /// <summary>Sentry spawner actors: <c>PatrolPoints</c> relative to the spawner; null for other actors.</summary>
     public IReadOnlyList<FVector>? PatrolPoints { get; init; }
 

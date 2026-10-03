@@ -1,5 +1,6 @@
 using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
 using ScumStudio.Core.Mathematics;
 using ScumStudio.Level.Editing;
 using ScumStudio.Level.Model;
@@ -16,21 +17,31 @@ namespace ScumStudio.App.ViewModels;
 /// </summary>
 public sealed partial class MapPageViewModel
 {
-    /// <summary>Part mode: a click on a Blueprint building picks the part under the cursor, not the whole building.</summary>
+    /// <summary>Part mode (kept for the next start): a click on a Blueprint building picks the part under the cursor, not the whole building.</summary>
     [ObservableProperty]
     private bool _pickParts;
 
+    partial void OnPickPartsChanged(bool value) => _services.UiState.Update(u => u with { PickParts = value });
+
     /// <summary>The selected instance (bound two-way to the viewport), or null when a whole actor is selected.</summary>
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(HasSelectedInstance))]
+    [NotifyPropertyChangedFor(nameof(HasSelectedInstance), nameof(HasSelectedPart))]
+    [NotifyCanExecuteChangedFor(nameof(SelectWholeCommand))]
     private InstanceKey? _selectedInstanceKey;
+
+    /// <summary>True when one part of a Blueprint building is selected (not the whole building).</summary>
+    public bool HasSelectedPart => SelectedInstanceKey is { InstanceIndex: InstanceKey.Part } && HasSelectedInstance;
+
+    /// <summary>From the selected part to the whole building it belongs to.</summary>
+    [RelayCommand(CanExecute = nameof(HasSelectedPart))]
+    private void SelectWhole() => SelectedInstanceKey = null;
 
     /// <summary>World transforms of instances the project moved (drawn by the viewport).</summary>
     [ObservableProperty]
     private IReadOnlyDictionary<InstanceKey, FTransform> _instanceTransforms = new Dictionary<InstanceKey, FTransform>();
 
     /// <summary>A copied instance: Paste places its mesh as a new StaticMeshActor.</summary>
-    private (string Mesh, TransformValue World)? _copiedInstance;
+    private (string Mesh, TransformValue World, string? Collision)? _copiedInstance;
 
     /// <summary>True when one instance (not a whole actor) is selected.</summary>
     public bool HasSelectedInstance => SelectedInstanceInfo() is not null;
@@ -43,9 +54,30 @@ public sealed partial class MapPageViewModel
             Remember(item); // another piece of the same road or forest
         }
 
+        OnPropertyChanged(nameof(IsLootPointSelected));
         DeleteSelectedCommand.NotifyCanExecuteChanged();
         DuplicateSelectedCommand.NotifyCanExecuteChanged();
         CopySelectedCommand.NotifyCanExecuteChanged();
+        ApplyTransformCommand.NotifyCanExecuteChanged();
+    }
+
+    /// <summary>Properties of one loot point: which building and spawner it belongs to, where it is.</summary>
+    private static IReadOnlyList<PropertyRow> DescribeLootPoint(ActorItemViewModel item, InstanceKey point)
+    {
+        var component = item.Actor.FindComponent(point.Component);
+        var marker = component?.SpawnMarkers is { } all && point.Marker < all.Count ? all[point.Marker] : null;
+        var rows = new List<PropertyRow>
+        {
+            new(Localization.Loc.T("Map.Row.LootPoint"), Localization.Loc.F("Map.LootPoint.Of", point.Marker + 1, component?.SpawnMarkers.Count ?? 0, item.Name)),
+            new(Localization.Loc.T("Map.Row.Level"), item.Level.PackagePath),
+        };
+        if (marker is not null && component is not null)
+        {
+            var t = (marker.Local * component.WorldTransform).Translation;
+            rows.Add(new(Localization.Loc.T("Map.Row.Location"), string.Create(CultureInfo.InvariantCulture, $"{t.X:0.#}, {t.Y:0.#}, {t.Z:0.#} cm")));
+        }
+
+        return rows;
     }
 
     // ponytail: class-name list of containers that must stay where the level has them; extend when others turn up.
@@ -90,6 +122,16 @@ public sealed partial class MapPageViewModel
     /// <summary>Properties, gizmo and edit fields for the current selection (one instance, or the actor).</summary>
     private void ShowSelection(ActorItemViewModel? item)
     {
+        ShowSpawnInfo(item);
+        if (item is not null && IsLootPointSelected && SelectedInstanceKey is { } point)
+        {
+            // One loot point of a building: what spawns there (SpawnInfo); no gizmo, it moves with its building.
+            ActorProperties = DescribeLootPoint(item, point);
+            SelectedRootWorld = null;
+            LoadShape(null);
+            return;
+        }
+
         if (SelectedInstanceInfo() is { } sel)
         {
             var local = CurrentInstanceTransform(sel);
@@ -261,7 +303,8 @@ public sealed partial class MapPageViewModel
         {
             var world = TransformValue.FromTransform(CurrentInstanceTransform(sel).ToTransform() * SpaceOf(sel));
             var shifted = world with { Location = new FVector(world.Location.X + 200f, world.Location.Y, world.Location.Z) };
-            var op = EditOpFactory.AddStaticMeshActor(sel.Item.Level, mesh, shifted, project.State);
+            // It collides as the tree, rock or part it was copied from (a tree mesh's own default lets players through).
+            var op = EditOpFactory.AddStaticMeshActor(sel.Item.Level, mesh, shifted, project.State) with { CollisionProfile = sel.Component.CollisionProfile };
             var entry = _services.Projects.Apply(op);
             _services.Notifications.Info(Localization.Loc.T("Map.Duplicated"), entry.Op.Describe());
             RefreshEdits();
@@ -281,7 +324,7 @@ public sealed partial class MapPageViewModel
             return;
         }
 
-        _copiedInstance = (mesh, TransformValue.FromTransform(CurrentInstanceTransform(sel).ToTransform() * SpaceOf(sel)));
+        _copiedInstance = (mesh, TransformValue.FromTransform(CurrentInstanceTransform(sel).ToTransform() * SpaceOf(sel)), sel.Component.CollisionProfile);
         CopiedActor = null;
         OnPropertyChanged(nameof(HasCopiedActor));
         OnPropertyChanged(nameof(PasteTip));
@@ -301,7 +344,7 @@ public sealed partial class MapPageViewModel
         var at = AimPointProvider?.Invoke() ?? copied.World.Location;
         try
         {
-            var op = EditOpFactory.AddStaticMeshActor(target, copied.Mesh, copied.World with { Location = at }, project.State);
+            var op = EditOpFactory.AddStaticMeshActor(target, copied.Mesh, copied.World with { Location = at }, project.State) with { CollisionProfile = copied.Collision };
             var entry = _services.Projects.Apply(op);
             _services.Notifications.Info(Localization.Loc.T("Map.Pasted"), entry.Op.Describe());
             RefreshEdits();

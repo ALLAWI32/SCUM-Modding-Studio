@@ -409,6 +409,13 @@ public sealed record AddStaticMeshActorOp(string Level, string NewName, string S
     [JsonIgnore]
     public ActorRef Created => new(Level, NewName);
 
+    /// <summary>
+    /// The collision profile of what it was copied from (a tree's foliage <c>SCUM_TreeStump</c>, a bush's <c>NoCollision</c>),
+    /// or null to collide as its mesh does by default. A tree mesh's own default (<c>SCUM_Foliage</c>) lets players walk
+    /// through: the owner's copied trees had no collision.
+    /// </summary>
+    public string? CollisionProfile { get; init; }
+
     /// <inheritdoc />
     public override EditOp Inverse() => new RemoveAddedActorOp(Created, this);
 

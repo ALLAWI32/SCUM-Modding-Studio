@@ -538,6 +538,9 @@ public abstract partial class ModulePageViewModel : PageViewModel, ISearchablePa
         _allRows = [];
         Groups = [];
         Preview = null;
+        _previewBase = null;
+        Paints = [];
+        ClearArmour();
         PreviewText = string.Empty;
         UpdateClonePreview();
         if (value is not null && _catalog is { } catalog)
@@ -547,20 +550,28 @@ public abstract partial class ModulePageViewModel : PageViewModel, ISearchablePa
         }
     }
 
-    /// <summary>Builds the 3D preview of <paramref name="item"/> on a worker (a clone shows its stock template's mesh).</summary>
-    private async Task LoadPreviewAsync(AssetCatalog catalog, ModuleItemViewModel item)
+    /// <summary>
+    /// Builds the 3D preview of <paramref name="item"/> on a worker (a clone shows its stock template's mesh), with a
+    /// vehicle's armour kit fitted when <paramref name="addOn"/> names one.
+    /// </summary>
+    private async Task LoadPreviewAsync(AssetCatalog catalog, ModuleItemViewModel item, string? addOn = null)
     {
         IsPreviewLoading = true;
         try
         {
             var template = item.CloneOf ?? item.PackagePath;
-            var model = await Task.Run(() => new MeshPreviewLoader(catalog, _services.Logger).LoadBlueprint(template)).ConfigureAwait(true);
+            var model = await Task.Run(() => new MeshPreviewLoader(catalog, _services.Logger).LoadBlueprint(template, addOn)).ConfigureAwait(true);
             if (!ReferenceEquals(SelectedItem, item))
             {
                 return;
             }
 
             Preview = model;
+            if (model is not null)
+            {
+                _ = LoadPaintsAsync(catalog, item, model);
+            }
+
             PreviewText = model is null
                 ? Loc.T("Module.NoMesh")
                 : Loc.F("Module.PreviewInfo", model.Name, model.Parts.Count, model.Triangles);
@@ -649,6 +660,7 @@ public abstract partial class ModulePageViewModel : PageViewModel, ISearchablePa
         }
 
         RefreshCommitted();
+        ReloadPaints();
     });
 
     private async Task LoadAsync(AssetCatalog catalog)

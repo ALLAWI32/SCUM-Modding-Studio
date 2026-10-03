@@ -4,7 +4,7 @@ using System.Runtime.InteropServices;
 namespace ScumStudio.Rendering.Resources;
 
 /// <summary>
-/// Per-instance vertex attributes of an instanced draw (96 bytes, attribute locations 3..8).
+/// Per-instance vertex attributes of an instanced draw (96 bytes, attribute locations 3..9).
 /// </summary>
 [StructLayout(LayoutKind.Explicit, Size = SizeInBytes)]
 public readonly struct InstanceData : IEquatable<InstanceData>
@@ -20,6 +20,9 @@ public readonly struct InstanceData : IEquatable<InstanceData>
 
     /// <summary>Byte offset of <see cref="PickCode"/> (followed by <see cref="Flags"/>).</summary>
     public const int PickCodeOffset = 80;
+
+    /// <summary>Byte offset of <see cref="Surface"/>.</summary>
+    public const int SurfaceOffset = 88;
 
     /// <summary>Model-to-world matrix, row-vector convention (<c>world = local * Model</c>).</summary>
     [FieldOffset(ModelOffset)]
@@ -37,24 +40,29 @@ public readonly struct InstanceData : IEquatable<InstanceData>
     [FieldOffset(PickCodeOffset + 4)]
     public readonly InstanceFlags Flags;
 
+    /// <summary>Metal (x) and gloss (y), 0..1: shiny paint (0 = plain shading).</summary>
+    [FieldOffset(SurfaceOffset)]
+    public readonly Vector2 Surface;
+
     /// <summary>Creates an instance record.</summary>
-    public InstanceData(Matrix4x4 model, Vector4 tint, uint pickCode, InstanceFlags flags)
+    public InstanceData(Matrix4x4 model, Vector4 tint, uint pickCode, InstanceFlags flags, Vector2 surface = default)
     {
         Model = model;
         Tint = tint;
         PickCode = pickCode;
         Flags = flags;
+        Surface = surface;
     }
 
     /// <inheritdoc />
     public bool Equals(InstanceData other) =>
-        Model.Equals(other.Model) && Tint.Equals(other.Tint) && PickCode == other.PickCode && Flags == other.Flags;
+        Model.Equals(other.Model) && Tint.Equals(other.Tint) && PickCode == other.PickCode && Flags == other.Flags && Surface == other.Surface;
 
     /// <inheritdoc />
     public override bool Equals(object? obj) => obj is InstanceData other && Equals(other);
 
     /// <inheritdoc />
-    public override int GetHashCode() => HashCode.Combine(Model, Tint, PickCode, Flags);
+    public override int GetHashCode() => HashCode.Combine(Model, Tint, PickCode, Flags, Surface);
 
     /// <summary>Equality operator.</summary>
     public static bool operator ==(InstanceData left, InstanceData right) => left.Equals(right);

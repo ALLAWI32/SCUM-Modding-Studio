@@ -113,6 +113,9 @@ public sealed class GpuMesh : IDisposable
         gl.EnableVertexAttribArray(8);
         gl.VertexAttribIPointer(8, 2, VertexAttribIType.UnsignedInt, istride, (void*)InstanceData.PickCodeOffset);
         gl.VertexAttribDivisor(8, 1);
+        gl.EnableVertexAttribArray(9);
+        gl.VertexAttribPointer(9, 2, VertexAttribPointerType.Float, false, istride, (void*)InstanceData.SurfaceOffset);
+        gl.VertexAttribDivisor(9, 1);
 
         gl.BindVertexArray(0);
         gl.BindBuffer(BufferTargetARB.ArrayBuffer, 0);

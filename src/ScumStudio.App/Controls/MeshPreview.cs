@@ -195,9 +195,15 @@ public sealed class MeshPreview : OpenGlControlBase
         if (_modelDirty)
         {
             _modelDirty = false;
-            Upload(Model);
-            _frameRequested = true;
-            SelectPart(null);
+            // A repaint of the same parts keeps the scene and the camera; the same model with other parts (an armour kit)
+            // keeps the camera; anything else is a new model, framed.
+            if (Model is null || _scene is null || !_scene.Restyle(Model))
+            {
+                var sameModel = Model is not null && _scene?.Model.Name == Model.Name;
+                Upload(Model);
+                _frameRequested = !sameModel;
+                SelectPart(null);
+            }
         }
 
         if (_frameRequested)

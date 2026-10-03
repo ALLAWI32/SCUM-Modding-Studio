@@ -101,10 +101,15 @@ public sealed record ScenePlacement(
 {
     /// <summary>
     /// The instance key of this placement: an ISM/HISM instance, or one spline mesh piece (a road, river bank or bridge
-    /// segment, <see cref="InstanceKey.Segment"/>) so a click picks that piece, not the whole road; null otherwise.
+    /// segment, <see cref="InstanceKey.Segment"/>) so a click picks that piece, not the whole road; or one part of a
+    /// Blueprint the level stores (<see cref="InstanceKey.Part"/>: a wall, shelf or lamp of a hangar), picked only in part
+    /// mode; null otherwise (the root component: that is the actor itself).
     /// </summary>
     public InstanceKey? InstanceKey => Instance is { } i ? Viewport.InstanceKey.Of(SelectableId, i.ComponentName, i.InstanceIndex)
-        : Component is { SplineMesh: not null } c ? Viewport.InstanceKey.Of(SelectableId, c.Name, Viewport.InstanceKey.Segment) : null;
+        : Component is { SplineMesh: not null } c ? Viewport.InstanceKey.Of(SelectableId, c.Name, Viewport.InstanceKey.Segment)
+        : Component is { IsSynthesized: false, ExportIndex: >= 0 } part && part.ExportIndex != Actor.RootComponent
+            ? Viewport.InstanceKey.Of(SelectableId, part.Name, Viewport.InstanceKey.Part)
+            : null;
 
     /// <summary>Distance (cm) beyond which the game does not draw this placement (HISM/foliage <c>InstanceEndCullDistance</c>); 0 = always drawn.</summary>
     public float CullDistance { get; init; }
@@ -121,6 +126,9 @@ public readonly record struct InstanceKey(uint SelectableId, string Component, i
 {
     /// <summary><see cref="InstanceIndex"/> of a whole spline mesh component (one road or bridge piece).</summary>
     public const int Segment = -1;
+
+    /// <summary><see cref="InstanceIndex"/> of one component of an actor (a part of a Blueprint building), picked in part mode.</summary>
+    public const int Part = -2;
 
     /// <summary>Creates a key, normalising the component name.</summary>
     public static InstanceKey Of(uint selectableId, string component, int instanceIndex) =>

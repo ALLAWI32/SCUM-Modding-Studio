@@ -30,6 +30,6 @@ public sealed class RoadSegmentPickTests
 
         Assert.Equal(InstanceKey.Segment, keys["SplineMeshComponent_0"]!.Value.InstanceIndex);
         Assert.NotEqual(keys["SplineMeshComponent_0"], keys["SplineMeshComponent_1"]);
-        Assert.Null(keys["Sign"]); // ordinary meshes still select the actor
+        Assert.Equal(InstanceKey.Part, keys["Sign"]!.Value.InstanceIndex); // a part: a click picks it alone only in part mode
     }
 }

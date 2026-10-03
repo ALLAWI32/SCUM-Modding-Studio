@@ -121,6 +121,10 @@ public sealed partial class LevelViewport : OpenGlControlBase
     public static readonly StyledProperty<bool> AutoSnapProperty =
         AvaloniaProperty.Register<LevelViewport, bool>(nameof(AutoSnap), defaultValue: true);
 
+    /// <summary>Part mode: a click picks the one part of a Blueprint under the cursor (a hangar's wall or lamp), not the whole Blueprint. Alt+click does it once.</summary>
+    public static readonly StyledProperty<bool> PickPartsProperty =
+        AvaloniaProperty.Register<LevelViewport, bool>(nameof(PickParts));
+
     /// <summary>One-line statistics of the last frame (read-only).</summary>
     public static readonly StyledProperty<string> FrameInfoProperty =
         AvaloniaProperty.Register<LevelViewport, string>(nameof(FrameInfo), string.Empty);
@@ -190,6 +194,7 @@ public sealed partial class LevelViewport : OpenGlControlBase
     private float _shownYaw;
     private bool _snapHeld;
     private bool _pickWhole;
+    private bool _pickPart;
     private bool _pickToggle;
     private PreparedLevelScene? _framedBackdrop;
     // Meshes stay on the GPU between scene swaps: the levels around a moving camera share most of them.
@@ -437,6 +442,13 @@ public sealed partial class LevelViewport : OpenGlControlBase
     {
         get => GetValue(AutoSnapProperty);
         set => SetValue(AutoSnapProperty, value);
+    }
+
+    /// <inheritdoc cref="PickPartsProperty" />
+    public bool PickParts
+    {
+        get => GetValue(PickPartsProperty);
+        set => SetValue(PickPartsProperty, value);
     }
 
     /// <summary>How close (cm) a neighbour's face must come for auto-snap to take it.</summary>
@@ -966,8 +978,11 @@ public sealed partial class LevelViewport : OpenGlControlBase
             }
 
             var id = result?.Node.SelectableId ?? 0u;
-            // Shift+click takes the whole actor (all of a road, all of a foliage actor) instead of the one piece under the cursor.
-            var instance = !_pickWhole && result?.Node.Tag is ScenePlacement { InstanceKey: { } key } ? key : (InstanceKey?)null;
+            // Shift+click takes the whole actor (all of a road, all of a foliage actor) instead of the one piece under the cursor;
+            // a part of a Blueprint is picked on its own only in part mode (or with Alt).
+            var instance = !_pickWhole && result?.Node.Tag is ScenePlacement { InstanceKey: { } key } && (key.InstanceIndex != InstanceKey.Part || _pickPart)
+                ? key
+                : (InstanceKey?)null;
             if (_pickToggle)
             {
                 _pickToggle = false;
@@ -1166,7 +1181,7 @@ public sealed partial class LevelViewport : OpenGlControlBase
         if (point.Properties.IsLeftButtonPressed && e.KeyModifiers.HasFlag(KeyModifiers.Control))
         {
             // Ctrl+click adds the object to the multi-selection (or takes it out); nothing is dragged.
-            QueuePick(point.Position, grab: false, whole: e.KeyModifiers.HasFlag(KeyModifiers.Shift), toggle: true);
+            QueuePick(point.Position, grab: false, whole: e.KeyModifiers.HasFlag(KeyModifiers.Shift), toggle: true, part: e.KeyModifiers.HasFlag(KeyModifiers.Alt));
             return;
         }
 
@@ -1174,7 +1189,7 @@ public sealed partial class LevelViewport : OpenGlControlBase
         {
             // Select on press; dragging afterwards moves the actor (see UpdateFreeDrag).
             _leftDown = true;
-            QueuePick(point.Position, grab: true, whole: e.KeyModifiers.HasFlag(KeyModifiers.Shift));
+            QueuePick(point.Position, grab: true, whole: e.KeyModifiers.HasFlag(KeyModifiers.Shift), part: e.KeyModifiers.HasFlag(KeyModifiers.Alt));
             e.Pointer.Capture(this);
             return;
         }
@@ -1539,11 +1554,12 @@ public sealed partial class LevelViewport : OpenGlControlBase
         return Math.Clamp(radius * 20f, MaxPickDistance, MathF.Max(MaxPickDistance, MaxPickDistanceLarge));
     }
 
-    private void QueuePick(Point position, bool grab, bool whole = false, bool toggle = false)
+    private void QueuePick(Point position, bool grab, bool whole = false, bool toggle = false, bool part = false)
     {
         var scaling = RenderScaling();
         _grabPending = grab;
         _pickWhole = whole;
+        _pickPart = part || PickParts;
         _pickToggle = toggle;
         _grabId = 0;
         _pendingPick = ((int)(position.X * scaling), (int)(position.Y * scaling));

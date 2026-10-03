@@ -18,6 +18,7 @@ internal static class ShaderSources
         layout(location = 3) in mat4 iModel;
         layout(location = 7) in vec4 iTint;
         layout(location = 8) in uvec2 iIdFlags;
+        layout(location = 9) in vec2 iSurface;
 
         uniform mat4 uViewProj;
 
@@ -27,6 +28,7 @@ internal static class ShaderSources
         out vec4 vTint;
         flat out uint vPickId;
         flat out uint vFlags;
+        flat out vec2 vSurface;
 
         void main()
         {
@@ -40,13 +42,15 @@ internal static class ShaderSources
             vTint = iTint;
             vPickId = iIdFlags.x;
             vFlags = iIdFlags.y;
+            vSurface = iSurface;
             gl_Position = uViewProj * world;
         }
         """;
 
     /// <summary>
     /// Colour pass: (texture * tint) with a hemispheric ambient + one directional key light, optional exponential distance
-    /// fog, selection tint + rim. Output alpha = albedo alpha (blended only in the translucent pass).
+    /// fog, selection tint + rim. Output alpha = albedo alpha (blended only in the translucent pass). Shiny paint
+    /// (instance surface: metal, gloss) adds a studio reflection, a key-light highlight and a clear coat.
     /// </summary>
     public const string MeshFragment = """
         #version 430 core
@@ -56,6 +60,7 @@ internal static class ShaderSources
         in vec4 vTint;
         flat in uint vPickId;
         flat in uint vFlags;
+        flat in vec2 vSurface;
 
         uniform sampler2D uTexture;
         uniform int uHasTexture;
@@ -96,9 +101,12 @@ internal static class ShaderSources
         void main()
         {
             vec4 albedo = vTint * uSectionTint; // node tint x material colour
+            float paintMask = 1.0;
             if (uHasTexture != 0)
             {
-                albedo *= texture(uTexture, vUv);
+                vec4 texel = texture(uTexture, vUv);
+                albedo *= texel;
+                paintMask = texel.a; // shiny paint: the texture's alpha says where the paint is
                 // Masked material: leaves and grass are cut out of their cards. Far mips average the leaves with the gaps
                 // between them, so alpha is sharpened with the mip level and a distant forest keeps its leaves.
                 if (uAlphaCutoff > 0.0 && albedo.a * (1.0 + max(textureQueryLod(uTexture, vUv).x, 0.0) * 0.25) < uAlphaCutoff)
@@ -142,6 +150,26 @@ internal static class ShaderSources
             vec3 hemi = mix(uGroundColor, uSkyColor, n.y * 0.5 + 0.5);
             float key = max(dot(n, -uLightDirection), 0.0);
             vec3 lit = albedo.rgb * (hemi + uLightColor * key);
+            float metal = vSurface.x * paintMask;
+            float gloss = vSurface.y * paintMask;
+            if (metal + gloss > 0.0)
+            {
+                // Studio reflection: dark floor, bright sky and a hot horizon band, so curved panels show a moving line.
+                vec3 r = reflect(-toCamera, n);
+                vec3 env = mix(uGroundColor * 0.5, uSkyColor * 1.9, smoothstep(-0.3, 0.45, r.y)) + vec3(1.4) * exp(-abs(r.y - 0.06) * 16.0);
+                vec3 h = normalize(toCamera - uLightDirection);
+                float nh = max(dot(n, h), 0.0);
+                float fresnel = 0.04 + 0.96 * pow(1.0 - max(dot(n, toCamera), 0.0), 5.0);
+                // Metal: the colour is in the reflection, not in the diffuse light. A bright reflection is scaled down as a
+                // whole, not clipped per channel: clipped gold turns yellow on the brightest panels.
+                vec3 reflection = albedo.rgb * 1.7 * (env + uLightColor * pow(nh, 60.0) * 4.0);
+                reflection /= max(1.0, max(reflection.r, max(reflection.g, reflection.b)));
+                lit = mix(lit, reflection, metal);
+                // Clear coat: a colourless lacquer on top, strongest at grazing angles, with a tight highlight.
+                lit += gloss * (fresnel * env * 0.6 + uLightColor * pow(nh, 400.0) * 6.0);
+                lit /= max(1.0, max(lit.r, max(lit.g, lit.b)));
+            }
+
             if (uFogDensity > 0.0)
             {
                 float fog = 1.0 - exp(-uFogDensity * length(uCameraPosition - vWorld));

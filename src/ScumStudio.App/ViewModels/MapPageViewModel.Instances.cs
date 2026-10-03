@@ -10,10 +10,16 @@ namespace ScumStudio.App.ViewModels;
 /// <summary>
 /// Single-instance editing: a click on a tree, rock or plank selects that one ISM/HISM/foliage instance (not the actor that
 /// holds thousands of them), a click on a road, river bank or bridge piece selects that one spline mesh segment (Ctrl+click
-/// takes the whole road), and moves, deletes and copies act on it alone. Terrain tiles and foliage containers cannot be moved.
+/// takes the whole road), and in part mode (or Alt+click) a click on a Blueprint building selects that one part of it (a
+/// hangar's wall, shelf or lamp, as the level stores it); moves, deletes and copies act on it alone. Terrain tiles and
+/// foliage containers cannot be moved.
 /// </summary>
 public sealed partial class MapPageViewModel
 {
+    /// <summary>Part mode: a click on a Blueprint building picks the part under the cursor, not the whole building.</summary>
+    [ObservableProperty]
+    private bool _pickParts;
+
     /// <summary>The selected instance (bound two-way to the viewport), or null when a whole actor is selected.</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasSelectedInstance))]
@@ -55,7 +61,7 @@ public sealed partial class MapPageViewModel
     /// <summary>The instance (or spline segment) <paramref name="key"/> of <paramref name="item"/>, or null.</summary>
     private static SelectedInstance? InstanceInfo(ActorItemViewModel item, InstanceKey key)
     {
-        if (key.InstanceIndex == InstanceKey.Segment)
+        if (key.InstanceIndex is InstanceKey.Segment or InstanceKey.Part)
         {
             return item.Actor.FindComponent(key.Component) is { } segment ? new SelectedInstance(item, null, segment) : null;
         }
@@ -117,7 +123,9 @@ public sealed partial class MapPageViewModel
         var state = _services.Projects.Current?.State;
         var rows = new List<PropertyRow>
         {
-            sel.Instance is null
+            sel.Instance is null && sel.Component.SplineMesh is null
+                ? new(Localization.Loc.T("Map.Row.Part"), Localization.Loc.F("Map.Part.Of", sel.Component.Name, sel.Item.Actor.ClassName.EndsWith("_C", StringComparison.Ordinal) ? sel.Item.Actor.ClassName[..^2] : sel.Item.Actor.ClassName))
+            : sel.Instance is null
                 ? new(Localization.Loc.T("Map.Row.Segment"), sel.Component.Name + Localization.Loc.T("Map.Segment.Hint"))
                 : new(Localization.Loc.T("Map.Row.Instance"), Localization.Loc.F("Map.InstanceOf", sel.Instance.InstanceIndex.ToString(CultureInfo.InvariantCulture), sel.Instance.ComponentName)),
             new(Localization.Loc.T("Map.Row.Mesh"), MeshOf(sel) ?? Localization.Loc.T("Map.NoneParen")),
@@ -168,9 +176,10 @@ public sealed partial class MapPageViewModel
 
         foreach (var (actor, name, value) in state.TransformOverrides)
         {
-            if (name.Length > 0 && byReference.TryGetValue(actor, out var item) && item.Actor.FindComponent(name) is { SplineMesh: not null } segment)
+            if (name.Length > 0 && byReference.TryGetValue(actor, out var item) && item.Actor.FindComponent(name) is { } piece && piece.ExportIndex != item.Actor.RootComponent)
             {
-                moved[InstanceKey.Of(item.SelectableId, name, InstanceKey.Segment)] = value.ToTransform() * SpaceOf(new SelectedInstance(item, null, segment));
+                var index = piece.SplineMesh is null ? InstanceKey.Part : InstanceKey.Segment;
+                moved[InstanceKey.Of(item.SelectableId, name, index)] = value.ToTransform() * SpaceOf(new SelectedInstance(item, null, piece));
             }
         }
 

@@ -22,6 +22,7 @@ public sealed class SceneNode
     private bool _visible = true;
     private bool _selected;
     private Vector4 _tint = Vector4.One;
+    private Vector2 _surface;
     private float _maxDrawDistance;
     private long _version;
 
@@ -77,6 +78,13 @@ public sealed class SceneNode
     {
         get => _tint;
         set => Set(ref _tint, value, structural: false);
+    }
+
+    /// <summary>Metal (x) and gloss (y), 0..1, for shiny paint; zero = plain shading. The texture's alpha masks it.</summary>
+    public Vector2 Surface
+    {
+        get => _surface;
+        set => Set(ref _surface, value, structural: false);
     }
 
     /// <summary>

@@ -413,8 +413,10 @@ public sealed class LevelScene : IDisposable
         var keySet = instances.ToHashSet();
         foreach (var node in Scene.Nodes)
         {
+            // A part of an actor is lit with its actor; an instance or road piece only by its own key.
             if (node.Tag is ScenePlacement placement
-                && (placement.InstanceKey is { } key ? keySet.Contains(key) : idSet.Contains(placement.SelectableId)))
+                && (placement.InstanceKey is { InstanceIndex: not InstanceKey.Part } key ? keySet.Contains(key)
+                    : idSet.Contains(placement.SelectableId) || (placement.InstanceKey is { } part && keySet.Contains(part))))
             {
                 node.Selected = true;
             }

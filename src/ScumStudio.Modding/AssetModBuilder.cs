@@ -116,9 +116,25 @@ public static class AssetModBuilder
 
             try
             {
-                var result = TunablePatcher.Apply(package, edits);
-                built[path] = (CookedPackage.Parse(result.Bytes.UAsset, result.Bytes.UExp, package.UBulk, path), result.Bytes, isClone);
-                applied.AddRange(result.Applied.Select(a => (path, a.Key, a.Old, a.New)));
+                // Stored values first (same-size patches), then parameters by name (a material instance may gain entries).
+                var stored = edits.Where(e => !MaterialParameters.IsKeyed(e.Path)).ToList();
+                var keyed = edits.Where(e => MaterialParameters.IsKeyed(e.Path)).ToList();
+                var bytes = PackageWriter.Rebuild(package);
+                if (stored.Count > 0)
+                {
+                    var result = TunablePatcher.Apply(package, stored);
+                    bytes = result.Bytes;
+                    package = CookedPackage.Parse(bytes.UAsset, bytes.UExp, package.UBulk, path);
+                    applied.AddRange(result.Applied.Select(a => (path, a.Key, a.Old, a.New)));
+                }
+
+                if (keyed.Count > 0)
+                {
+                    bytes = MaterialParameters.Apply(package, keyed, ParentGuids(catalog, package, warnings));
+                    applied.AddRange(keyed.Select(e => (path, e.Export + "|" + e.Path, string.Empty, e.Value)));
+                }
+
+                built[path] = (CookedPackage.Parse(bytes.UAsset, bytes.UExp, package.UBulk, path), bytes, isClone);
             }
             catch (InvalidOperationException ex)
             {
@@ -151,5 +167,23 @@ public static class AssetModBuilder
             .Select(b => new BuiltAssetPackage(b.Key, b.Value.Bytes, b.Value.Package.UBulk, b.Value.IsClone))
             .ToList();
         return new AssetModBuildResult(packages, registryBytes, registered, applied, warnings);
+    }
+
+    /// <summary>The expression guids of a material instance's parent material (empty, with a warning, when unreadable).</summary>
+    private static IReadOnlyDictionary<string, byte[]> ParentGuids(AssetCatalog catalog, CookedPackage instance, List<string> warnings)
+    {
+        try
+        {
+            if (MaterialParameters.ParentPackage(instance) is { } parent)
+            {
+                return MaterialParameters.ExpressionGuids(ModdableAssets.ReadPackage(catalog, parent));
+            }
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or FormatException or InvalidDataException or IOException)
+        {
+            warnings.Add($"{instance.BasePath}: parent material not read ({ex.Message}); new parameters get no expression guid.");
+        }
+
+        return new Dictionary<string, byte[]>();
     }
 }

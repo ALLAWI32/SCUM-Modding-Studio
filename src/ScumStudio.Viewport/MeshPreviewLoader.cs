@@ -24,7 +24,14 @@ namespace ScumStudio.Viewport;
 /// <param name="Transform">Where the part sits (UE space).</param>
 /// <param name="Tint">Linear RGBA multiplied into the surface (null = white).</param>
 /// <param name="AlphaCutoff">Opacity clip of a masked material (leaves, grass, fences): texels whose alpha is below it are cut out; 0 = opaque.</param>
-public sealed record PreviewPart(string Name, MeshData Mesh, string? TexturePath, FTransform Transform, Vector4? Tint = null, float AlphaCutoff = 0f);
+public sealed record PreviewPart(string Name, MeshData Mesh, string? TexturePath, FTransform Transform, Vector4? Tint = null, float AlphaCutoff = 0f)
+{
+    /// <summary>The material object path the part is drawn with (its mesh's material slot), or empty.</summary>
+    public string Material { get; init; } = string.Empty;
+
+    /// <summary>Shiny paint: metal (x) and gloss (y), 0..1, where the texture's alpha is set; zero = plain shading.</summary>
+    public Vector2 Surface { get; init; }
+}
 
 /// <summary>A CPU-side model for <c>MeshPreview</c>: parts plus the decoded base-colour textures they share.</summary>
 /// <param name="Name">What is shown (asset or Blueprint name).</param>
@@ -34,6 +41,9 @@ public sealed record PreviewModel(string Name, IReadOnlyList<PreviewPart> Parts,
 {
     /// <summary>Total triangles.</summary>
     public long Triangles => Parts.Sum(p => (long)p.Mesh.TriangleCount);
+
+    /// <summary>Add-on kits the vehicle's empty slots take (<c>ArmorLight</c>, <c>ArmorHeavy</c>), for the armour choice.</summary>
+    public IReadOnlyList<string> AddOns { get; init; } = [];
 }
 
 /// <summary>
@@ -46,9 +56,14 @@ public sealed class MeshPreviewLoader
 {
     private const int MaxClassDepth = 8;
 
-    /// <summary>Chassis (0) and the parts in its slots (1); deeper slots hold optional add-ons (armour plates, wheel guards) a stock vehicle does not spawn with.</summary>
-    private const int MaxAttachmentDepth = 2;
-    private const int MaxAttachments = 64;
+    /// <summary>
+    /// Chassis (0), the parts in its slots (1) and theirs: a Rager's doors hang on its body sides (2). Which parts a stock
+    /// vehicle has comes from its world spawn preset (see <see cref="StockParts"/>), not from the depth.
+    /// </summary>
+    private const int MaxAttachmentDepth = 4;
+
+    private const string WorldSpawnPresets = "/Game/ConZ_Files/Vehicles/SpawningPresets/AutomaticSpawn/";
+    private const int MaxAttachments = 128;
 
     private readonly AssetCatalog _catalog;
     private readonly ILogger _logger;
@@ -85,7 +100,9 @@ public sealed class MeshPreviewLoader
     /// Loads the mesh a cooked Blueprint shows in game (plus a vehicle's default attachments), or null when no mesh is
     /// referenced by it or its parent classes.
     /// </summary>
-    public PreviewModel? LoadBlueprint(string packagePath)
+    /// <param name="packagePath">Blueprint package.</param>
+    /// <param name="addOn">A vehicle's add-on kit to fit in its empty slots (<c>ArmorLight</c>, <c>ArmorHeavy</c>), or null for stock.</param>
+    public PreviewModel? LoadBlueprint(string packagePath, string? addOn = null)
     {
         // Buildings, rooms and props are many meshes in the construction script; vehicles are one skeletal body plus slots.
         if (TryGetDefaultObject(packagePath)?.GetOrDefault<FStructFallback>("_chassisSlot") is null)
@@ -113,12 +130,13 @@ public sealed class MeshPreviewLoader
 
         AddMeshParts(parts, root, meshPath, FTransform.Identity);
         var count = 0;
+        var addOns = new SortedSet<string>(StringComparer.Ordinal);
         if (TryGetDefaultObject(packagePath) is { } cdo && cdo.GetOrDefault<FStructFallback>("_chassisSlot") is { } chassisSlot)
         {
-            AddAttachments(parts, [chassisSlot], root, FTransform.Identity, root, 0, ref count);
+            AddAttachments(parts, [chassisSlot], root, FTransform.Identity, root, 0, ref count, StockParts(packagePath), addOn, addOns);
         }
 
-        return new PreviewModel(PackageLeaf(packagePath), parts, _textures);
+        return new PreviewModel(PackageLeaf(packagePath), parts, _textures) { AddOns = [.. addOns] };
     }
 
     /// <summary>
@@ -239,7 +257,36 @@ public sealed class MeshPreviewLoader
         return null;
     }
 
-    private void AddAttachments(List<PreviewPart> parts, IEnumerable<FStructFallback> slots, UObject parentMesh, FTransform parentWorld, UObject vehicleMesh, int depth, ref int count)
+    /// <summary>
+    /// The parts a stock <paramref name="vehiclePackage"/> spawns with in the world: the attachment classes its world spawn
+    /// preset names (a Rager's doors, panels, lights, seats, wheels; no armour, no roof rack). Null when no preset names
+    /// the vehicle (every slot then shows its first part).
+    /// </summary>
+    public HashSet<string>? StockParts(string vehiclePackage)
+    {
+        var vehicle = vehiclePackage + ".";
+        foreach (var preset in _catalog.PackageFiles
+                     .Select(f => AssetPaths.ToPackagePath(f, _catalog.ProjectName))
+                     .Where(p => p.StartsWith(WorldSpawnPresets, StringComparison.OrdinalIgnoreCase) && !p.Contains("_RadiationZone", StringComparison.OrdinalIgnoreCase)))
+        {
+            if (!_catalog.TryLoadPackage(preset, out var package) || package is not CUE4Parse.UE4.Assets.AbstractUePackage { NameMap: { } names })
+            {
+                continue;
+            }
+
+            var paths = names.Select(n => n.Name ?? string.Empty).ToList();
+            if (paths.Any(n => n.StartsWith(vehicle, StringComparison.OrdinalIgnoreCase)))
+            {
+                return paths.Where(n => n.StartsWith("/Game/", StringComparison.Ordinal) && !n.Contains('.', StringComparison.Ordinal))
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            }
+        }
+
+        return null;
+    }
+
+    private void AddAttachments(List<PreviewPart> parts, IEnumerable<FStructFallback> slots, UObject parentMesh, FTransform parentWorld, UObject vehicleMesh, int depth, ref int count,
+        HashSet<string>? stock = null, string? addOn = null, ISet<string>? addOns = null)
     {
         if (depth >= MaxAttachmentDepth)
         {
@@ -254,8 +301,20 @@ public sealed class MeshPreviewLoader
                 continue;
             }
 
-            // The first class of a slot is the plain part (armour and other variants follow).
-            var attachmentPackage = PackageOf(classes[0].AssetPathName.Text);
+            // The part the stock vehicle has in this slot (none: an add-on slot such as armour or a roof rack); without
+            // a preset, the first class (the plain part; armour and other variants follow). An empty slot takes the
+            // chosen add-on kit (BPC_Rager_Body_ArmorLight_Left for "ArmorLight").
+            var packages = classes.Select(c => PackageOf(c.AssetPathName.Text)).ToList();
+            foreach (var kit in packages.Select(KitOf).OfType<string>())
+            {
+                addOns?.Add(kit);
+            }
+
+            var attachmentPackage = stock is null
+                ? packages[0]
+                : packages.FirstOrDefault(stock.Contains)
+                  ?? (addOn is null ? null : packages.FirstOrDefault(p => KitOf(p) == addOn))
+                  ?? string.Empty;
             if (attachmentPackage.Length == 0 || TryGetDefaultObject(attachmentPackage) is not { } cdo)
             {
                 continue;
@@ -263,7 +322,10 @@ public sealed class MeshPreviewLoader
 
             count++;
             var socket = cdo.GetOrDefault<FName>("ParentSocket").Text;
-            var world = (SocketTransform(parentMesh, socket) ?? SocketTransform(vehicleMesh, socket) ?? FTransform.Identity) * parentWorld;
+            // A socket of the parent part is in its space; one only the vehicle's own mesh has is in vehicle space already
+            // (multiplying that by the parent's place doubled the offset: armour floated off the doors).
+            var world = SocketTransform(parentMesh, socket) is { } local ? local * parentWorld
+                : SocketTransform(vehicleMesh, socket) ?? parentWorld;
             var meshPath = cdo.GetOrDefault<FStructFallback>("MeshSetup")?.GetOrDefault<FSoftObjectPath>("Mesh").AssetPathName.Text;
             var mesh = string.IsNullOrEmpty(meshPath) || meshPath == "None" ? null : TryLoadMeshObject(meshPath);
             if (mesh is not null)
@@ -274,9 +336,18 @@ public sealed class MeshPreviewLoader
             var children = cdo.GetOrDefault<FStructFallback[]>("_slots");
             if (children is { Length: > 0 })
             {
-                AddAttachments(parts, children.Where(c => c is not null), mesh ?? parentMesh, world, vehicleMesh, depth + 1, ref count);
+                AddAttachments(parts, children.Where(c => c is not null), mesh ?? parentMesh, world, vehicleMesh, depth + 1, ref count, stock, addOn, addOns);
             }
         }
+    }
+
+    /// <summary>The add-on kit an attachment class belongs to (<c>ArmorLight</c>, <c>ArmorHeavy</c>), or null.</summary>
+    private static string? KitOf(string package)
+    {
+        var leaf = package[(package.LastIndexOf('/') + 1)..];
+        return leaf.Contains("_ArmorLight", StringComparison.OrdinalIgnoreCase) ? "ArmorLight"
+            : leaf.Contains("_ArmorHeavy", StringComparison.OrdinalIgnoreCase) ? "ArmorHeavy"
+            : null;
     }
 
     /// <summary>Adds one part per material of <paramref name="mesh"/> (sections sharing a material are merged); a mesh without render data is skipped.</summary>
@@ -321,7 +392,7 @@ public sealed class MeshPreviewLoader
             }
 
             var name = group.Key.Length == 0 ? data.Name : data.Name + " / " + group.Key[(group.Key.LastIndexOfAny(['/', '.']) + 1)..];
-            parts.Add(new PreviewPart(name, part, texture, transform, tint, clip));
+            parts.Add(new PreviewPart(name, part, texture, transform, tint, clip) { Material = group.Key });
         }
     }
 

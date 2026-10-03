@@ -279,7 +279,8 @@
               </DockPanel>
 
               <!-- 3D tab: the asset's mesh (vehicles with their default attachments on their sockets) -->
-              <Border IsVisible="{Binding ShowPreviewTab}" Margin="6" CornerRadius="{DynamicResource SmallCornerRadius}" ClipToBounds="True" Background="{DynamicResource ViewportBrush}">
+              <Grid IsVisible="{Binding ShowPreviewTab}" ColumnDefinitions="*,Auto">
+              <Border Margin="6" CornerRadius="{DynamicResource SmallCornerRadius}" ClipToBounds="True" Background="{DynamicResource ViewportBrush}">
                 <Panel>
                   <c:ViewportGrid Background="{DynamicResource ViewportBrush}" AxisXBrush="{DynamicResource AxisXBrush}" AxisYBrush="{DynamicResource AxisYBrush}" IsVisible="{Binding !HasPreview}" />
                   <c:MeshPreview x:Name="ItemPreview" Model="{Binding Preview}" IsVisible="{Binding HasPreview}" />
@@ -300,6 +301,84 @@
                   </Border>
                 </Panel>
               </Border>
+
+              <!-- Paint (vehicles): the body paints, shown on the model as they are chosen -->
+              <Border Grid.Column="1" Width="300" Margin="0,6,6,6" IsVisible="{Binding HasPaints}" Classes="panel">
+                <DockPanel>
+                  <StackPanel DockPanel.Dock="Top" Margin="12,10,12,4" Spacing="2">
+                    <TextBlock Text="{Tr Paint.Title}" Classes="h2" />
+                    <TextBlock Text="{Tr Paint.Caption}" Classes="caption wrap" />
+                    <Grid ColumnDefinitions="*,Auto" Margin="0,6,0,0">
+                      <TextBlock Text="{Tr Paint.Together}" VerticalAlignment="Center" TextWrapping="Wrap" />
+                      <ToggleSwitch x:Name="PaintTogetherSwitch" Grid.Column="1" IsChecked="{Binding PaintTogether}" OnContent="" OffContent="" MinWidth="0"
+                                    ToolTip.Tip="{Tr Paint.Together.Tip}" />
+                    </Grid>
+                    <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8" IsVisible="{Binding HasArmour}">
+                      <TextBlock Text="{Tr Paint.Armour}" VerticalAlignment="Center" />
+                      <ComboBox x:Name="ArmourPicker" Grid.Column="1" ItemsSource="{Binding ArmourChoices}" SelectedItem="{Binding Armour}" HorizontalAlignment="Stretch"
+                                ToolTip.Tip="{Tr Paint.Armour.Tip}" />
+                    </Grid>
+                  </StackPanel>
+                  <Border DockPanel.Dock="Bottom" Padding="12,8" BorderThickness="0,1,0,0" BorderBrush="{DynamicResource StrokeSubtleBrush}">
+                    <StackPanel Spacing="6">
+                      <TextBlock Classes="caption wrap" Text="{Tr Paint.Note}" />
+                      <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Right">
+                        <Button Classes="ghost" Content="{Tr Paint.Discard}" Command="{Binding DiscardPaintCommand}" ToolTip.Tip="{Tr Paint.Discard.Tip}" />
+                        <Button x:Name="ApplyPaintButton" Classes="accent" Content="{Tr Paint.Apply}" Command="{Binding ApplyPaintCommand}" ToolTip.Tip="{Tr Paint.Apply.Tip}" />
+                      </StackPanel>
+                    </StackPanel>
+                  </Border>
+                  <ScrollViewer HorizontalScrollBarVisibility="Disabled">
+                    <ItemsControl x:Name="PaintList" ItemsSource="{Binding Paints}" Margin="12,0,12,8">
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:PaintMaterialViewModel">
+                          <StackPanel Spacing="6" Margin="0,8,0,4">
+                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
+                            <TextBlock Text="{Tr Paint.Added}" Classes="caption wrap" IsVisible="{Binding IsAdded}" />
+                            <CheckBox IsChecked="{Binding Plain}" IsVisible="{Binding HasPlain}" ToolTip.Tip="{Tr Paint.Plain.Tip}">
+                              <TextBlock Text="{Tr Paint.Plain}" TextWrapping="Wrap" />
+                            </CheckBox>
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                              <ColorPicker Color="{Binding Colour}" IsAlphaEnabled="False" IsAlphaVisible="False" ToolTip.Tip="{Tr Paint.Colour.Tip}" />
+                              <TextBlock Text="{Tr Paint.Colour}" VerticalAlignment="Center" />
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding HasSecond}">
+                              <ColorPicker Color="{Binding Second}" IsAlphaEnabled="False" IsAlphaVisible="False" ToolTip.Tip="{Tr Paint.Second.Tip}" />
+                              <TextBlock Text="{Tr Paint.Second}" VerticalAlignment="Center" />
+                            </StackPanel>
+                            <WrapPanel ItemSpacing="4" LineSpacing="4">
+                              <Button Classes="ghost small" Content="{Tr Paint.Finish.Original}" Command="{Binding OriginalCommand}" ToolTip.Tip="{Tr Paint.Finish.Original.Tip}" />
+                              <ItemsControl ItemsSource="{Binding Finishes}">
+                                <ItemsControl.ItemsPanel>
+                                  <ItemsPanelTemplate><WrapPanel ItemSpacing="4" LineSpacing="4" /></ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                  <DataTemplate x:DataType="vm:PaintFinish">
+                                    <Button Classes="ghost small" Content="{Binding Label}" CommandParameter="{Binding}"
+                                            Command="{Binding $parent[ItemsControl].((vm:PaintMaterialViewModel)DataContext).ApplyFinishCommand}"
+                                            ToolTip.Tip="{Tr Paint.Finish.Tip}" />
+                                  </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                              </ItemsControl>
+                            </WrapPanel>
+                            <Grid ColumnDefinitions="80,*,44" ColumnSpacing="6" IsVisible="{Binding HasMetal}">
+                              <TextBlock Text="{Tr Paint.Metal}" Classes="caption" VerticalAlignment="Center" />
+                              <Slider Grid.Column="1" Minimum="0" Maximum="1" Value="{Binding Metal}" SmallChange="0.05" LargeChange="0.1" ToolTip.Tip="{Tr Paint.Metal.Tip}" />
+                              <TextBlock Grid.Column="2" Text="{Binding MetalText}" Classes="caption mono" VerticalAlignment="Center" HorizontalAlignment="Right" />
+                            </Grid>
+                            <Grid ColumnDefinitions="80,*,44" ColumnSpacing="6" IsVisible="{Binding HasClearCoat}">
+                              <TextBlock Text="{Tr Paint.ClearCoat}" Classes="caption" VerticalAlignment="Center" />
+                              <Slider Grid.Column="1" Minimum="0" Maximum="1" Value="{Binding ClearCoat}" SmallChange="0.05" LargeChange="0.1" ToolTip.Tip="{Tr Paint.ClearCoat.Tip}" />
+                              <TextBlock Grid.Column="2" Text="{Binding ClearCoatText}" Classes="caption mono" VerticalAlignment="Center" HorizontalAlignment="Right" />
+                            </Grid>
+                          </StackPanel>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                  </ScrollViewer>
+                </DockPanel>
+              </Border>
+              </Grid>
             </Panel>
           </DockPanel>
         </Border>

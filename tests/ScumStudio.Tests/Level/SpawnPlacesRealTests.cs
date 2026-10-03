@@ -98,7 +98,7 @@ public sealed class SpawnPlacesRealTests
                        select (Cell: (x, y), Box: b);
             }).ToLookup(e => e.Cell, e => e.Box);
             var far = descriptions.Single(d => d.Name == name);
-            var verts = catalog.LoadObject<UStaticMesh>(far.Meshes[0]).RenderData!.LODs[0].PositionVertexBuffer!.Verts;
+            var verts = catalog.LoadObject<UStaticMesh>(far.Meshes[0]).RenderData!.LODs![0].PositionVertexBuffer!.Verts!;
             var covered = verts.Select(v => far.World.TransformPosition(new FVector(v.X, v.Y, v.Z)))
                 .Count(p => grid[((int)Math.Floor(p.X / 1000), (int)Math.Floor(p.Y / 1000))].Any(b => b.Contains(p, 100f)));
 

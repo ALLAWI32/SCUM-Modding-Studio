@@ -26,6 +26,7 @@ undo anything, even after a restart, and rebuild the mod after a game update.
 What you can do with it: a **SCUM map editor** (move, copy, delete and add objects, buildings, trees and rocks), a
 **SCUM bridge and road builder** (bend, lengthen, weld and repeat pieces with working collision), a **SCUM vehicle and
 weapon editor** (damage, rate of fire, range, mass, handling, in-game names, clones with their own names), a **SCUM
+vehicle paint editor** (gold, chrome, any colour, armour painted with the car), a **SCUM
 spawn editor** (vehicle fuel and parts at spawn, zombie zones, sentries, animals, the game's spawn places on the map), an
 **asset browser** (thumbnails, PNG and glTF export) and a **pak mod exporter** for single player and servers.
 
@@ -67,13 +68,14 @@ You need Windows 10 or 11 (x64), SCUM installed, and a graphics card with OpenGL
 
 | | |
 |---|---|
-| **3D map editor** | Fly over the whole island (levels stream in around the camera) or open one cell or sublevel. Click any object, move and turn it with the mouse, snap it to the ground or to other pieces, delete it, copy it anywhere (`Ctrl+C` / `Ctrl+V`), select every object of the same kind (`Ctrl+A`), or pick single trees and rocks. |
+| **3D map editor** | Fly over the whole island (levels stream in around the camera) or open one cell or sublevel. Click any object, move and turn it with the mouse, snap it to the ground or to other pieces, delete it, copy it anywhere (`Ctrl+C` / `Ctrl+V`), select every object of the same kind (`Ctrl+A`), or pick single trees and rocks. With **Parts** on (or `Alt+click`) a click picks one part of a building (a hangar's wall, shelf or lamp) to move, copy or delete it alone. |
 | **Bridges, roads and walls** | The **Shape** menu bends a wall, bridge or road piece into a curve or an S, makes it longer, wider, taller, raises a ramp or a hump, lengthens a bridge pylon's legs under the water, and welds an end onto another piece. Pieces made much longer repeat copy after copy. Bent pieces get **real collision** built from the mesh (no invisible walls, no holes), on the client and the server. |
 | **Spawns** | Vehicles, planes and boats: the fuel and battery they spawn with (Empty, Half, Full or any range), the chance each part is there, part condition and how many the server allows. Zombies and NPCs: all 73 threat zones (spawn chance, first spawn, cooldown, distance, which groups). Server: zombie and horde amounts, sentries on or off, drones, animals, written into `ServerSettings.ini`. |
 | **Spawn places on the map** | Every loot point of the game, read from the game files (select one to see what spawns there: shelf food, hunting weapons, military gear …), loot zones, sentries with their patrol paths, bunker creature points, car-shop spots and drop zones show as coloured pins. Spawners move, copy and delete like any object. |
 | **Far view follows your edits** | Delete or move a building and it is cut out of the island's far-view models and the outposts' HLODs too, so it no longer shows from far away. |
 | **Objects browser** | Every placeable object of the game in categories (buildings, furniture, nature, vehicles, items …) with thumbnails, plus building sets: all walls, all roads, all bridges. Place one in front of the camera with a click. |
 | **Vehicles and weapons** | Change the stored values (damage, rate of fire, range, handling, mass, capacity, names …) or clone a vehicle or item under a new name, ready to spawn with `#SpawnItem` / `#SpawnVehicle`. |
+| **Vehicle paint** | Repaint a vehicle in the 3D view: any colour or a finish (gold, rose gold, chrome, bronze, pink, candy red, metallic blue, pearl white, matte black) with metal and clear-coat shine. Fit the light or heavy armour kit and paint it with the car (a plain finish gives the scrap-metal plates one even colour). `Ctrl+Z` steps back. |
 | **Assets** | Browse all 110,000 game packages, preview meshes and textures, export textures as PNG and meshes as glTF (Blender), dump whole categories of game files. |
 | **Mod export** | One click writes the client pak (and the server pak when a server is set) with an export report. It checks the collision of every shaped piece, makes the game load your additions wherever you built them, and never modifies the original game files. |
 | **Automatic AES key** | The key is fetched from a public key list, tested and stored encrypted; you are asked only if that fails. |
@@ -165,6 +167,9 @@ included in this repository.</sub>
     there), orange: loot zones, red: sentries, pink: sentry patrol paths, purple: bunker creatures, blue: car-shop
     vehicles, green: drop zones. Spawner pins move, copy and delete like objects; loot points inside buildings move with
     their building.
+  - **Parts**: a click on a building picks the one part under the cursor (a wall, shelf, lamp or crate of a hangar)
+    instead of the whole building; it moves, copies and deletes alone and only that building changes. `Alt+click` does
+    it once; `Shift+click` takes the whole building.
   - **Snap**: pieces dragged near each other join end to end, or side by side with level tops; fences stand on edges.
     Hold `Alt` to place freely.
   - **Drone** (`Tab`): fly like the in-game drone.
@@ -188,7 +193,13 @@ included in this repository.</sub>
 ### Vehicles and Weapons
 
 - The list on the left with a filter and category chips (Weapons, Magazines, Ammunition, Projectiles; Car, Bike, Boat …).
-- **Values** / **3D**: the stored values, or the model in 3D.
+- **Values** / **3D**: the stored values, or the model in 3D (the whole stock vehicle, doors and panels included).
+- **Paint** (vehicles, next to the 3D view): each body material's colour, a second colour on two-tone bodies, **Metal**
+  and **Clear coat**, and finishes (gold, rose gold, chrome, bronze, pink, candy red, metallic blue, pearl white, matte
+  black); the model shows the paint with its shine as you pick. **Paint every part the same** keeps body, doors and
+  armour on one finish. **Armour**: none, light or heavy kit on the model; armour has no paint of its own, so the mod adds
+  it (the armour material is shared by the vehicles whose kits use it), and **Plain finish** swaps its scrap-metal print
+  for an even colour. `Ctrl+Z` steps back; **Apply paint** records it, **Export mod** writes it into the client pak.
 - The part picker (vehicle, chassis, doors, entity setup …) and **Key stats** (only gameplay values, or everything).
 - **NEW** column: type a new value; the arrow resets it. **Apply changes** records the edits, **Discard** drops them.
 - **Clone under a new name** (with attachments and spawn presets) and the **spawn command** to copy.
@@ -235,7 +246,7 @@ included in this repository.</sub>
 | Right-drag | look around |
 | `W` `A` `S` `D`, `Q` `E` | fly, down and up (`Shift` faster, wheel changes speed) |
 | `Tab` | drone mode (`Esc` leaves) |
-| Left click | select (`Ctrl+click` adds, `Shift+click` a whole road or forest) |
+| Left click | select (`Ctrl+click` adds, `Shift+click` a whole road, forest or building, `Alt+click` one part of a building) |
 | Left-drag | move the selection (wheel turns it, `Shift`+wheel raises it) |
 | `Page Up` / `Page Down` | raise or lower 1 cm (`Shift`: 10 cm) |
 | `Ctrl+C` / `Ctrl+V` | copy and paste in front of the camera (also into another level) |

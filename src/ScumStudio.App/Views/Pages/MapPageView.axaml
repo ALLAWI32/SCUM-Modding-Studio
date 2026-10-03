@@ -28,6 +28,7 @@
                 <TextBlock Text="{Tr Map.Spawns}" />
               </StackPanel>
             </ToggleButton>
+            <ToggleButton Classes="ghost" Padding="8,4" x:Name="PartsButton" Content="{Tr Map.Parts}" IsChecked="{Binding PickParts}" ToolTip.Tip="{Tr Map.Parts.Tip}" IsVisible="{Binding HasView}" />
             <ToggleButton Classes="ghost" Padding="8,4" x:Name="SnapButton" Content="{Tr Map.Snap}" IsChecked="{Binding #Viewport3d.AutoSnap}" ToolTip.Tip="{Tr Map.Snap.Tip}" IsVisible="{Binding HasView}" />
             <Button Classes="ghost" Padding="8,4" x:Name="DroneButton" Content="{Tr Map.Drone}" Click="OnDroneClick" ToolTip.Tip="{Tr Map.Drone.Tip}" IsVisible="{Binding HasView}" />
             <Button Classes="ghost" Padding="8,4" Content="{Tr Map.FrameAll}" Click="OnFrameAllClick" ToolTip.Tip="{Tr Map.FrameAll.Tip}" IsVisible="{Binding HasScene}" />
@@ -255,7 +256,7 @@
         <Border Grid.Row="0" Classes="panel" x:Name="Viewport">
           <Panel x:Name="ViewportContent">
             <c:ViewportGrid Background="{DynamicResource ViewportBrush}" AxisXBrush="{DynamicResource AxisXBrush}" AxisYBrush="{DynamicResource AxisYBrush}" IsVisible="{Binding !HasView}" />
-            <c:LevelViewport x:Name="Viewport3d" Scene="{Binding PreparedScene}" SelectedId="{Binding SelectedActorId, Mode=TwoWay}" SelectedInstance="{Binding SelectedInstanceKey, Mode=TwoWay}" Backdrop="{Binding WorldBackdrop}" KeepCamera="{Binding IsWorldMode}" Quality="{Binding RenderQuality}" KindIds="{Binding KindSelectionIds}" KindInstances="{Binding KindSelectionInstances}" InstanceTransforms="{Binding InstanceTransforms}"
+            <c:LevelViewport x:Name="Viewport3d" Scene="{Binding PreparedScene}" PickParts="{Binding PickParts}" SelectedId="{Binding SelectedActorId, Mode=TwoWay}" SelectedInstance="{Binding SelectedInstanceKey, Mode=TwoWay}" Backdrop="{Binding WorldBackdrop}" KeepCamera="{Binding IsWorldMode}" Quality="{Binding RenderQuality}" KindIds="{Binding KindSelectionIds}" KindInstances="{Binding KindSelectionInstances}" InstanceTransforms="{Binding InstanceTransforms}"
                              HiddenIds="{Binding HiddenActorIds}" HiddenInstances="{Binding HiddenInstanceKeys}"
                              ActorTransforms="{Binding ActorTransforms}" Clones="{Binding Clones}"
                              SelectedRootWorld="{Binding SelectedRootWorld}" TranslationSnap="{Binding TranslationSnap}" RotationSnap="{Binding RotationSnap}"

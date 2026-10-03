@@ -3,6 +3,24 @@
 All notable changes are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [semantic versioning](https://semver.org/).
 
+## [0.2.1] - 2026-10-03
+
+### New in this release
+- **Vehicle paint**: a Paint panel next to the vehicle's 3D view. Any colour or a finish (gold, rose gold, chrome, bronze,
+  pink, candy red, metallic blue, pearl white, matte black), metal and clear coat; the model shows the paint with its
+  shine as you pick, through the game's own colour mask (bare plastic, rubber and rust stay as they are). `Ctrl+Z` steps
+  back. Apply paint records it; Export mod writes it into the client pak.
+- **Armour in 3D and painted**: fit the light or heavy armour kit on the vehicle's model. The armour material has no
+  paint of its own, so the mod adds it (colour, shine and a full colour mask); **Plain finish** swaps the scrap-metal print
+  for one even colour. **Paint every part the same** keeps body, doors and armour on one finish.
+- **Parts of buildings on the map**: the **Parts** button (or `Alt+click`) picks one part of a Blueprint building (a
+  hangar's wall, shelf or lamp) instead of the whole building, to move, copy or delete it alone; only that building
+  changes.
+
+### Fixes
+- The vehicle 3D view shows the whole stock vehicle (all doors and panels); armour plates sit on their sockets.
+- Changing a colour no longer moves the 3D camera back.
+- Bright gold panels no longer turn yellow in the preview.
 ## [0.2.0] - 2026-10-03
 
 ### New in this release

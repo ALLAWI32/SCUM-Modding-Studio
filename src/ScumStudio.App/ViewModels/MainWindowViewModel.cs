@@ -332,6 +332,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IDisposable
     [RelayCommand]
     private void Undo()
     {
+        // Paint being chosen steps back first; then the project journal.
+        if (CurrentPage is ModulePageViewModel { CanUndoPaint: true } module)
+        {
+            module.UndoPaint();
+            return;
+        }
+
         try
         {
             Services.Projects.Undo();

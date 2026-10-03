@@ -46,6 +46,43 @@ public sealed class MapInstanceTests
         Assert.DoesNotContain(InstanceKey.Of(rocks.SelectableId, "Rocks", 0), map.HiddenInstanceKeys);
     }
 
+    /// <summary>
+    /// Igor (Discord): "picking the hangar selects everything in it; let me edit what is fixed to the main model". In part
+    /// mode one part of a Blueprint (the lamp's bulb) is selected, moved and deleted alone; the lamp stays where it is.
+    /// </summary>
+    [Fact]
+    public async Task OnePartOfABlueprintIsMovedAndDeletedAlone()
+    {
+        using var ctx = AppTestContext.Create();
+        var game = ctx.Combine("game");
+        SyntheticLevels.WriteContent(game, withBlueprintPackage: true);
+        using var map = new MapPageViewModel(ctx.Services);
+        await ctx.Services.Workspace.OpenLooseAsync(game, ProgressSink.Null);
+        await map.LoadCompletion;
+        await ctx.Services.Projects.CreateAsync(ctx.Combine("projects"), "Parts");
+        await map.LoadLevelsAsync([SyntheticLevels.LevelPath]);
+
+        var lamp = map.AllActors.Single(a => a.Name == "BP_Lamp_C_1");
+        var key = InstanceKey.Of(lamp.SelectableId, "Bulb", InstanceKey.Part);
+        map.PickParts = true;
+        map.SelectedInstanceKey = key;
+        map.SelectedActorId = lamp.SelectableId;
+        Assert.True(map.HasSelectedInstance);
+        Assert.Contains(map.ActorProperties, r => r.Name == "Part" && r.Value.StartsWith("Bulb of BP_Lamp", StringComparison.Ordinal));
+
+        var world = map.SelectedRootWorld!.Value;
+        map.ApplyDraggedTransform(lamp.SelectableId, world with { Translation = new FVector(world.Translation.X + 120f, world.Translation.Y, world.Translation.Z) });
+        var move = Assert.IsType<SetTransformOp>(Assert.Single(ctx.Services.Projects.Current!.Journal.Applied).Op);
+        Assert.Equal("Bulb", move.Component);
+        Assert.Equal(world.Translation.X + 120f, map.InstanceTransforms[key].Translation.X, 0.5f);
+        Assert.Empty(map.ActorTransforms); // the lamp itself did not move
+
+        map.DeleteSelectedCommand.Execute(null);
+        var delete = Assert.IsType<SetTransformOp>(ctx.Services.Projects.Current!.Journal.Applied[^1].Op);
+        Assert.Equal(new FVector(0, 0, 0), delete.New.Scale); // gone: drawn and collided as nothing
+        Assert.DoesNotContain(lamp.SelectableId, map.HiddenActorIds);
+    }
+
     [Fact]
     public async Task CtrlASelectsEveryInstanceOfTheKindAndDeleteRemovesThemAll()
     {

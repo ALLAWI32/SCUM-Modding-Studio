@@ -306,7 +306,7 @@ public static class FarModels
     public static (int Inside, int Total) Count(UStaticMesh mesh, FTransform world, IReadOnlyList<CutBox> cuts)
     {
         ArgumentNullException.ThrowIfNull(mesh);
-        var lod = mesh.RenderData!.LODs.FirstOrDefault(l => !l.SkipLod && l.PositionVertexBuffer is not null && l.IndexBuffer is not null);
+        var lod = (mesh.RenderData?.LODs ?? []).FirstOrDefault(l => !l.SkipLod && l.PositionVertexBuffer is not null && l.IndexBuffer is not null);
         if (lod is null)
         {
             return (0, 0);
@@ -332,7 +332,7 @@ public static class FarModels
         ArgumentNullException.ThrowIfNull(mesh);
         ArgumentNullException.ThrowIfNull(files);
         int cut = 0, missing = 0;
-        foreach (var lod in mesh.RenderData!.LODs.Where(l => !l.SkipLod && l.PositionVertexBuffer is not null))
+        foreach (var lod in (mesh.RenderData?.LODs ?? []).Where(l => !l.SkipLod && l.PositionVertexBuffer is not null))
         {
             var inside = Inside(lod.PositionVertexBuffer!, world, cuts);
             var buffers = new[] { lod.IndexBuffer, lod.ReversedIndexBuffer, lod.DepthOnlyIndexBuffer, lod.ReversedDepthOnlyIndexBuffer }

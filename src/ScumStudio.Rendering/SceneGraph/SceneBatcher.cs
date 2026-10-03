@@ -185,7 +185,7 @@ public sealed class SceneBatcher
             var i = node.SlotIndex;
             var old = batch.Instances[i];
             var world = node.WorldTransform;
-            batch.Instances[i] = new InstanceData(world, node.Tint, old.PickCode, node.Selected ? InstanceFlags.Selected : InstanceFlags.None);
+            batch.Instances[i] = new InstanceData(world, node.Tint, old.PickCode, node.Selected ? InstanceFlags.Selected : InstanceFlags.None, node.Surface);
             if (world != old.Model)
             {
                 var bounds = Frustum.TransformBounds(mesh.Bounds, world);
@@ -314,7 +314,7 @@ public sealed class SceneBatcher
             {
                 var (world, node) = items[order[i]];
                 var flags = node.Selected ? InstanceFlags.Selected : InstanceFlags.None;
-                instances[i] = new InstanceData(world, node.Tint, node.SelectableId == 0 ? 0u : code, flags);
+                instances[i] = new InstanceData(world, node.Tint, node.SelectableId == 0 ? 0u : code, flags, node.Surface);
                 nodes[i] = node;
                 code++;
             }

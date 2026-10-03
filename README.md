@@ -6,7 +6,7 @@
 weapons, and export ready-to-play mod paks for single player and dedicated servers, without the Unreal editor.**
 
 [![build](https://github.com/ALLAWI32/SCUM-Modding-Studio/actions/workflows/build.yml/badge.svg)](https://github.com/ALLAWI32/SCUM-Modding-Studio/actions/workflows/build.yml)
-[![Downloads](https://img.shields.io/github/downloads/ALLAWI32/SCUM-Modding-Studio/total?label=downloads&color=E87B2F)](https://github.com/ALLAWI32/SCUM-Modding-Studio/releases)
+[![Downloads](https://img.shields.io/github/downloads/ALLAWI32/SCUM-Modding-Studio/total?label=downloads&color=E87B2F)](https://allawi32.github.io/SCUM-Modding-Studio/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-2E7D32)](LICENSE)
 ![.NET 8](https://img.shields.io/badge/.NET-8.0-512BD4)
 ![Unreal Engine 4.27](https://img.shields.io/badge/SCUM-UE%204.27-0E1128)

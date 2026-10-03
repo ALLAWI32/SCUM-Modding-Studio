@@ -23,7 +23,16 @@ public sealed record UiState
 
     /// <summary>Assets page shows tiles (true) or rows.</summary>
     public bool AssetsGridView { get; init; } = true;
+
+    /// <summary>The map shows the game's spawn places as pins.</summary>
+    public bool ShowSpawnPoints { get; init; } = true;
+
+    /// <summary>Where the map camera was last (the map reopens there), or null.</summary>
+    public MapView? MapView { get; init; }
 }
+
+/// <summary>A map camera: position in UE world space (cm) and the camera's yaw and pitch (degrees, as the viewport keeps them).</summary>
+public sealed record MapView(float X, float Y, float Z, float Yaw, float Pitch);
 
 /// <summary>Loads and saves <see cref="UiState"/>; failures fall back to defaults and are logged.</summary>
 public sealed class UiStateStore

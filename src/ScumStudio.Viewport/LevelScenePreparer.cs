@@ -361,6 +361,27 @@ public sealed class LevelScenePreparer
                     $"{actor.Name}/{component.Name}", documentIndex, actor, component, null));
             }
 
+            // Spawn places: a pin for an actor that only spawns (picks and moves as the actor), and pins for the loot points
+            // and vehicle boxes inside other actors (their own ids pick nothing: they move with their building).
+            if (SpawnMarkers.KindOf(actor) is { } actorKind)
+            {
+                var pin = SpawnMarkers.PinAt(actor.WorldTransform, actorKind);
+                placements.Add(new ScenePlacement(SpawnMarkers.MeshKey(actorKind), UeToGl.ModelMatrix(pin), pin, id, actor.Name, documentIndex, actor, null, null));
+            }
+            else
+            {
+                foreach (var component in actor.Components)
+                {
+                    if (component.IsSceneComponent && SpawnMarkers.KindOf(component) is { } kind)
+                    {
+                        var pin = SpawnMarkers.PinAt(component.WorldTransform, kind, inside: true);
+                        var pinId = ((uint)documentIndex << options.DocumentIdShift) | (uint)(component.ExportIndex + 1);
+                        placements.Add(new ScenePlacement(SpawnMarkers.MeshKey(kind), UeToGl.ModelMatrix(pin), pin, pinId,
+                            $"{actor.Name}/{component.Name}", documentIndex, actor, component, null));
+                    }
+                }
+            }
+
             if (!options.IncludeInstances)
             {
                 continue;
@@ -383,18 +404,7 @@ public sealed class LevelScenePreparer
 
         return placements;
 
-        // ponytail: name-based list of helper meshes; add entries when other volumes show up as solid boxes.
-        // Never drawn as solid geometry in game: environment-description volumes and the boxes that fake lit windows at
-        // night (their material only glows behind the glass). Drawn here they hid whole buildings as white blocks.
-        static bool IsHelperMesh(ActorRecord actor, ComponentRecord component) =>
-            component.ClassName == "EnvironmentDescriptionComponent"
-            // Bunker weather masks (TV_Base_*_WM, Apex_Facility_WM): rain/sky blocker shells round the whole base.
-            || actor.ClassName.EndsWith("_WM_C", StringComparison.OrdinalIgnoreCase)
-            || component.StaticMeshPath!.Contains("/Materials/Light/WindowLights/", StringComparison.OrdinalIgnoreCase)
-            // Editor-only shapes (the giant white EditorSphere of every volumetric fog Blueprint); the game never draws them.
-            || component.StaticMeshPath.StartsWith("/Engine/Editor", StringComparison.OrdinalIgnoreCase)
-            // The game's far-sea plane (14 km): the viewport draws its own sea.
-            || component.StaticMeshPath.Contains("/Water/DistantWater/", StringComparison.OrdinalIgnoreCase);
+        static bool IsHelperMesh(ActorRecord actor, ComponentRecord component) => HelperMeshes.IsHelper(actor, component);
 
         static bool Matches(ActorRecord actor, string text) =>
             actor.Name.Contains(text, StringComparison.OrdinalIgnoreCase)
@@ -520,6 +530,10 @@ public sealed class LevelScenePreparer
             {
                 (asset, reason) = (hit.Asset, hit.Reason);
                 cache.Meshes[meshPath] = hit with { Used = cache.Generation };
+            }
+            else if (SpawnMarkers.AssetFor(meshPath) is { } marker)
+            {
+                (asset, reason) = (marker, string.Empty);
             }
             else
             {

@@ -25,6 +25,7 @@ public sealed class AppHeadlessTests
         ["map"] = typeof(MapPageView),
         ["vehicles"] = typeof(ModulePageView),
         ["weapons"] = typeof(ModulePageView),
+        ["spawns"] = typeof(SpawnsPageView),
         ["assets"] = typeof(AssetsPageView),
         ["projects"] = typeof(ProjectsPageView),
         ["settings"] = typeof(SettingsPageView),
@@ -43,9 +44,9 @@ public sealed class AppHeadlessTests
         {
             var nav = HeadlessUi.FindNamed<ListBox>(window, "NavList");
             Assert.NotNull(nav);
-            Assert.Equal(6, nav!.ItemCount);
+            Assert.Equal(7, nav!.ItemCount);
             var texts = HeadlessUi.Find<TextBlock>(window).Select(t => t.Text).ToHashSet();
-            foreach (var title in new[] { "Map", "Vehicles", "Weapons", "Assets", "Projects", "Settings" })
+            foreach (var title in new[] { "Map", "Vehicles", "Weapons", "Spawns", "Assets", "Projects", "Settings" })
             {
                 Assert.Contains(title, texts);
             }
@@ -100,7 +101,7 @@ public sealed class AppHeadlessTests
 
             // Clicking a rail entry navigates too.
             var nav = HeadlessUi.FindNamed<ListBox>(window, "NavList")!;
-            nav.SelectedIndex = 3;
+            nav.SelectedIndex = 4;
             HeadlessUi.Pump();
             Assert.IsType<AssetsPageView>(host.CurrentView);
             Assert.Contains(HeadlessUi.Find<TextBlock>(window), t => t.Text == "No assets to show yet");

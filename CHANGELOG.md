@@ -3,6 +3,28 @@
 All notable changes are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [semantic versioning](https://semver.org/).
 
+## [0.2.0] - 2026-10-03
+
+### New in this release
+- **Updates inside the app**: the app checks GitHub when it starts; a newer release shows an **Update** button with the
+  release notes. One click downloads it, puts it in place of the running copy and restarts; the new version then shows
+  what changed. Optional, and your projects and settings stay.
+- **Spawns page**: vehicles, planes and boats (fuel and battery at spawn with Empty / Half / Full, the chance each part is
+  there, part condition, the server's limit per vehicle); zombies and NPCs (all 73 threat zones: spawn chance, first
+  spawn, check interval, cooldown, distance, spread, group weights); server settings (zombie and horde multipliers,
+  sentries, drones, dropships, animals) written straight into `ServerSettings.ini` with a backup.
+- **Spawn places on the map**: loot spawners and areas, sentry spawners, bunker creature points, car-shop spots and drop
+  zones as coloured pins that move, copy and delete like objects; a Spawns switch in the map header hides them.
+- **Far view follows your edits**: deleted or moved objects are cut out of the island's far-view models (towns,
+  outposts, bridges) and the outposts' HLOD proxies, so they no longer show from far away.
+- **Faster map**: the whole-island terrain is cached (0.6 s instead of 15-17 s at every start) and the map reopens where
+  the camera was.
+
+### Fixes
+- Export no longer fails with "Implausible Actors count" on 15 levels whose actor list keeps empty slots for actors the
+  game's cook removed (stone mines, Biomes, Threat Zones, the airport, Kotoriba and others).
+- Fake lit-window boxes no longer count as part of a building.
+
 ## [0.1.0] - 2026-10-02
 
 First public release: **SCUM Modding Studio**.

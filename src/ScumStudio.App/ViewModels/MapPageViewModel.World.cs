@@ -1,6 +1,7 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.Extensions.Logging;
+using ScumStudio.App.Services;
 using ScumStudio.Core.Mathematics;
 using ScumStudio.Level.World;
 using ScumStudio.Viewport;
@@ -42,8 +43,29 @@ public sealed partial class MapPageViewModel
         try
         {
             var progress = new Progress<(int Done, int Total, string Item)>(p => WorldStatus = Localization.Loc.F("Map.World.Terrain", p.Done, p.Total));
-            WorldBackdrop = await Task.Run(() => new LevelScenePreparer(catalog, _services.Logger).PrepareTerrain(
-                tiles, new LevelSceneOptions { LandscapeStep = 16, TerrainTextureSize = 128 }, progress)).ConfigureAwait(true);
+            var options = new LevelSceneOptions { LandscapeStep = 16, TerrainTextureSize = 128 };
+            WorldBackdrop = await Task.Run(() =>
+            {
+                // Built once per game version and kept: reading 400 landscape tiles took 15-17 s at every start.
+                var cache = TerrainCache.PathFor(Path.Combine(_services.DataDirectory, "cache"), catalog, tiles, options);
+                if (TerrainCache.TryLoad(cache) is { } kept)
+                {
+                    _services.Logger.LogInformation("Island terrain read from the cache in {Ms:0} ms.", kept.Elapsed.TotalMilliseconds);
+                    return kept;
+                }
+
+                var built = new LevelScenePreparer(catalog, _services.Logger).PrepareTerrain(tiles, options, progress);
+                try
+                {
+                    TerrainCache.Save(cache, built);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    _services.Logger.LogWarning("Island terrain not cached: {Message}", ex.Message);
+                }
+
+                return built;
+            }).ConfigureAwait(true);
             WorldStatus = Localization.Loc.T("Map.World.Ready");
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
@@ -62,6 +84,29 @@ public sealed partial class MapPageViewModel
         if (IsWorldMode && World is { } world)
         {
             StreamAround(world, cameraUe);
+        }
+    }
+
+    /// <summary>The game's spawn places are shown as coloured pins (kept for the next start).</summary>
+    [ObservableProperty]
+    private bool _showSpawns;
+
+    partial void OnShowSpawnsChanged(bool value)
+    {
+        _services.UiState.Update(u => u with { ShowSpawnPoints = value });
+        RefreshHiddenIds();
+    }
+
+    /// <summary>Where the camera was when the map was last used (owner: reopen there, not far out over the island), or null.</summary>
+    public MapView? SavedView => _services.UiState.Current.MapView;
+
+    /// <summary>Keeps the camera for the next start (the view calls this every few seconds while it moves).</summary>
+    public void RememberView(FVector at, float yaw, float pitch)
+    {
+        var view = new MapView(MathF.Round(at.X), MathF.Round(at.Y), MathF.Round(at.Z), MathF.Round(yaw, 1), MathF.Round(pitch, 1));
+        if (view != SavedView)
+        {
+            _services.UiState.Update(u => u with { MapView = view });
         }
     }
 

@@ -284,6 +284,26 @@ public sealed partial class LevelViewport : OpenGlControlBase
     /// <summary>Camera position in UE world space (cm).</summary>
     public FVector CameraUe => UeToGl.ToUePoint(_camera.Position);
 
+    /// <summary>
+    /// A view (UE cm, camera yaw/pitch) used instead of framing the island when it first shows, then cleared: the map
+    /// reopens where the user left it.
+    /// </summary>
+    public (FVector Location, float Yaw, float Pitch)? InitialView { get; set; }
+
+    private bool TakeInitialView()
+    {
+        if (InitialView is not { } view)
+        {
+            return false;
+        }
+
+        InitialView = null;
+        _camera.Position = UeToGl.Point(view.Location);
+        _camera.Yaw = view.Yaw;
+        _camera.Pitch = view.Pitch;
+        return true;
+    }
+
     /// <inheritdoc cref="SelectedInstanceProperty" />
     public InstanceKey? SelectedInstance
     {
@@ -728,7 +748,7 @@ public sealed partial class LevelViewport : OpenGlControlBase
             _backdropHiddenFor = null;
             var sameIsland = ReferenceEquals(Backdrop, _framedBackdrop);
             _framedBackdrop = Backdrop;
-            if (_backdrop is { } b && _level is null && !sameIsland && !b.TerrainBounds.IsEmpty)
+            if (_backdrop is { } b && !sameIsland && !b.TerrainBounds.IsEmpty && !TakeInitialView() && _level is null)
             {
                 FrameBounds(b.TerrainBounds, yaw: -90f, pitch: -55f, resetSpeed: true);
             }

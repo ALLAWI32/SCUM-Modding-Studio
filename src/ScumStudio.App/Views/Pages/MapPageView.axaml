@@ -22,6 +22,12 @@
             <ComboBox x:Name="QualityBox" ItemsSource="{Binding RenderQualities}" SelectedItem="{Binding RenderQuality}" MinWidth="118" VerticalAlignment="Center"
                       IsVisible="{Binding HasView}" ToolTip.Tip="{Tr Map.Quality.Tip}" />
             <Border Classes="vsep" IsVisible="{Binding HasView}" />
+            <ToggleButton Classes="ghost" Padding="8,4" x:Name="SpawnsButton" IsChecked="{Binding ShowSpawns}" IsVisible="{Binding HasView}" ToolTip.Tip="{Tr Map.Spawns.Tip}">
+              <StackPanel Orientation="Horizontal" Spacing="5">
+                <c:GlyphIcon Kind="Icon.Pin" IconSize="13" />
+                <TextBlock Text="{Tr Map.Spawns}" />
+              </StackPanel>
+            </ToggleButton>
             <ToggleButton Classes="ghost" Padding="8,4" x:Name="SnapButton" Content="{Tr Map.Snap}" IsChecked="{Binding #Viewport3d.AutoSnap}" ToolTip.Tip="{Tr Map.Snap.Tip}" IsVisible="{Binding HasView}" />
             <Button Classes="ghost" Padding="8,4" x:Name="DroneButton" Content="{Tr Map.Drone}" Click="OnDroneClick" ToolTip.Tip="{Tr Map.Drone.Tip}" IsVisible="{Binding HasView}" />
             <Button Classes="ghost" Padding="8,4" Content="{Tr Map.FrameAll}" Click="OnFrameAllClick" ToolTip.Tip="{Tr Map.FrameAll.Tip}" IsVisible="{Binding HasScene}" />

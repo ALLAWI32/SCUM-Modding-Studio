@@ -1,0 +1,239 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:ScumStudio.App.ViewModels"
+             xmlns:c="using:ScumStudio.App.Controls"
+             x:Class="ScumStudio.App.Views.Pages.SpawnsPageView"
+             x:DataType="vm:SpawnsPageViewModel">
+  <UserControl.Styles>
+    <Style Selector="TextBlock.value">
+      <Setter Property="FontFamily" Value="{DynamicResource MonoFontFamily}" />
+      <Setter Property="HorizontalAlignment" Value="Right" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+      <Setter Property="Foreground" Value="{DynamicResource TextMutedBrush}" />
+    </Style>
+    <Style Selector="TextBlock.value.pending">
+      <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style Selector="Border.spawnRow Slider">
+      <Setter Property="Height" Value="34" />
+      <Setter Property="MinHeight" Value="0" />
+      <Setter Property="Margin" Value="0,-16,0,0" />
+    </Style>
+    <Style Selector="Border.spawnRow">
+      <Setter Property="Padding" Value="10,4" />
+      <Setter Property="CornerRadius" Value="{DynamicResource SmallCornerRadius}" />
+    </Style>
+    <Style Selector="Border.spawnRow:pointerover">
+      <Setter Property="Background" Value="{DynamicResource Surface2Brush}" />
+    </Style>
+    <Style Selector="Border.spawnRow.pending">
+      <Setter Property="Background" Value="{DynamicResource AccentSoftBrush}" />
+    </Style>
+  </UserControl.Styles>
+
+  <UserControl.DataTemplates>
+    <!-- One slider over stored values. -->
+    <DataTemplate DataType="vm:SpawnSliderViewModel">
+      <Border Classes="spawnRow" Classes.pending="{Binding IsPending}" ToolTip.Tip="{Binding Tip}">
+        <Grid ColumnDefinitions="190,*,110" ColumnSpacing="14">
+          <TextBlock Text="{Binding Label}" VerticalAlignment="Center" TextWrapping="Wrap" />
+          <Slider Grid.Column="1" Minimum="{Binding Minimum}" Maximum="{Binding Maximum}" Value="{Binding Value}" ToolTip.Tip="{Binding Tip}"
+                  SmallChange="{Binding Step}" LargeChange="{Binding Step}" TickFrequency="{Binding Step}" IsSnapToTickEnabled="True"
+                  VerticalAlignment="Center" />
+          <TextBlock Grid.Column="2" Classes="value" Classes.pending="{Binding IsPending}" Text="{Binding ValueText}" />
+        </Grid>
+      </Border>
+    </DataTemplate>
+
+    <!-- From / to pair, optionally with Empty / Half / Full. -->
+    <DataTemplate DataType="vm:SpawnRangeViewModel">
+      <StackPanel Spacing="2" Margin="0,4" ToolTip.Tip="{Binding Tip}">
+        <Grid ColumnDefinitions="*,Auto" Margin="10,2,10,0">
+          <TextBlock Text="{Binding Label}" FontWeight="SemiBold" VerticalAlignment="Center" />
+          <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4" IsVisible="{Binding HasQuickButtons}">
+            <Button Classes="ghost small" Content="{Tr Spawns.Empty}" Command="{Binding SetBothCommand}" CommandParameter="0" ToolTip.Tip="{Tr Spawns.Empty.Tip}" />
+            <Button Classes="ghost small" Content="{Tr Spawns.Half}" Command="{Binding SetBothCommand}" CommandParameter="0.5" ToolTip.Tip="{Tr Spawns.Half.Tip}" />
+            <Button Classes="ghost small" Content="{Tr Spawns.Full}" Command="{Binding SetBothCommand}" CommandParameter="1" ToolTip.Tip="{Tr Spawns.Full.Tip}" />
+          </StackPanel>
+        </Grid>
+        <ContentControl Content="{Binding From}" Margin="12,0,0,0" />
+        <ContentControl Content="{Binding To}" Margin="12,0,0,0" />
+      </StackPanel>
+    </DataTemplate>
+
+    <!-- A ServerSettings.ini value: switch or slider. -->
+    <DataTemplate DataType="vm:ServerSettingViewModel">
+      <Border Classes="spawnRow" Classes.pending="{Binding IsPending}" ToolTip.Tip="{Binding Tip}">
+        <Panel>
+          <Grid ColumnDefinitions="*,Auto" IsVisible="{Binding IsToggle}">
+            <TextBlock Text="{Binding Label}" VerticalAlignment="Center" TextWrapping="Wrap" />
+            <ToggleSwitch Grid.Column="1" IsChecked="{Binding Flag}" OnContent="" OffContent="" VerticalAlignment="Center" ToolTip.Tip="{Binding Tip}" />
+          </Grid>
+          <Grid ColumnDefinitions="190,*,110" ColumnSpacing="14" IsVisible="{Binding IsSlider}">
+            <TextBlock Text="{Binding Label}" VerticalAlignment="Center" TextWrapping="Wrap" />
+            <Slider Grid.Column="1" Minimum="{Binding Minimum}" Maximum="{Binding Maximum}" Value="{Binding Value}" ToolTip.Tip="{Binding Tip}"
+                    SmallChange="{Binding Step}" LargeChange="{Binding Step}" TickFrequency="{Binding Step}" IsSnapToTickEnabled="True"
+                    VerticalAlignment="Center" />
+            <TextBlock Grid.Column="2" Classes="value" Classes.pending="{Binding IsPending}" Text="{Binding ValueText}" />
+          </Grid>
+        </Panel>
+      </Border>
+    </DataTemplate>
+
+    <!-- A card of rows. -->
+    <DataTemplate DataType="vm:SpawnCard">
+      <Border Classes="card" Margin="0,0,0,12">
+        <StackPanel Spacing="8">
+          <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12">
+            <Border Classes="iconTile" Width="36" Height="36">
+              <c:GlyphIcon Kind="{Binding IconKey}" IconSize="18" HorizontalAlignment="Center" VerticalAlignment="Center" />
+            </Border>
+            <StackPanel Grid.Column="1" VerticalAlignment="Center">
+              <TextBlock Text="{Binding Title}" Classes="h2" />
+              <TextBlock Text="{Binding Caption}" Classes="caption wrap" IsVisible="{Binding HasCaption}" />
+            </StackPanel>
+          </Grid>
+          <ItemsControl ItemsSource="{Binding Rows}" />
+        </StackPanel>
+      </Border>
+    </DataTemplate>
+  </UserControl.DataTemplates>
+
+  <DockPanel>
+
+    <!-- ===== Header ===== -->
+    <Border DockPanel.Dock="Top" Classes="pageHeader">
+      <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="14">
+        <Border Grid.Column="0" Classes="pageGlyph"><c:GlyphIcon Kind="{Binding IconKey}" IconSize="22" /></Border>
+        <StackPanel Grid.Column="1" Spacing="2" VerticalAlignment="Center">
+          <TextBlock Text="{Binding Title}" Classes="pageTitle" />
+          <TextBlock Text="{Binding Subtitle}" Classes="muted" TextTrimming="CharacterEllipsis" />
+        </StackPanel>
+        <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+          <Border Classes="segmented">
+            <StackPanel Orientation="Horizontal">
+              <ToggleButton x:Name="VehiclesTab" IsChecked="{Binding IsVehiclesTab}" ToolTip.Tip="{Tr Spawns.Tab.Vehicles.Tip}">
+                <StackPanel Orientation="Horizontal" Spacing="5">
+                  <c:GlyphIcon Kind="Icon.Vehicle" IconSize="13" />
+                  <TextBlock Text="{Tr Spawns.Tab.Vehicles}" />
+                </StackPanel>
+              </ToggleButton>
+              <ToggleButton x:Name="ZombiesTab" IsChecked="{Binding IsZombiesTab}" ToolTip.Tip="{Tr Spawns.Tab.Zombies.Tip}">
+                <StackPanel Orientation="Horizontal" Spacing="5">
+                  <c:GlyphIcon Kind="Icon.Warning" IconSize="13" />
+                  <TextBlock Text="{Tr Spawns.Tab.Zombies}" />
+                </StackPanel>
+              </ToggleButton>
+              <ToggleButton x:Name="ServerTab" IsChecked="{Binding IsServerTab}" ToolTip.Tip="{Tr Spawns.Tab.Server.Tip}">
+                <StackPanel Orientation="Horizontal" Spacing="5">
+                  <c:GlyphIcon Kind="Icon.Server" IconSize="13" />
+                  <TextBlock Text="{Tr Spawns.Tab.Server}" />
+                </StackPanel>
+              </ToggleButton>
+            </StackPanel>
+          </Border>
+          <TextBlock Text="{Binding PendingText}" IsVisible="{Binding HasPending}" Classes="caption" VerticalAlignment="Center" Margin="6,0,0,0" />
+          <Button Classes="ghost" Content="{Tr Spawns.Discard}" Command="{Binding DiscardCommand}" ToolTip.Tip="{Tr Spawns.Discard.Tip}" />
+          <Button x:Name="ApplyButton" Classes="accent" Command="{Binding ApplyCommand}" ToolTip.Tip="{Tr Spawns.Apply.Tip}">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <c:GlyphIcon Kind="Icon.Check" IconSize="14" />
+              <TextBlock Text="{Tr Spawns.Apply}" />
+            </StackPanel>
+          </Button>
+        </StackPanel>
+      </Grid>
+    </Border>
+
+    <!-- ===== Body ===== -->
+    <Panel Margin="24,0,24,20">
+
+      <!-- No game files yet (vehicles and zones come from them). -->
+      <Border Classes="emptyState">
+        <Border.IsVisible>
+          <MultiBinding Converter="{x:Static BoolConverters.And}">
+            <Binding Path="ShowList" />
+            <Binding Path="!HasCatalog" />
+          </MultiBinding>
+        </Border.IsVisible>
+        <StackPanel Spacing="12">
+          <Border Classes="iconTile" HorizontalAlignment="Center">
+            <c:GlyphIcon Kind="Icon.Pin" IconSize="20" HorizontalAlignment="Center" VerticalAlignment="Center" />
+          </Border>
+          <TextBlock Text="{Tr Module.Empty}" Classes="h2" HorizontalAlignment="Center" />
+          <TextBlock Classes="muted wrap" TextAlignment="Center" MaxWidth="520" Text="{Tr Spawns.Empty.Body}" />
+          <Button Classes="accent" HorizontalAlignment="Center" Content="{Tr Common.OpenSetup}" Command="{Binding OpenSetupCommand}" ToolTip.Tip="{Tr Common.OpenSetup.Tip}" />
+        </StackPanel>
+      </Border>
+
+      <!-- Vehicles / zones: list and detail. -->
+      <Grid ColumnDefinitions="320,*" ColumnSpacing="12">
+        <Grid.IsVisible>
+          <MultiBinding Converter="{x:Static BoolConverters.And}">
+            <Binding Path="ShowList" />
+            <Binding Path="HasCatalog" />
+          </MultiBinding>
+        </Grid.IsVisible>
+        <Border Grid.Column="0" Classes="panel">
+          <DockPanel>
+            <Panel DockPanel.Dock="Top" Margin="8,8,8,4">
+              <TextBox x:Name="SpawnSearch" Classes="search" Text="{Binding FilterText}" Watermark="{Tr Module.Filter}" ToolTip.Tip="{Tr Spawns.Filter.Tip}" />
+              <c:GlyphIcon Kind="Icon.Search" IconSize="15" Margin="11,0,0,0" IsHitTestVisible="False"
+                           HorizontalAlignment="Left" VerticalAlignment="Center" Foreground="{DynamicResource TextMutedBrush}" />
+            </Panel>
+            <ListBox x:Name="SpawnList" Classes="plain" ItemsSource="{Binding Entries}" SelectedItem="{Binding SelectedEntry}" Margin="4">
+              <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="vm:SpawnEntry">
+                  <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10" ToolTip.Tip="{Binding PackagePath}">
+                    <Border Width="30" Height="30" CornerRadius="{DynamicResource SmallCornerRadius}" Background="{DynamicResource Surface2Brush}">
+                      <c:GlyphIcon Kind="{Binding IconKey}" IconSize="15" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <StackPanel Grid.Column="1" Spacing="1" VerticalAlignment="Center">
+                      <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                      <TextBlock Text="{Binding Group}" Classes="caption" TextTrimming="CharacterEllipsis" />
+                    </StackPanel>
+                  </Grid>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+          </DockPanel>
+        </Border>
+
+        <Border Grid.Column="1" Classes="panel">
+          <Panel>
+            <ProgressBar IsIndeterminate="True" IsVisible="{Binding IsLoading}" VerticalAlignment="Top" Margin="12" />
+            <ScrollViewer HorizontalScrollBarVisibility="Disabled" IsVisible="{Binding HasSelection}">
+              <StackPanel Margin="16,14,16,16" Spacing="4" MaxWidth="900" HorizontalAlignment="Left">
+                <TextBlock Text="{Binding SelectedEntry.Name, FallbackValue=''}" Classes="h1" FontSize="20" />
+                <TextBlock Text="{Binding SelectedEntry.Group, FallbackValue=''}" Classes="muted" Margin="0,0,0,10" />
+                <ItemsControl x:Name="DetailCards" ItemsSource="{Binding DetailCards}" />
+                <TextBlock Classes="caption wrap" Text="{Tr Spawns.ExportNote}" Margin="2,4,0,0" />
+              </StackPanel>
+            </ScrollViewer>
+          </Panel>
+        </Border>
+      </Grid>
+
+      <!-- Server settings. -->
+      <ScrollViewer HorizontalScrollBarVisibility="Disabled" IsVisible="{Binding IsServerTab}">
+        <StackPanel Spacing="10" MaxWidth="960" HorizontalAlignment="Left">
+          <Border Classes="chip" HorizontalAlignment="Left" ToolTip.Tip="{Tr Spawns.ServerFile.Tip}">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <c:GlyphIcon Kind="Icon.File" IconSize="13" VerticalAlignment="Center" />
+              <TextBlock Text="{Binding ServerFileText}" TextTrimming="PrefixCharacterEllipsis" MaxWidth="760" />
+            </StackPanel>
+          </Border>
+          <TextBlock Classes="caption wrap" Text="{Tr Spawns.ServerNote}" IsVisible="{Binding HasServerFile}" />
+          <Border Classes="emptyState" IsVisible="{Binding !HasServerFile}">
+            <StackPanel Spacing="12">
+              <TextBlock Text="{Tr Spawns.NoServer}" Classes="h2" HorizontalAlignment="Center" />
+              <TextBlock Classes="muted wrap" TextAlignment="Center" MaxWidth="560" Text="{Tr Spawns.NoServer.Body}" />
+              <Button Classes="accent" HorizontalAlignment="Center" Content="{Tr Common.OpenSetup}" Command="{Binding OpenSetupCommand}" ToolTip.Tip="{Tr Common.OpenSetup.Tip}" />
+            </StackPanel>
+          </Border>
+          <ItemsControl x:Name="ServerCards" ItemsSource="{Binding ServerCards}" />
+        </StackPanel>
+      </ScrollViewer>
+    </Panel>
+  </DockPanel>
+</UserControl>

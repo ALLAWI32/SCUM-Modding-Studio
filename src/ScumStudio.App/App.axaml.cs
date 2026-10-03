@@ -33,7 +33,7 @@ public partial class App : Application
             AccentPalette.Apply(this, services.UiState.Current.Accent);
             Loc.Instance.Language = services.Settings.Load().Ui.Language;
 
-            var viewModel = new MainWindowViewModel(services);
+            var viewModel = new MainWindowViewModel(services) { UpdateCheck = Updater.CheckAsync, RequestShutdown = () => desktop.Shutdown() };
             var window = new MainWindow { DataContext = viewModel };
             services.Dialogs = new AvaloniaDialogService(() => window);
             var startup = StartupOptions.Parse(desktop.Args ?? []);

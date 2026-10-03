@@ -87,6 +87,22 @@ public sealed class LevelPackageEditorTests
     }
 
     [Fact]
+    public void ALevelWithMoreNullSlotsThanExportsStillExports()
+    {
+        // The cook keeps a null slot for each editor-only actor it strips (B_3_Stone_Mine_01: 53 slots, 29 exports).
+        var p = MinimalLevel();
+        var actor = 3;
+        p.SetPayload(2, p.Properties(native: w => LevelTail(w, [0, 0, 0, actor, 0, 0, 0, 0, 0])));
+        var built = p.Build();
+        var package = CookedPackage.Parse(built.UAsset, built.UExp);
+        Assert.True(package.Exports.Count < 9);
+
+        var (bytes, report) = LevelPackageEditor.Apply(package, new LevelEditRequest { DeleteActors = ["Actor_1"] });
+        Assert.Equal(["Actor_1"], report.RemovedActors);
+        Assert.All(LevelPackageEditor.ReadActorList(CookedPackage.Parse(bytes.UAsset, bytes.UExp)), a => Assert.Null(a.Name));
+    }
+
+    [Fact]
     public void RemovesActorsFromTheLevelActorListOnly()
     {
         var package = Synthetic();

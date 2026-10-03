@@ -102,6 +102,9 @@ public sealed record ExportResult
     /// <summary>Bent, longer or repeated pieces written with collision that passed the check.</summary>
     public int SolidPieces { get; init; }
 
+    /// <summary>Far models (seen from far away) that were cut or hidden because objects in them were removed or moved.</summary>
+    public IReadOnlyList<string> FarModels { get; init; } = [];
+
     /// <summary>Total actors removed across levels.</summary>
     public int RemovedActorCount => Levels.Sum(l => l.Report.RemovedActors.Count);
 
@@ -212,6 +215,8 @@ public sealed class ProjectExporter
         var packageCache = new Dictionary<string, CookedPackage?>(StringComparer.OrdinalIgnoreCase);
         var documentCache = new Dictionary<string, LevelDocument?>(StringComparer.OrdinalIgnoreCase);
         var placed = new List<(string Level, string File, HashSet<string> Actors)>();
+        var cuts = new List<CutBox>();
+        var proxies = new List<FarModels.Candidate>();
         foreach (var level in state.ChangedLevels)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -276,6 +281,10 @@ public sealed class ProjectExporter
             }
 
             var (bytes, report) = LevelPackageEditor.Apply(package, request);
+            if (role == ProjectSourceRole.Client && document is not null)
+            {
+                CollectFarCuts(document, request, bendMeshes, cuts, proxies);
+            }
 
             // The collision check: every spline piece written carries its boxes and its mesh's body guid.
             var pieces = request.StaticMeshAdds.Where(a => a.Spline is not null).Select(a => a.NewName).ToList();
@@ -310,6 +319,13 @@ public sealed class ProjectExporter
         }
 
         GrowStreamingAreas(staging, placed, bendMeshes, warnings, cancellationToken);
+        IReadOnlyList<string> farModels = [];
+        if (cuts.Count > 0)
+        {
+            progress?.Report("Cutting removed objects out of the far models");
+            farModels = FarModels.Apply(catalog, cuts, proxies, staging, warnings);
+            _logger.LogInformation("Far models: {Count} changed.", farModels.Count);
+        }
 
         // Vehicles and items: clones (renamed families) and stored-value edits, plus the merged AssetRegistry.bin.
         var assets = new List<ExportedAsset>();
@@ -393,10 +409,44 @@ public sealed class ProjectExporter
             AssetValues = assetValues,
             Warnings = warnings,
             SolidPieces = solidPieces,
+            FarModels = farModels,
         };
         var reportPath = Path.Combine(roleDirectory, ReportFileName);
         await File.WriteAllTextAsync(reportPath, BuildReport(result, catalog), new UTF8Encoding(false), cancellationToken).ConfigureAwait(false);
         return result with { ReportPath = reportPath };
+    }
+
+    /// <summary>
+    /// The places of what <paramref name="request"/> removes or moves away (deleted and moved actors as they stood, deleted and
+    /// moved instances) and the level's HLOD proxies, for <see cref="FarModels"/>.
+    /// </summary>
+    private static void CollectFarCuts(LevelDocument document, LevelEditRequest request, Func<string, BendMesh?> meshes, List<CutBox> cuts, List<FarModels.Candidate> proxies)
+    {
+        var gone = new HashSet<string>(request.DeleteActors.Concat(request.Transforms.Select(t => t.Actor)), StringComparer.OrdinalIgnoreCase);
+        foreach (var actor in document.Actors)
+        {
+            if (gone.Contains(actor.Name))
+            {
+                cuts.AddRange(FarModels.BoxesOf(actor, meshes));
+            }
+            else if (actor.ClassName == "LODActor")
+            {
+                foreach (var c in actor.Components.Where(c => c.StaticMeshPath is not null))
+                {
+                    proxies.Add(new FarModels.Candidate($"{document.Name} {actor.Name} (HLOD)", c.WorldTransform, [c.StaticMeshPath!], null));
+                }
+            }
+        }
+
+        foreach (var patch in request.Instances)
+        {
+            if (document.Actors.FirstOrDefault(a => a.Name.Equals(patch.Actor, StringComparison.OrdinalIgnoreCase))?.FindComponent(patch.Component) is { } c
+                && patch.Index >= 0 && patch.Index < c.Instances.Count
+                && FarModels.BoxOf(c, c.Instances[patch.Index], meshes) is { } box)
+            {
+                cuts.Add(box);
+            }
+        }
     }
 
     /// <summary>
@@ -867,6 +917,17 @@ public sealed class ProjectExporter
         sb.Append("- Pak: ").AppendLine(result.PakPath ?? "(not written)");
         sb.Append("- Signature: ").AppendLine(result.SigPath ?? "(none — copy a stock .sig next to the pak)");
         sb.Append("- Staging: ").AppendLine(result.StagingDirectory);
+        if (result.FarModels.Count > 0)
+        {
+            sb.AppendLine();
+            sb.AppendLine("## Far models");
+            sb.AppendLine();
+            foreach (var line in result.FarModels)
+            {
+                sb.Append("- ").AppendLine(line);
+            }
+        }
+
         sb.AppendLine();
         sb.AppendLine("## Levels");
         foreach (var level in result.Levels)

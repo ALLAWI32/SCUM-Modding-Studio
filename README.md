@@ -25,8 +25,9 @@ undo anything, even after a restart, and rebuild the mod after a game update.
 
 What you can do with it: a **SCUM map editor** (move, copy, delete and add objects, buildings, trees and rocks), a
 **SCUM bridge and road builder** (bend, lengthen, weld and repeat pieces with working collision), a **SCUM vehicle and
-weapon editor** (damage, rate of fire, range, mass, handling, in-game names, clones with their own names), an **asset
-browser** (thumbnails, PNG and glTF export) and a **pak mod exporter** for single player and servers.
+weapon editor** (damage, rate of fire, range, mass, handling, in-game names, clones with their own names), a **SCUM
+spawn editor** (vehicle fuel and parts at spawn, zombie zones, sentries, animals, the game's spawn places on the map), an
+**asset browser** (thumbnails, PNG and glTF export) and a **pak mod exporter** for single player and servers.
 
 ## Contents
 
@@ -57,6 +58,8 @@ browser** (thumbnails, PNG and glTF export) and a **pak mod exporter** for singl
      for your Windows account ([details](#the-aes-key)). If that fails, paste the key in the box.
    - **Save and connect**.
 3. Everything is yours from there: each person points the app at their own game, nothing is shared or uploaded.
+4. **Updates come by themselves** (from 0.2.0 on): when a new version is out, an **Update** button appears at the top;
+   one click installs it and restarts, then the app shows what is new.
 
 You need Windows 10 or 11 (x64), SCUM installed, and a graphics card with OpenGL 4.3 (any card from the last ten years).
 
@@ -66,6 +69,9 @@ You need Windows 10 or 11 (x64), SCUM installed, and a graphics card with OpenGL
 |---|---|
 | **3D map editor** | Fly over the whole island (levels stream in around the camera) or open one cell or sublevel. Click any object, move and turn it with the mouse, snap it to the ground or to other pieces, delete it, copy it anywhere (`Ctrl+C` / `Ctrl+V`), select every object of the same kind (`Ctrl+A`), or pick single trees and rocks. |
 | **Bridges, roads and walls** | The **Shape** menu bends a wall, bridge or road piece into a curve or an S, makes it longer, wider, taller, raises a ramp or a hump, lengthens a bridge pylon's legs under the water, and welds an end onto another piece. Pieces made much longer repeat copy after copy. Bent pieces get **real collision** built from the mesh (no invisible walls, no holes), on the client and the server. |
+| **Spawns** | Vehicles, planes and boats: the fuel and battery they spawn with (Empty, Half, Full or any range), the chance each part is there, part condition and how many the server allows. Zombies and NPCs: all 73 threat zones (spawn chance, first spawn, cooldown, distance, which groups). Server: zombie and horde amounts, sentries on or off, drones, animals, written into `ServerSettings.ini`. |
+| **Spawn places on the map** | Loot spawners and areas, sentry spawners, bunker creature points, car-shop spots and drop zones show as coloured pins: move, copy or delete them like any object. |
+| **Far view follows your edits** | Delete or move a building and it is cut out of the island's far-view models and the outposts' HLODs too, so it no longer shows from far away. |
 | **Objects browser** | Every placeable object of the game in categories (buildings, furniture, nature, vehicles, items …) with thumbnails, plus building sets: all walls, all roads, all bridges. Place one in front of the camera with a click. |
 | **Vehicles and weapons** | Change the stored values (damage, rate of fire, range, handling, mass, capacity, names …) or clone a vehicle or item under a new name, ready to spawn with `#SpawnItem` / `#SpawnVehicle`. |
 | **Assets** | Browse all 110,000 game packages, preview meshes and textures, export textures as PNG and meshes as glTF (Blender), dump whole categories of game files. |
@@ -102,6 +108,14 @@ You need Windows 10 or 11 (x64), SCUM installed, and a graphics card with OpenGL
 
 <img src="docs/images/app-vehicles.png" alt="Vehicles page with the WolfsWagen's push force, wheel radius and damping values" width="900" />
 
+**Spawns: a Rager's fuel set to a full tank, its battery and parts, and the server's limit for Ragers**
+
+<img src="docs/images/app-spawns-vehicles.png" alt="Spawns page: the Rager's world spawn preset with fuel set to 100 percent, battery, parts and server limits" width="900" />
+
+**Spawns: a high-threat zone's timing, distance and groups**
+
+<img src="docs/images/app-spawns-zombies.png" alt="Spawns page: the Military TV Bunker threat zone with spawn delays, check interval and cooldown sliders" width="900" />
+
 **Settings: language, colours, folders, key and AI control**
 
 <img src="docs/images/app-settings.png" alt="Settings page with 16 accent colours, a colour picker and the language list" width="900" />
@@ -133,7 +147,8 @@ included in this repository.</sub>
 
 ### Top bar
 
-- **Map, Vehicles, Weapons, Assets, Projects, Settings**: the pages.
+- **Map, Vehicles, Weapons, Spawns, Assets, Projects, Settings**: the pages.
+- **Update x.y.z** (only when a new version is out): the release notes and **Install and restart**.
 - **Search** (`Ctrl+K`): searches the current page; elsewhere it searches the Assets page.
 - **PROJECT**: the open project; the plug icon opens the setup.
 - **Status bar** (bottom): game paks, server, key and AI state, the reconnect button, warning and error counters, and
@@ -146,6 +161,9 @@ included in this repository.</sub>
 - Toolbar:
   - **Maximize** (`F11`) and **Pop out**: give the 3D view the whole page or its own window (second monitor).
   - **Quality**: Performance, Balanced, High or Ultra (how far and how detailed the view draws).
+  - **Spawns**: show or hide the game's spawn places as pins. Gold: loot, orange: loot areas, red: sentries, purple:
+    bunker creatures, blue: car-shop vehicles, green: drop zones. Spawner pins move, copy and delete like objects; loot
+    points inside buildings move with their building.
   - **Snap**: pieces dragged near each other join end to end, or side by side with level tops; fences stand on edges.
     Hold `Alt` to place freely.
   - **Drone** (`Tab`): fly like the in-game drone.
@@ -174,6 +192,20 @@ included in this repository.</sub>
 - **NEW** column: type a new value; the arrow resets it. **Apply changes** records the edits, **Discard** drops them.
 - **Clone under a new name** (with attachments and spawn presets) and the **spawn command** to copy.
 - Values that are not listed live in a parent class or the game code: the "What can be changed" box explains where.
+
+### Spawns
+
+- **Vehicles & planes**: every spawn preset (world spawns, admin spawns, bought from the trader). **Fuel** and **Battery**
+  at spawn (lowest and highest, with **Empty**, **Half**, **Full**), **Chance each part is there** (100 % = complete),
+  **Part condition**, and **Server limits** for that vehicle (most in the world, most that can drive, kept for traders).
+- **Zombies & NPCs**: the threat zones (the whole island's low-threat zone, medium and high-threat zones). **Spawn
+  chance**, **First spawn after**, **Check every**, **Rest after a group**, **Distance from the player**, **Spread
+  around the player**, and the weight of each **group** the zone can spawn.
+- **Server**: zombie and horde multipliers, most zombies at once, zombie health and speed, sentries on or off and their
+  health, drones, dropships, animals. Written into the server's `ServerSettings.ini` (a backup is kept); restart the
+  server to use them.
+- **Save changes** records vehicle and zone values in the project (they go into the mod with **Export mod**) and writes
+  the server settings; **Discard** puts the sliders back.
 
 ### Assets
 

@@ -327,8 +327,10 @@ public static partial class LevelPackageEditor
         }
 
         var countOffset = r.Position;
+        // Not bounded by the export count: the cook leaves a null slot for every editor-only actor it strips
+        // (B_3_Stone_Mine_01: 53 slots, 29 exports; Biomes: 477 slots, 7 exports).
         var count = r.I32();
-        if (count < 0 || count > package.Exports.Count || r.Remaining < 4L * count)
+        if (count < 0 || r.Remaining < 4L * count)
         {
             throw new InvalidDataException($"Implausible Actors count {count} in the Level export.");
         }

@@ -3,6 +3,7 @@ using Avalonia.Input;
 using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
 using ScumStudio.App.ViewModels;
+using ScumStudio.Core.Mathematics;
 
 namespace ScumStudio.App.Views.Pages;
 
@@ -12,6 +13,7 @@ public partial class MapPageView : UserControl
     private MapPageViewModel? _viewModel;
     private bool _maximized;
     private readonly Avalonia.Threading.DispatcherTimer _worldTimer;
+    private int _ticks;
     private GridLength[]? _savedSizes;
     private Window? _popout;
 
@@ -95,6 +97,12 @@ public partial class MapPageView : UserControl
             {
                 vm.UpdateWorldCamera(Viewport3d.CameraUe);
             }
+
+            // The camera is kept every 3 s while something is shown, so the map reopens where it was left.
+            if (_viewModel is { HasView: true } shown && ++_ticks % 6 == 0)
+            {
+                shown.RememberView(Viewport3d.CameraUe, Viewport3d.Camera.Yaw, Viewport3d.Camera.Pitch);
+            }
         };
         _worldTimer.Start();
     }
@@ -109,6 +117,14 @@ public partial class MapPageView : UserControl
         _viewModel = viewModel;
         if (_viewModel is not null)
         {
+            // First open of the map this run: start where the camera was left, so streaming loads that area right away.
+            if (_viewModel.SavedView is { } saved && !_viewModel.HasView)
+            {
+                var at = new FVector(saved.X, saved.Y, saved.Z);
+                Viewport3d.InitialView = (at, saved.Yaw, saved.Pitch);
+                Viewport3d.SetView(at, null, saved.Yaw, saved.Pitch);
+            }
+
             _viewModel.FrameSelectionRequested += OnFrameSelectionRequested;
             _viewModel.AimPointProvider = () => Viewport3d.AimPointUe(MapPageViewModel.PlacementDistance);
         }

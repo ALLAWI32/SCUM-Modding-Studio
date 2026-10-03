@@ -96,8 +96,15 @@
             </Border>
           </Panel>
 
-          <!-- Project. -->
+          <!-- Update (a newer release is out) and the project. -->
           <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center" Margin="0,0,6,0">
+            <Button x:Name="UpdateButton" Classes="accent" Padding="10,3" Margin="0,0,10,0" IsVisible="{Binding HasUpdate}"
+                    Command="{Binding OpenUpdateCommand}" ToolTip.Tip="{Tr Update.Button.Tip}">
+              <StackPanel Orientation="Horizontal" Spacing="6">
+                <c:GlyphIcon Kind="Icon.Download" IconSize="13" />
+                <TextBlock Text="{Binding UpdateButtonText}" FontSize="12" />
+              </StackPanel>
+            </Button>
             <TextBlock Text="{Tr Shell.Project}" Classes="colHeader" VerticalAlignment="Center" Margin="0,1,0,0" />
             <TextBlock x:Name="ProjectName" Text="{Binding Projects.DisplayName}" FontWeight="SemiBold" FontSize="12.5" MaxWidth="220"
                        VerticalAlignment="Center" ToolTip.Tip="{Binding Projects.DirectoryPath}" />
@@ -244,6 +251,98 @@
     <Panel x:Name="SetupOverlay" IsVisible="{Binding IsSetupOpen}" ZIndex="20">
       <Border Background="{DynamicResource ScrimBrush}" />
       <ContentControl Content="{Binding Setup}" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="24" />
+    </Panel>
+
+    <!-- ===================================================================== Update card -->
+    <Panel x:Name="UpdateOverlay" IsVisible="{Binding IsUpdateOpen}" ZIndex="21">
+      <Border Background="{DynamicResource ScrimBrush}" />
+      <Border Classes="dialog" Width="620" MaxHeight="640" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="24">
+        <DockPanel>
+          <Border DockPanel.Dock="Top" Padding="24,20,24,16" BorderBrush="{DynamicResource StrokeSubtleBrush}" BorderThickness="0,0,0,1">
+            <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="14">
+              <Border Classes="iconTile" Width="44" Height="44" CornerRadius="{DynamicResource SmallCornerRadius}">
+                <c:GlyphIcon Kind="Icon.Download" IconSize="22" HorizontalAlignment="Center" VerticalAlignment="Center" />
+              </Border>
+              <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
+                <TextBlock Text="{Binding UpdateTitle}" Classes="h1" FontSize="19" />
+                <TextBlock Text="{Binding UpdateSubtitle}" Classes="muted wrap" FontSize="12.5" />
+              </StackPanel>
+              <Button Grid.Column="2" Classes="ghost square" Command="{Binding CloseUpdateCommand}" VerticalAlignment="Top" ToolTip.Tip="{Tr Update.Later.Tip}">
+                <c:GlyphIcon Kind="Icon.Close" IconSize="14" />
+              </Button>
+            </Grid>
+          </Border>
+          <Border DockPanel.Dock="Bottom" Padding="24,14" BorderBrush="{DynamicResource StrokeSubtleBrush}" BorderThickness="0,1,0,0" Background="{DynamicResource Bg1Brush}">
+            <Grid ColumnDefinitions="*,Auto,Auto,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="8">
+              <ProgressBar Grid.ColumnSpan="4" Value="{Binding UpdateProgress}" Maximum="100" IsVisible="{Binding IsUpdating}" Margin="0,0,0,10" />
+              <TextBlock Grid.Row="1" Text="{Binding UpdateStatus}" Classes="caption wrap" VerticalAlignment="Center" />
+              <Button Grid.Row="1" Grid.Column="1" Content="{Tr Update.ReleasePage}" Classes="ghost" Command="{Binding OpenReleasePageCommand}" ToolTip.Tip="{Tr Update.ReleasePage.Tip}" />
+              <Button Grid.Row="1" Grid.Column="2" Content="{Tr Update.Later}" Classes="ghost" Command="{Binding CloseUpdateCommand}" IsEnabled="{Binding !IsUpdating}" ToolTip.Tip="{Tr Update.Later.Tip}" />
+              <Button Grid.Row="1" Grid.Column="3" x:Name="InstallUpdateButton" Classes="accent" Command="{Binding InstallUpdateCommand}" ToolTip.Tip="{Tr Update.Install.Tip}">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                  <c:GlyphIcon Kind="Icon.Download" IconSize="14" />
+                  <TextBlock Text="{Tr Update.Install}" />
+                </StackPanel>
+              </Button>
+            </Grid>
+          </Border>
+          <ScrollViewer HorizontalScrollBarVisibility="Disabled">
+            <ItemsControl ItemsSource="{Binding UpdateNotes}" Margin="24,10,24,18">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:NoteLine">
+                  <Panel>
+                    <TextBlock Text="{Binding Text}" IsVisible="{Binding IsHeading}" FontWeight="SemiBold" FontSize="14" Margin="0,12,0,4" TextWrapping="Wrap" />
+                    <Grid IsVisible="{Binding IsBullet}" ColumnDefinitions="16,*" Margin="0,3">
+                      <Border Width="5" Height="5" CornerRadius="3" Background="{DynamicResource AccentBrush}" VerticalAlignment="Top" HorizontalAlignment="Left" Margin="2,7,0,0" />
+                      <TextBlock Grid.Column="1" Text="{Binding Text}" TextWrapping="Wrap" />
+                    </Grid>
+                    <TextBlock Text="{Binding Text}" IsVisible="{Binding IsText}" Classes="muted" TextWrapping="Wrap" Margin="0,3" />
+                  </Panel>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </ScrollViewer>
+        </DockPanel>
+      </Border>
+    </Panel>
+
+    <!-- ===================================================================== What's new (once, after an update) -->
+    <Panel x:Name="WhatsNewOverlay" IsVisible="{Binding IsWhatsNewOpen}" ZIndex="22">
+      <Border Background="{DynamicResource ScrimBrush}" />
+      <Border Classes="dialog" Width="620" MaxHeight="640" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="24">
+        <DockPanel>
+          <Border DockPanel.Dock="Top" Padding="24,20,24,16" BorderBrush="{DynamicResource StrokeSubtleBrush}" BorderThickness="0,0,0,1">
+            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="14">
+              <Border Classes="iconTile" Width="44" Height="44" CornerRadius="{DynamicResource SmallCornerRadius}">
+                <c:GlyphIcon Kind="Icon.Star" IconSize="22" HorizontalAlignment="Center" VerticalAlignment="Center" />
+              </Border>
+              <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
+                <TextBlock Text="{Binding WhatsNewTitle}" Classes="h1" FontSize="19" />
+                <TextBlock Text="{Tr Update.WhatsNewSubtitle}" Classes="muted wrap" FontSize="12.5" />
+              </StackPanel>
+            </Grid>
+          </Border>
+          <Border DockPanel.Dock="Bottom" Padding="24,14" BorderBrush="{DynamicResource StrokeSubtleBrush}" BorderThickness="0,1,0,0" Background="{DynamicResource Bg1Brush}">
+            <Button x:Name="WhatsNewClose" HorizontalAlignment="Right" Classes="accent" Content="{Tr Update.Great}" Command="{Binding CloseWhatsNewCommand}" ToolTip.Tip="{Tr Update.Great.Tip}" />
+          </Border>
+          <ScrollViewer HorizontalScrollBarVisibility="Disabled">
+            <ItemsControl ItemsSource="{Binding WhatsNew}" Margin="24,10,24,18">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:NoteLine">
+                  <Panel>
+                    <TextBlock Text="{Binding Text}" IsVisible="{Binding IsHeading}" FontWeight="SemiBold" FontSize="14" Margin="0,12,0,4" TextWrapping="Wrap" />
+                    <Grid IsVisible="{Binding IsBullet}" ColumnDefinitions="16,*" Margin="0,3">
+                      <Border Width="5" Height="5" CornerRadius="3" Background="{DynamicResource AccentBrush}" VerticalAlignment="Top" HorizontalAlignment="Left" Margin="2,7,0,0" />
+                      <TextBlock Grid.Column="1" Text="{Binding Text}" TextWrapping="Wrap" />
+                    </Grid>
+                    <TextBlock Text="{Binding Text}" IsVisible="{Binding IsText}" Classes="muted" TextWrapping="Wrap" Margin="0,3" />
+                  </Panel>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </ScrollViewer>
+        </DockPanel>
+      </Border>
     </Panel>
   </Panel>
 </Window>

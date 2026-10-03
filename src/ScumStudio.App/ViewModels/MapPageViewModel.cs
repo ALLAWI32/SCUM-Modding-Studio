@@ -72,6 +72,7 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
         _translationSnap = ui.TranslationSnap;
         _rotationSnap = ui.RotationSnapDegrees;
         _renderQuality = ui.RenderQuality;
+        _showSpawns = services.UiState.Current.ShowSpawnPoints;
         _services = services;
         _openSetup = openSetup ?? (() => { });
         _services.Workspace.CatalogChanged += OnCatalogChanged;
@@ -676,6 +677,12 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
                     hiddenInstances.Add(InstanceKey.Of(id, instance.Component, instance.Index));
                 }
             }
+        }
+
+        // Spawn pins off: every pin's id (the spawn-only actors' and the pins inside buildings) is hidden.
+        if (!ShowSpawns && PreparedScene is { } scene)
+        {
+            hidden.UnionWith(scene.Placements.Where(p => SpawnMarkers.IsMarker(p.MeshPath)).Select(p => p.SelectableId));
         }
 
         HiddenActorIds = hidden;

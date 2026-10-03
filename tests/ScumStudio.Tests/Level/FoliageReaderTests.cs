@@ -44,3 +44,33 @@ public sealed class HelperMeshTests
         Assert.DoesNotContain(placements, p => p.Component?.ClassName == "EnvironmentDescriptionComponent");
     }
 }
+
+/// <summary>The game's spawn places are drawn as coloured pins (owner: show the default spawn places and let me move them).</summary>
+public sealed class SpawnPinTests
+{
+    [Fact]
+    public void APinPointsDownAtItsPlaceInItsKindsColour()
+    {
+        var asset = ScumStudio.Viewport.SpawnMarkers.Asset(ScumStudio.Viewport.SpawnKind.Sentry);
+
+        Assert.True(ScumStudio.Viewport.SpawnMarkers.IsMarker(asset.MeshPath));
+        Assert.Equal(0f, asset.Mesh.Bounds.Min.Z);
+        Assert.True(asset.Mesh.Bounds.Max.Z > 100f);
+        Assert.Equal(ScumStudio.Viewport.SpawnMarkers.Color(ScumStudio.Viewport.SpawnKind.Sentry), asset.MaterialTints[asset.Mesh.Sections[0].MaterialName]);
+        Assert.Null(ScumStudio.Viewport.SpawnMarkers.AssetFor("/Game/Some/Mesh.Mesh"));
+    }
+
+    [MapSliceFact]
+    public void TheOutpostCarShopShowsWhereItsVehiclesAppear()
+    {
+        using var catalog = MapSlice.Open();
+        var doc = LevelDocument.Load(new Cue4ParseLevelReader(catalog), MapSlice.MapsPath + "A_0_Outpost");
+        var placements = ScumStudio.Viewport.LevelScenePreparer.CollectPlacements(doc, 0);
+        var pins = placements.Where(p => p.MeshPath == ScumStudio.Viewport.SpawnMarkers.MeshKey(ScumStudio.Viewport.SpawnKind.Vehicle)).ToList();
+
+        Assert.NotEmpty(pins);
+        // Inside the shop's Blueprint: half size, and an id of their own that picks nothing (they move with the shop).
+        Assert.All(pins, p => Assert.Equal(0.5f, p.World.Scale3D.X));
+        Assert.All(pins, p => Assert.NotEqual(ScumStudio.Viewport.LevelScenePreparer.SelectableIdOf(0, p.Actor), p.SelectableId));
+    }
+}

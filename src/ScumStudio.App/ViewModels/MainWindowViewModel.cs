@@ -17,7 +17,7 @@ namespace ScumStudio.App.ViewModels;
 public sealed partial class MainWindowViewModel : ViewModelBase, IDisposable
 {
     /// <summary>Navigation keys in rail order.</summary>
-    public static IReadOnlyList<string> PageKeys { get; } = ["map", "vehicles", "weapons", "assets", "projects", "settings"];
+    public static IReadOnlyList<string> PageKeys { get; } = ["map", "vehicles", "weapons", "spawns", "assets", "projects", "settings"];
 
     private readonly List<IDisposable> _disposables = [];
 
@@ -30,6 +30,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IDisposable
             new NavItemViewModel("map", "Map", "Icon.Map", null, () => Track(new MapPageViewModel(services, OpenSetup))),
             new NavItemViewModel("vehicles", "Vehicles", "Icon.Vehicle", null, () => Track(new VehiclesPageViewModel(services, OpenSetup))),
             new NavItemViewModel("weapons", "Weapons", "Icon.Weapon", null, () => Track(new WeaponsPageViewModel(services, OpenSetup))),
+            new NavItemViewModel("spawns", "Spawns", "Icon.Pin", null, () => Track(new SpawnsPageViewModel(services, OpenSetup))),
             new NavItemViewModel("assets", "Assets", "Icon.Assets", null, () => Track(new AssetsPageViewModel(services, OpenSetup, PlaceMeshInMap))),
             new NavItemViewModel("projects", "Projects", "Icon.Projects", null, () => Track(new ProjectsPageViewModel(services))),
             new NavItemViewModel("settings", "Settings", "Icon.Settings", null, () => Track(new SettingsPageViewModel(services, OpenSetup))),
@@ -144,6 +145,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IDisposable
                 await Services.Operations.RunAsync(Loc.T("Shell.OpeningLastProject"), (_, ct) => Services.Projects.OpenAsync(path, ct)).ConfigureAwait(true);
             }
 
+            _ = StartUpdatesAsync();
             if (!string.IsNullOrWhiteSpace(settings.GamePaksFolder))
             {
                 await ConnectAsync().ConfigureAwait(true);

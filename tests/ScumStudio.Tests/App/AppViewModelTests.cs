@@ -202,7 +202,7 @@ public sealed class AppViewModelTests
         using var ctx = AppTestContext.Create();
         using var vm = new MainWindowViewModel(ctx.Services);
 
-        Assert.Equal(["Map", "Vehicles", "Weapons", "Assets", "Projects", "Settings"], vm.NavItems.Select(n => n.Title));
+        Assert.Equal(["Map", "Vehicles", "Weapons", "Spawns", "Assets", "Projects", "Settings"], vm.NavItems.Select(n => n.Title));
         Assert.Equal(MainWindowViewModel.PageKeys, vm.NavItems.Select(n => n.Key));
         Assert.Equal("map", vm.CurrentPage?.Key);
         Assert.Equal(PillState.Off, vm.GamePill.State);
@@ -355,6 +355,20 @@ public sealed class AppViewModelTests
         {
             Directory.Delete(directory, recursive: true);
         }
+    }
+
+    [Fact]
+    public void TheMapCameraIsKeptForTheNextStart()
+    {
+        using var ctx = AppTestContext.Create();
+        using (var map = new MapPageViewModel(ctx.Services))
+        {
+            Assert.Null(map.SavedView);
+            map.RememberView(new ScumStudio.Core.Mathematics.FVector(270203.9f, -182336f, 17456.3f), 35.24f, -12.06f);
+        }
+
+        var reopened = new UiStateStore(ctx.Services.DataDirectory, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance).Current.MapView;
+        Assert.Equal(new MapView(270204f, -182336f, 17456f, 35.2f, -12.1f), reopened);
     }
 
     [Fact]

@@ -1,0 +1,49 @@
+# ---- .NET / Visual Studio ----
+bin/
+obj/
+artifacts/
+publish/
+[Pp]ublish/
+TestResults/
+[Tt]est[Rr]esults/
+*.trx
+*.coverage
+*.runsettings
+*.user
+*.suo
+*.userprefs
+*.rsuser
+.vs/
+.vscode/
+.idea/
+*.swp
+*.DotSettings.user
+*.nupkg
+*.snupkg
+_ReSharper*/
+*.log
+
+# ---- SCUM game data: never commit game assets, paks or keys ----
+*.pak
+# ...but not the source project whose folder name ends in .Pak
+!src/ScumStudio.Pak/
+*.sig
+*.utoc
+*.ucas
+*.uasset
+*.uexp
+*.ubulk
+*.umap
+scum_aes_key.txt
+orig/
+build/
+build_*/
+Content/
+
+# ---- local tool state ----
+.DS_Store
+Thumbs.db
+
+# Agent worktrees (workflow isolation)
+/.claude/worktrees/
+dist/

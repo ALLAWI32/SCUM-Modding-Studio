@@ -1,0 +1,468 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:ScumStudio.App.ViewModels"
+             xmlns:c="using:ScumStudio.App.Controls"
+             x:Class="ScumStudio.App.Views.Pages.MapPageView"
+             x:DataType="vm:MapPageViewModel">
+  <DockPanel>
+
+    <!-- ===== Header ===== -->
+    <Border DockPanel.Dock="Top" Classes="pageHeader">
+      <Grid ColumnDefinitions="Auto,Auto,*,Auto" ColumnSpacing="14">
+        <Border Grid.Column="0" Classes="pageGlyph"><c:GlyphIcon Kind="{Binding IconKey}" IconSize="22" /></Border>
+        <StackPanel Grid.Column="1" Spacing="2" VerticalAlignment="Center">
+          <TextBlock Text="{Binding Title}" Classes="pageTitle" />
+          <TextBlock Text="{Binding Subtitle}" Classes="muted" />
+        </StackPanel>
+        <!-- The 3D view's toolbar and status live here, so the view itself shows only the map. -->
+        <StackPanel Grid.Column="2" Spacing="6" VerticalAlignment="Center" Margin="12,0">
+          <WrapPanel x:Name="ViewToolbar" ItemSpacing="4" LineSpacing="4">
+            <Button Classes="ghost" Padding="8,4" x:Name="MaximizeButton" Content="{Tr Map.Maximize}" Click="OnMaximizeClick" ToolTip.Tip="{Tr Map.Maximize.Tip}" />
+            <Button Classes="ghost" Padding="8,4" x:Name="PopOutButton" Content="{Tr Map.PopOut}" Click="OnPopOutClick" ToolTip.Tip="{Tr Map.PopOut.Tip}" />
+            <ComboBox x:Name="QualityBox" ItemsSource="{Binding RenderQualities}" SelectedItem="{Binding RenderQuality}" MinWidth="118" VerticalAlignment="Center"
+                      IsVisible="{Binding HasView}" ToolTip.Tip="{Tr Map.Quality.Tip}" />
+            <Border Classes="vsep" IsVisible="{Binding HasView}" />
+            <ToggleButton Classes="ghost" Padding="8,4" x:Name="SnapButton" Content="{Tr Map.Snap}" IsChecked="{Binding #Viewport3d.AutoSnap}" ToolTip.Tip="{Tr Map.Snap.Tip}" IsVisible="{Binding HasView}" />
+            <Button Classes="ghost" Padding="8,4" x:Name="DroneButton" Content="{Tr Map.Drone}" Click="OnDroneClick" ToolTip.Tip="{Tr Map.Drone.Tip}" IsVisible="{Binding HasView}" />
+            <Button Classes="ghost" Padding="8,4" Content="{Tr Map.FrameAll}" Click="OnFrameAllClick" ToolTip.Tip="{Tr Map.FrameAll.Tip}" IsVisible="{Binding HasScene}" />
+            <Button Classes="ghost" Padding="8,4" Content="{Tr Map.FrameSelection}" Command="{Binding FrameSelectionCommand}" ToolTip.Tip="{Tr Map.FrameSelection.Tip}" IsVisible="{Binding HasSelectedActor}" />
+            <Button Classes="ghost" Padding="8,4" x:Name="ShapeButton" Content="{Tr Map.Shape}" IsVisible="{Binding HasShape}" ToolTip.Tip="{Tr Map.Shape.Tip}">
+              <Button.Flyout>
+                <Flyout Placement="BottomEdgeAlignedLeft">
+                  <StackPanel x:Name="ShapePanel" Spacing="8" Width="380">
+                    <Grid ColumnDefinitions="*,Auto">
+                      <TextBlock Text="{Tr Map.Shape}" Classes="h3" VerticalAlignment="Center" />
+                      <Button Grid.Column="1" Classes="small" Content="{Tr Map.Shape.Reset}" Command="{Binding ResetShapeCommand}" ToolTip.Tip="{Tr Map.Shape.Reset.Tip}" />
+                    </Grid>
+                    <StackPanel Spacing="2">
+                      <Grid ColumnDefinitions="70,*,58" ColumnSpacing="8" IsVisible="{Binding CanScale}">
+                        <TextBlock Text="{Tr Map.Shape.Bend}" Classes="caption" VerticalAlignment="Center" />
+                        <Slider Grid.Column="1" x:Name="ShapeBendSlider" Minimum="-180" Maximum="180" SmallChange="1" LargeChange="15"
+                                Value="{Binding ShapeBend}" IsEnabled="{Binding CanBend}" ToolTip.Tip="{Tr Map.Shape.Bend.Tip}" />
+                        <TextBlock Grid.Column="2" Text="{Binding ShapeBendText}" Classes="caption mono" VerticalAlignment="Center" HorizontalAlignment="Right" />
+                      </Grid>
+                      <Grid ColumnDefinitions="70,*,58" ColumnSpacing="8" IsVisible="{Binding CanSway}">
+                        <TextBlock Text="{Tr Map.Shape.Curve1}" Classes="caption" VerticalAlignment="Center" />
+                        <Slider Grid.Column="1" x:Name="ShapeCurve1Slider" Minimum="{Binding ShapeSwayMin}" Maximum="{Binding ShapeSwayMax}" SmallChange="0.1" LargeChange="1"
+                                Value="{Binding ShapeSway1}" ToolTip.Tip="{Tr Map.Shape.Curve1.Tip}" />
+                        <TextBlock Grid.Column="2" Text="{Binding ShapeSway1Text}" Classes="caption mono" VerticalAlignment="Center" HorizontalAlignment="Right" />
+                      </Grid>
+                      <Grid ColumnDefinitions="70,*,58" ColumnSpacing="8" IsVisible="{Binding CanSway}">
+                        <TextBlock Text="{Tr Map.Shape.Curve2}" Classes="caption" VerticalAlignment="Center" />
+                        <Slider Grid.Column="1" x:Name="ShapeCurve2Slider" Minimum="{Binding ShapeSwayMin}" Maximum="{Binding ShapeSwayMax}" SmallChange="0.1" LargeChange="1"
+                                Value="{Binding ShapeSway2}" ToolTip.Tip="{Tr Map.Shape.Curve2.Tip}" />
+                        <TextBlock Grid.Column="2" Text="{Binding ShapeSway2Text}" Classes="caption mono" VerticalAlignment="Center" HorizontalAlignment="Right" />
+                      </Grid>
+                      <Grid ColumnDefinitions="70,*,58" ColumnSpacing="8" IsVisible="{Binding CanBend}">
+                        <TextBlock Text="{Tr Map.Shape.Legs}" Classes="caption" VerticalAlignment="Center" />
+                        <Slider Grid.Column="1" x:Name="ShapeLegsSlider" Minimum="0" Maximum="100" SmallChange="0.1" LargeChange="1"
+                                Value="{Binding ShapeLegs}" ToolTip.Tip="{Tr Map.Shape.Legs.Tip}" />
+                        <TextBlock Grid.Column="2" Text="{Binding ShapeLegsText}" Classes="caption mono" VerticalAlignment="Center" HorizontalAlignment="Right" />
+                      </Grid>
+                      <Grid ColumnDefinitions="70,*,58" ColumnSpacing="8" IsVisible="{Binding CanScale}">
+                        <TextBlock Text="{Tr Map.Shape.Length}" Classes="caption" VerticalAlignment="Center" />
+                        <Slider Grid.Column="1" x:Name="ShapeLengthSlider" Minimum="0.1" Maximum="4" SmallChange="0.01" LargeChange="0.1"
+                                Value="{Binding ShapeLength}" ToolTip.Tip="{Tr Map.Shape.Length.Tip}" />
+                        <TextBlock Grid.Column="2" Text="{Binding ShapeLengthText}" Classes="caption mono" VerticalAlignment="Center" HorizontalAlignment="Right" />
+                      </Grid>
+                      <Grid ColumnDefinitions="70,*,58" ColumnSpacing="8" IsVisible="{Binding CanScale}">
+                        <TextBlock Text="{Tr Map.Shape.Width}" Classes="caption" VerticalAlignment="Center" />
+                        <Slider Grid.Column="1" x:Name="ShapeWidthSlider" Minimum="0.1" Maximum="4" SmallChange="0.01" LargeChange="0.1"
+                                Value="{Binding ShapeWidth}" ToolTip.Tip="{Tr Map.Shape.Width.Tip}" />
+                        <TextBlock Grid.Column="2" Text="{Binding ShapeWidthText}" Classes="caption mono" VerticalAlignment="Center" HorizontalAlignment="Right" />
+                      </Grid>
+                      <Grid ColumnDefinitions="70,*,58" ColumnSpacing="8" IsVisible="{Binding CanScale}">
+                        <TextBlock Text="{Tr Map.Shape.Height}" Classes="caption" VerticalAlignment="Center" />
+                        <Slider Grid.Column="1" x:Name="ShapeHeightSlider" Minimum="0.1" Maximum="4" SmallChange="0.01" LargeChange="0.1"
+                                Value="{Binding ShapeHeight}" ToolTip.Tip="{Tr Map.Shape.Height.Tip}" />
+                        <TextBlock Grid.Column="2" Text="{Binding ShapeHeightText}" Classes="caption mono" VerticalAlignment="Center" HorizontalAlignment="Right" />
+                      </Grid>
+                      <Grid ColumnDefinitions="70,*,58" ColumnSpacing="8" IsVisible="{Binding CanScale}">
+                        <TextBlock Text="{Tr Map.Shape.Size}" Classes="caption" VerticalAlignment="Center" />
+                        <Slider Grid.Column="1" x:Name="ShapeSizeSlider" Minimum="0.1" Maximum="4" SmallChange="0.01" LargeChange="0.1"
+                                Value="{Binding ShapeSize}" ToolTip.Tip="{Tr Map.Shape.Size.Tip}" />
+                        <TextBlock Grid.Column="2" Text="{Binding ShapeSizeText}" Classes="caption mono" VerticalAlignment="Center" HorizontalAlignment="Right" />
+                      </Grid>
+                    </StackPanel>
+                    <TextBlock Text="{Tr Map.Shape.HandlesHint}" Classes="caption wrap" IsVisible="{Binding CanSway}" />
+                    <TextBlock Text="{Binding BendNote}" Classes="caption wrap" IsVisible="{Binding HasBendNote}" />
+                  </StackPanel>
+                </Flyout>
+              </Button.Flyout>
+            </Button>
+            <Button Classes="ghost" Padding="8,4" x:Name="ExtendButton" Content="{Tr Map.Extend}" Click="OnExtendClick" ToolTip.Tip="{Tr Map.Extend.Tip}" IsVisible="{Binding HasSelectedActor}" />
+            <Button Classes="ghost" Padding="8,4" x:Name="LastObjectButton" Content="{Tr Map.LastObject}" Click="OnLastObjectClick" ToolTip.Tip="{Tr Map.LastObject.Tip}" IsVisible="{Binding HasScene}" />
+            <Border Classes="vsep" IsVisible="{Binding HasScene}" />
+            <Button Classes="ghost" Padding="8,4" x:Name="PasteButton" Content="{Tr Map.Paste}" Command="{Binding PasteCommand}" ToolTip.Tip="{Binding PasteTip}" IsVisible="{Binding HasCopiedActor}" />
+                    <Button Classes="ghost" Padding="8,4" x:Name="AddObjectButton" Content="{Tr Map.AddObject}" IsVisible="{Binding HasScene}"
+                            ToolTip.Tip="{Tr Map.AddObject.Tip}">
+                      <Button.Flyout>
+                        <Flyout Placement="BottomEdgeAlignedRight">
+                          <StackPanel Spacing="8" Width="360">
+                            <TextBlock Text="{Tr Map.ObjectPathOrName}" Classes="caption" />
+                            <TextBox x:Name="AddObjectBox" Text="{Binding AddObjectText}" Watermark="{Tr Map.AddObject.Watermark}" ToolTip.Tip="{Tr Map.AddObjectBox.Tip}">
+                              <TextBox.KeyBindings>
+                                <KeyBinding Gesture="Enter" Command="{Binding AddObjectFromTextCommand}" />
+                              </TextBox.KeyBindings>
+                            </TextBox>
+                            <Button Classes="accent" Content="{Tr Map.AddInFront}" HorizontalAlignment="Right" Command="{Binding AddObjectFromTextCommand}" ToolTip.Tip="{Tr Map.AddInFront.Tip}" />
+                          </StackPanel>
+                        </Flyout>
+                      </Button.Flyout>
+                    </Button>
+          </WrapPanel>
+          <WrapPanel x:Name="ViewStatus" ItemSpacing="6" LineSpacing="4">
+            <Border Classes="chip" IsVisible="{Binding HasScene}" ToolTip.Tip="{Binding LoadStatus}">
+              <StackPanel Orientation="Horizontal" Spacing="6">
+                <c:GlyphIcon Kind="Icon.Cube3d" IconSize="13" VerticalAlignment="Center" />
+                <TextBlock Text="{Binding LoadedLevelsCaption}" />
+              </StackPanel>
+            </Border>
+            <Border Classes="chip" IsVisible="{Binding IsWorldMode}">
+              <TextBlock Text="{Binding WorldStatus}" />
+            </Border>
+            <Border Classes="chip" IsVisible="{Binding HasKindSelection}" BorderBrush="{DynamicResource AccentBrush}">
+              <TextBlock Text="{Binding KindSelectionText}" />
+            </Border>
+            <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding HasKindRadius}">
+              <Slider x:Name="KindRadiusSlider" Width="150" Minimum="0" Maximum="500" SmallChange="5" LargeChange="25" TickFrequency="5" IsSnapToTickEnabled="True"
+                      Value="{Binding KindRadius}" VerticalAlignment="Center" ToolTip.Tip="{Tr Map.Kind.Radius.Tip}" />
+              <TextBlock Text="{Binding KindRadiusText}" Classes="caption mono" VerticalAlignment="Center" MinWidth="44" />
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding IsLoadingLevel}">
+              <ProgressBar IsIndeterminate="True" Width="90" VerticalAlignment="Center" />
+              <TextBlock Text="{Binding LoadStatus}" Classes="caption" MaxWidth="420" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+            </StackPanel>
+            <TextBlock Classes="caption" VerticalAlignment="Center" IsVisible="{Binding HasView}" ToolTip.Tip="{Binding #Viewport3d.GpuName}">
+              <Run Text="{Binding #Viewport3d.SpeedText}" />
+              <Run Text=" · " />
+              <Run Text="{Binding #Viewport3d.FrameInfo}" />
+            </TextBlock>
+          </WrapPanel>
+        </StackPanel>
+        <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+          <Border Classes="chip" IsVisible="{Binding Session.HasProject}" VerticalAlignment="Center">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <c:GlyphIcon Kind="Icon.Projects" IconSize="13" VerticalAlignment="Center" />
+              <TextBlock Text="{Binding Session.DisplayName}" />
+            </StackPanel>
+          </Border>
+          <TextBox Text="{Binding NewProjectName}" Width="160" Watermark="{Tr Projects.ProjectName}"
+                   IsVisible="{Binding !Session.HasProject}" ToolTip.Tip="{Tr Map.NewProjectName.Tip}" />
+          <Button Classes="accent" Command="{Binding NewProjectCommand}" IsVisible="{Binding !Session.HasProject}" ToolTip.Tip="{Tr Map.NewProject.Tip}">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <c:GlyphIcon Kind="Icon.Plus" IconSize="14" />
+              <TextBlock Text="{Tr Projects.New}" />
+            </StackPanel>
+          </Button>
+          <Button Command="{Binding OpenProjectPickerCommand}" ToolTip.Tip="{Tr Projects.Open.Tip}">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <c:GlyphIcon Kind="Icon.Folder" IconSize="14" />
+              <TextBlock Text="{Tr Map.OpenProject}" />
+            </StackPanel>
+          </Button>
+          <Button Classes="accent" x:Name="ExportModButton" Command="{Binding ExportModCommand}" IsVisible="{Binding Session.HasProject}"
+                  ToolTip.Tip="{Tr Map.ExportMod.Tip}">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <c:GlyphIcon Kind="Icon.Download" IconSize="14" />
+              <TextBlock Text="{Tr Projects.Export}" />
+            </StackPanel>
+          </Button>
+          <Button Classes="ghost" Content="{Tr Common.Close}" Command="{Binding CloseProjectCommand}" IsVisible="{Binding Session.HasProject}" ToolTip.Tip="{Tr Projects.Close.Tip}" />
+        </StackPanel>
+      </Grid>
+    </Border>
+
+    <!-- ===== Body ===== -->
+    <Grid x:Name="MapBody" Margin="24,0,24,20" ColumnDefinitions="300,12,*,12,320">
+
+      <!-- World tree -->
+      <Border Grid.Column="0" Classes="panel" x:Name="LeftPanel">
+        <DockPanel>
+          <Border DockPanel.Dock="Top" Classes="panelHeader">
+            <StackPanel Spacing="8">
+              <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
+                <c:GlyphIcon Grid.Column="0" Kind="Icon.World" IconSize="16" VerticalAlignment="Center" />
+                <TextBlock Grid.Column="1" Text="{Tr Map.World}" Classes="h3" VerticalAlignment="Center" ToolTip.Tip="{Tr Map.World.Tip}" />
+                <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6">
+                  <ProgressBar IsIndeterminate="True" Width="60" VerticalAlignment="Center" IsVisible="{Binding IsLoadingWorld}" />
+                  <Button x:Name="WholeIslandButton" Classes="ghost" Padding="8,3" Content="{Tr Map.WholeIsland}" Command="{Binding OpenWholeIslandCommand}"
+                          ToolTip.Tip="{Tr Map.WholeIsland.Tip}" />
+                </StackPanel>
+              </Grid>
+              <ItemsControl ItemsSource="{Binding KindChips}" IsVisible="{Binding HasWorld}">
+                <ItemsControl.ItemsPanel>
+                  <ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="vm:CountChip">
+                    <Border Classes="chip" Margin="0,0,6,6">
+                      <StackPanel Orientation="Horizontal" Spacing="5">
+                        <TextBlock Text="{Binding Label}" />
+                        <TextBlock Text="{Binding CountText}" FontWeight="SemiBold" Foreground="{DynamicResource TextBrush}" />
+                      </StackPanel>
+                    </Border>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </StackPanel>
+          </Border>
+
+          <Panel>
+            <TreeView x:Name="WorldTree" ItemsSource="{Binding Nodes}" SelectedItem="{Binding SelectedNode}"
+                      IsVisible="{Binding !ShowEmptyState}" Margin="4">
+              <TreeView.Styles>
+                <Style Selector="TreeViewItem" x:DataType="vm:WorldTreeNode">
+                  <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}" />
+                </Style>
+              </TreeView.Styles>
+              <TreeView.ItemTemplate>
+                <TreeDataTemplate x:DataType="vm:WorldTreeNode" ItemsSource="{Binding Children}">
+                  <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
+                    <c:GlyphIcon Grid.Column="0" Kind="{Binding IconKey}" IconSize="15" VerticalAlignment="Center" />
+                    <TextBlock Grid.Column="1" Text="{Binding Title}" VerticalAlignment="Center" />
+                    <TextBlock Grid.Column="2" Text="{Binding CountText}" Classes="caption" IsVisible="{Binding HasCount}"
+                               VerticalAlignment="Center" Margin="0,0,6,0" />
+                  </Grid>
+                </TreeDataTemplate>
+              </TreeView.ItemTemplate>
+            </TreeView>
+
+            <!-- Empty state -->
+            <StackPanel IsVisible="{Binding ShowEmptyState}" VerticalAlignment="Center" Margin="20" Spacing="10">
+              <Border Classes="iconTile" HorizontalAlignment="Center">
+                <c:GlyphIcon Kind="Icon.Map" IconSize="20" HorizontalAlignment="Center" VerticalAlignment="Center" />
+              </Border>
+              <TextBlock Text="{Binding EmptyTitle}" Classes="h3" HorizontalAlignment="Center" />
+              <TextBlock Text="{Binding EmptyMessage}" Classes="muted wrap" TextAlignment="Center" FontSize="12" />
+              <Button Classes="accent" HorizontalAlignment="Center" Content="{Tr Common.OpenSetup}" ToolTip.Tip="{Tr Common.OpenSetup.Tip}"
+                      Command="{Binding OpenSetupCommand}" IsVisible="{Binding EmptyStateNeedsSetup}" />
+            </StackPanel>
+          </Panel>
+        </DockPanel>
+      </Border>
+
+      <GridSplitter Grid.Column="1" x:Name="LeftSplitter" ResizeDirection="Columns" Background="Transparent" ToolTip.Tip="{Tr Common.Splitter.Tip}" />
+
+      <!-- Viewport + entities -->
+      <Grid Grid.Column="2" x:Name="CenterGrid" RowDefinitions="*,12,190">
+        <Border Grid.Row="0" Classes="panel" x:Name="Viewport">
+          <Panel x:Name="ViewportContent">
+            <c:ViewportGrid Background="{DynamicResource ViewportBrush}" AxisXBrush="{DynamicResource AxisXBrush}" AxisYBrush="{DynamicResource AxisYBrush}" IsVisible="{Binding !HasView}" />
+            <c:LevelViewport x:Name="Viewport3d" Scene="{Binding PreparedScene}" SelectedId="{Binding SelectedActorId, Mode=TwoWay}" SelectedInstance="{Binding SelectedInstanceKey, Mode=TwoWay}" Backdrop="{Binding WorldBackdrop}" KeepCamera="{Binding IsWorldMode}" Quality="{Binding RenderQuality}" KindIds="{Binding KindSelectionIds}" KindInstances="{Binding KindSelectionInstances}" InstanceTransforms="{Binding InstanceTransforms}"
+                             HiddenIds="{Binding HiddenActorIds}" HiddenInstances="{Binding HiddenInstanceKeys}"
+                             ActorTransforms="{Binding ActorTransforms}" Clones="{Binding Clones}"
+                             SelectedRootWorld="{Binding SelectedRootWorld}" TranslationSnap="{Binding TranslationSnap}" RotationSnap="{Binding RotationSnap}"
+                             ExtraMeshes="{Binding ExtraMeshes}" Bends="{Binding Bends}" SegmentBends="{Binding SegmentBends}" ShapeHandles="{Binding ShapeHandles}" ScaleHandles="{Binding ScaleHandles}" LegHandle="{Binding LegHandle}" GroupWorlds="{Binding GroupWorlds}" IsVisible="{Binding HasView}" />
+            <!-- drone mode: crosshair + what the keys do -->
+            <Panel IsHitTestVisible="False" IsVisible="{Binding #Viewport3d.IsDroneMode}">
+              <TextBlock Text="+" Classes="hud" FontSize="22" Foreground="{DynamicResource AccentBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+              <Border Classes="hud" HorizontalAlignment="Center" VerticalAlignment="Top" Margin="12,48,12,12">
+                <TextBlock>
+                  <Run Text="{Tr Map.DroneHud}" Foreground="{DynamicResource AccentBrush}" FontWeight="SemiBold" />
+                  <Run Text="{Binding #Viewport3d.SpeedText}" />
+                  <Run Text="{Tr Map.DroneHudKeys}" Foreground="{DynamicResource TextMutedBrush}" />
+                </TextBlock>
+              </Border>
+            </Panel>
+            <!-- hint overlay -->
+            <Border Classes="overlayCard viewportOverlay" HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="420">
+              <Border.IsVisible>
+                <MultiBinding Converter="{x:Static BoolConverters.And}">
+                  <Binding Path="!HasView" />
+                  <Binding Path="!IsLoadingLevel" />
+                </MultiBinding>
+              </Border.IsVisible>
+              <StackPanel Spacing="8">
+                <Border Classes="iconTile" HorizontalAlignment="Center">
+                  <c:GlyphIcon Kind="Icon.Cube3d" IconSize="20" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                </Border>
+                <TextBlock Text="{Tr Map.PickLevel}" Classes="h2" HorizontalAlignment="Center" />
+                <TextBlock Classes="muted wrap" FontSize="12"
+                           Text="{Tr Map.PickLevel.Body}" />
+              </StackPanel>
+            </Border>
+          </Panel>
+        </Border>
+
+        <GridSplitter Grid.Row="1" x:Name="RowSplitter" ResizeDirection="Rows" Background="Transparent" ToolTip.Tip="{Tr Common.Splitter.Tip}" />
+        <Border Grid.Row="2" Classes="panel" x:Name="EntitiesPanel">
+          <DockPanel>
+            <Border DockPanel.Dock="Top" Classes="panelHeader">
+              <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto" ColumnSpacing="8">
+                <c:GlyphIcon Grid.Column="0" Kind="Icon.List" IconSize="16" VerticalAlignment="Center" />
+                <TextBlock Grid.Column="1" Text="{Tr Map.Entities}" Classes="h3" VerticalAlignment="Center" ToolTip.Tip="{Tr Map.Entities.Tip}" />
+                <TextBox Grid.Column="2" Text="{Binding EntityFilter}" Watermark="{Tr Map.EntityFilter}" ToolTip.Tip="{Tr Map.EntityFilter.Tip}" MaxWidth="360" HorizontalAlignment="Stretch" />
+                <TextBlock Grid.Column="3" Text="{Binding EntityCountText}" Classes="caption" VerticalAlignment="Center" />
+                <Button Grid.Column="4" x:Name="DeleteButton" Classes="ghost" Padding="8,4" Command="{Binding DeleteSelectedCommand}" ToolTip.Tip="{Tr Map.Delete.Tip}">
+                  <StackPanel Orientation="Horizontal" Spacing="6">
+                    <c:GlyphIcon Kind="Icon.Close" IconSize="14" />
+                    <TextBlock Text="{Tr Map.Delete}" />
+                  </StackPanel>
+                </Button>
+                <Button Grid.Column="5" x:Name="DeleteAllButton" Classes="ghost" Padding="8,4" IsEnabled="{Binding HasSelectedActor}"
+                        ToolTip.Tip="{Tr Map.DeleteAll.Tip}">
+                  <StackPanel Orientation="Horizontal" Spacing="6">
+                    <c:GlyphIcon Kind="Icon.Copy" IconSize="14" />
+                    <TextBlock Text="{Tr Map.DeleteAll}" />
+                  </StackPanel>
+                  <Button.Flyout>
+                    <MenuFlyout Placement="BottomEdgeAlignedRight">
+                      <MenuItem Header="{Binding DeleteAllOfMeshTip}" Command="{Binding DeleteAllOfMeshCommand}" ToolTip.Tip="{Tr Map.DeleteAllMesh.Tip}" />
+                      <MenuItem Header="{Binding DeleteAllOfClassTip}" Command="{Binding DeleteAllOfClassCommand}" ToolTip.Tip="{Tr Map.DeleteAllClass.Tip}" />
+                    </MenuFlyout>
+                  </Button.Flyout>
+                </Button>
+              </Grid>
+            </Border>
+            <Panel>
+              <TextBlock Text="{Tr Map.LoadToList}" Classes="caption" Margin="16" IsVisible="{Binding !HasScene}" />
+              <ListBox x:Name="EntityList" Classes="plain" ItemsSource="{Binding Actors}" SelectedItem="{Binding SelectedActor}" IsVisible="{Binding HasScene}">
+                <ListBox.ItemTemplate>
+                  <DataTemplate x:DataType="vm:ActorItemViewModel">
+                    <Grid ColumnDefinitions="Auto,2*,2*,2*,Auto" ColumnSpacing="10" Opacity="{Binding IsDeleted, Converter={x:Static vm:MapPageViewModel.DeletedOpacity}}">
+                      <c:GlyphIcon Grid.Column="0" Kind="{Binding IconKey}" IconSize="14" VerticalAlignment="Center" />
+                      <TextBlock Grid.Column="1" Text="{Binding Name}" FontSize="12.5" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                      <TextBlock Grid.Column="2" Text="{Binding ClassName}" Classes="caption" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                      <TextBlock Grid.Column="3" Text="{Binding MeshName}" Classes="caption" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                      <TextBlock Grid.Column="4" Text="{Binding LocationText}" Classes="caption mono" VerticalAlignment="Center" />
+                    </Grid>
+                  </DataTemplate>
+                </ListBox.ItemTemplate>
+              </ListBox>
+            </Panel>
+          </DockPanel>
+        </Border>
+      </Grid>
+
+      <GridSplitter Grid.Column="3" x:Name="RightSplitter" ResizeDirection="Columns" Background="Transparent" ToolTip.Tip="{Tr Common.Splitter.Tip}" />
+
+      <!-- Properties + history -->
+      <Grid Grid.Column="4" x:Name="RightPanel" RowDefinitions="*,*" RowSpacing="12">
+        <Border Grid.Row="0" Classes="panel">
+          <DockPanel>
+            <Border DockPanel.Dock="Top" Classes="panelHeader">
+              <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
+                <c:GlyphIcon Grid.Column="0" Kind="Icon.Sliders" IconSize="16" VerticalAlignment="Center" />
+                <TextBlock Grid.Column="1" Text="{Tr Map.Properties}" Classes="h3" VerticalAlignment="Center" ToolTip.Tip="{Tr Map.Properties.Tip}" />
+              </Grid>
+            </Border>
+            <Panel>
+              <TextBlock Text="{Tr Map.Properties.Empty}"
+                         Classes="caption wrap" Margin="16">
+                <TextBlock.IsVisible>
+                  <MultiBinding Converter="{x:Static BoolConverters.And}">
+                    <Binding Path="!HasSelectedPackage" />
+                    <Binding Path="!HasSelectedActor" />
+                  </MultiBinding>
+                </TextBlock.IsVisible>
+              </TextBlock>
+              <ScrollViewer IsVisible="{Binding HasSelectedActor}">
+                <StackPanel Margin="12,8" Spacing="6">
+                  <!-- Transform editor: the selected actor's root, written to the journal with Apply -->
+                  <Grid ColumnDefinitions="92,*" ColumnSpacing="8" RowDefinitions="Auto,Auto,Auto" RowSpacing="4">
+                    <TextBlock Grid.Row="0" Grid.Column="0" Text="{Tr Map.LocationCm}" Classes="caption" VerticalAlignment="Center" />
+                    <TextBox Grid.Row="0" Grid.Column="1" x:Name="EditLocationBox" Text="{Binding EditLocation}" Classes="mono" FontSize="12" Padding="6,3" Watermark="x, y, z" ToolTip.Tip="{Tr Map.EditLocation.Tip}" />
+                    <TextBlock Grid.Row="1" Grid.Column="0" Text="{Tr Map.RotationDeg}" Classes="caption" VerticalAlignment="Center" />
+                    <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding EditRotation}" Classes="mono" FontSize="12" Padding="6,3" Watermark="pitch, yaw, roll" ToolTip.Tip="{Tr Map.EditRotation.Tip}" />
+                    <TextBlock Grid.Row="2" Grid.Column="0" Text="{Tr Map.Scale}" Classes="caption" VerticalAlignment="Center" />
+                    <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding EditScale}" Classes="mono" FontSize="12" Padding="6,3" Watermark="x, y, z" ToolTip.Tip="{Tr Map.EditScale.Tip}" />
+                  </Grid>
+                  <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Right">
+                    <Button Classes="small" x:Name="CopyButton" Command="{Binding CopySelectedCommand}" ToolTip.Tip="{Tr Map.Copy.Tip}">
+                      <TextBlock Text="{Tr Common.Copy}" />
+                    </Button>
+                    <Button Classes="small" x:Name="DuplicateButton" Command="{Binding DuplicateSelectedCommand}" ToolTip.Tip="{Tr Map.Duplicate.Tip}">
+                      <StackPanel Orientation="Horizontal" Spacing="4">
+                        <c:GlyphIcon Kind="Icon.Copy" IconSize="12" />
+                        <TextBlock Text="{Tr Map.Duplicate}" />
+                      </StackPanel>
+                    </Button>
+                    <Button Classes="small accent" x:Name="ApplyTransformButton" Command="{Binding ApplyTransformCommand}" ToolTip.Tip="{Tr Map.ApplyTransform.Tip}">
+                      <StackPanel Orientation="Horizontal" Spacing="4">
+                        <c:GlyphIcon Kind="Icon.Check" IconSize="12" />
+                        <TextBlock Text="{Tr Map.ApplyTransform}" />
+                      </StackPanel>
+                    </Button>
+                  </StackPanel>
+                  <Separator />
+                  <ItemsControl ItemsSource="{Binding ActorProperties}">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="vm:PropertyRow">
+                        <Grid ColumnDefinitions="92,*" ColumnSpacing="8" Margin="0,4">
+                          <TextBlock Grid.Column="0" Text="{Binding Name}" Classes="caption" />
+                          <SelectableTextBlock Grid.Column="1" Text="{Binding Value}" TextWrapping="Wrap" FontSize="12" />
+                        </Grid>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                </StackPanel>
+              </ScrollViewer>
+              <ScrollViewer IsVisible="{Binding HasSelectedPackage}">
+                <ScrollViewer.IsVisible>
+                  <MultiBinding Converter="{x:Static BoolConverters.And}">
+                    <Binding Path="HasSelectedPackage" />
+                    <Binding Path="!HasSelectedActor" />
+                  </MultiBinding>
+                </ScrollViewer.IsVisible>
+                <ItemsControl ItemsSource="{Binding SelectedProperties}" Margin="12,8">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:PropertyRow">
+                      <Grid ColumnDefinitions="92,*" ColumnSpacing="8" Margin="0,4">
+                        <TextBlock Grid.Column="0" Text="{Binding Name}" Classes="caption" />
+                        <SelectableTextBlock Grid.Column="1" Text="{Binding Value}" TextWrapping="Wrap" FontSize="12" />
+                      </Grid>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </ScrollViewer>
+            </Panel>
+          </DockPanel>
+        </Border>
+
+        <Border Grid.Row="1" Classes="panel">
+          <DockPanel>
+            <Border DockPanel.Dock="Top" Classes="panelHeader">
+              <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="6">
+                <c:GlyphIcon Grid.Column="0" Kind="Icon.History" IconSize="16" VerticalAlignment="Center" />
+                <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="2,0,0,0">
+                  <TextBlock Text="{Tr Map.History}" Classes="h3" ToolTip.Tip="{Tr Map.History.Tip}" />
+                  <TextBlock Text="{Binding Session.HistorySummary}" Classes="caption" FontSize="11" />
+                </StackPanel>
+                <Button Grid.Column="2" x:Name="UndoButton" Classes="ghost square" Command="{Binding UndoCommand}" ToolTip.Tip="{Tr Common.Undo.Tip}">
+                  <c:GlyphIcon Kind="Icon.Undo" IconSize="16" />
+                </Button>
+                <Button Grid.Column="3" x:Name="RedoButton" Classes="ghost square" Command="{Binding RedoCommand}" ToolTip.Tip="{Tr Common.Redo.Tip}">
+                  <c:GlyphIcon Kind="Icon.Redo" IconSize="16" />
+                </Button>
+              </Grid>
+            </Border>
+            <Panel>
+              <StackPanel IsVisible="{Binding !Session.HasProject}" Margin="16" Spacing="8" VerticalAlignment="Center">
+                <TextBlock Text="{Tr History.NoProject}" Classes="h3" HorizontalAlignment="Center" />
+                <TextBlock Classes="caption wrap" TextAlignment="Center"
+                           Text="{Tr Map.NoProject.Body}" />
+              </StackPanel>
+              <ListBox x:Name="HistoryList" Classes="plain" ItemsSource="{Binding Session.History}" IsVisible="{Binding Session.HasProject}">
+                <ListBox.ItemTemplate>
+                  <DataTemplate x:DataType="vm:HistoryItemViewModel">
+                    <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8" Opacity="{Binding Opacity}">
+                      <TextBlock Grid.Column="0" Text="{Binding SeqText}" Classes="caption mono" VerticalAlignment="Center" />
+                      <StackPanel Grid.Column="1">
+                        <TextBlock Text="{Binding Summary}" FontSize="12.5" />
+                        <TextBlock Text="{Binding TimeText}" Classes="caption" FontSize="11" />
+                      </StackPanel>
+                      <Border Grid.Column="2" Classes="badge" Classes.ok="{Binding IsApplied}" Classes.warn="{Binding IsUndone}">
+                        <TextBlock Text="{Binding StatusText}" />
+                      </Border>
+                    </Grid>
+                  </DataTemplate>
+                </ListBox.ItemTemplate>
+              </ListBox>
+            </Panel>
+          </DockPanel>
+        </Border>
+      </Grid>
+    </Grid>
+  </DockPanel>
+</UserControl>

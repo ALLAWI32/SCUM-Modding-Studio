@@ -1,0 +1,37 @@
+<Project>
+  <!--
+    Shared build settings for every project in ScumStudio.sln.
+    Build output goes to ./artifacts (UseArtifactsOutput). Override per build with
+      dotnet build -p:ArtifactsPath=<folder>
+    so parallel builds (or agents) never collide.
+  -->
+  <PropertyGroup>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>12</LangVersion>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <UseArtifactsOutput>true</UseArtifactsOutput>
+    <ArtifactsPath Condition="'$(ArtifactsPath)' == ''">$(MSBuildThisFileDirectory)artifacts</ArtifactsPath>
+
+    <Company>ScumStudio</Company>
+    <Product>SCUM Modding Studio</Product>
+    <Copyright>Copyright (c) 2026 ALLAWI and contributors</Copyright>
+    <Version>0.1.0</Version>
+    <NeutralLanguage>en</NeutralLanguage>
+
+    <!-- XML docs are produced so public-API doc comments are checked; missing-comment warnings stay quiet. -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <!-- CUE4Parse 1.2.2 ships its native CUE4Parse-Natives.dll in lib/net8.0, so a full rebuild reports MSB3246 ("PE image
+         does not have metadata") for every project that references it. The DLL is only copied to the output, never loaded
+         as an assembly; keep the build at 0 warnings. -->
+    <MSBuildWarningsAsMessages>$(MSBuildWarningsAsMessages);MSB3246</MSBuildWarningsAsMessages>
+
+    <!-- The app, CLI and tests target .NET 8; when only a newer .NET runtime is installed they run on it instead of failing. -->
+    <RollForward>Major</RollForward>
+
+    <Deterministic>true</Deterministic>
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+</Project>

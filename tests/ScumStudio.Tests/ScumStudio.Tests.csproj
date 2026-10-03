@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>ScumStudio.Tests</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="Avalonia.Headless.XUnit" />
+    <PackageReference Include="xunit.runner.visualstudio">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\ScumStudio.Core\ScumStudio.Core.csproj" />
+    <ProjectReference Include="..\..\src\ScumStudio.Formats\ScumStudio.Formats.csproj" />
+    <ProjectReference Include="..\..\src\ScumStudio.Pak\ScumStudio.Pak.csproj" />
+    <ProjectReference Include="..\..\src\ScumStudio.Assets\ScumStudio.Assets.csproj" />
+    <ProjectReference Include="..\..\src\ScumStudio.Rendering\ScumStudio.Rendering.csproj" />
+    <ProjectReference Include="..\..\src\ScumStudio.Level\ScumStudio.Level.csproj" />
+    <ProjectReference Include="..\..\src\ScumStudio.Modding\ScumStudio.Modding.csproj" />
+    <ProjectReference Include="..\..\src\ScumStudio.Mcp\ScumStudio.Mcp.csproj" />
+    <ProjectReference Include="..\..\src\ScumStudio.Viewport\ScumStudio.Viewport.csproj" />
+    <ProjectReference Include="..\..\src\ScumStudio.App\ScumStudio.App.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>ScumStudio.Pak</RootNamespace>
+    <AssemblyName>ScumStudio.Pak</AssemblyName>
+    <Description>Pak reading (CUE4Parse providers, loose directories) and pak V11 writing.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="CUE4Parse" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ScumStudio.Core\ScumStudio.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="ScumStudio.Tests" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,48 @@
+name: build
+
+# Runs on pushes to main and on demand (Actions tab -> build -> Run workflow, pick the branch). Work-in-progress
+# checkpoints on feature branches are pushed many times a day and must not trigger a run — each failed run e-mails
+# the owner. Re-enable `pull_request:` once the branch is stable.
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ windows-latest, ubuntu-latest ]
+    env:
+      DOTNET_NOLOGO: "1"
+      DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+      # SCUM_FIXTURES is intentionally not set in CI: fixture-based tests skip automatically.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore
+        run: dotnet restore ScumStudio.sln
+
+      - name: Build
+        run: dotnet build ScumStudio.sln -c Release --no-restore
+
+      - name: Test
+        run: dotnet test ScumStudio.sln -c Release --no-build --logger "trx;LogFileName=results.trx" --results-directory TestResults
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.os }}
+          path: TestResults
+          if-no-files-found: ignore

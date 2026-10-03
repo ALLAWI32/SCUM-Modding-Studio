@@ -1,0 +1,156 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:ScumStudio.App.ViewModels"
+             xmlns:c="using:ScumStudio.App.Controls"
+             x:Class="ScumStudio.App.Views.SetupView"
+             x:DataType="vm:SetupViewModel">
+  <Border Classes="dialog" Width="720" MaxHeight="820">
+    <DockPanel>
+      <!-- Header -->
+      <Border DockPanel.Dock="Top" Padding="24,20,24,16" BorderBrush="{DynamicResource StrokeSubtleBrush}" BorderThickness="0,0,0,1">
+        <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="14">
+          <Border Grid.Column="0" Classes="iconTile" Width="44" Height="44" CornerRadius="{DynamicResource SmallCornerRadius}">
+            <c:GlyphIcon Kind="Icon.Plug" IconSize="22" HorizontalAlignment="Center" VerticalAlignment="Center" />
+          </Border>
+          <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
+            <TextBlock Text="{Tr Setup.Title}" Classes="h1" FontSize="19" />
+            <TextBlock Text="{Tr Setup.Subtitle}" Classes="muted wrap" FontSize="12.5" />
+          </StackPanel>
+          <Button Grid.Column="2" Classes="ghost square" Command="{Binding CancelCommand}" VerticalAlignment="Top" ToolTip.Tip="{Tr Setup.Close.Tip}">
+            <c:GlyphIcon Kind="Icon.Close" IconSize="14" />
+          </Button>
+        </Grid>
+      </Border>
+
+      <!-- Footer -->
+      <Border DockPanel.Dock="Bottom" Padding="24,14" BorderBrush="{DynamicResource StrokeSubtleBrush}" BorderThickness="0,1,0,0"
+              Background="{DynamicResource Bg1Brush}">
+        <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
+          <TextBlock Grid.Column="0" Text="{Binding SettingsFolderText}" Classes="caption" VerticalAlignment="Center" ToolTip.Tip="{Binding DataDirectory}" />
+          <Button Grid.Column="1" Content="{Tr Setup.Skip}" Classes="ghost" Command="{Binding CancelCommand}" ToolTip.Tip="{Tr Setup.Skip.Tip}" />
+          <Button Grid.Column="2" x:Name="SaveButton" Classes="accent" Command="{Binding SaveAndCloseCommand}" ToolTip.Tip="{Tr Setup.Save.Tip}">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <c:GlyphIcon Kind="Icon.Check" IconSize="14" />
+              <TextBlock Text="{Tr Setup.Save}" />
+            </StackPanel>
+          </Button>
+        </Grid>
+      </Border>
+
+      <ScrollViewer HorizontalScrollBarVisibility="Disabled">
+        <StackPanel Margin="24,18" Spacing="18">
+
+          <!-- 1. Game -->
+          <StackPanel Spacing="10">
+            <Grid ColumnDefinitions="*,Auto">
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <Border Classes="badge accent"><TextBlock Text="1" /></Border>
+                <TextBlock Text="{Tr Setup.Folders}" Classes="h2" VerticalAlignment="Center" />
+              </StackPanel>
+              <Button Grid.Column="1" Classes="small" Command="{Binding AutoDetectCommand}" IsEnabled="{Binding !IsWorking}" ToolTip.Tip="{Tr Setup.AutoDetect.Tip}">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                  <c:GlyphIcon Kind="Icon.Search" IconSize="13" />
+                  <TextBlock Text="{Tr Setup.AutoDetect}" />
+                </StackPanel>
+              </Button>
+            </Grid>
+            <TextBlock Text="{Binding DetectStatus}" Classes="caption wrap"
+                       IsVisible="{Binding DetectStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+            <StackPanel>
+              <TextBlock Text="{Tr Setup.GamePaks}" Classes="label" />
+              <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                <TextBox x:Name="GameFolderBox" Text="{Binding GamePaksFolder}" Watermark="...\steamapps\common\SCUM\SCUM\Content\Paks" ToolTip.Tip="{Tr Settings.GamePaks.Tip}" />
+                <Button Grid.Column="1" Content="{Tr Common.Browse}" Command="{Binding BrowseGameCommand}" ToolTip.Tip="{Tr Common.BrowseFolder.Tip}" />
+              </Grid>
+            </StackPanel>
+            <StackPanel>
+              <TextBlock Text="{Tr Setup.ServerPaks}" Classes="label" />
+              <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                <TextBox Text="{Binding ServerPaksFolder}" Watermark="...\SCUMServer\SCUM\Content\Paks" ToolTip.Tip="{Tr Settings.ServerPaks.Tip}" />
+                <Button Grid.Column="1" Content="{Tr Common.Browse}" Command="{Binding BrowseServerCommand}" ToolTip.Tip="{Tr Common.BrowseFolder.Tip}" />
+              </Grid>
+            </StackPanel>
+            <Grid ColumnDefinitions="*,*" ColumnSpacing="12">
+              <StackPanel Grid.Column="0">
+                <TextBlock Text="{Tr Settings.ClientMods}" Classes="label" />
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                  <TextBox Text="{Binding ClientModsFolder}" Watermark="Paks\~mods" ToolTip.Tip="{Tr Settings.ClientMods.Tip}" />
+                  <Button Grid.Column="1" Content="..." Command="{Binding BrowseClientModsCommand}" ToolTip.Tip="{Tr Common.BrowseFolder.Tip}" />
+                </Grid>
+              </StackPanel>
+              <StackPanel Grid.Column="1">
+                <TextBlock Text="{Tr Settings.ServerMods}" Classes="label" />
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                  <TextBox Text="{Binding ServerModsFolder}" Watermark="Paks\~mods" ToolTip.Tip="{Tr Settings.ServerMods.Tip}" />
+                  <Button Grid.Column="1" Content="..." Command="{Binding BrowseServerModsCommand}" ToolTip.Tip="{Tr Common.BrowseFolder.Tip}" />
+                </Grid>
+              </StackPanel>
+            </Grid>
+          </StackPanel>
+
+          <Separator />
+
+          <!-- 2. Key -->
+          <StackPanel Spacing="10">
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <Border Classes="badge accent"><TextBlock Text="2" /></Border>
+              <TextBlock Text="{Tr Settings.AesKey}" Classes="h2" VerticalAlignment="Center" />
+              <Border Classes="badge ok" IsVisible="{Binding HasStoredKey}"><TextBlock Text="{Tr Setup.Stored}" /></Border>
+            </StackPanel>
+            <TextBlock Text="{Binding KeyStatusText}" Classes="muted wrap" FontSize="12.5" />
+            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+              <TextBox x:Name="KeyBox" Text="{Binding KeyInput}" PasswordChar="&#x2022;" RevealPassword="False"
+                       Watermark="{Tr Setup.Key.Watermark}" Classes="mono" AcceptsReturn="False"
+                       Classes.invalid="{Binding HasKeyError}" ToolTip.Tip="{Tr Setup.Key.Tip}" />
+              <Button Grid.Column="1" Classes="danger" Content="{Tr Setup.ForgetKey}" Command="{Binding ForgetKeyCommand}"
+                      IsVisible="{Binding HasStoredKey}" ToolTip.Tip="{Tr Settings.ForgetKey.Tip}" />
+            </Grid>
+            <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding HasKeyError}">
+              <c:GlyphIcon Kind="Icon.Error" IconSize="14" Foreground="{DynamicResource DangerBrush}" VerticalAlignment="Center" />
+              <TextBlock x:Name="KeyErrorText" Text="{Binding KeyError}" Classes="error wrap" FontSize="12.5" />
+            </StackPanel>
+            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10">
+              <Button Content="{Tr Setup.FindKeyOnline}" Command="{Binding FindKeyOnlineCommand}" IsEnabled="{Binding !IsFindingKey}"
+                      ToolTip.Tip="{Tr Setup.FindKeyOnline.Tip}" />
+              <TextBlock Grid.Column="1" Text="{Binding KeyOnlineStatus}" Classes="muted wrap" FontSize="12.5" VerticalAlignment="Center" />
+            </Grid>
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <c:GlyphIcon Kind="Icon.Shield" IconSize="14" Foreground="{DynamicResource SuccessBrush}" VerticalAlignment="Center" />
+              <TextBlock Text="{Binding KeyProtectionText}" Classes="caption wrap" />
+            </StackPanel>
+          </StackPanel>
+
+          <Separator />
+
+          <!-- 3. Test -->
+          <StackPanel Spacing="10">
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <Border Classes="badge accent"><TextBlock Text="3" /></Border>
+              <TextBlock Text="{Tr Setup.Test}" Classes="h2" VerticalAlignment="Center" />
+            </StackPanel>
+            <Border Classes="inset">
+              <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                <StackPanel Grid.Column="0" VerticalAlignment="Center" Spacing="4">
+                  <TextBlock Text="{Tr Setup.Test.Caption}" Classes="caption wrap"
+                             IsVisible="{Binding !HasTestResult}" />
+                  <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding HasTestResult}">
+                    <Ellipse Classes="dot" Classes.ok="{Binding IsTestOk}" Classes.error="{Binding IsTestFailed}" Classes.busy="{Binding IsWorking}" />
+                    <TextBlock x:Name="TestResultText" Text="{Binding TestResult}" Classes="wrap" FontSize="12.5"
+                               Classes.ok="{Binding IsTestOk}" Classes.error="{Binding IsTestFailed}" />
+                  </StackPanel>
+                  <ProgressBar IsIndeterminate="True" IsVisible="{Binding IsWorking}" />
+                </StackPanel>
+                <Button Grid.Column="1" Command="{Binding TestConnectionCommand}" IsEnabled="{Binding !IsWorking}" VerticalAlignment="Center" ToolTip.Tip="{Tr Setup.TestButton.Tip}">
+                  <StackPanel Orientation="Horizontal" Spacing="6">
+                    <c:GlyphIcon Kind="Icon.Plug" IconSize="14" />
+                    <TextBlock Text="{Tr Setup.TestButton}" />
+                  </StackPanel>
+                </Button>
+              </Grid>
+            </Border>
+          </StackPanel>
+        </StackPanel>
+      </ScrollViewer>
+    </DockPanel>
+  </Border>
+</UserControl>

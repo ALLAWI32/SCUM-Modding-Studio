@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>ScumStudio.Cli</RootNamespace>
+    <!-- The executable is "scumstudio" (scumstudio.exe on Windows). -->
+    <AssemblyName>scumstudio</AssemblyName>
+    <Description>ScumStudio command line: list levels, dump actors, verify round-trips, render, export paks.</Description>
+    <!-- Single-file publish: bundle the native libraries (GLFW, SkiaSharp, ...) into the .exe so it runs on its own.
+         ScumStudio.Rendering's GlfwNativeLoader finds GLFW in the bundle's extraction folder. -->
+    <IncludeNativeLibrariesForSelfExtract Condition="'$(PublishSingleFile)' == 'true'">true</IncludeNativeLibrariesForSelfExtract>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.CommandLine" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ScumStudio.Core\ScumStudio.Core.csproj" />
+    <ProjectReference Include="..\ScumStudio.Formats\ScumStudio.Formats.csproj" />
+    <ProjectReference Include="..\ScumStudio.Pak\ScumStudio.Pak.csproj" />
+    <ProjectReference Include="..\ScumStudio.Assets\ScumStudio.Assets.csproj" />
+    <ProjectReference Include="..\ScumStudio.Rendering\ScumStudio.Rendering.csproj" />
+    <ProjectReference Include="..\ScumStudio.Level\ScumStudio.Level.csproj" />
+    <ProjectReference Include="..\ScumStudio.Viewport\ScumStudio.Viewport.csproj" />
+    <ProjectReference Include="..\ScumStudio.Mcp\ScumStudio.Mcp.csproj" />
+  </ItemGroup>
+
+</Project>

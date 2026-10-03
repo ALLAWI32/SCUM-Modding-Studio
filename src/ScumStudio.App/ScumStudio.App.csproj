@@ -1,0 +1,48 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>ScumStudio.App</RootNamespace>
+    <Description>ScumStudio desktop editor (Avalonia).</Description>
+    <!-- Single-file publish: bundle the native libraries (GLFW, SkiaSharp, ...) into the .exe so it runs on its own.
+         ScumStudio.Rendering's GlfwNativeLoader finds GLFW in the bundle's extraction folder. -->
+    <IncludeNativeLibrariesForSelfExtract Condition="'$(PublishSingleFile)' == 'true'">true</IncludeNativeLibrariesForSelfExtract>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
+    <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <AvaloniaResource Include="Assets\**" />
+    <!-- UI strings per language (see Localization/Loc.cs), read as Strings.<code>.json. -->
+    <EmbeddedResource Include="Localization\Strings\*.json" LogicalName="Strings.%(Filename).json" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="ScumStudio.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" />
+    <PackageReference Include="Avalonia.Desktop" />
+    <PackageReference Include="Avalonia.Themes.Fluent" />
+    <PackageReference Include="Avalonia.Controls.ColorPicker" />
+    <PackageReference Include="Avalonia.Fonts.Inter" />
+    <!-- Developer tools (F12) only in Debug builds. -->
+    <PackageReference Include="Avalonia.Diagnostics" Condition="'$(Configuration)' == 'Debug'" />
+    <PackageReference Include="CommunityToolkit.Mvvm" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ScumStudio.Core\ScumStudio.Core.csproj" />
+    <ProjectReference Include="..\ScumStudio.Pak\ScumStudio.Pak.csproj" />
+    <ProjectReference Include="..\ScumStudio.Assets\ScumStudio.Assets.csproj" />
+    <ProjectReference Include="..\ScumStudio.Rendering\ScumStudio.Rendering.csproj" />
+    <ProjectReference Include="..\ScumStudio.Level\ScumStudio.Level.csproj" />
+    <ProjectReference Include="..\ScumStudio.Viewport\ScumStudio.Viewport.csproj" />
+    <ProjectReference Include="..\ScumStudio.Mcp\ScumStudio.Mcp.csproj" />
+  </ItemGroup>
+
+</Project>

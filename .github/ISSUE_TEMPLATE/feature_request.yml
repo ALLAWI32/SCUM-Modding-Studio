@@ -1,0 +1,22 @@
+name: Feature request
+description: An idea for ScumStudio.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like to do?
+      description: Describe the result you want in the game or in the app, not only the button.
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why does it matter to you?
+  - type: checkboxes
+    id: rules
+    attributes:
+      label: Fair play
+      options:
+        - label: This works on game files and mod paks only (no reading the running game, no cheats, no anti-cheat bypass).
+          required: true

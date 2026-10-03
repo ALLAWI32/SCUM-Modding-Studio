@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>ScumStudio.Formats</RootNamespace>
+    <AssemblyName>ScumStudio.Formats</AssemblyName>
+    <Description>In-house cooked UE 4.27 package reader/writer (port of the ue4pkg/ue4write toolchain) and round-trip verification.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="UAssetAPI" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ScumStudio.Core\ScumStudio.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="ScumStudio.Tests" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>ScumStudio.Level</RootNamespace>
+    <AssemblyName>ScumStudio.Level</AssemblyName>
+    <Description>Editable level model: world index, actor graph, edit operations, journal, project and exporter.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Also flows in through ScumStudio.Assets; referenced directly because Reading/Cue4ParseLevelReader uses its types. -->
+    <PackageReference Include="CUE4Parse" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ScumStudio.Core\ScumStudio.Core.csproj" />
+    <ProjectReference Include="..\ScumStudio.Formats\ScumStudio.Formats.csproj" />
+    <ProjectReference Include="..\ScumStudio.Pak\ScumStudio.Pak.csproj" />
+    <ProjectReference Include="..\ScumStudio.Assets\ScumStudio.Assets.csproj" />
+    <ProjectReference Include="..\ScumStudio.Modding\ScumStudio.Modding.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="ScumStudio.Tests" />
+  </ItemGroup>
+
+</Project>

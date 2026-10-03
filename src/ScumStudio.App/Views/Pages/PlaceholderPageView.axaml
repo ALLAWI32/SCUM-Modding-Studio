@@ -1,0 +1,92 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:ScumStudio.App.ViewModels"
+             xmlns:c="using:ScumStudio.App.Controls"
+             x:Class="ScumStudio.App.Views.Pages.PlaceholderPageView"
+             x:DataType="vm:PlaceholderPageViewModel">
+  <ScrollViewer HorizontalScrollBarVisibility="Disabled">
+    <StackPanel Margin="24,20,24,24" Spacing="16" MaxWidth="1180" HorizontalAlignment="Left">
+
+      <!-- Header -->
+      <StackPanel Spacing="4">
+        <StackPanel Orientation="Horizontal" Spacing="10">
+          <TextBlock Text="{Binding Title}" Classes="h1" />
+          <Border Classes="badge accent" VerticalAlignment="Center"><TextBlock Text="{Tr Placeholder.Planned}" /></Border>
+        </StackPanel>
+        <TextBlock Text="{Binding Subtitle}" Classes="muted" />
+      </StackPanel>
+
+      <!-- Hero -->
+      <Border Classes="card" Padding="0">
+        <Grid ColumnDefinitions="*,280">
+          <StackPanel Grid.Column="0" Margin="24" Spacing="12">
+            <Border Classes="iconTile" HorizontalAlignment="Left" Width="48" Height="48" CornerRadius="{DynamicResource SmallCornerRadius}">
+              <c:GlyphIcon Kind="{Binding IconKey}" IconSize="26" HorizontalAlignment="Center" VerticalAlignment="Center" />
+            </Border>
+            <TextBlock Text="{Binding Headline}" Classes="h1" FontSize="20" />
+            <TextBlock Text="{Binding Body}" Classes="muted wrap" LineHeight="21" MaxWidth="640" HorizontalAlignment="Left" />
+            <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,4,0,0">
+              <c:GlyphIcon Kind="Icon.Info" IconSize="14" Foreground="{DynamicResource TextMutedBrush}" VerticalAlignment="Center" />
+              <TextBlock Text="{Tr Placeholder.Roadmap}"
+                         Classes="caption" VerticalAlignment="Center" />
+            </StackPanel>
+          </StackPanel>
+          <Border Grid.Column="1" CornerRadius="{DynamicResource PanelCornerRadius}" ClipToBounds="True">
+            <Panel>
+              <c:ViewportGrid CellSize="18" MajorEvery="4" Background="{DynamicResource ViewportBrush}" AxisXBrush="{DynamicResource AxisXBrush}" AxisYBrush="{DynamicResource AxisYBrush}" />
+              <c:GlyphIcon Kind="{Binding IconKey}" IconSize="120" StrokeThickness="1.2" Opacity="0.55"
+                           Foreground="{DynamicResource AccentBrush}"
+                           HorizontalAlignment="Center" VerticalAlignment="Center" />
+            </Panel>
+          </Border>
+        </Grid>
+      </Border>
+
+      <!-- Features -->
+      <TextBlock Text="{Tr Placeholder.Features}" Classes="section" Margin="0,8,0,0" />
+      <ItemsControl ItemsSource="{Binding Features}">
+        <ItemsControl.ItemsPanel>
+          <ItemsPanelTemplate>
+            <UniformGrid Columns="3" />
+          </ItemsPanelTemplate>
+        </ItemsControl.ItemsPanel>
+        <ItemsControl.ItemTemplate>
+          <DataTemplate x:DataType="vm:FeatureCard">
+            <Border Classes="card" Margin="0,0,12,12" MinHeight="150">
+              <StackPanel Spacing="10">
+                <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
+                  <Border Grid.Column="0" Classes="iconTile" Width="32" Height="32" CornerRadius="{DynamicResource SmallCornerRadius}">
+                    <c:GlyphIcon Kind="{Binding IconKey}" IconSize="17" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                  </Border>
+                  <TextBlock Grid.Column="1" Text="{Binding Title}" Classes="h3" VerticalAlignment="Center" />
+                  <Border Grid.Column="2" Classes="badge"><TextBlock Text="{Binding Status}" /></Border>
+                </Grid>
+                <TextBlock Text="{Binding Description}" Classes="muted wrap" FontSize="12.5" LineHeight="19" />
+              </StackPanel>
+            </Border>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+
+      <!-- Foundations -->
+      <TextBlock Text="{Tr Placeholder.BuiltOn}" Classes="section" />
+      <ItemsControl ItemsSource="{Binding Foundations}">
+        <ItemsControl.ItemsPanel>
+          <ItemsPanelTemplate>
+            <WrapPanel />
+          </ItemsPanelTemplate>
+        </ItemsControl.ItemsPanel>
+        <ItemsControl.ItemTemplate>
+          <DataTemplate x:DataType="x:String">
+            <Border Classes="chip" Margin="0,0,8,8">
+              <StackPanel Orientation="Horizontal" Spacing="6">
+                <c:GlyphIcon Kind="Icon.Check" IconSize="12" Foreground="{DynamicResource SuccessBrush}" VerticalAlignment="Center" />
+                <TextBlock Text="{Binding}" />
+              </StackPanel>
+            </Border>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>

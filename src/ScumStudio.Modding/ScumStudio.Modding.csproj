@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>ScumStudio.Modding</RootNamespace>
+    <AssemblyName>ScumStudio.Modding</AssemblyName>
+    <Description>Vehicle and weapon modding: rename-clone of cooked Blueprint families, stored-value (stats) editing, AssetRegistry registration.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="CUE4Parse" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ScumStudio.Core\ScumStudio.Core.csproj" />
+    <ProjectReference Include="..\ScumStudio.Formats\ScumStudio.Formats.csproj" />
+    <ProjectReference Include="..\ScumStudio.Assets\ScumStudio.Assets.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="ScumStudio.Tests" />
+  </ItemGroup>
+
+</Project>

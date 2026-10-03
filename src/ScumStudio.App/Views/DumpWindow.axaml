@@ -1,0 +1,39 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:ScumStudio.App.ViewModels"
+        x:Class="ScumStudio.App.Views.DumpWindow"
+        x:DataType="vm:DumpViewModel"
+        Title="{Tr Dump.WindowTitle}" Width="900" Height="760"
+        Background="{DynamicResource Bg0Brush}">
+  <DockPanel Margin="16">
+    <StackPanel DockPanel.Dock="Top" Spacing="4" Margin="0,0,0,12">
+      <TextBlock Text="{Tr Dump.Title}" Classes="h2" />
+      <TextBlock Text="{Tr Dump.Caption}" Classes="caption wrap" />
+    </StackPanel>
+
+    <StackPanel DockPanel.Dock="Bottom" Spacing="8" Margin="0,12,0,0">
+      <Grid ColumnDefinitions="*,Auto,Auto,Auto" ColumnSpacing="8">
+        <TextBox Grid.Column="0" Text="{Binding OutputFolder}" Watermark="{Tr Dump.Folder}" ToolTip.Tip="{Tr Dump.Folder.Tip}" />
+        <Button Grid.Column="1" Content="{Tr Common.BrowseEllipsis}" Command="{Binding BrowseCommand}" ToolTip.Tip="{Tr Common.BrowseFolder.Tip}" />
+        <Button Grid.Column="2" Classes="accent" Content="{Tr Dump.Dump}" Command="{Binding DumpCommand}" x:Name="DumpButton" ToolTip.Tip="{Tr Dump.Dump.Tip}" />
+        <Button Grid.Column="3" Classes="ghost" Content="{Tr Dump.Stop}" Command="{Binding CancelCommand}" ToolTip.Tip="{Tr Dump.Stop.Tip}" />
+      </Grid>
+      <ProgressBar Value="{Binding Progress}" Maximum="100" IsVisible="{Binding IsRunning}" />
+      <TextBlock Text="{Binding Status}" Classes="caption mono" TextTrimming="CharacterEllipsis" />
+    </StackPanel>
+
+    <Border Classes="panel">
+      <TreeView ItemsSource="{Binding Roots}" x:Name="DumpTree">
+        <TreeView.ItemTemplate>
+          <TreeDataTemplate DataType="vm:DumpNodeViewModel" ItemsSource="{Binding Children}">
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <CheckBox IsChecked="{Binding IsChecked}" ToolTip.Tip="{Tr Dump.Check.Tip}" />
+              <TextBlock Text="{Binding Text}" VerticalAlignment="Center" />
+              <TextBlock Text="{Binding Info}" Classes="caption mono" VerticalAlignment="Center" ToolTip.Tip="{Tr Dump.Info.Tip}" />
+            </StackPanel>
+          </TreeDataTemplate>
+        </TreeView.ItemTemplate>
+      </TreeView>
+    </Border>
+  </DockPanel>
+</Window>

@@ -1,0 +1,393 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:ScumStudio.App.ViewModels"
+             xmlns:c="using:ScumStudio.App.Controls"
+             xmlns:conv="using:ScumStudio.App.Converters"
+             x:Class="ScumStudio.App.Views.Pages.AssetsPageView"
+             x:DataType="vm:AssetsPageViewModel">
+  <UserControl.Styles>
+    <!-- Tiles: a square picture with the name under it; the selected one gets the accent frame. -->
+    <Style Selector="Button.tile">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderBrush" Value="Transparent" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="Padding" Value="6" />
+      <Setter Property="Margin" Value="0,0,8,8" />
+      <Setter Property="MinHeight" Value="0" />
+      <Setter Property="CornerRadius" Value="{DynamicResource ControlCornerRadius}" />
+    </Style>
+    <Style Selector="Button.tile:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource Surface2Brush}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource StrokeBrush}" />
+    </Style>
+    <Style Selector="Button.tile.selected /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource AccentSoftBrush}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+    </Style>
+    <Style Selector="Button.tile.selected:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource AccentSoftBrush}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+    </Style>
+  </UserControl.Styles>
+
+  <DockPanel>
+
+    <!-- ===== Header ===== -->
+    <Border DockPanel.Dock="Top" Classes="pageHeader">
+      <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="14">
+        <Border Grid.Column="0" Classes="pageGlyph"><c:GlyphIcon Kind="{Binding IconKey}" IconSize="22" /></Border>
+        <StackPanel Grid.Column="1" Spacing="2" VerticalAlignment="Center">
+          <TextBlock Text="{Binding Title}" Classes="pageTitle" />
+          <TextBlock Text="{Binding Subtitle}" Classes="muted" />
+        </StackPanel>
+        <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+          <Border Classes="chip" VerticalAlignment="Center" ToolTip.Tip="{Binding SourceText}">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <c:GlyphIcon Kind="Icon.Pak" IconSize="13" VerticalAlignment="Center" />
+              <TextBlock Text="{Binding SourceText}" MaxWidth="300" TextTrimming="PrefixCharacterEllipsis" />
+            </StackPanel>
+          </Border>
+          <Button Command="{Binding OpenLooseFolderPickerCommand}" ToolTip.Tip="{Tr Common.OpenLooseFolder.Tip}">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <c:GlyphIcon Kind="Icon.Folder" IconSize="14" />
+              <TextBlock Text="{Tr Common.OpenFolder}" />
+            </StackPanel>
+          </Button>
+          <Button Classes="ghost square" Command="{Binding ReloadCommand}" ToolTip.Tip="{Tr Assets.Reload.Tip}">
+            <c:GlyphIcon Kind="Icon.Refresh" IconSize="16" />
+          </Button>
+        </StackPanel>
+      </Grid>
+    </Border>
+
+    <!-- ===== Toolbar ===== -->
+    <Grid DockPanel.Dock="Top" Margin="24,0,24,12" ColumnDefinitions="360,*,Auto" ColumnSpacing="12" IsVisible="{Binding HasCatalog}">
+      <Panel Grid.Column="0">
+        <TextBox x:Name="SearchBox" Classes="search" Text="{Binding SearchText}"
+                 Watermark="{Tr Assets.Filter}" ToolTip.Tip="{Tr Assets.Filter.Tip}" />
+        <c:GlyphIcon Kind="Icon.Search" IconSize="15" Margin="11,0,0,0" IsHitTestVisible="False"
+                     HorizontalAlignment="Left" VerticalAlignment="Center" Foreground="{DynamicResource TextMutedBrush}" />
+      </Panel>
+      <ItemsControl Grid.Column="1" ItemsSource="{Binding ClassChips}" VerticalAlignment="Center" IsVisible="{Binding !IsObjectsView}">
+        <ItemsControl.ItemsPanel>
+          <ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate>
+        </ItemsControl.ItemsPanel>
+        <ItemsControl.ItemTemplate>
+          <DataTemplate x:DataType="vm:CountChip">
+            <Button Classes="chipButton" Margin="0,2,6,2"
+                    Command="{Binding $parent[UserControl].((vm:AssetsPageViewModel)DataContext).FilterByClassCommand}"
+                    CommandParameter="{Binding}" ToolTip.Tip="{Tr Assets.ClassChip.Tip}">
+              <StackPanel Orientation="Horizontal" Spacing="5">
+                <TextBlock Text="{Binding Label}" Foreground="{DynamicResource TextSecondaryBrush}" />
+                <TextBlock Text="{Binding CountText}" FontWeight="SemiBold" />
+              </StackPanel>
+            </Button>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+      <Border Grid.Column="2" Classes="segmented">
+        <StackPanel Orientation="Horizontal">
+          <ToggleButton x:Name="GridViewButton" IsChecked="{Binding IsGridView}" ToolTip.Tip="{Tr Assets.Tiles.Tip}">
+            <c:GlyphIcon Kind="Icon.Grid" IconSize="14" />
+          </ToggleButton>
+          <ToggleButton IsChecked="{Binding !IsGridView}" ToolTip.Tip="{Tr Assets.Rows.Tip}">
+            <c:GlyphIcon Kind="Icon.List" IconSize="14" />
+          </ToggleButton>
+        </StackPanel>
+      </Border>
+    </Grid>
+
+    <!-- ===== Body ===== -->
+    <Panel Margin="24,0,24,20">
+
+      <!-- Empty state -->
+      <Border Classes="emptyState" IsVisible="{Binding ShowEmptyState}">
+        <StackPanel Spacing="12">
+          <Border Classes="iconTile" HorizontalAlignment="Center">
+            <c:GlyphIcon Kind="Icon.Assets" IconSize="20" HorizontalAlignment="Center" VerticalAlignment="Center" />
+          </Border>
+          <TextBlock Text="{Tr Assets.Empty}" Classes="h2" HorizontalAlignment="Center" />
+          <TextBlock Classes="muted wrap" TextAlignment="Center"
+                     Text="{Tr Assets.Empty.Body}" />
+          <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center">
+            <Button Classes="accent" Content="{Tr Common.OpenSetup}" Command="{Binding OpenSetupCommand}" ToolTip.Tip="{Tr Common.OpenSetup.Tip}" />
+            <Button Content="{Tr Common.OpenExtractedFolder}" Command="{Binding OpenLooseFolderPickerCommand}" ToolTip.Tip="{Tr Common.OpenLooseFolder.Tip}" />
+          </StackPanel>
+        </StackPanel>
+      </Border>
+
+      <!-- Indexing -->
+      <Border Classes="emptyState" IsVisible="{Binding IsIndexing}">
+        <StackPanel Spacing="12" Width="320">
+          <TextBlock Text="{Tr Assets.Indexing}" Classes="h2" HorizontalAlignment="Center" />
+          <ProgressBar IsIndeterminate="True" />
+          <TextBlock Text="{Tr Assets.Indexing.Body}"
+                     Classes="caption wrap" TextAlignment="Center" />
+        </StackPanel>
+      </Border>
+
+      <!-- Browser -->
+      <Grid ColumnDefinitions="260,*,360" ColumnSpacing="12" IsVisible="{Binding HasCatalog}">
+
+        <!-- Folder tree -->
+        <Border Grid.Column="0" Classes="panel">
+          <DockPanel>
+            <Border DockPanel.Dock="Top" Classes="panelHeader">
+              <Border Classes="segmented" HorizontalAlignment="Left">
+                <StackPanel Orientation="Horizontal">
+                  <ToggleButton x:Name="ObjectsViewButton" IsChecked="{Binding IsObjectsView}" Content="{Tr Assets.Objects}"
+                                ToolTip.Tip="{Tr Assets.Objects.Tip}" />
+                  <ToggleButton IsChecked="{Binding !IsObjectsView}" Content="{Tr Assets.AllFiles}"
+                                ToolTip.Tip="{Tr Assets.AllFiles.Tip}" />
+                </StackPanel>
+              </Border>
+            </Border>
+            <TreeView x:Name="CategoryTree" ItemsSource="{Binding ObjectRoots}" SelectedItem="{Binding SelectedCategory}" Margin="4" IsVisible="{Binding IsObjectsView}">
+              <TreeView.Styles>
+                <Style Selector="TreeViewItem" x:DataType="vm:ObjectCategoryNode">
+                  <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}" />
+                </Style>
+              </TreeView.Styles>
+              <TreeView.ItemTemplate>
+                <TreeDataTemplate x:DataType="vm:ObjectCategoryNode" ItemsSource="{Binding Children}">
+                  <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                    <TextBlock Grid.Column="0" Text="{Binding Title}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Title}" />
+                    <TextBlock Grid.Column="1" Text="{Binding CountText}" Classes="caption" VerticalAlignment="Center" Margin="0,0,6,0" />
+                  </Grid>
+                </TreeDataTemplate>
+              </TreeView.ItemTemplate>
+            </TreeView>
+            <TreeView x:Name="FolderTree" ItemsSource="{Binding Roots}" SelectedItem="{Binding SelectedFolder}" Margin="4" IsVisible="{Binding !IsObjectsView}">
+              <TreeView.Styles>
+                <Style Selector="TreeViewItem" x:DataType="vm:AssetFolderNode">
+                  <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}" />
+                </Style>
+              </TreeView.Styles>
+              <TreeView.ItemTemplate>
+                <TreeDataTemplate x:DataType="vm:AssetFolderNode" ItemsSource="{Binding Children}">
+                  <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
+                    <c:GlyphIcon Grid.Column="0" Kind="Icon.Folder" IconSize="15" VerticalAlignment="Center" />
+                    <TextBlock Grid.Column="1" Text="{Binding Name}" VerticalAlignment="Center" ToolTip.Tip="{Binding Path}" />
+                    <TextBlock Grid.Column="2" Text="{Binding CountText}" Classes="caption" VerticalAlignment="Center" Margin="0,0,6,0" />
+                  </Grid>
+                </TreeDataTemplate>
+              </TreeView.ItemTemplate>
+            </TreeView>
+          </DockPanel>
+        </Border>
+
+        <!-- Packages: tiles (rows virtualized, pictures made for the tiles on screen) or a list -->
+        <Border Grid.Column="1" Classes="panel">
+          <DockPanel>
+            <Border DockPanel.Dock="Top" Classes="panelHeader">
+              <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
+                <c:GlyphIcon Grid.Column="0" Kind="Icon.List" IconSize="16" VerticalAlignment="Center" />
+                <TextBlock Grid.Column="1" x:Name="ResultText" Text="{Binding ResultText}" Classes="muted" VerticalAlignment="Center" />
+              </Grid>
+            </Border>
+            <Panel>
+              <ListBox x:Name="PackageList" Classes="plain" ItemsSource="{Binding Items}" SelectedItem="{Binding SelectedItem}" IsVisible="{Binding !IsGridView}">
+                <ListBox.ItemTemplate>
+                  <DataTemplate x:DataType="vm:AssetItemViewModel">
+                    <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
+                      <Border Grid.Column="0" Width="28" Height="28" CornerRadius="{DynamicResource SmallCornerRadius}" Background="{DynamicResource Surface2Brush}" ClipToBounds="True">
+                        <Panel>
+                          <c:GlyphIcon Kind="{Binding IconKey}" IconSize="16" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                       Foreground="{Binding Tint, Converter={x:Static conv:HexBrushConverter.Instance}}"
+                                       IsVisible="{Binding Thumbnail, Converter={x:Static ObjectConverters.IsNull}}" />
+                          <c:ThumbnailImage Source="{Binding Thumbnail}" Stretch="UniformToFill" />
+                        </Panel>
+                      </Border>
+                      <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                        <TextBlock Text="{Binding Name}" FontWeight="Medium" />
+                        <TextBlock Text="{Binding Folder}" Classes="caption" FontSize="11" />
+                      </StackPanel>
+                      <Border Grid.Column="2" Classes="badge"><TextBlock Text="{Binding ClassName}" /></Border>
+                    </Grid>
+                  </DataTemplate>
+                </ListBox.ItemTemplate>
+              </ListBox>
+              <ScrollViewer x:Name="PackageGridScroll" IsVisible="{Binding IsGridView}" HorizontalScrollBarVisibility="Disabled">
+                <ItemsControl x:Name="PackageGrid" ItemsSource="{Binding TileRows}" Margin="8,6,0,0">
+                  <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate><VirtualizingStackPanel /></ItemsPanelTemplate>
+                  </ItemsControl.ItemsPanel>
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:AssetTileRow">
+                      <ItemsControl ItemsSource="{Binding Tiles}">
+                        <ItemsControl.ItemsPanel>
+                          <ItemsPanelTemplate><StackPanel Orientation="Horizontal" /></ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                          <DataTemplate x:DataType="vm:AssetItemViewModel">
+                            <Button Classes="tile" Classes.selected="{Binding IsSelected}" ToolTip.Tip="{Binding Entry.PackagePath}"
+                                    Command="{Binding $parent[UserControl].((vm:AssetsPageViewModel)DataContext).SelectCommand}" CommandParameter="{Binding}">
+                              <StackPanel Width="120" Spacing="5">
+                                <Border Height="120" CornerRadius="{DynamicResource SmallCornerRadius}" Background="{DynamicResource ViewportBrush}" ClipToBounds="True">
+                                  <Panel>
+                                    <c:GlyphIcon Kind="{Binding IconKey}" IconSize="30" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                 Foreground="{Binding Tint, Converter={x:Static conv:HexBrushConverter.Instance}}"
+                                                 IsVisible="{Binding Thumbnail, Converter={x:Static ObjectConverters.IsNull}}" />
+                                    <c:ThumbnailImage Source="{Binding Thumbnail}" Stretch="Uniform" Margin="2" />
+                                  </Panel>
+                                </Border>
+                                <TextBlock Text="{Binding Name}" FontSize="12" TextAlignment="Center" TextTrimming="CharacterEllipsis" />
+                                <TextBlock Text="{Binding ClassName}" Classes="caption" FontSize="10.5" TextAlignment="Center" TextTrimming="CharacterEllipsis" />
+                              </StackPanel>
+                            </Button>
+                          </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                      </ItemsControl>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </ScrollViewer>
+            </Panel>
+          </DockPanel>
+        </Border>
+
+        <!-- Details -->
+        <Border Grid.Column="2" Classes="panel">
+          <Panel>
+            <StackPanel IsVisible="{Binding !HasSelection}" VerticalAlignment="Center" Margin="24" Spacing="8">
+              <c:GlyphIcon Kind="Icon.Info" IconSize="22" HorizontalAlignment="Center" />
+              <TextBlock Text="{Tr Assets.SelectPackage}" Classes="h3" HorizontalAlignment="Center" />
+              <TextBlock Text="{Tr Assets.SelectPackage.Body}"
+                         Classes="caption wrap" TextAlignment="Center" />
+            </StackPanel>
+
+            <ScrollViewer IsVisible="{Binding HasSelection}">
+              <ContentControl x:Name="DetailsHost" Content="{Binding Details}" HorizontalContentAlignment="Stretch">
+                <ContentControl.ContentTemplate>
+                  <DataTemplate x:DataType="vm:AssetDetailsViewModel">
+              <StackPanel Margin="16" Spacing="12">
+                <!-- Title -->
+                <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12">
+                  <Border Grid.Column="0" Width="40" Height="40" CornerRadius="{DynamicResource SmallCornerRadius}" Background="{DynamicResource Surface2Brush}">
+                    <c:GlyphIcon Kind="{Binding IconKey}" IconSize="22" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                 Foreground="{Binding Tint, Converter={x:Static conv:HexBrushConverter.Instance}}" />
+                  </Border>
+                  <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
+                    <TextBlock x:Name="DetailsName" Text="{Binding Name}" Classes="h2" />
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                      <Border Classes="badge accent"><TextBlock Text="{Binding ClassName}" /></Border>
+                      <Border Classes="badge"><TextBlock Text="{Binding SizeText}" /></Border>
+                    </StackPanel>
+                  </StackPanel>
+                </Grid>
+
+                <!-- Preview: meshes orbit in the OpenGL viewport, textures and materials show their image, anything else its class icon. -->
+                <Border x:Name="PreviewRegion" Height="240" CornerRadius="{DynamicResource SmallCornerRadius}" ClipToBounds="True"
+                        BorderBrush="{DynamicResource StrokeSubtleBrush}" BorderThickness="1" Background="{DynamicResource ViewportBrush}">
+                  <Panel>
+                    <c:ViewportGrid CellSize="16" MajorEvery="4" Background="{DynamicResource ViewportBrush}" AxisXBrush="{DynamicResource AxisXBrush}" AxisYBrush="{DynamicResource AxisYBrush}"
+                                    IsVisible="{Binding !HasPreview}" />
+                    <c:GlyphIcon Kind="{Binding IconKey}" IconSize="28" HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding ShowIcon}"
+                                 Foreground="{Binding Tint, Converter={x:Static conv:HexBrushConverter.Instance}}" />
+                    <Image Source="{Binding Image, Converter={x:Static conv:TextureImageConverter.Instance}}" Stretch="Uniform" Margin="8" IsVisible="{Binding HasImage}" />
+                    <c:MeshPreview x:Name="MeshView" Model="{Binding Preview}" IsVisible="{Binding HasPreview}" />
+                    <Border Classes="hud" HorizontalAlignment="Center" VerticalAlignment="Top" Margin="8" IsHitTestVisible="False"
+                            IsVisible="{Binding #MeshView.SelectedPart, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock Text="{Binding #MeshView.SelectedPart}" FontWeight="SemiBold" />
+                        <TextBlock Text="{Tr Preview.PartHint}" Foreground="{DynamicResource TextMutedBrush}" />
+                      </StackPanel>
+                    </Border>
+                    <ProgressBar IsIndeterminate="True" IsVisible="{Binding IsPreviewLoading}" VerticalAlignment="Top" Margin="8,6" />
+                    <Border Classes="hud" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="8" IsHitTestVisible="False" IsVisible="{Binding HasImage}">
+                      <TextBlock Text="{Binding ImageText}" />
+                    </Border>
+                    <Border Classes="hud" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="8" IsHitTestVisible="False" IsVisible="{Binding HasPreview}">
+                      <TextBlock Text="{Binding #MeshView.Info}" />
+                    </Border>
+                  </Panel>
+                </Border>
+                <TextBlock Text="{Binding PreviewError}" Classes="error caption wrap" IsVisible="{Binding PreviewError, Converter={x:Static ObjectConverters.IsNotNull}}" />
+
+                <!-- Actions (wrap instead of clipping at the panel edge) -->
+                <WrapPanel ItemSpacing="6" LineSpacing="6">
+                  <Button x:Name="ExportPngButton" Classes="accent" IsEnabled="{Binding CanExportPng}" ToolTip.Tip="{Tr Assets.ExportPng.Tip}"
+                          Command="{Binding $parent[UserControl].((vm:AssetsPageViewModel)DataContext).ExportPngCommand}">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                      <c:GlyphIcon Kind="Icon.Export" IconSize="14" />
+                      <TextBlock Text="{Tr Assets.ExportPng}" />
+                    </StackPanel>
+                  </Button>
+                  <Button x:Name="ExportGltfButton" IsEnabled="{Binding CanExportGltf}" ToolTip.Tip="{Tr Assets.ExportGltf.Tip}"
+                          Command="{Binding $parent[UserControl].((vm:AssetsPageViewModel)DataContext).ExportGltfCommand}">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                      <c:GlyphIcon Kind="Icon.Export" IconSize="14" />
+                      <TextBlock Text="{Tr Assets.ExportGltf}" />
+                    </StackPanel>
+                  </Button>
+                  <Button x:Name="PlaceInMapButton" IsEnabled="{Binding CanPlaceInMap}" ToolTip.Tip="{Tr Assets.PlaceInMap.Tip}"
+                          Command="{Binding $parent[UserControl].((vm:AssetsPageViewModel)DataContext).PlaceInMapCommand}">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                      <c:GlyphIcon Kind="Icon.Map" IconSize="14" />
+                      <TextBlock Text="{Tr Assets.PlaceInMap}" />
+                    </StackPanel>
+                  </Button>
+                  <Button Classes="ghost" ToolTip.Tip="{Tr Assets.CopyPath.Tip}"
+                          Command="{Binding $parent[UserControl].((vm:AssetsPageViewModel)DataContext).CopyPathCommand}">
+                    <c:GlyphIcon Kind="Icon.Copy" IconSize="15" />
+                  </Button>
+                </WrapPanel>
+
+                <TextBlock Text="{Binding Error}" Classes="error wrap" IsVisible="{Binding Error, Converter={x:Static ObjectConverters.IsNotNull}}" />
+                <ProgressBar IsIndeterminate="True" IsVisible="{Binding IsLoading}" />
+
+                <!-- Material parameters (materials and instances): parent chain, textures, colours, scalars -->
+                <TextBlock Text="{Tr Assets.MaterialSection}" Classes="section" IsVisible="{Binding HasMaterialRows}" />
+                <ItemsControl ItemsSource="{Binding MaterialRows}" IsVisible="{Binding HasMaterialRows}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:PropertyRow">
+                      <Grid ColumnDefinitions="120,*" ColumnSpacing="8" Margin="0,3">
+                        <TextBlock Grid.Column="0" Text="{Binding Name}" Classes="caption" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Name}" />
+                        <SelectableTextBlock Grid.Column="1" Text="{Binding Value}" TextWrapping="Wrap" FontSize="12" />
+                      </Grid>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <!-- Rows -->
+                <TextBlock Text="{Tr Assets.DetailsSection}" Classes="section" />
+                <ItemsControl ItemsSource="{Binding Rows}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:PropertyRow">
+                      <Grid ColumnDefinitions="72,*" ColumnSpacing="8" Margin="0,3">
+                        <TextBlock Grid.Column="0" Text="{Binding Name}" Classes="caption" />
+                        <SelectableTextBlock Grid.Column="1" Text="{Binding Value}" TextWrapping="Wrap" FontSize="12" />
+                      </Grid>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <!-- Exports -->
+                <TextBlock Text="{Tr Assets.ExportsSection}" Classes="section" />
+                <ItemsControl ItemsSource="{Binding Exports}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:ExportRow">
+                      <Border Classes="inset" Padding="10,6" Margin="0,0,0,4">
+                        <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
+                          <TextBlock Grid.Column="0" Text="{Binding Index}" Classes="caption mono" VerticalAlignment="Center" />
+                          <StackPanel Grid.Column="1">
+                            <TextBlock Text="{Binding Name}" FontSize="12.5" />
+                            <TextBlock Text="{Binding ClassName}" Classes="caption" FontSize="11" />
+                          </StackPanel>
+                          <TextBlock Grid.Column="2" Text="{Binding SizeText}" Classes="caption" VerticalAlignment="Center" />
+                        </Grid>
+                      </Border>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </StackPanel>
+                  </DataTemplate>
+                </ContentControl.ContentTemplate>
+              </ContentControl>
+            </ScrollViewer>
+          </Panel>
+        </Border>
+      </Grid>
+    </Panel>
+  </DockPanel>
+</UserControl>

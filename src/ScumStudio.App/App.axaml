@@ -1,0 +1,171 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="using:ScumStudio.App"
+             x:Class="ScumStudio.App.App"
+             Name="ScumStudio"
+             RequestedThemeVariant="Dark">
+
+  <!--
+    FIELD MANUAL - ScumStudio's design tokens. Every colour used by the views is a DynamicResource defined here so the
+    accent picker (Settings > Appearance) can swap it at runtime. Never hard-code a hex value in a view.
+
+    Surfaces climb a warm olive-black ladder: Bg0 (window, bars, splitters) < Bg1 (docked panel bodies) < Surface
+    (panel headers, toolbars) < Surface2 (buttons, hover) < Surface3 (pressed, checked). Text is bone, the accent is
+    blaze orange - the same colour as the viewport's selection highlight (RenderSettings.HighlightColor).
+
+    Type: IBM Plex Sans (UI), Plex Sans Condensed (panel titles, labels, column headers), Plex Mono (numbers, paths,
+    coordinates, status bar) - each with IBM Plex Sans Arabic as fallback - and Saira Stencil One for the SCUM
+    wordmark only. Fonts are the official, unmodified TTFs in Assets/Fonts (SIL OFL 1.1, see OFL.txt).
+
+    Rhythm: 4 px base (2/4/6/8/12/16/24). Heights: controls 28, small 24, list rows 26, panel headers 30,
+    toolbars 38, title strip 40, status bar 24. Radii: 0 docked panels and rows, 2 inputs/chips/badges,
+    3 buttons and segmented controls, 4 popovers and dialogs.
+  -->
+  <Application.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.MergedDictionaries>
+        <ResourceInclude Source="avares://ScumStudio.App/Styles/Icons.axaml" />
+      </ResourceDictionary.MergedDictionaries>
+
+      <!-- Type -->
+      <FontFamily x:Key="ContentControlThemeFontFamily">avares://ScumStudio.App/Assets/Fonts#IBM Plex Sans, avares://ScumStudio.App/Assets/Fonts#IBM Plex Sans Arabic, $Default</FontFamily>
+      <FontFamily x:Key="CondensedFontFamily">avares://ScumStudio.App/Assets/Fonts#IBM Plex Sans Condensed, avares://ScumStudio.App/Assets/Fonts#IBM Plex Sans Arabic, $Default</FontFamily>
+      <FontFamily x:Key="MonoFontFamily">avares://ScumStudio.App/Assets/Fonts#IBM Plex Mono, avares://ScumStudio.App/Assets/Fonts#IBM Plex Sans Arabic, $Default</FontFamily>
+      <FontFamily x:Key="StencilFontFamily">avares://ScumStudio.App/Assets/Fonts#Saira Stencil One</FontFamily>
+      <!-- Shape: one place to change how square the app is. -->
+      <CornerRadius x:Key="PanelCornerRadius">10</CornerRadius>
+      <CornerRadius x:Key="SmallCornerRadius">6</CornerRadius>
+      <CornerRadius x:Key="ControlCornerRadius">7</CornerRadius>
+      <CornerRadius x:Key="OverlayCornerRadius">12</CornerRadius>
+
+      <!-- Colours -->
+      <Color x:Key="Bg0Color">#0D0E0B</Color>
+      <Color x:Key="Bg1Color">#141511</Color>
+      <Color x:Key="SurfaceColor">#1A1B16</Color>
+      <Color x:Key="Surface2Color">#22241D</Color>
+      <Color x:Key="Surface3Color">#2C2E26</Color>
+      <Color x:Key="StrokeColor">#34362C</Color>
+      <Color x:Key="StrokeSubtleColor">#25271F</Color>
+      <Color x:Key="TextColor">#E6E1D3</Color>
+      <Color x:Key="TextSecondaryColor">#ABA691</Color>
+      <Color x:Key="TextMutedColor">#737060</Color>
+      <Color x:Key="AccentColor">#E87B2F</Color>
+      <Color x:Key="AccentSoftColor">#2EE87B2F</Color>
+      <Color x:Key="SuccessColor">#8DA35B</Color>
+      <Color x:Key="WarningColor">#D4A53A</Color>
+      <Color x:Key="DangerColor">#D9533F</Color>
+      <Color x:Key="KhakiColor">#C8B98C</Color>
+      <Color x:Key="OnAccentColor">#160B03</Color>
+      <Color x:Key="AxisXColor">#E5534B</Color>
+      <Color x:Key="AxisYColor">#8DB84A</Color>
+      <Color x:Key="AxisZColor">#4F8FE0</Color>
+      <Color x:Key="ViewportColor">#0B0C0A</Color>
+
+      <SolidColorBrush x:Key="Bg0Brush" Color="#0D0E0B" />
+      <SolidColorBrush x:Key="Bg1Brush" Color="#141511" />
+      <SolidColorBrush x:Key="SurfaceBrush" Color="#1A1B16" />
+      <SolidColorBrush x:Key="Surface2Brush" Color="#22241D" />
+      <SolidColorBrush x:Key="Surface3Brush" Color="#2C2E26" />
+      <SolidColorBrush x:Key="StrokeBrush" Color="#34362C" />
+      <SolidColorBrush x:Key="StrokeSubtleBrush" Color="#25271F" />
+      <SolidColorBrush x:Key="TextBrush" Color="#E6E1D3" />
+      <SolidColorBrush x:Key="TextSecondaryBrush" Color="#ABA691" />
+      <SolidColorBrush x:Key="TextMutedBrush" Color="#737060" />
+      <SolidColorBrush x:Key="AccentBrush" Color="#E87B2F" />
+      <SolidColorBrush x:Key="AccentSoftBrush" Color="#2EE87B2F" />
+      <SolidColorBrush x:Key="AccentStrongBrush" Color="#FF9A55" />
+      <SolidColorBrush x:Key="OnAccentBrush" Color="#160B03" />
+      <SolidColorBrush x:Key="SuccessBrush" Color="#8DA35B" />
+      <SolidColorBrush x:Key="SuccessSoftBrush" Color="#248DA35B" />
+      <SolidColorBrush x:Key="WarningBrush" Color="#D4A53A" />
+      <SolidColorBrush x:Key="WarningSoftBrush" Color="#24D4A53A" />
+      <SolidColorBrush x:Key="DangerBrush" Color="#D9533F" />
+      <SolidColorBrush x:Key="DangerSoftBrush" Color="#24D9533F" />
+      <SolidColorBrush x:Key="KhakiBrush" Color="#C8B98C" />
+      <SolidColorBrush x:Key="AxisXBrush" Color="#E5534B" />
+      <SolidColorBrush x:Key="AxisYBrush" Color="#8DB84A" />
+      <SolidColorBrush x:Key="AxisZBrush" Color="#4F8FE0" />
+      <SolidColorBrush x:Key="ViewportBrush" Color="#0B0C0A" />
+      <SolidColorBrush x:Key="ViewportChromeBrush" Color="#D90D0E0B" />
+      <SolidColorBrush x:Key="ScrimBrush" Color="#B3050604" />
+
+      <!-- Fluent control resources re-pointed at the palette. -->
+      <SolidColorBrush x:Key="TextControlBackground" Color="#0F100D" />
+      <SolidColorBrush x:Key="TextControlBackgroundPointerOver" Color="#141511" />
+      <SolidColorBrush x:Key="TextControlBackgroundFocused" Color="#0F100D" />
+      <SolidColorBrush x:Key="TextControlBorderBrush" Color="#2E3027" />
+      <SolidColorBrush x:Key="TextControlBorderBrushPointerOver" Color="#3D4034" />
+      <SolidColorBrush x:Key="TextControlPlaceholderForeground" Color="#66634F" />
+      <SolidColorBrush x:Key="TextControlPlaceholderForegroundPointerOver" Color="#737060" />
+      <SolidColorBrush x:Key="TextControlPlaceholderForegroundFocused" Color="#66634F" />
+      <SolidColorBrush x:Key="ButtonBackground" Color="#22241D" />
+      <SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="#2C2E26" />
+      <SolidColorBrush x:Key="ButtonBackgroundPressed" Color="#34362C" />
+      <SolidColorBrush x:Key="ButtonBackgroundDisabled" Color="#1A1B16" />
+      <SolidColorBrush x:Key="ButtonBorderBrush" Color="#34362C" />
+      <SolidColorBrush x:Key="ButtonBorderBrushPointerOver" Color="#45483B" />
+      <SolidColorBrush x:Key="ButtonBorderBrushPressed" Color="#4E5143" />
+      <SolidColorBrush x:Key="ButtonBorderBrushDisabled" Color="#25271F" />
+      <SolidColorBrush x:Key="ButtonForeground" Color="#E6E1D3" />
+      <SolidColorBrush x:Key="ButtonForegroundPointerOver" Color="#F4F0E4" />
+      <SolidColorBrush x:Key="ButtonForegroundDisabled" Color="#5C5A4C" />
+      <SolidColorBrush x:Key="ToggleButtonBackground" Color="#22241D" />
+      <SolidColorBrush x:Key="ToggleButtonBackgroundPointerOver" Color="#2C2E26" />
+      <SolidColorBrush x:Key="ToggleButtonBorderBrush" Color="#34362C" />
+      <SolidColorBrush x:Key="ToggleButtonBackgroundChecked" Color="#2EE87B2F" />
+      <SolidColorBrush x:Key="ToggleButtonForegroundChecked" Color="#FF9A55" />
+      <SolidColorBrush x:Key="ToggleButtonBackgroundCheckedPointerOver" Color="#3DE87B2F" />
+      <SolidColorBrush x:Key="ToggleButtonForegroundCheckedPointerOver" Color="#FF9A55" />
+      <SolidColorBrush x:Key="ScrollBarThumbFill" Color="#3A3C31" />
+      <SolidColorBrush x:Key="TreeViewItemBackgroundSelected" Color="#2EE87B2F" />
+      <SolidColorBrush x:Key="TreeViewItemBackgroundSelectedPointerOver" Color="#3DE87B2F" />
+      <SolidColorBrush x:Key="TreeViewItemBackgroundPointerOver" Color="#1E2019" />
+      <SolidColorBrush x:Key="SystemControlHighlightListAccentLowBrush" Color="#2EE87B2F" />
+      <SolidColorBrush x:Key="SystemControlHighlightListAccentMediumBrush" Color="#3DE87B2F" />
+      <SolidColorBrush x:Key="SystemControlHighlightListLowBrush" Color="#1E2019" />
+      <SolidColorBrush x:Key="SystemControlHighlightListMediumBrush" Color="#2C2E26" />
+    </ResourceDictionary>
+  </Application.Resources>
+
+  <Application.DataTemplates>
+    <local:ViewLocator />
+  </Application.DataTemplates>
+
+  <Application.Styles>
+    <FluentTheme>
+      <FluentTheme.Palettes>
+        <ColorPaletteResources x:Key="Dark"
+                               Accent="#FFE87B2F"
+                               RegionColor="#FF0D0E0B"
+                               AltHigh="#FF0D0E0B"
+                               AltLow="#FF0D0E0B"
+                               AltMedium="#FF0D0E0B"
+                               AltMediumHigh="#FF0D0E0B"
+                               AltMediumLow="#FF0D0E0B"
+                               BaseHigh="#FFE6E1D3"
+                               BaseLow="#FF34362C"
+                               BaseMedium="#FF928D79"
+                               BaseMediumHigh="#FFC4BFAE"
+                               BaseMediumLow="#FF5C5A4C"
+                               ChromeAltLow="#FFC4BFAE"
+                               ChromeBlackHigh="#FF000000"
+                               ChromeBlackLow="#FFC4BFAE"
+                               ChromeBlackMedium="#FF000000"
+                               ChromeBlackMediumLow="#FF000000"
+                               ChromeDisabledHigh="#FF34362C"
+                               ChromeDisabledLow="#FF5C5A4C"
+                               ChromeGray="#FF737060"
+                               ChromeHigh="#FF737060"
+                               ChromeLow="#FF1A1B16"
+                               ChromeMedium="#FF22241D"
+                               ChromeMediumLow="#FF1A1B16"
+                               ChromeWhite="#FFFFFFFF"
+                               ListLow="#FF22241D"
+                               ListMedium="#FF34362C"
+                               ErrorText="#FFD9533F" />
+      </FluentTheme.Palettes>
+    </FluentTheme>
+    <StyleInclude Source="avares://Avalonia.Controls.ColorPicker/Themes/Fluent/Fluent.xaml" />
+    <StyleInclude Source="avares://ScumStudio.App/Styles/Controls.axaml" />
+  </Application.Styles>
+</Application>

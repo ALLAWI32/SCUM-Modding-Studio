@@ -1,0 +1,50 @@
+<Project>
+  <!--
+    Central Package Management: every package version used anywhere in the solution is pinned here.
+    Projects reference packages WITHOUT a Version attribute.
+
+    IMPORTANT: CUE4Parse must stay at 1.2.2 and CUE4Parse-Conversion at 1.2.1. All newer builds
+    (1.2.2.2026xx and later) target net10.0 only and break the net8.0 / VS 2022 build.
+    Avalonia must stay on 11.x: Avalonia 12 needs Roslyn 4.14 (VS 2022 17.14+).
+  -->
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <CentralPackageTransitivePinningEnabled>false</CentralPackageTransitivePinningEnabled>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Unreal Engine package reading / writing -->
+    <PackageVersion Include="CUE4Parse" Version="1.2.2" />
+    <!-- CUE4Parse-Conversion 1.2.2 does not exist on nuget.org; 1.2.1 (published with CUE4Parse 1.2.2 on 2025-02-28)
+         is the net8.0 companion build and depends on CUE4Parse 1.2.2. Its 1.2.2.2026xx builds are net10-only. -->
+    <PackageVersion Include="CUE4Parse-Conversion" Version="1.2.1" />
+    <PackageVersion Include="UAssetAPI" Version="1.1.0" />
+
+    <!-- UI -->
+    <PackageVersion Include="Avalonia" Version="11.3.22" />
+    <PackageVersion Include="Avalonia.Desktop" Version="11.3.22" />
+    <PackageVersion Include="Avalonia.Themes.Fluent" Version="11.3.22" />
+    <PackageVersion Include="Avalonia.Controls.ColorPicker" Version="11.3.22" />
+    <PackageVersion Include="Avalonia.Fonts.Inter" Version="11.3.22" />
+    <PackageVersion Include="Avalonia.Diagnostics" Version="11.3.22" />
+    <PackageVersion Include="Avalonia.Headless" Version="11.3.22" />
+    <PackageVersion Include="Avalonia.Headless.XUnit" Version="11.3.22" />
+    <PackageVersion Include="CommunityToolkit.Mvvm" Version="8.3.2" />
+
+    <!-- 3D rendering -->
+    <PackageVersion Include="Silk.NET.OpenGL" Version="2.23.0" />
+    <PackageVersion Include="Silk.NET.Core" Version="2.23.0" />
+    <PackageVersion Include="Silk.NET.Maths" Version="2.23.0" />
+    <PackageVersion Include="Silk.NET.Windowing" Version="2.23.0" />
+    <PackageVersion Include="SixLabors.ImageSharp" Version="3.1.12" />
+
+    <!-- Infrastructure -->
+    <PackageVersion Include="System.CommandLine" Version="2.0.0-beta4.22272.1" />
+    <PackageVersion Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.2" />
+
+    <!-- Tests -->
+    <PackageVersion Include="xunit" Version="2.9.3" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="2.8.2" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+  </ItemGroup>
+</Project>

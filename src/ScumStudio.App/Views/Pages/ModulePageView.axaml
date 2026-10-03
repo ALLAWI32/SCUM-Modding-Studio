@@ -1,0 +1,366 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:ScumStudio.App.ViewModels"
+             xmlns:c="using:ScumStudio.App.Controls"
+             x:Class="ScumStudio.App.Views.Pages.ModulePageView"
+             x:DataType="vm:ModulePageViewModel">
+  <UserControl.Styles>
+    <Style Selector="ListBox.chips">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderThickness" Value="0" />
+      <Setter Property="Padding" Value="0" />
+    </Style>
+    <Style Selector="ListBox.chips ListBoxItem">
+      <Setter Property="Padding" Value="10,4" />
+      <Setter Property="Margin" Value="0,2,4,2" />
+      <Setter Property="CornerRadius" Value="{DynamicResource ControlCornerRadius}" />
+      <Setter Property="Background" Value="{DynamicResource Surface2Brush}" />
+    </Style>
+    <Style Selector="ListBox.chips ListBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
+      <Setter Property="Foreground" Value="{DynamicResource OnAccentBrush}" />
+    </Style>
+    <Style Selector="Border.valueRow">
+      <Setter Property="Padding" Value="10,5" />
+      <Setter Property="CornerRadius" Value="{DynamicResource SmallCornerRadius}" />
+      <Setter Property="Margin" Value="0,1" />
+    </Style>
+    <Style Selector="Border.valueRow:pointerover">
+      <Setter Property="Background" Value="{DynamicResource Surface2Brush}" />
+    </Style>
+    <Style Selector="Border.valueRow.pending">
+      <Setter Property="Background" Value="{DynamicResource AccentSoftBrush}" />
+    </Style>
+    <Style Selector="Ellipse.edited">
+      <Setter Property="Fill" Value="{DynamicResource AccentBrush}" />
+    </Style>
+  </UserControl.Styles>
+
+  <DockPanel>
+
+    <!-- ===== Header ===== -->
+    <Border DockPanel.Dock="Top" Classes="pageHeader">
+      <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="14">
+        <Border Grid.Column="0" Classes="pageGlyph"><c:GlyphIcon Kind="{Binding IconKey}" IconSize="22" /></Border>
+        <StackPanel Grid.Column="1" Spacing="2" VerticalAlignment="Center">
+          <TextBlock Text="{Binding Title}" Classes="pageTitle" />
+          <TextBlock Text="{Binding Subtitle}" Classes="muted" />
+        </StackPanel>
+        <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+          <Border Classes="chip" VerticalAlignment="Center" ToolTip.Tip="{Binding SourceText}">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <c:GlyphIcon Kind="Icon.Pak" IconSize="13" VerticalAlignment="Center" />
+              <TextBlock Text="{Binding SourceText}" MaxWidth="280" TextTrimming="PrefixCharacterEllipsis" />
+            </StackPanel>
+          </Border>
+          <Button Classes="ghost square" Command="{Binding UndoCommand}" ToolTip.Tip="{Tr Common.Undo.Tip}">
+            <c:GlyphIcon Kind="Icon.Undo" IconSize="16" />
+          </Button>
+          <Button Classes="ghost square" Command="{Binding RedoCommand}" ToolTip.Tip="{Tr Common.Redo.Tip}">
+            <c:GlyphIcon Kind="Icon.Redo" IconSize="16" />
+          </Button>
+          <Button Command="{Binding OpenLooseFolderPickerCommand}" ToolTip.Tip="{Tr Common.OpenLooseFolder.Tip}">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <c:GlyphIcon Kind="Icon.Folder" IconSize="14" />
+              <TextBlock Text="{Tr Common.OpenFolder}" />
+            </StackPanel>
+          </Button>
+        </StackPanel>
+      </Grid>
+    </Border>
+
+    <!-- ===== Toolbar ===== -->
+    <Grid DockPanel.Dock="Top" Margin="24,0,24,12" ColumnDefinitions="300,*" ColumnSpacing="12" IsVisible="{Binding HasCatalog}">
+      <Panel Grid.Column="0">
+        <TextBox x:Name="SearchBox" Classes="search" Text="{Binding SearchText}" Watermark="{Tr Module.Filter}" ToolTip.Tip="{Tr Module.Filter.Tip}" />
+        <c:GlyphIcon Kind="Icon.Search" IconSize="15" Margin="11,0,0,0" IsHitTestVisible="False"
+                     HorizontalAlignment="Left" VerticalAlignment="Center" Foreground="{DynamicResource TextMutedBrush}" />
+      </Panel>
+      <ListBox Grid.Column="1" Classes="chips" ItemsSource="{Binding Filters}" SelectedItem="{Binding SelectedFilter}" VerticalAlignment="Center"
+               ToolTip.Tip="{Tr Module.Chips.Tip}">
+        <ListBox.ItemsPanel>
+          <ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate>
+        </ListBox.ItemsPanel>
+        <ListBox.ItemTemplate>
+          <DataTemplate x:DataType="vm:ModuleFilter">
+            <TextBlock Text="{Binding Label}" />
+          </DataTemplate>
+        </ListBox.ItemTemplate>
+      </ListBox>
+    </Grid>
+
+    <!-- ===== Body ===== -->
+    <Panel Margin="24,0,24,20">
+
+      <Border Classes="emptyState" IsVisible="{Binding ShowEmptyState}">
+        <StackPanel Spacing="12">
+          <Border Classes="iconTile" HorizontalAlignment="Center">
+            <c:GlyphIcon Kind="Icon.Sliders" IconSize="20" HorizontalAlignment="Center" VerticalAlignment="Center" />
+          </Border>
+          <TextBlock Text="{Tr Module.Empty}" Classes="h2" HorizontalAlignment="Center" />
+          <TextBlock Classes="muted wrap" TextAlignment="Center" MaxWidth="520"
+                     Text="{Tr Module.Empty.Body}" />
+          <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center">
+            <Button Classes="accent" Content="{Tr Common.OpenSetup}" Command="{Binding OpenSetupCommand}" ToolTip.Tip="{Tr Common.OpenSetup.Tip}" />
+            <Button Content="{Tr Common.OpenExtractedFolder}" Command="{Binding OpenLooseFolderPickerCommand}" ToolTip.Tip="{Tr Common.OpenLooseFolder.Tip}" />
+          </StackPanel>
+        </StackPanel>
+      </Border>
+
+      <Border Classes="emptyState" IsVisible="{Binding IsLoading}">
+        <StackPanel Spacing="12" Width="320">
+          <TextBlock Text="{Tr Module.Loading}" Classes="h2" HorizontalAlignment="Center" />
+          <ProgressBar IsIndeterminate="True" />
+        </StackPanel>
+      </Border>
+
+      <Grid ColumnDefinitions="300,*,330" ColumnSpacing="12" IsVisible="{Binding HasCatalog}">
+
+        <!-- List: inventory icons load for the rows on screen; right-click selects the row and opens the menu -->
+        <Border Grid.Column="0" Classes="panel">
+          <ListBox x:Name="ItemList" Classes="plain" ItemsSource="{Binding Items}" SelectedItem="{Binding SelectedItem}" Margin="4">
+            <ListBox.ContextMenu>
+              <ContextMenu>
+                <MenuItem Header="{Tr Module.ViewIn3D}" Command="{Binding ViewIn3DCommand}" ToolTip.Tip="{Tr Module.ViewIn3D.Tip}">
+                  <MenuItem.Icon><c:GlyphIcon Kind="Icon.Cube3d" IconSize="14" /></MenuItem.Icon>
+                </MenuItem>
+                <MenuItem Header="{Tr Module.CopySpawn}" Command="{Binding CopySpawnCommandCommand}" ToolTip.Tip="{Tr Module.CopySpawn.Tip}">
+                  <MenuItem.Icon><c:GlyphIcon Kind="Icon.Copy" IconSize="14" /></MenuItem.Icon>
+                </MenuItem>
+                <MenuItem Header="{Tr Module.CloneEllipsis}" Command="{Binding CloneItemCommand}" ToolTip.Tip="{Tr Module.CloneMenu.Tip}">
+                  <MenuItem.Icon><c:GlyphIcon Kind="Icon.Plus" IconSize="14" /></MenuItem.Icon>
+                </MenuItem>
+              </ContextMenu>
+            </ListBox.ContextMenu>
+            <ListBox.ItemTemplate>
+              <DataTemplate x:DataType="vm:ModuleItemViewModel">
+                <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
+                  <Border Grid.Column="0" Width="64" Height="30" CornerRadius="{DynamicResource SmallCornerRadius}" Background="{DynamicResource Surface2Brush}" ClipToBounds="True">
+                    <Panel>
+                      <c:GlyphIcon Kind="{Binding IconKey}" IconSize="16" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                   IsVisible="{Binding Thumbnail, Converter={x:Static ObjectConverters.IsNull}}" />
+                      <c:ThumbnailImage Source="{Binding Thumbnail}" Stretch="Uniform" Margin="2" />
+                    </Panel>
+                  </Border>
+                  <StackPanel Grid.Column="1" Spacing="1" VerticalAlignment="Center">
+                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding PackagePath}" />
+                    <TextBlock Text="{Binding Detail}" Classes="caption" TextTrimming="CharacterEllipsis" />
+                  </StackPanel>
+                  <Border Grid.Column="2" Classes="badge accent" IsVisible="{Binding HasBadge}" VerticalAlignment="Center">
+                    <TextBlock Text="{Binding Badge}" />
+                  </Border>
+                </Grid>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+        </Border>
+
+        <!-- Selected asset: header with the Values / 3D tabs, then the values editor or the orbit view -->
+        <Border Grid.Column="1" Classes="panel">
+          <DockPanel IsVisible="{Binding HasSelection}">
+            <Border DockPanel.Dock="Top" Classes="panelHeader">
+              <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="12">
+                <Border Grid.Column="0" Classes="iconTile" Width="40" Height="40">
+                  <c:GlyphIcon Kind="{Binding SelectedItem.IconKey, FallbackValue=Icon.Weapon}" IconSize="20" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                </Border>
+                <StackPanel Grid.Column="1" Spacing="2" VerticalAlignment="Center">
+                  <StackPanel Orientation="Horizontal" Spacing="8">
+                    <TextBlock Text="{Binding SelectedTitle}" Classes="h2" />
+                    <TextBlock Text="{Binding Caption}" Classes="muted" VerticalAlignment="Bottom" Margin="0,0,0,2" />
+                  </StackPanel>
+                  <TextBlock Text="{Binding SelectedItem.PackagePath, FallbackValue=''}" Classes="caption" TextTrimming="PrefixCharacterEllipsis" />
+                </StackPanel>
+                <Border Grid.Column="2" Classes="segmented">
+                  <StackPanel Orientation="Horizontal">
+                    <ToggleButton IsChecked="{Binding !ShowPreviewTab}" ToolTip.Tip="{Tr Module.ValuesTab.Tip}">
+                      <StackPanel Orientation="Horizontal" Spacing="5">
+                        <c:GlyphIcon Kind="Icon.Sliders" IconSize="13" />
+                        <TextBlock Text="{Tr Module.Values}" />
+                      </StackPanel>
+                    </ToggleButton>
+                    <ToggleButton x:Name="PreviewTabButton" IsChecked="{Binding ShowPreviewTab}" ToolTip.Tip="{Tr Module.PreviewTab.Tip}">
+                      <StackPanel Orientation="Horizontal" Spacing="5">
+                        <c:GlyphIcon Kind="Icon.Cube3d" IconSize="13" />
+                        <TextBlock Text="3D" />
+                      </StackPanel>
+                    </ToggleButton>
+                  </StackPanel>
+                </Border>
+                <Border Grid.Column="3" Classes="chip" VerticalAlignment="Center" ToolTip.Tip="{Tr Module.SpawnChip.Tip}">
+                  <TextBlock Text="{Binding SpawnCommandText}" Classes="mono" />
+                </Border>
+              </Grid>
+            </Border>
+
+            <Panel>
+              <!-- Values tab -->
+              <DockPanel IsVisible="{Binding !ShowPreviewTab}">
+                <Grid DockPanel.Dock="Top" Margin="12,10,12,6" ColumnDefinitions="260,*,Auto" ColumnSpacing="10">
+                  <ComboBox Grid.Column="0" ItemsSource="{Binding Parts}" SelectedItem="{Binding SelectedPart}" HorizontalAlignment="Stretch"
+                            ToolTip.Tip="{Tr Module.Part.Tip}">
+                    <ComboBox.ItemTemplate>
+                      <DataTemplate x:DataType="vm:ModulePart">
+                        <TextBlock Text="{Binding Label}" ToolTip.Tip="{Binding Description}" />
+                      </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                  </ComboBox>
+                  <Panel Grid.Column="1">
+                    <TextBox Classes="search" Text="{Binding ValueFilter}" Watermark="{Tr Module.ValueFilter}" ToolTip.Tip="{Tr Module.ValueFilter.Tip}" />
+                    <c:GlyphIcon Kind="Icon.Search" IconSize="15" Margin="11,0,0,0" IsHitTestVisible="False"
+                                 HorizontalAlignment="Left" VerticalAlignment="Center" Foreground="{DynamicResource TextMutedBrush}" />
+                  </Panel>
+                  <ToggleButton Grid.Column="2" IsChecked="{Binding KeyStatsOnly}" ToolTip.Tip="{Tr Module.KeyStats.Tip}">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                      <c:GlyphIcon Kind="Icon.Star" IconSize="14" />
+                      <TextBlock Text="{Tr Module.KeyStats}" />
+                    </StackPanel>
+                  </ToggleButton>
+                </Grid>
+
+                <Border DockPanel.Dock="Bottom" Padding="12,8" BorderThickness="0,1,0,0" BorderBrush="{DynamicResource StrokeSubtleBrush}">
+                  <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
+                    <TextBlock Grid.Column="0" Text="{Binding ValuesSummary}" Classes="caption" VerticalAlignment="Center" TextWrapping="Wrap" />
+                    <Button Grid.Column="1" Content="{Tr Module.Discard}" Command="{Binding DiscardChangesCommand}" ToolTip.Tip="{Tr Module.Discard.Tip}" />
+                    <Button Grid.Column="2" Classes="accent" Command="{Binding ApplyChangesCommand}" ToolTip.Tip="{Tr Module.Apply.Tip}">
+                      <StackPanel Orientation="Horizontal" Spacing="6">
+                        <c:GlyphIcon Kind="Icon.Check" IconSize="14" />
+                        <TextBlock Text="{Tr Module.Apply}" />
+                      </StackPanel>
+                    </Button>
+                  </Grid>
+                </Border>
+
+                <Grid DockPanel.Dock="Top" Margin="22,4,52,2" ColumnDefinitions="*,120,200" ColumnSpacing="10">
+                  <TextBlock Grid.Column="0" Text="{Tr Module.Col.Value}" Classes="section" ToolTip.Tip="{Tr Module.Col.Value.Tip}" />
+                  <TextBlock Grid.Column="1" Text="{Tr Module.Col.Stock}" Classes="section" ToolTip.Tip="{Tr Module.Col.Stock.Tip}" />
+                  <TextBlock Grid.Column="2" Text="{Tr Module.Col.New}" Classes="section" ToolTip.Tip="{Tr Module.Col.New.Tip}" />
+                </Grid>
+
+                <Panel>
+                  <ProgressBar IsIndeterminate="True" IsVisible="{Binding IsLoadingValues}" VerticalAlignment="Top" Margin="12,0" />
+                  <ScrollViewer Margin="6,0,6,6" HorizontalScrollBarVisibility="Disabled">
+                    <ItemsControl ItemsSource="{Binding Groups}">
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:TunableGroupViewModel">
+                          <StackPanel Margin="0,6,0,2">
+                            <TextBlock Text="{Binding Title}" Classes="h3" Margin="10,6,0,4" Foreground="{DynamicResource TextSecondaryBrush}" />
+                            <ItemsControl ItemsSource="{Binding Rows}">
+                              <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:TunableRowViewModel">
+                                  <Border Classes="valueRow" Classes.pending="{Binding IsPending}">
+                                    <Grid ColumnDefinitions="*,120,200,32" ColumnSpacing="10">
+                                      <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="7" VerticalAlignment="Center">
+                                        <Ellipse Classes="edited" Width="7" Height="7" IsVisible="{Binding IsOverridden}" ToolTip.Tip="{Tr Module.Edited.Tip}" />
+                                        <TextBlock Text="{Binding Label}" ToolTip.Tip="{Binding PathText}" TextTrimming="CharacterEllipsis" />
+                                      </StackPanel>
+                                      <TextBlock Grid.Column="1" Text="{Binding StockDisplay}" Classes="muted mono" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
+                                                 ToolTip.Tip="{Binding StockValue}" />
+                                      <Panel Grid.Column="2">
+                                        <TextBox Text="{Binding Value}" IsVisible="{Binding IsText}" IsReadOnly="{Binding IsReadOnly}" Classes="mono"
+                                                 ToolTip.Tip="{Binding Error}" />
+                                        <CheckBox IsChecked="{Binding BoolValue}" IsVisible="{Binding IsBool}" ToolTip.Tip="{Tr Module.BoolValue.Tip}" />
+                                        <ComboBox ItemsSource="{Binding Choices}" SelectedItem="{Binding Value}" IsVisible="{Binding IsEnum}" HorizontalAlignment="Stretch" ToolTip.Tip="{Tr Module.EnumValue.Tip}" />
+                                      </Panel>
+                                      <Button Grid.Column="3" Classes="ghost square small" ToolTip.Tip="{Tr Module.ResetRow.Tip}"
+                                              Command="{Binding $parent[UserControl].((vm:ModulePageViewModel)DataContext).ResetRowCommand}" CommandParameter="{Binding}">
+                                        <c:GlyphIcon Kind="Icon.Undo" IconSize="13" />
+                                      </Button>
+                                    </Grid>
+                                  </Border>
+                                </DataTemplate>
+                              </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                          </StackPanel>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                  </ScrollViewer>
+                </Panel>
+              </DockPanel>
+
+              <!-- 3D tab: the asset's mesh (vehicles with their default attachments on their sockets) -->
+              <Border IsVisible="{Binding ShowPreviewTab}" Margin="6" CornerRadius="{DynamicResource SmallCornerRadius}" ClipToBounds="True" Background="{DynamicResource ViewportBrush}">
+                <Panel>
+                  <c:ViewportGrid Background="{DynamicResource ViewportBrush}" AxisXBrush="{DynamicResource AxisXBrush}" AxisYBrush="{DynamicResource AxisYBrush}" IsVisible="{Binding !HasPreview}" />
+                  <c:MeshPreview x:Name="ItemPreview" Model="{Binding Preview}" IsVisible="{Binding HasPreview}" />
+                  <ProgressBar IsIndeterminate="True" IsVisible="{Binding IsPreviewLoading}" VerticalAlignment="Top" Margin="8,6" />
+                  <Border Classes="hud" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="8" IsHitTestVisible="False"
+                          IsVisible="{Binding PreviewText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                    <TextBlock Text="{Binding PreviewText}" TextTrimming="CharacterEllipsis" />
+                  </Border>
+                  <Border Classes="hud" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="8" IsHitTestVisible="False" IsVisible="{Binding HasPreview}">
+                    <TextBlock Text="{Tr Module.PreviewHint}" />
+                  </Border>
+                  <Border Classes="hud" HorizontalAlignment="Center" VerticalAlignment="Top" Margin="8" IsHitTestVisible="False"
+                          IsVisible="{Binding #ItemPreview.SelectedPart, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                      <TextBlock Text="{Binding #ItemPreview.SelectedPart}" FontWeight="SemiBold" />
+                      <TextBlock Text="{Tr Preview.PartHint}" Foreground="{DynamicResource TextMutedBrush}" />
+                    </StackPanel>
+                  </Border>
+                </Panel>
+              </Border>
+            </Panel>
+          </DockPanel>
+        </Border>
+
+        <!-- Clone + how-to -->
+        <ScrollViewer Grid.Column="2" HorizontalScrollBarVisibility="Disabled">
+          <StackPanel Spacing="12">
+            <Border Classes="card">
+              <StackPanel Spacing="10">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <c:GlyphIcon Kind="Icon.Copy" IconSize="16" VerticalAlignment="Center" />
+                  <TextBlock Text="{Tr Module.CloneTitle}" Classes="h3" VerticalAlignment="Center" />
+                </StackPanel>
+                <TextBox x:Name="CloneNameBox" Text="{Binding CloneName}" Watermark="{Tr Module.CloneName}" ToolTip.Tip="{Tr Module.CloneName.Tip}" />
+                <TextBlock Text="{Binding CloneNameError}" Classes="error caption wrap" IsVisible="{Binding CloneNameError, Converter={x:Static ObjectConverters.IsNotNull}}" />
+                <TextBox Text="{Binding CloneCaption}" Watermark="{Tr Module.CloneCaption}" ToolTip.Tip="{Tr Module.CloneCaption.Tip}" />
+                <CheckBox Content="{Tr Module.CloneAttachments}" IsChecked="{Binding IncludeAttachments}" IsVisible="{Binding IsVehicleModule}" ToolTip.Tip="{Tr Module.CloneAttachments.Tip}" />
+                <CheckBox Content="{Tr Module.ClonePresets}" IsChecked="{Binding IncludeSpawnPresets}" IsVisible="{Binding IsVehicleModule}" ToolTip.Tip="{Tr Module.ClonePresets.Tip}" />
+                <TextBlock Text="{Binding ClonePreview}" Classes="caption wrap" />
+                <Button Classes="accent" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Command="{Binding CreateCloneCommand}" ToolTip.Tip="{Tr Module.CreateClone.Tip}">
+                  <StackPanel Orientation="Horizontal" Spacing="6">
+                    <c:GlyphIcon Kind="Icon.Plus" IconSize="14" />
+                    <TextBlock Text="{Tr Module.CreateClone}" />
+                  </StackPanel>
+                </Button>
+                <Button Classes="danger" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Command="{Binding RemoveCloneCommand}"
+                        IsVisible="{Binding CanRemoveClone}" Content="{Tr Module.RemoveClone}" ToolTip.Tip="{Tr Module.RemoveClone.Tip}" />
+              </StackPanel>
+            </Border>
+
+            <Border Classes="card">
+              <StackPanel Spacing="8">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <c:GlyphIcon Kind="Icon.Export" IconSize="16" VerticalAlignment="Center" />
+                  <TextBlock Text="{Tr Module.IntoGame}" Classes="h3" VerticalAlignment="Center" />
+                </StackPanel>
+                <TextBlock Classes="muted wrap" FontSize="12.5" LineHeight="19"
+                           Text="{Tr Module.IntoGame.Step1}" />
+                <TextBlock Classes="muted wrap" FontSize="12.5" LineHeight="19"
+                           Text="{Tr Module.IntoGame.Step2}" />
+                <TextBlock Classes="muted wrap" FontSize="12.5" LineHeight="19"
+                           Text="{Tr Module.IntoGame.Step3}" />
+                <Border Classes="inset" Padding="8,6">
+                  <SelectableTextBlock Text="{Binding SpawnCommandText}" Classes="mono" />
+                </Border>
+              </StackPanel>
+            </Border>
+
+            <Border Classes="card">
+              <StackPanel Spacing="6">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <c:GlyphIcon Kind="Icon.Info" IconSize="16" VerticalAlignment="Center" />
+                  <TextBlock Text="{Tr Module.WhatCanChange}" Classes="h3" VerticalAlignment="Center" />
+                </StackPanel>
+                <TextBlock Classes="muted wrap" FontSize="12.5" LineHeight="19"
+                           Text="{Tr Module.WhatCanChange.Body}" />
+              </StackPanel>
+            </Border>
+          </StackPanel>
+        </ScrollViewer>
+      </Grid>
+    </Panel>
+  </DockPanel>
+</UserControl>

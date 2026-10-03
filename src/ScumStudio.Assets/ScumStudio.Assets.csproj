@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>ScumStudio.Assets</RootNamespace>
+    <AssemblyName>ScumStudio.Assets</AssemblyName>
+    <Description>Read-only CUE4Parse facade: static meshes, textures, materials, landscape data.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="CUE4Parse" />
+    <PackageReference Include="CUE4Parse-Conversion" />
+    <PackageReference Include="SixLabors.ImageSharp" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ScumStudio.Core\ScumStudio.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="ScumStudio.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Landscape\terrain-layers.json" LogicalName="ScumStudio.Assets.Landscape.terrain-layers.json" />
+    <EmbeddedResource Include="Catalog\Dump\dump-tree.json" LogicalName="ScumStudio.Assets.Catalog.Dump.dump-tree.json" />
+    <EmbeddedResource Include="Catalog\Dump\dump-assignments.tsv.gz" LogicalName="ScumStudio.Assets.Catalog.Dump.dump-assignments.tsv.gz" />
+  </ItemGroup>
+
+</Project>

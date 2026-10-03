@@ -1,0 +1,45 @@
+name: Bug report
+description: Something does not work as it should.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Never paste the game's AES key, and remove personal paths if you want.
+  - type: input
+    id: version
+    attributes:
+      label: ScumStudio version
+      description: Shown at the right end of the status bar (e.g. v0.1.0).
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options: [Map editor, Shape menu, Assets / objects, Vehicles, Weapons, Projects / export, AI control (MCP), Command line, Settings / languages, Other]
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: What did you do?
+      description: Steps to reproduce, as exact as you can.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: Console button in the status bar → copy the lines around the problem.
+      render: text
+  - type: input
+    id: system
+    attributes:
+      label: Windows version and GPU

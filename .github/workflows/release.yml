@@ -1,0 +1,52 @@
+name: release
+
+# Runs ONLY when a version tag (v1.2.3) is pushed, or by hand from the Actions tab. It builds, tests, publishes the
+# self-contained Windows build and attaches the zip to a DRAFT release: nothing is public until the owner presses
+# "Publish release" on GitHub.
+on:
+  push:
+    tags: [ "v*" ]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version without the leading v (e.g. 0.1.0)
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    env:
+      DOTNET_NOLOGO: "1"
+      DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Version
+        id: version
+        shell: pwsh
+        run: |
+          $v = if ("${{ github.event_name }}" -eq "workflow_dispatch") { "${{ inputs.version }}" } else { "${{ github.ref_name }}".TrimStart('v') }
+          "value=$v" >> $env:GITHUB_OUTPUT
+
+      - name: Build, test, publish, zip
+        shell: pwsh
+        run: scripts/build.ps1 -Configuration Release -Test -Publish -Zip -Version ${{ steps.version.outputs.value }}
+
+      - name: Draft release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $v = "${{ steps.version.outputs.value }}"
+          $zip = "dist/SCUM-Modding-Studio-$v-win-x64.zip"
+          # A release made by hand for this tag gets the CI-built zip; otherwise a draft is created.
+          gh release view "v$v" *> $null
+          if ($LASTEXITCODE -eq 0) { gh release upload "v$v" $zip --clobber }
+          else { gh release create "v$v" $zip --draft --title "SCUM Modding Studio $v" --notes-file CHANGELOG.md }

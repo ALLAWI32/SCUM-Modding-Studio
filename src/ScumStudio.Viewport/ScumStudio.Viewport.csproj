@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>ScumStudio.Viewport</RootNamespace>
+    <AssemblyName>ScumStudio.Viewport</AssemblyName>
+    <Description>Turns level documents into renderable scenes: mesh/texture preparation on a worker thread, GPU upload on the render thread, selection ids back to actors. Shared by the CLI and the desktop viewport.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ScumStudio.Core\ScumStudio.Core.csproj" />
+    <ProjectReference Include="..\ScumStudio.Assets\ScumStudio.Assets.csproj" />
+    <ProjectReference Include="..\ScumStudio.Level\ScumStudio.Level.csproj" />
+    <ProjectReference Include="..\ScumStudio.Rendering\ScumStudio.Rendering.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="ScumStudio.Tests" />
+  </ItemGroup>
+
+</Project>

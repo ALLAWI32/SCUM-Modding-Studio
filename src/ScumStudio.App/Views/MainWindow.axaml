@@ -1,0 +1,249 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="using:ScumStudio.App.ViewModels"
+        xmlns:c="using:ScumStudio.App.Controls"
+        mc:Ignorable="d" d:DesignWidth="1440" d:DesignHeight="860"
+        x:Class="ScumStudio.App.Views.MainWindow"
+        x:DataType="vm:MainWindowViewModel"
+        Title="{Binding Title}"
+        Width="1440" Height="860" MinWidth="1024" MinHeight="640"
+        WindowStartupLocation="CenterScreen">
+
+  <Window.KeyBindings>
+    <KeyBinding Gesture="Ctrl+Z" Command="{Binding UndoCommand}" />
+    <KeyBinding Gesture="Ctrl+Y" Command="{Binding RedoCommand}" />
+    <KeyBinding Gesture="Ctrl+Shift+Z" Command="{Binding RedoCommand}" />
+    <KeyBinding Gesture="Ctrl+L" Command="{Binding ToggleLogCommand}" />
+  </Window.KeyBindings>
+
+  <Window.DataTemplates>
+    <!-- Connection segment of the status bar: dot, label, value (mono); the details are in the tooltip. -->
+    <DataTemplate DataType="vm:StatusPillViewModel">
+      <Border Classes="statusSegment" ToolTip.Tip="{Binding Detail}" Background="Transparent">
+        <StackPanel Orientation="Horizontal" Spacing="6">
+          <Ellipse Classes="dot" Classes.ok="{Binding IsOk}" Classes.warn="{Binding IsWarn}"
+                   Classes.error="{Binding IsError}" Classes.busy="{Binding IsBusy}" />
+          <TextBlock Text="{Binding Label}" Foreground="{DynamicResource TextMutedBrush}" />
+          <TextBlock Text="{Binding Value}" Foreground="{DynamicResource TextSecondaryBrush}" />
+        </StackPanel>
+      </Border>
+    </DataTemplate>
+  </Window.DataTemplates>
+
+  <!--
+    Shell (the OS keeps its own title bar):
+      40 px strip   wordmark | workspace tabs (NavList) | command field (Ctrl K) | project | setup
+      page          PageHost
+      console       LogPanel (Ctrl+L), mono lines
+      24 px bar     status | notification tray (ToastHost) / last log line | PAKS SERVER KEY AI | counters | console | version
+    Notifications live in the status bar so they never cover a working panel.
+  -->
+  <Panel>
+    <Grid RowDefinitions="40,*,Auto,24">
+
+      <!-- ===================================================================== Title strip -->
+      <Border Grid.Row="0" Background="{DynamicResource Bg0Brush}" BorderBrush="{DynamicResource StrokeBrush}" BorderThickness="0,0,0,1">
+        <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto">
+
+          <!-- Wordmark: blaze tick, stencil SCUM, tracked STUDIO. -->
+          <StackPanel Grid.Column="0" Orientation="Horizontal" Margin="14,0,16,0" VerticalAlignment="Center"
+                      ToolTip.Tip="{Binding Title}">
+            <Border Width="3" Height="17" Background="{DynamicResource AccentBrush}" Margin="0,0,9,0" VerticalAlignment="Center" />
+            <TextBlock Text="SCUM" FontFamily="{DynamicResource StencilFontFamily}" FontSize="19"
+                       Foreground="{DynamicResource TextBrush}" VerticalAlignment="Center" />
+            <TextBlock Text="MODDING STUDIO" FontFamily="{DynamicResource CondensedFontFamily}" FontWeight="Medium" FontSize="10.5"
+                       LetterSpacing="2.8" Foreground="{DynamicResource TextMutedBrush}" VerticalAlignment="Center" Margin="8,3,0,0" />
+          </StackPanel>
+
+          <!-- Workspace tabs. -->
+          <ListBox Grid.Column="1" x:Name="NavList" Classes="nav" ItemsSource="{Binding NavItems}" SelectedItem="{Binding SelectedNavItem}"
+                   ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+            <ListBox.ItemsPanel>
+              <ItemsPanelTemplate>
+                <StackPanel Orientation="Horizontal" />
+              </ItemsPanelTemplate>
+            </ListBox.ItemsPanel>
+            <ListBox.ItemTemplate>
+              <DataTemplate x:DataType="vm:NavItemViewModel">
+                <Panel ToolTip.Tip="{Binding Tip}">
+                  <StackPanel Orientation="Horizontal" Spacing="7" VerticalAlignment="Center">
+                    <c:GlyphIcon Kind="{Binding IconKey}" IconSize="15" VerticalAlignment="Center" />
+                    <TextBlock Text="{Binding Title}" VerticalAlignment="Center" FontWeight="Medium" FontSize="12.5" />
+                    <Border Classes="badge" IsVisible="{Binding HasBadge}">
+                      <TextBlock Text="{Binding Badge}" />
+                    </Border>
+                  </StackPanel>
+                  <Border Classes="navIndicator" Height="2" VerticalAlignment="Bottom" Margin="-12,0" />
+                </Panel>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+
+          <!-- Command field: Ctrl+K focuses it. -->
+          <Panel Grid.Column="2" MaxWidth="440" MinWidth="200" Margin="20,0" HorizontalAlignment="Stretch" VerticalAlignment="Center">
+            <TextBox x:Name="GlobalSearch" Classes="search" Text="{Binding SearchText}" Watermark="{Binding SearchWatermark}"
+                     Padding="30,4,52,4" ToolTip.Tip="{Tr Shell.Search.Tip}">
+              <TextBox.KeyBindings>
+                <KeyBinding Gesture="Enter" Command="{Binding SubmitSearchCommand}" />
+              </TextBox.KeyBindings>
+            </TextBox>
+            <c:GlyphIcon Kind="Icon.Search" IconSize="14" Margin="10,0,0,0" IsHitTestVisible="False"
+                         HorizontalAlignment="Left" VerticalAlignment="Center" Foreground="{DynamicResource TextMutedBrush}" />
+            <Border Classes="kbd" HorizontalAlignment="Right" Margin="0,0,7,0" IsHitTestVisible="False">
+              <TextBlock Text="Ctrl K" />
+            </Border>
+          </Panel>
+
+          <!-- Project. -->
+          <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center" Margin="0,0,6,0">
+            <TextBlock Text="{Tr Shell.Project}" Classes="colHeader" VerticalAlignment="Center" Margin="0,1,0,0" />
+            <TextBlock x:Name="ProjectName" Text="{Binding Projects.DisplayName}" FontWeight="SemiBold" FontSize="12.5" MaxWidth="220"
+                       VerticalAlignment="Center" ToolTip.Tip="{Binding Projects.DirectoryPath}" />
+          </StackPanel>
+          <Button Grid.Column="4" Classes="ghost square" Margin="0,0,8,0" Command="{Binding OpenSetupCommand}"
+                  ToolTip.Tip="{Tr Shell.Setup.Tip}">
+            <c:GlyphIcon Kind="Icon.Plug" IconSize="15" />
+          </Button>
+        </Grid>
+      </Border>
+
+      <!-- ===================================================================== Page -->
+      <c:PageDeck x:Name="PageHost" Grid.Row="1" Current="{Binding CurrentPage}" />
+
+      <!-- ===================================================================== Console -->
+      <Border x:Name="LogPanel" Grid.Row="2" Height="220" IsVisible="{Binding IsLogOpen}"
+              Background="{DynamicResource Bg0Brush}" BorderBrush="{DynamicResource StrokeBrush}" BorderThickness="0,1,0,0">
+        <DockPanel>
+          <Border DockPanel.Dock="Top" Classes="panelHeader" Padding="10,0,4,0">
+            <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto" ColumnSpacing="8">
+              <c:GlyphIcon Grid.Column="0" Kind="Icon.Terminal" IconSize="13" VerticalAlignment="Center" />
+              <TextBlock Grid.Column="1" Text="{Tr Shell.ConsoleTitle}" Classes="panelTitle" />
+              <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center" Margin="4,0,0,0">
+                <Border Classes="badge warn" ToolTip.Tip="{Tr Shell.Warnings}">
+                  <TextBlock Text="{Binding Log.WarningCount, StringFormat='{}{0} warn'}" />
+                </Border>
+                <Border Classes="badge error" ToolTip.Tip="{Tr Shell.Errors}">
+                  <TextBlock Text="{Binding Log.ErrorCount, StringFormat='{}{0} err'}" />
+                </Border>
+              </StackPanel>
+              <Button Grid.Column="3" Classes="ghost small" Content="{Tr Common.Copy}" Click="OnCopyLogClick" ToolTip.Tip="{Tr Shell.CopyConsole.Tip}" />
+              <Button Grid.Column="4" Classes="ghost small" Content="{Tr Common.Clear}" Command="{Binding Log.ClearCommand}" ToolTip.Tip="{Tr Shell.ClearConsole.Tip}" />
+              <Button Grid.Column="5" Classes="ghost square" Width="24" Height="24" Command="{Binding ToggleLogCommand}"
+                      ToolTip.Tip="{Tr Shell.HideConsole.Tip}">
+                <c:GlyphIcon Kind="Icon.Close" IconSize="11" />
+              </Button>
+            </Grid>
+          </Border>
+          <!-- Click, Shift+click and Ctrl+click pick lines, Ctrl+A all of them; Ctrl+C copies them (or every line when none is picked). -->
+          <ListBox x:Name="LogList" Classes="log plain" ItemsSource="{Binding Log.Entries}" Background="Transparent" SelectionMode="Multiple"
+                   KeyDown="OnLogKeyDown">
+            <ListBox.ItemTemplate>
+              <DataTemplate x:DataType="vm:LogLineViewModel">
+                <Grid ColumnDefinitions="64,34,170,*" ColumnSpacing="10">
+                  <TextBlock Grid.Column="0" Classes="mono" FontSize="11.5" Foreground="{DynamicResource TextMutedBrush}" Text="{Binding Time}" />
+                  <TextBlock Grid.Column="1" Classes="mono logLevel" FontSize="11.5" FontWeight="Medium" Text="{Binding Level}"
+                             Classes.warn="{Binding IsWarning}" Classes.error="{Binding IsError}" />
+                  <TextBlock Grid.Column="2" Classes="mono" FontSize="11.5" Foreground="{DynamicResource TextMutedBrush}" Text="{Binding Category}" />
+                  <TextBlock Grid.Column="3" Classes="mono" FontSize="11.5" Text="{Binding Message}" TextWrapping="Wrap" />
+                </Grid>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+        </DockPanel>
+      </Border>
+
+      <!-- ===================================================================== Status bar -->
+      <Border Grid.Row="3" Background="{DynamicResource Bg0Brush}" BorderBrush="{DynamicResource StrokeBrush}" BorderThickness="0,1,0,0">
+        <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto,Auto,Auto">
+
+          <!-- Operation. -->
+          <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="7" Margin="10,0" VerticalAlignment="Center">
+            <Ellipse Classes="dot" Classes.busy="{Binding Operations.IsBusy}" Classes.ok="{Binding !Operations.IsBusy}" />
+            <TextBlock x:Name="StatusText" Text="{Binding Operations.StatusText}" Classes="status" MaxWidth="340" />
+          </StackPanel>
+          <ProgressBar Grid.Column="1" Width="120" VerticalAlignment="Center" Margin="0,0,10,0"
+                       IsVisible="{Binding Operations.IsBusy}" IsIndeterminate="{Binding Operations.IsIndeterminate}"
+                       Value="{Binding Operations.Progress}" Minimum="0" Maximum="100" />
+
+          <!-- Notification tray, then the last log line in the space that is left. -->
+          <DockPanel Grid.Column="2" ClipToBounds="True">
+            <ItemsControl x:Name="ToastHost" DockPanel.Dock="Left" ItemsSource="{Binding Toasts}" VerticalAlignment="Center">
+              <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate>
+                  <UniformGrid Rows="1" />
+                </ItemsPanelTemplate>
+              </ItemsControl.ItemsPanel>
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:ToastViewModel">
+                  <Border Classes="toast" Classes.success="{Binding IsSuccess}" Classes.warning="{Binding IsWarning}"
+                          Classes.error="{Binding IsError}">
+                    <ToolTip.Tip>
+                      <StackPanel Spacing="2" MaxWidth="360">
+                        <TextBlock Text="{Binding Title}" FontWeight="SemiBold" Classes="wrap" />
+                        <TextBlock Text="{Binding Message}" Classes="muted wrap" IsVisible="{Binding HasMessage}" />
+                      </StackPanel>
+                    </ToolTip.Tip>
+                    <Grid ColumnDefinitions="Auto,Auto,*,Auto" ColumnSpacing="7">
+                      <c:GlyphIcon Grid.Column="0" Classes="toastIcon" Kind="{Binding IconKey}" IconSize="12" VerticalAlignment="Center" />
+                      <TextBlock Grid.Column="1" Classes="toastTitle" Text="{Binding Title}" MaxWidth="260" />
+                      <TextBlock Grid.Column="2" Classes="toastDetail" Text="{Binding Message}" IsVisible="{Binding HasMessage}" />
+                      <Button Grid.Column="3" Command="{Binding CloseCommand}" ToolTip.Tip="{Tr Shell.Dismiss.Tip}" VerticalAlignment="Center">
+                        <c:GlyphIcon Kind="Icon.Close" IconSize="9" />
+                      </Button>
+                    </Grid>
+                  </Border>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+            <TextBlock Text="{Binding Log.Last.Message, FallbackValue=''}" Classes="status" Foreground="{DynamicResource TextMutedBrush}"
+                       Margin="10,0" ToolTip.Tip="{Binding Log.Last.Message, FallbackValue=''}" IsVisible="{Binding !HasToasts}" />
+          </DockPanel>
+
+          <!-- Connections. -->
+          <ContentControl Grid.Column="3" Content="{Binding GamePill}" />
+          <ContentControl Grid.Column="4" Content="{Binding ServerPill}" />
+          <ContentControl Grid.Column="5" Content="{Binding KeyPill}" />
+          <StackPanel Grid.Column="6" Orientation="Horizontal">
+            <ContentControl x:Name="AiPill" Content="{Binding AiPill}" />
+            <Border Classes="statusSegment" Padding="0">
+              <Button Classes="bar" Command="{Binding ConnectCommand}" ToolTip.Tip="{Tr Shell.Reconnect.Tip}">
+                <c:GlyphIcon Kind="Icon.Refresh" IconSize="12" />
+              </Button>
+            </Border>
+          </StackPanel>
+
+          <!-- Counters, console, version. -->
+          <StackPanel Grid.Column="7" Orientation="Horizontal">
+            <Border Classes="statusSegment" ToolTip.Tip="{Tr Shell.Counters.Tip}">
+              <StackPanel Orientation="Horizontal" Spacing="5">
+                <c:GlyphIcon Kind="Icon.Warning" IconSize="12" Foreground="{DynamicResource WarningBrush}" VerticalAlignment="Center" />
+                <TextBlock Text="{Binding Log.WarningCount}" Foreground="{DynamicResource TextSecondaryBrush}" />
+                <c:GlyphIcon Kind="Icon.Error" IconSize="12" Foreground="{DynamicResource DangerBrush}" Margin="5,0,0,0" VerticalAlignment="Center" />
+                <TextBlock Text="{Binding Log.ErrorCount}" Foreground="{DynamicResource TextSecondaryBrush}" />
+              </StackPanel>
+            </Border>
+            <Border Classes="statusSegment" Padding="0">
+              <ToggleButton x:Name="LogToggle" Classes="bar" IsChecked="{Binding IsLogOpen}" ToolTip.Tip="{Tr Shell.ToggleConsole.Tip}">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                  <c:GlyphIcon Kind="Icon.Terminal" IconSize="12" VerticalAlignment="Center" />
+                  <TextBlock Text="{Tr Shell.Console}" Classes="status" Foreground="{DynamicResource TextSecondaryBrush}" />
+                </StackPanel>
+              </ToggleButton>
+            </Border>
+            <Border Classes="statusSegment">
+              <TextBlock Text="{Binding Version}" Foreground="{DynamicResource TextMutedBrush}" />
+            </Border>
+          </StackPanel>
+        </Grid>
+      </Border>
+    </Grid>
+
+    <!-- ===================================================================== Setup overlay -->
+    <Panel x:Name="SetupOverlay" IsVisible="{Binding IsSetupOpen}" ZIndex="20">
+      <Border Background="{DynamicResource ScrimBrush}" />
+      <ContentControl Content="{Binding Setup}" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="24" />
+    </Panel>
+  </Panel>
+</Window>

@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>ScumStudio.Core</RootNamespace>
+    <AssemblyName>ScumStudio.Core</AssemblyName>
+    <Description>Shared primitives and contracts: geometry DTOs, UE math (FVector/FRotator/FQuat/FTransform, UE-to-GL mapping), file-source and progress abstractions, settings, protected AES key store, SCUM install locator, logging via Microsoft.Extensions.Logging.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="ScumStudio.Tests" />
+  </ItemGroup>
+
+</Project>

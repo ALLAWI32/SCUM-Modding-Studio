@@ -1,0 +1,208 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:ScumStudio.App.ViewModels"
+             xmlns:c="using:ScumStudio.App.Controls"
+             xmlns:conv="using:ScumStudio.App.Converters"
+             xmlns:loc="using:ScumStudio.App.Localization"
+             x:Class="ScumStudio.App.Views.Pages.SettingsPageView"
+             x:DataType="vm:SettingsPageViewModel">
+  <ScrollViewer HorizontalScrollBarVisibility="Disabled">
+    <StackPanel Margin="24,20,24,24" Spacing="16" MaxWidth="920" HorizontalAlignment="Left">
+      <StackPanel Spacing="4">
+        <TextBlock Text="{Binding Title}" Classes="h1" />
+        <TextBlock Text="{Binding Subtitle}" Classes="muted" />
+      </StackPanel>
+
+      <!-- Appearance -->
+      <Border Classes="card">
+        <StackPanel Spacing="12">
+          <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12">
+            <Border Grid.Column="0" Classes="iconTile"><c:GlyphIcon Kind="Icon.Palette" IconSize="20" HorizontalAlignment="Center" VerticalAlignment="Center" /></Border>
+            <StackPanel Grid.Column="1" VerticalAlignment="Center">
+              <TextBlock Text="{Tr Settings.Appearance}" Classes="h2" />
+              <TextBlock Classes="caption" Text="{Binding AccentCaption}" />
+            </StackPanel>
+          </Grid>
+          <ItemsControl x:Name="AccentList" ItemsSource="{Binding Accents}">
+            <ItemsControl.ItemsPanel>
+              <ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="vm:AccentChoiceViewModel">
+                <Button Classes="swatch" Classes.selected="{Binding IsSelected}" Margin="0,0,10,8"
+                        Command="{Binding SelectCommand}" ToolTip.Tip="{Binding Tip}">
+                  <Border Width="24" Height="24" CornerRadius="6" Background="{Binding Hex, Converter={x:Static conv:HexBrushConverter.Instance}}" />
+                </Button>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+          <StackPanel Orientation="Horizontal" Spacing="10">
+            <TextBlock Text="{Tr Settings.AnyColour}" Classes="label" VerticalAlignment="Center" />
+            <ColorPicker x:Name="AccentPicker" Color="{Binding CustomAccent}" IsAlphaEnabled="False" IsAlphaVisible="False"
+                         ToolTip.Tip="{Tr Settings.AnyColour.Tip}" />
+          </StackPanel>
+          <StackPanel>
+            <TextBlock Text="{Tr Settings.Language}" Classes="label" />
+            <ComboBox x:Name="LanguagePicker" ItemsSource="{Binding Languages}" SelectedItem="{Binding SelectedLanguage}" MinWidth="220"
+                      ToolTip.Tip="{Tr Settings.Language.Tip}">
+              <ComboBox.ItemTemplate>
+                <DataTemplate x:DataType="loc:LanguageOption">
+                  <TextBlock Text="{Binding NativeName}" />
+                </DataTemplate>
+              </ComboBox.ItemTemplate>
+            </ComboBox>
+          </StackPanel>
+          <StackPanel>
+            <TextBlock Text="{Tr Settings.Quality}" Classes="label" />
+            <ComboBox x:Name="QualityPicker" ItemsSource="{Binding RenderQualities}" SelectedItem="{Binding RenderQuality}" MinWidth="220"
+                      ToolTip.Tip="{Tr Settings.Quality.Tip}" />
+          </StackPanel>
+        </StackPanel>
+      </Border>
+
+      <!-- Folders -->
+      <Border Classes="card">
+        <StackPanel Spacing="12">
+          <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12">
+            <Border Grid.Column="0" Classes="iconTile"><c:GlyphIcon Kind="Icon.Folder" IconSize="20" HorizontalAlignment="Center" VerticalAlignment="Center" /></Border>
+            <StackPanel Grid.Column="1" VerticalAlignment="Center">
+              <TextBlock Text="{Tr Settings.Folders}" Classes="h2" />
+              <TextBlock Classes="caption" Text="{Tr Settings.Folders.Caption}" />
+            </StackPanel>
+            <Button Grid.Column="2" Classes="accent" Content="{Tr Settings.SaveFolders}" Command="{Binding SavePathsCommand}" VerticalAlignment="Center"
+                    ToolTip.Tip="{Tr Settings.SaveFolders.Tip}" />
+          </Grid>
+
+          <StackPanel>
+            <TextBlock Text="{Tr Settings.GamePaks}" Classes="label" />
+            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+              <TextBox Text="{Binding GamePaksFolder}" Watermark="...\steamapps\common\SCUM\SCUM\Content\Paks" ToolTip.Tip="{Tr Settings.GamePaks.Tip}" />
+              <Button Grid.Column="1" Content="{Tr Common.Browse}" Command="{Binding BrowseCommand}" CommandParameter="game" ToolTip.Tip="{Tr Common.BrowseFolder.Tip}" />
+            </Grid>
+          </StackPanel>
+          <StackPanel>
+            <TextBlock Text="{Tr Settings.ServerPaks}" Classes="label" />
+            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+              <TextBox Text="{Binding ServerPaksFolder}" Watermark="...\SCUMServer\SCUM\Content\Paks" ToolTip.Tip="{Tr Settings.ServerPaks.Tip}" />
+              <Button Grid.Column="1" Content="{Tr Common.Browse}" Command="{Binding BrowseCommand}" CommandParameter="server" ToolTip.Tip="{Tr Common.BrowseFolder.Tip}" />
+            </Grid>
+          </StackPanel>
+          <Grid ColumnDefinitions="*,*" ColumnSpacing="12">
+            <StackPanel Grid.Column="0">
+              <TextBlock Text="{Tr Settings.ClientMods}" Classes="label" />
+              <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                <TextBox Text="{Binding ClientModsFolder}" Watermark="...\Paks\~mods" ToolTip.Tip="{Tr Settings.ClientMods.Tip}" />
+                <Button Grid.Column="1" Content="{Tr Common.Browse}" Command="{Binding BrowseCommand}" CommandParameter="clientMods" ToolTip.Tip="{Tr Common.BrowseFolder.Tip}" />
+              </Grid>
+            </StackPanel>
+            <StackPanel Grid.Column="1">
+              <TextBlock Text="{Tr Settings.ServerMods}" Classes="label" />
+              <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                <TextBox Text="{Binding ServerModsFolder}" Watermark="...\Paks\~mods" ToolTip.Tip="{Tr Settings.ServerMods.Tip}" />
+                <Button Grid.Column="1" Content="{Tr Common.Browse}" Command="{Binding BrowseCommand}" CommandParameter="serverMods" ToolTip.Tip="{Tr Common.BrowseFolder.Tip}" />
+              </Grid>
+            </StackPanel>
+          </Grid>
+        </StackPanel>
+      </Border>
+
+      <!-- Key -->
+      <Border Classes="card">
+        <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12">
+          <Border Grid.Column="0" Classes="iconTile" VerticalAlignment="Top"><c:GlyphIcon Kind="Icon.Key" IconSize="20" HorizontalAlignment="Center" VerticalAlignment="Center" /></Border>
+          <StackPanel Grid.Column="1" Spacing="4">
+            <TextBlock Text="{Tr Settings.AesKey}" Classes="h2" />
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <Border Classes="badge" Classes.ok="{Binding HasKey}"><TextBlock x:Name="KeyStatus" Text="{Binding KeyStatus}" /></Border>
+            </StackPanel>
+            <TextBlock Classes="caption wrap" Text="{Binding KeyProtection}" />
+            <TextBlock Classes="caption wrap" Text="{Tr Settings.AesKey.Caption}" />
+          </StackPanel>
+          <StackPanel Grid.Column="2" Spacing="8" VerticalAlignment="Center">
+            <Button Content="{Tr Settings.ChangeInSetup}" Command="{Binding OpenSetupCommand}" HorizontalAlignment="Stretch" ToolTip.Tip="{Tr Settings.ChangeInSetup.Tip}" />
+            <Button x:Name="ForgetKeyButton" Classes="danger" Content="{Tr Settings.ForgetKey}" Command="{Binding ForgetKeyCommand}"
+                    IsEnabled="{Binding HasKey}" HorizontalAlignment="Stretch" ToolTip.Tip="{Tr Settings.ForgetKey.Tip}" />
+          </StackPanel>
+        </Grid>
+      </Border>
+
+      <!-- AI control -->
+      <Border x:Name="AiControlCard" Classes="card">
+        <StackPanel Spacing="12">
+          <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12">
+            <Border Grid.Column="0" Classes="iconTile" VerticalAlignment="Top"><c:GlyphIcon Kind="Icon.Ai" IconSize="20" HorizontalAlignment="Center" VerticalAlignment="Center" /></Border>
+            <StackPanel Grid.Column="1" Spacing="4">
+              <TextBlock Text="{Tr Settings.AiControl}" Classes="h2" />
+              <TextBlock Classes="caption wrap" Text="{Tr Settings.AiControl.Caption}" />
+            </StackPanel>
+            <ToggleSwitch x:Name="McpToggle" Grid.Column="2" IsChecked="{Binding McpEnabled}" OnContent="{Tr Common.On}" OffContent="{Tr Common.Off}" VerticalAlignment="Top"
+                          ToolTip.Tip="{Tr Settings.McpToggle.Tip}" />
+          </Grid>
+
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <Border Classes="badge" Classes.ok="{Binding McpRunning}"><TextBlock x:Name="McpStatus" Text="{Binding McpStatus}" /></Border>
+          </StackPanel>
+
+          <Grid ColumnDefinitions="Auto,*" ColumnSpacing="24">
+            <StackPanel Grid.Column="0">
+              <TextBlock Text="{Tr Settings.Port}" Classes="label" />
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <TextBox Text="{Binding McpPort}" Width="110" ToolTip.Tip="{Tr Settings.Port.Tip}" />
+                <Button Content="{Tr Common.Apply}" Command="{Binding SaveMcpPortCommand}" ToolTip.Tip="{Tr Settings.ApplyPort.Tip}" />
+              </StackPanel>
+            </StackPanel>
+            <StackPanel Grid.Column="1">
+              <TextBlock Text="{Tr Settings.Token}" Classes="label" />
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <Border Classes="badge" VerticalAlignment="Center"><TextBlock x:Name="McpToken" Text="{Binding McpTokenMasked}" Classes="mono" /></Border>
+                <Button Command="{Binding CopyMcpTokenCommand}" ToolTip.Tip="{Tr Settings.CopyToken.Tip}">
+                  <StackPanel Orientation="Horizontal" Spacing="6"><c:GlyphIcon Kind="Icon.Copy" IconSize="14" /><TextBlock Text="{Tr Common.Copy}" /></StackPanel>
+                </Button>
+                <Button Content="{Tr Settings.NewToken}" Command="{Binding NewMcpTokenCommand}" ToolTip.Tip="{Tr Settings.NewToken.Tip}" />
+              </StackPanel>
+            </StackPanel>
+          </Grid>
+
+          <StackPanel Spacing="6">
+            <TextBlock Text="{Tr Settings.ConnectClient}" Classes="label" />
+            <WrapPanel>
+              <Button x:Name="CopyClaudeCode" Classes="accent" Margin="0,0,8,8" Command="{Binding CopyClaudeCodeCommandCommand}" ToolTip.Tip="{Tr Settings.CopyClaudeCode.Tip}">
+                <StackPanel Orientation="Horizontal" Spacing="6"><c:GlyphIcon Kind="Icon.Copy" IconSize="14" /><TextBlock Text="{Tr Settings.CopyClaudeCode}" /></StackPanel>
+              </Button>
+              <Button Margin="0,0,8,8" Command="{Binding CopyClaudeDesktopConfigCommand}" ToolTip.Tip="{Tr Settings.CopyClaudeDesktop.Tip}">
+                <StackPanel Orientation="Horizontal" Spacing="6"><c:GlyphIcon Kind="Icon.Copy" IconSize="14" /><TextBlock Text="{Tr Settings.CopyClaudeDesktop}" /></StackPanel>
+              </Button>
+              <Button x:Name="InstallSkill" Margin="0,0,8,8" Command="{Binding InstallClaudeSkillCommand}"
+                      ToolTip.Tip="{Tr Settings.InstallSkill.Tip}">
+                <StackPanel Orientation="Horizontal" Spacing="6"><c:GlyphIcon Kind="Icon.Download" IconSize="14" /><TextBlock Text="{Tr Settings.InstallSkill}" /></StackPanel>
+              </Button>
+            </WrapPanel>
+            <SelectableTextBlock Text="{Binding McpCommandPreview}" Classes="mono" TextWrapping="Wrap" Foreground="{DynamicResource TextMutedBrush}" />
+          </StackPanel>
+
+          <TextBlock x:Name="McpActivity" Classes="caption wrap" Text="{Binding McpActivity}" IsVisible="{Binding HasMcpActivity}" />
+          <TextBlock Classes="caption wrap" Text="{Tr Settings.AiControl.Safety}" />
+        </StackPanel>
+      </Border>
+
+      <!-- About -->
+      <Border Classes="card">
+        <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12">
+          <Border Grid.Column="0" Classes="iconTile" VerticalAlignment="Top"><c:GlyphIcon Kind="Icon.Info" IconSize="20" HorizontalAlignment="Center" VerticalAlignment="Center" /></Border>
+          <StackPanel Grid.Column="1" Spacing="4">
+            <TextBlock Text="{Tr Settings.About}" Classes="h2" />
+            <TextBlock Text="{Tr Settings.About.MadeBy}" FontWeight="SemiBold" />
+            <TextBlock Text="{Tr Settings.About.Body}" Classes="wrap" />
+            <TextBlock Text="{Binding Version}" Classes="muted" ToolTip.Tip="{Binding BuildVersion}" />
+            <SelectableTextBlock Text="{Binding DataFolderText}" Classes="mono" Foreground="{DynamicResource TextMutedBrush}" />
+            <WrapPanel Margin="0,4,0,0">
+              <Button x:Name="ProjectPageButton" Margin="0,0,8,0" Command="{Binding OpenProjectPageCommand}" ToolTip.Tip="{Tr Settings.About.Page.Tip}">
+                <StackPanel Orientation="Horizontal" Spacing="6"><c:GlyphIcon Kind="Icon.Info" IconSize="14" /><TextBlock Text="{Tr Settings.About.Page}" /></StackPanel>
+              </Button>
+            </WrapPanel>
+          </StackPanel>
+        </Grid>
+      </Border>
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>

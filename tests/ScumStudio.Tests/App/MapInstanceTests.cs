@@ -47,6 +47,63 @@ public sealed class MapInstanceTests
     }
 
     /// <summary>
+    /// Hektor (Discord): a copied tree could not be chopped (it was a plain mesh actor). Duplicate and Paste of an instance
+    /// add a new instance to its own component, which is drawn, selected, moved and taken out again like the stored ones.
+    /// </summary>
+    [Fact]
+    public async Task ADuplicatedInstanceIsANewInstanceOfItsComponent()
+    {
+        using var ctx = AppTestContext.Create();
+        var game = ctx.Combine("game");
+        SyntheticLevels.WriteContent(game, withBlueprintPackage: true);
+        using var map = new MapPageViewModel(ctx.Services);
+        await ctx.Services.Workspace.OpenLooseAsync(game, ProgressSink.Null);
+        await map.LoadCompletion;
+        await ctx.Services.Projects.CreateAsync(ctx.Combine("projects"), "Copies");
+        await map.LoadLevelsAsync([SyntheticLevels.LevelPath]);
+        var journal = ctx.Services.Projects.Current!.Journal;
+
+        var rocks = map.AllActors.Single(a => a.Name == "Rocks_Actor");
+        map.SelectedInstanceKey = InstanceKey.Of(rocks.SelectableId, "Rocks", 1);
+        map.SelectedActorId = rocks.SelectableId;
+        var source = map.SelectedRootWorld!.Value;
+
+        map.DuplicateSelectedCommand.Execute(null);
+        var add = Assert.IsType<AddInstanceOp>(Assert.Single(journal.Applied).Op);
+        Assert.Equal(2, add.Target.Index); // behind the two stored rocks
+        var copy = InstanceKey.Of(rocks.SelectableId, "Rocks", 2);
+        Assert.Equal(copy, map.SelectedInstanceKey);
+        Assert.True(map.HasSelectedInstance);
+        Assert.Equal(source.Translation.X + 200f, map.InstanceTransforms[copy].Translation.X, 0.5f);
+        Assert.Contains(map.ActorProperties, r => r.Name == "Instance" && r.Value.StartsWith("#2 of Rocks", StringComparison.Ordinal));
+        Assert.DoesNotContain(map.AllActors, a => a.IsAdded); // no mesh actor
+
+        // The copy moves on its own index.
+        var world = map.SelectedRootWorld!.Value;
+        map.ApplyDraggedTransform(rocks.SelectableId, world with { Translation = world.Translation + new FVector(0f, 300f, 0f) });
+        var move = Assert.IsType<SetInstanceTransformOp>(journal.Applied[^1].Op);
+        Assert.Equal(2, move.Target.Index);
+        Assert.Equal(world.Translation.Y + 300f, map.InstanceTransforms[copy].Translation.Y, 0.5f);
+
+        // Delete takes the copy out of the project again.
+        map.DeleteSelectedCommand.Execute(null);
+        Assert.IsType<RemoveAddedInstanceOp>(journal.Applied[^1].Op);
+        Assert.DoesNotContain(copy, map.InstanceTransforms.Keys);
+        Assert.Empty(ctx.Services.Projects.Current!.State.AddedInstances);
+
+        // Copy + Paste into the same level: a new instance where the camera aims.
+        map.SelectedInstanceKey = InstanceKey.Of(rocks.SelectableId, "Rocks", 0);
+        map.SelectedActorId = rocks.SelectableId;
+        map.CopySelectedCommand.Execute(null);
+        map.AimPointProvider = () => new FVector(1000f, 2000f, 100f);
+        map.PasteCommand.Execute(null);
+        var pasted = Assert.IsType<AddInstanceOp>(journal.Applied[^1].Op);
+        Assert.Equal(2, pasted.Target.Index);
+        Assert.Equal(1000f, map.InstanceTransforms[copy].Translation.X, 0.5f);
+        Assert.Equal(2000f, map.InstanceTransforms[copy].Translation.Y, 0.5f);
+    }
+
+    /// <summary>
     /// Igor (Discord): "picking the hangar selects everything in it; let me edit what is fixed to the main model". In part
     /// mode one part of a Blueprint (the lamp's bulb) is selected, moved and deleted alone; the lamp stays where it is.
     /// </summary>

@@ -508,8 +508,13 @@ public sealed partial class Cue4ParseLevelReader : ILevelReader
             collision = profile.Text;
         }
 
+        // A box component's half size (a car shop's vehicle box), as stored or in a template; the engine's default otherwise.
+        FVector? boxExtent = TryGetProperty(templates, "BoxExtent", out UeVector extent, ref ignored) ? new FVector(extent.X, extent.Y, extent.Z)
+            : name.EndsWith("BoxComponent", StringComparison.Ordinal) || classChain.Contains("BoxComponent", StringComparer.Ordinal) ? new FVector(32f, 32f, 32f)
+            : null;
+
         return new ComponentValues(location, rotation, scale, absLocation, absRotation, absScale, mesh, instances, isInstancedClass,
-            isMesh, isScene, isComponent, visible, childActorClass, spline, fromTemplate, endCullDistance, overrides, markers, collision);
+            isMesh, isScene, isComponent, visible, childActorClass, spline, fromTemplate, endCullDistance, overrides, markers, collision, boxExtent);
     }
 
     private readonly Dictionary<string, (string Name, string Type)> _personalities = new(StringComparer.OrdinalIgnoreCase);

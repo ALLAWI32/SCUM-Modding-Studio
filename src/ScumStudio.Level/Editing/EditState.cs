@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using ScumStudio.Level.Model;
+using ScumStudio.Level.Spawns;
 
 namespace ScumStudio.Level.Editing;
 
@@ -17,13 +18,15 @@ public sealed partial class EditState
     private readonly Dictionary<(ActorRef Actor, string Component), Override> _transforms = new(TransformKeyComparer.Instance);
     private readonly Dictionary<InstanceRef, Override> _instanceTransforms = new(InstanceRef.Comparer);
     private readonly Dictionary<ActorRef, EditOp> _added = new(ActorRef.Comparer);
+    private readonly Dictionary<InstanceRef, AddInstanceOp> _addedInstances = new(InstanceRef.Comparer);
     private readonly Dictionary<ActorRef, BendValue> _bends = new(ActorRef.Comparer);
     private readonly Dictionary<(ActorRef Actor, string Component), BendValue> _segmentSways = new(TransformKeyComparer.Instance);
+    private readonly Dictionary<(ActorRef Actor, string Component, string Array), PointsOverride> _spawnPoints = new(PointsKeyComparer.Instance);
 
     /// <summary>True when no operation has a net effect.</summary>
     public bool IsEmpty =>
         _deletedActors.Count == 0 && _deletedInstances.Count == 0 && _transforms.Count == 0 && _instanceTransforms.Count == 0 && _added.Count == 0
-        && _clones.Count == 0 && _values.Count == 0 && _replacements.Count == 0 && _bends.Count == 0 && _segmentSways.Count == 0;
+        && _addedInstances.Count == 0 && _clones.Count == 0 && _values.Count == 0 && _replacements.Count == 0 && _bends.Count == 0 && _segmentSways.Count == 0 && _spawnPoints.Count == 0;
 
     /// <summary>Deleted actors (pristine or added).</summary>
     public IReadOnlyCollection<ActorRef> DeletedActors => _deletedActors;
@@ -33,6 +36,9 @@ public sealed partial class EditState
 
     /// <summary>Actors created by duplicate/add operations, with the operation that created them.</summary>
     public IReadOnlyDictionary<ActorRef, EditOp> AddedActors => _added;
+
+    /// <summary>ISM/HISM instances the project added (copied trees), with the operation that created them.</summary>
+    public IReadOnlyDictionary<InstanceRef, AddInstanceOp> AddedInstances => _addedInstances;
 
     /// <summary>
     /// Every net transform override: the actor, the component it applies to (empty = the root component) and the current
@@ -61,6 +67,17 @@ public sealed partial class EditState
     /// <summary>The handles' pushes of one spline piece (0, 0 = as the level has it).</summary>
     public BendValue GetSegmentShape(ActorRef actor, string component) => _segmentSways.GetValueOrDefault((actor, component));
 
+    /// <summary>
+    /// Every spawner point array with a net change (see <see cref="SetSpawnPointsOp"/>): the actor, the component storing
+    /// the array (null = the actor's own), the array and its current points. The exporter rewrites these arrays.
+    /// </summary>
+    public IEnumerable<(ActorRef Actor, string? Component, string Array, IReadOnlyList<SpawnPoint> Points)> SpawnPointOverrides =>
+        _spawnPoints.Select(p => (p.Key.Actor, p.Key.Component.Length == 0 ? null : p.Key.Component, p.Key.Array, p.Value.Current));
+
+    /// <summary>The overridden points of a spawner's array, or null when it is as the level stores it.</summary>
+    public IReadOnlyList<SpawnPoint>? GetSpawnPoints(ActorRef actor, string? component, string array) =>
+        _spawnPoints.TryGetValue((actor, component ?? string.Empty, array), out var o) ? o.Current : null;
+
     /// <summary>Levels with a net change.</summary>
     public IReadOnlyList<string> ChangedLevels =>
         _deletedActors.Select(a => a.Level)
@@ -68,8 +85,10 @@ public sealed partial class EditState
             .Concat(_transforms.Keys.Select(k => k.Actor.Level))
             .Concat(_instanceTransforms.Keys.Select(i => i.Level))
             .Concat(_added.Keys.Select(a => a.Level))
+            .Concat(_addedInstances.Keys.Select(i => i.Level))
             .Concat(_bends.Keys.Select(a => a.Level))
             .Concat(_segmentSways.Keys.Select(k => k.Actor.Level))
+            .Concat(_spawnPoints.Keys.Select(k => k.Actor.Level))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(l => l, StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -82,6 +101,13 @@ public sealed partial class EditState
 
     /// <summary>True when the actor was created by an edit.</summary>
     public bool IsAdded(ActorRef actor) => _added.ContainsKey(actor);
+
+    /// <summary>True when the instance was created by an edit (see <see cref="AddInstanceOp"/>).</summary>
+    public bool IsAdded(InstanceRef instance) => _addedInstances.ContainsKey(instance);
+
+    /// <summary>The effective transform of an added instance (its creation transform or a later override), or null when it was not added.</summary>
+    public TransformValue? GetAddedInstanceTransform(InstanceRef instance) =>
+        _addedInstances.TryGetValue(instance, out var op) ? GetInstanceOverride(instance) ?? op.Transform : null;
 
     /// <summary>The overridden relative transform of an actor's root (or named component), if any.</summary>
     public TransformValue? GetTransformOverride(ActorRef actor, string? component = null) =>
@@ -196,6 +222,35 @@ public sealed partial class EditState
                 return IsDeleted(di.Target) ? $"{di.Target} is already deleted." : null;
             case RestoreInstanceOp ri:
                 return _deletedInstances.Contains(ri.Target) ? null : $"{ri.Target} is not deleted.";
+            case AddInstanceOp ai:
+                return ai.Target.Index < 0 ? "An instance index cannot be negative."
+                    : _addedInstances.ContainsKey(ai.Target) ? $"{ai.Target} already exists." : null;
+            case RemoveAddedInstanceOp removeInstance:
+                if (!_addedInstances.TryGetValue(removeInstance.Target, out var originalInstance))
+                {
+                    return $"{removeInstance.Target} was not added by an edit.";
+                }
+
+                return originalInstance.Equals(removeInstance.Original) ? null : $"{removeInstance.Target} was added by a different operation.";
+            case SetSpawnPointsOp points:
+                if (_deletedActors.Contains(points.Target))
+                {
+                    return $"{points.Target} is deleted.";
+                }
+
+                if (string.IsNullOrWhiteSpace(points.Array))
+                {
+                    return "No point array given.";
+                }
+
+                if (points.New.Any(p => p.Source < 0))
+                {
+                    return "Every point must be a copy of a stored point.";
+                }
+
+                return GetSpawnPoints(points.Target, points.Component, points.Array) is { } currentPoints && !currentPoints.SequenceEqual(points.Old)
+                    ? $"{points.Target} does not have the expected spawn points (edit is out of date)."
+                    : null;
             case CloneAssetOp or RemoveAssetCloneOp or SetAssetValueOp or ReplaceAssetOp:
                 return ValidateAsset(op);
             case BatchOp batch:
@@ -214,7 +269,8 @@ public sealed partial class EditState
                     _ => null,
                 }).OfType<ActorRef>();
                 return batch.Ops.Select(Validate).FirstOrDefault(e => e is not null)
-                       ?? Duplicates(created, ActorRef.Comparer).FirstOrDefault();
+                       ?? Duplicates(created, ActorRef.Comparer).FirstOrDefault()
+                       ?? Duplicates(batch.Ops.OfType<AddInstanceOp>().Select(a => a.Target), InstanceRef.Comparer).FirstOrDefault();
             default:
                 return $"Unsupported operation {op.GetType().Name}.";
         }
@@ -273,9 +329,33 @@ public sealed partial class EditState
                 }
 
                 _bends.Remove(remove.Target);
+                foreach (var key in _spawnPoints.Keys.Where(k => ActorRef.Comparer.Equals(k.Actor, remove.Target)).ToList())
+                {
+                    _spawnPoints.Remove(key);
+                }
+
                 break;
             case SetTransformOp set:
                 SetOverride(_transforms, (set.Target, set.Component ?? string.Empty), set.Old, set.New);
+                break;
+            case SetSpawnPointsOp points:
+                var pointsKey = (points.Target, points.Component ?? string.Empty, points.Array);
+                if (!_spawnPoints.TryGetValue(pointsKey, out var entry))
+                {
+                    if (!points.Old.SequenceEqual(points.New))
+                    {
+                        _spawnPoints[pointsKey] = new PointsOverride(points.Old, points.New);
+                    }
+                }
+                else if (entry.Base.SequenceEqual(points.New))
+                {
+                    _spawnPoints.Remove(pointsKey);
+                }
+                else
+                {
+                    _spawnPoints[pointsKey] = entry with { Current = points.New };
+                }
+
                 break;
             case SetInstanceTransformOp setInstance:
                 SetOverride(_instanceTransforms, setInstance.Target, setInstance.Old, setInstance.New);
@@ -307,6 +387,14 @@ public sealed partial class EditState
                 break;
             case RestoreInstanceOp ri:
                 _deletedInstances.Remove(ri.Target);
+                break;
+            case AddInstanceOp ai:
+                _addedInstances[ai.Target] = ai;
+                break;
+            case RemoveAddedInstanceOp removeInstance:
+                _addedInstances.Remove(removeInstance.Target);
+                _instanceTransforms.Remove(removeInstance.Target);
+                _deletedInstances.Remove(removeInstance.Target);
                 break;
             case CloneAssetOp or RemoveAssetCloneOp or SetAssetValueOp or ReplaceAssetOp:
                 ApplyAsset(op);
@@ -344,8 +432,11 @@ public sealed partial class EditState
         lines.AddRange(_transforms.Select(t => $"transform {Key(t.Key.Actor)}.{t.Key.Component.ToLowerInvariant()} {t.Value.Base} -> {t.Value.Current}"));
         lines.AddRange(_instanceTransforms.Select(t => $"instance-transform {Key(t.Key)} {t.Value.Base} -> {t.Value.Current}"));
         lines.AddRange(_added.Select(a => $"added {Key(a.Key)} by {a.Value.GetType().Name}"));
+        lines.AddRange(_addedInstances.Select(a => $"added-instance {Key(a.Key)} at {a.Value.Transform}"));
         lines.AddRange(_bends.Select(b => FormattableString.Invariant($"bend {Key(b.Key)} {b.Value.Degrees:0.###} {b.Value.Sway1:0.##} {b.Value.Sway2:0.##}{b.Value.DescribeEnds()}")));
         lines.AddRange(_segmentSways.Select(s => FormattableString.Invariant($"sway {Key(s.Key.Actor)}.{s.Key.Component.ToLowerInvariant()} {s.Value.Sway1:0.##} {s.Value.Sway2:0.##}{s.Value.DescribeEnds()}")));
+        lines.AddRange(_spawnPoints.Select(p => FormattableString.Invariant(
+            $"spawn-points {Key(p.Key.Actor)}.{p.Key.Component.ToLowerInvariant()}.{p.Key.Array.ToLowerInvariant()} {p.Value.Base.Count} -> {p.Value.Current.Count}: {string.Join(" ", p.Value.Current.Select(x => $"{x.Source}@{x.Local}"))}")));
         lines.AddRange(DescribeAssets());
         lines.Sort(StringComparer.Ordinal);
         var sb = new StringBuilder();
@@ -402,6 +493,20 @@ public sealed partial class EditState
         errors.SelectMany(e => e).FirstOrDefault();
 
     private sealed record Override(TransformValue Base, TransformValue Current);
+
+    private sealed record PointsOverride(IReadOnlyList<SpawnPoint> Base, IReadOnlyList<SpawnPoint> Current);
+
+    private sealed class PointsKeyComparer : IEqualityComparer<(ActorRef Actor, string Component, string Array)>
+    {
+        public static readonly PointsKeyComparer Instance = new();
+
+        public bool Equals((ActorRef Actor, string Component, string Array) x, (ActorRef Actor, string Component, string Array) y) =>
+            ActorRef.Comparer.Equals(x.Actor, y.Actor) && StringComparer.OrdinalIgnoreCase.Equals(x.Component, y.Component)
+            && StringComparer.OrdinalIgnoreCase.Equals(x.Array, y.Array);
+
+        public int GetHashCode((ActorRef Actor, string Component, string Array) obj) =>
+            HashCode.Combine(ActorRef.Comparer.GetHashCode(obj.Actor), StringComparer.OrdinalIgnoreCase.GetHashCode(obj.Component), StringComparer.OrdinalIgnoreCase.GetHashCode(obj.Array));
+    }
 
     private sealed class TransformKeyComparer : IEqualityComparer<(ActorRef Actor, string Component)>
     {

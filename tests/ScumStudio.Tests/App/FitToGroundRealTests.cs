@@ -67,6 +67,24 @@ public sealed class FitToGroundRealTests
         Assert.All(after, d => Assert.InRange(d, -15f, 15f));
         Assert.True(before.Max(MathF.Abs) > 100f);
 
+        // Hektor: "fit a forest to the terrain". One tree of the game's foliage, lifted 3 m: its foot comes back onto the
+        // ground, upright as it was (a plant stands on its pivot, not tilted to the slope).
+        var tile = map.AllActors.First(a => a.Actor.InstanceTransforms.Any(i => i.StaticMeshPath?.Contains("/Foliage/", StringComparison.OrdinalIgnoreCase) == true));
+        var tree = tile.Actor.InstanceTransforms.First(i => i.StaticMeshPath?.Contains("/Foliage/", StringComparison.OrdinalIgnoreCase) == true);
+        var lifted = ScumStudio.Level.Model.TransformValue.FromTransform(tree.LocalTransform);
+        lifted = lifted with { Location = lifted.Location + new FVector(0f, 0f, 300f) };
+        ctx.Services.Projects.Apply(ScumStudio.Level.Editing.EditOpFactory.SetInstanceTransform(tile.Level, tile.Actor, tree.ComponentName, tree.InstanceIndex, lifted, ctx.Services.Projects.Current!.State));
+        map.RefreshEdits();
+        map.SelectedActorId = tile.SelectableId;
+        map.SelectedInstanceKey = ScumStudio.Viewport.InstanceKey.Of(tile.SelectableId, tree.ComponentName, tree.InstanceIndex);
+        map.FitToGroundCommand.Execute(null);
+        var placed = ctx.Services.Projects.Current!.State.GetInstanceOverride(new ScumStudio.Level.Editing.InstanceRef(tile.Level.PackagePath, tile.Name, tree.ComponentName, tree.InstanceIndex))!.Value;
+        var foot = placed.ToTransform() * tile.Actor.FindComponent(tree.ComponentName)!.WorldTransform;
+        var groundZ = scene.HeightField!.SampleHeight(foot.Translation.X, foot.Translation.Y)!.Value;
+        _output.WriteLine($"tree {tree.StaticMeshPath}: foot {foot.Translation.Z:0} cm, ground {groundZ:0} cm");
+        Assert.InRange(foot.Translation.Z - groundZ, -5f, 5f);
+        Assert.True(placed.IsNearlyEqual(lifted with { Location = placed.Location }, 0.01f), $"{placed} vs {lifted}"); // only the height moved
+
         List<float> Offsets(FTransform root)
         {
             var result = new List<float>();

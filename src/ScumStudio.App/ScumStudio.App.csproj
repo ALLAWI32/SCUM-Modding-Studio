@@ -17,6 +17,8 @@
     <AvaloniaResource Include="Assets\**" />
     <!-- UI strings per language (see Localization/Loc.cs), read as Strings.<code>.json. -->
     <EmbeddedResource Include="Localization\Strings\*.json" LogicalName="Strings.%(Filename).json" />
+    <!-- The "Report a problem" Discord webhook: written by CI from a secret (never committed), or by the owner by hand. -->
+    <EmbeddedResource Include="report-webhook.txt" LogicalName="report-webhook.txt" Condition="Exists('report-webhook.txt')" />
   </ItemGroup>
 
   <ItemGroup>

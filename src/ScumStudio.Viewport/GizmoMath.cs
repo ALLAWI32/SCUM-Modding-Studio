@@ -276,10 +276,16 @@ public static class GizmoMath
     }
 
     /// <summary>The root transform after dragging <paramref name="axis"/> by <paramref name="delta"/> cm (snapped to <paramref name="snap"/> when positive).</summary>
-    public static FTransform Translate(FTransform start, GizmoAxis axis, float delta, float snap)
+    public static FTransform Translate(FTransform start, GizmoAxis axis, float delta, float snap) => Translate(start, UeDirection(axis), delta, snap);
+
+    /// <summary>
+    /// The root transform moved <paramref name="delta"/> cm (snapped to <paramref name="snap"/> when positive) along the
+    /// UE-space unit <paramref name="direction"/>: a world axis, or the object's own axis (Discord salvador: "the gizmo
+    /// doesn't align with the object's orientation").
+    /// </summary>
+    public static FTransform Translate(FTransform start, FVector direction, float delta, float snap)
     {
         var step = Snap(delta, snap);
-        var direction = UeDirection(axis);
         return start with
         {
             Translation = new FVector(

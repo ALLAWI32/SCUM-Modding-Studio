@@ -150,6 +150,9 @@ public sealed record LevelExportData
     /// <summary>Primitive components: <c>BodyInstance.CollisionProfileName</c> as stored (or in a template), or null.</summary>
     public string? CollisionProfile { get; init; }
 
+    /// <summary>Box components: <c>BoxExtent</c>, the half size in component space (the engine's 32 cm when not stored); null for other components.</summary>
+    public FVector? BoxExtent { get; init; }
+
     /// <summary>Sentry spawner actors: <c>PatrolPoints</c> relative to the spawner; null for other actors.</summary>
     public IReadOnlyList<FVector>? PatrolPoints { get; init; }
 

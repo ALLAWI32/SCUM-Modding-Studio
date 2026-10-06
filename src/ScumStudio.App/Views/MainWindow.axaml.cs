@@ -24,6 +24,16 @@ public partial class MainWindow : Window
 #endif
     }
 
+    /// <inheritdoc />
+    protected override void OnSizeChanged(SizeChangedEventArgs e)
+    {
+        base.OnSizeChanged(e);
+        if (DataContext is ViewModels.MainWindowViewModel vm)
+        {
+            vm.IsCompactHeader = e.NewSize.Width < ViewModels.MainWindowViewModel.CompactHeaderWidth;
+        }
+    }
+
     private void FocusSearch()
     {
         GlobalSearch.Focus(NavigationMethod.Tab);

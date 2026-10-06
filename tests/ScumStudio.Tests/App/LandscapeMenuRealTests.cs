@@ -47,11 +47,16 @@ public sealed class LandscapeMenuRealTests
             map.SwapTreeCommand.Execute(null);
             HeadlessUi.Pump();
             Assert.Single(map.TreeSwaps);
+            await map.LoadCompletion; // the swap previews the levels that use the tree; back to the farm
+            await map.LoadLevelsAsync(["/Game/ConZ_Files/Maps/The_Island/A_3_Farm_01"]);
+            HeadlessUi.Pump();
             HeadlessUi.SaveScreenshot(window, "map-landscape-menu");
             button.Flyout.Hide();
 
             // A house: no bend row, "Fit to ground" next to "Straighten".
-            map.SelectedActor = map.AllActors.First(a => a.Actor.Kind == ActorKind.Blueprint && a.Name.Contains("House", StringComparison.OrdinalIgnoreCase));
+            var houseItem = map.AllActors.FirstOrDefault(a => a.Actor.Kind == ActorKind.Blueprint && a.Name.Contains("House", StringComparison.OrdinalIgnoreCase));
+            Assert.True(houseItem is not null, $"{map.AllActors.Count} actors: {string.Join(", ", map.AllActors.Take(14).Select(a => a.Name + "/" + a.Actor.Kind + "/" + a.Level.Name))}");
+            map.SelectedActor = houseItem;
             HeadlessUi.Pump();
             Assert.False(map.CanBend);
             var shape = window.GetVisualDescendants().OfType<Avalonia.Controls.Button>().Single(b => b.Name == "ShapeButton");

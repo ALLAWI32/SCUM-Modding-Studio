@@ -10,7 +10,7 @@ using Avalonia.Markup.Xaml;
 namespace ScumStudio.App.Localization;
 
 /// <summary>A user-interface language: its code and its name written in that language (for the picker).</summary>
-/// <param name="Code">Code used in settings and in the table name (<c>en</c>, <c>ar</c>, <c>ru</c>, <c>de</c>, <c>es</c>, <c>tr</c>, <c>sh</c> = Bosnian/Croatian/Serbian in Latin script, <c>zh</c> = Simplified Chinese).</param>
+/// <param name="Code">Code used in settings and in the table name (<c>en</c>, <c>ar</c>, <c>ru</c>, <c>de</c>, <c>es</c>, <c>tr</c>, <c>sh</c> = Bosnian/Croatian/Serbian in Latin script, <c>zh</c> = Simplified Chinese, <c>fr</c>, <c>vi</c>).</param>
 /// <param name="NativeName">Name of the language in the language itself.</param>
 public sealed record LanguageOption(string Code, string NativeName);
 
@@ -37,6 +37,8 @@ public sealed class Loc : INotifyPropertyChanged
         new("tr", "Türkçe"),
         new("sh", "Bosanski / Hrvatski / Srpski"),
         new("zh", "简体中文"),
+        new("fr", "Français"),
+        new("vi", "Tiếng Việt"),
     ];
 
     // Static initialisers run in text order: the tables need Languages, the instance needs the tables.

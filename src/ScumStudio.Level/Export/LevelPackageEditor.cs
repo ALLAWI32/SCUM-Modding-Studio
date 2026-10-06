@@ -23,6 +23,17 @@ public sealed record TransformPatch(string Actor, string? Component, TransformVa
 public sealed record SplinePatch(string Actor, string Component, SplineMeshParams Spline, IReadOnlyList<Assets.Meshes.CollisionBox>? Collision = null);
 
 /// <summary>
+/// A spawner's point array rewritten (a sentry's <c>PatrolPoints</c>, an item spawner component's <c>SpawnerMarkers</c>;
+/// see <see cref="Spawns.SpawnPointArrays"/>): each point is a copy of a stored element placed anew, so the other fields
+/// of the element stay as they were; left-out elements are gone.
+/// </summary>
+/// <param name="Actor">Owning actor name.</param>
+/// <param name="Component">The component storing the array, or null for the actor's own.</param>
+/// <param name="Array">The array property.</param>
+/// <param name="Points">The points to write, in order.</param>
+public sealed record SpawnPointsPatch(string Actor, string? Component, string Array, IReadOnlyList<Spawns.SpawnPoint> Points);
+
+/// <summary>
 /// One ISM/HISM instance to rewrite inside its component's <c>PerInstanceSMData</c>. A null <paramref name="Local"/>
 /// "deletes" the instance by collapsing it in place (scale 0.0001), which keeps the array length, the HISM cluster tree
 /// and every other instance index valid. The cooked copy the game draws is rebuilt from the array (see
@@ -33,6 +44,16 @@ public sealed record SplinePatch(string Actor, string Component, SplineMeshParam
 /// <param name="Index">Instance index in the pristine array.</param>
 /// <param name="Local">New instance transform in component space, or null to collapse it.</param>
 public sealed record InstancePatch(string Actor, string Component, int Index, FTransform? Local);
+
+/// <summary>
+/// One ISM/HISM instance to append to its component's <c>PerInstanceSMData</c> (a copied tree as a new tree of the same
+/// foliage). The game rebuilds the foliage cluster tree and the draw copy for the grown array when the level loads
+/// (<c>NumBuiltInstances</c> no longer matches, see <c>UHierarchicalInstancedStaticMeshComponent::BuildTreeIfOutdated</c>).
+/// </summary>
+/// <param name="Actor">Owning actor name.</param>
+/// <param name="Component">ISM/HISM component name.</param>
+/// <param name="Local">Instance transform in component space.</param>
+public sealed record InstanceAdd(string Actor, string Component, FTransform Local);
 
 /// <summary>
 /// The pristine instance transforms of one component (as the level reader decoded them). The editor locates the
@@ -56,7 +77,10 @@ public sealed record LevelEditRequest
     /// <summary>ISM/HISM instances to collapse or move.</summary>
     public IReadOnlyList<InstancePatch> Instances { get; init; } = [];
 
-    /// <summary>Pristine instance arrays of the components named in <see cref="Instances"/> (one per component).</summary>
+    /// <summary>ISM/HISM instances to append (in order).</summary>
+    public IReadOnlyList<InstanceAdd> InstanceAdds { get; init; } = [];
+
+    /// <summary>Pristine instance arrays of the components named in <see cref="Instances"/> and <see cref="InstanceAdds"/> (one per component).</summary>
     public IReadOnlyList<InstanceArrayHint> InstanceHints { get; init; } = [];
 
     /// <summary>Actors to create by copying existing actors of this level.</summary>
@@ -71,9 +95,12 @@ public sealed record LevelEditRequest
     /// <summary>Spline mesh pieces to reshape.</summary>
     public IReadOnlyList<SplinePatch> SplinePatches { get; init; } = [];
 
+    /// <summary>Spawner point arrays to rewrite.</summary>
+    public IReadOnlyList<SpawnPointsPatch> SpawnPoints { get; init; } = [];
+
     /// <summary>True when the request changes nothing.</summary>
-    public bool IsEmpty => DeleteActors.Count == 0 && Transforms.Count == 0 && Instances.Count == 0 && Copies.Count == 0 && StaticMeshAdds.Count == 0
-        && ForeignCopies.Count == 0 && SplinePatches.Count == 0;
+    public bool IsEmpty => DeleteActors.Count == 0 && Transforms.Count == 0 && Instances.Count == 0 && InstanceAdds.Count == 0 && Copies.Count == 0
+        && StaticMeshAdds.Count == 0 && ForeignCopies.Count == 0 && SplinePatches.Count == 0 && SpawnPoints.Count == 0;
 }
 
 /// <summary>What <see cref="LevelPackageEditor.Apply"/> did to a level package.</summary>
@@ -105,6 +132,9 @@ public sealed record LevelEditReport
 
     /// <summary>ISM/HISM instances moved.</summary>
     public int MovedInstances { get; init; }
+
+    /// <summary>ISM/HISM instances appended.</summary>
+    public int AddedInstances { get; init; }
 
     /// <summary>Requested changes that could not be applied, with the reason.</summary>
     public required IReadOnlyList<string> Warnings { get; init; }
@@ -180,12 +210,20 @@ public static partial class LevelPackageEditor
             }
         }
 
-        var (deletedInstances, movedInstances) = PatchInstances(package, levelIndex, request, data, warnings);
+        var (deletedInstances, movedInstances, addedInstances) = PatchInstances(package, levelIndex, request, data, warnings);
         foreach (var patch in request.SplinePatches)
         {
             if (TryPatchSpline(package, levelIndex, patch, data, names, wide, addedNames, warnings))
             {
                 patched.Add($"{patch.Actor}.{patch.Component} (spline)");
+            }
+        }
+
+        foreach (var patch in request.SpawnPoints)
+        {
+            if (TryPatchSpawnPoints(package, levelIndex, patch, data, warnings) is { } label)
+            {
+                patched.Add(label);
             }
         }
 
@@ -212,6 +250,7 @@ public static partial class LevelPackageEditor
             AddedActors = addedActors,
             DeletedInstances = deletedInstances,
             MovedInstances = movedInstances,
+            AddedInstances = addedInstances,
             Warnings = warnings,
         };
         return (bytes, report);
@@ -525,27 +564,89 @@ public static partial class LevelPackageEditor
         return w.ToArray();
     }
 
+    /// <summary>
+    /// Rewrites a spawner's point array (see <see cref="SpawnPointsPatch"/>) in the actor's or component's payload as it is
+    /// now (a transform patch may have grown it): the stored elements are copied for the points that keep them, placed anew
+    /// (<see cref="Spawns.SpawnPlacesEditor.WritePoint"/>), and the array is rebuilt with the new count. Returns the label
+    /// written, or null (with a warning) when the array is not stored there.
+    /// </summary>
+    private static string? TryPatchSpawnPoints(CookedPackage package, int levelIndex, SpawnPointsPatch patch, IList<ReadOnlyMemory<byte>> data, List<string> warnings)
+    {
+        var label = $"{patch.Actor}{(patch.Component is null ? string.Empty : "." + patch.Component)}.{patch.Array}";
+        var actorIndex = FindExport(package, patch.Actor, levelIndex + 1);
+        var exportIndex = actorIndex < 0 ? -1 : patch.Component is null ? actorIndex : FindExport(package, patch.Component, actorIndex + 1);
+        if (exportIndex < 0)
+        {
+            warnings.Add($"'{label}': {(actorIndex < 0 ? "the actor" : "the component")} is not stored in the level package; its spawn points were not written.");
+            return null;
+        }
+
+        var payload = data[exportIndex].ToArray();
+        PropertyBlock block;
+        try
+        {
+            block = PropertyReader.ReadPayload(package, payload, exportIndex);
+        }
+        catch (Exception ex) when (ex is FormatException or EndOfStreamException or ArgumentOutOfRangeException or NotSupportedException)
+        {
+            // A transform patch inserted tags with names new to the package: the payload cannot be read back with the old name table.
+            warnings.Add($"'{label}': the export could not be read after its other edits ({ex.Message}); its spawn points were not written.");
+            return null;
+        }
+
+        if (block.Find(patch.Array) is not { Value: ArrayValue { InnerTag: not null } array } tag)
+        {
+            warnings.Add($"'{label}': the array is not stored on the export (it comes from the class or a template); its spawn points were not written.");
+            return null;
+        }
+
+        var items = new List<byte[]>(patch.Points.Count);
+        foreach (var point in patch.Points)
+        {
+            if (point.Source < 0 || point.Source >= array.Items.Count || array.Items[point.Source] is not StructValue item)
+            {
+                warnings.Add($"'{label}': point source {point.Source} is outside the {array.Items.Count} stored element(s); that point was left out.");
+                continue;
+            }
+
+            var bytes = payload.AsSpan(item.Offset, item.Size).ToArray();
+            if (!Spawns.SpawnPlacesEditor.WritePoint(bytes, item, point.Local, -item.Offset))
+            {
+                warnings.Add($"'{label}[{point.Source}]': the element has no location to write; the point keeps its stored place.");
+            }
+
+            items.Add(bytes);
+        }
+
+        data[exportIndex] = Spawns.SpawnPlacesEditor.ReplaceStructArray(payload, tag, array, items);
+        return $"{label} ({items.Count} point(s))";
+    }
+
     /// <summary>Scale written into a collapsed ("deleted") instance: invisible, no usable collision, never zero (no NaN normals).</summary>
     public const float CollapsedInstanceScale = 0.0001f;
 
     private const int MatrixSize = 64;
 
-    private static (int Deleted, int Moved) PatchInstances(
+    private static (int Deleted, int Moved, int Added) PatchInstances(
         CookedPackage package, int levelIndex, LevelEditRequest request, IList<ReadOnlyMemory<byte>> data, List<string> warnings)
     {
-        if (request.Instances.Count == 0)
+        if (request.Instances.Count == 0 && request.InstanceAdds.Count == 0)
         {
-            return (0, 0);
+            return (0, 0, 0);
         }
 
         var deleted = 0;
         var moved = 0;
+        var added = 0;
         var hints = request.InstanceHints.ToDictionary(h => (h.Actor, h.Component), h => h, ActorComponentComparer.Instance);
-        foreach (var group in request.Instances.GroupBy(i => (i.Actor, i.Component), ActorComponentComparer.Instance))
+        var components = request.Instances.Select(i => (i.Actor, i.Component)).Concat(request.InstanceAdds.Select(a => (a.Actor, a.Component))).Distinct(ActorComponentComparer.Instance);
+        foreach (var key in components)
         {
-            var (actorName, componentName) = group.Key;
+            var (actorName, componentName) = key;
+            var group = request.Instances.Where(i => ActorComponentComparer.Instance.Equals((i.Actor, i.Component), key)).ToList();
+            var adds = request.InstanceAdds.Where(a => ActorComponentComparer.Instance.Equals((a.Actor, a.Component), key)).Select(a => a.Local).ToList();
             var label = $"{actorName}.{componentName}";
-            if (!hints.TryGetValue(group.Key, out var hint))
+            if (!hints.TryGetValue(key, out var hint))
             {
                 warnings.Add($"'{label}': no pristine instance list was given; its instance edits were not written.");
                 continue;
@@ -592,10 +693,82 @@ public static partial class LevelPackageEditor
                 }
             }
 
-            data[componentIndex] = InstanceRenderData.Refresh(payload, block, dataOffset + (elementSize * hint.Instances.Count), hint.Instances.Count, moves);
+            // Appended instances grow the array (and the custom floats) behind the stored ones; the render copy and the
+            // tagged block before the array keep their offsets, so the draw copy is dropped next and the reorder table
+            // (inside the tagged block) grown last.
+            payload = AppendInstances(payload, block, dataOffset, elementSize, hint.Instances.Count, adds);
+            added += adds.Count;
+            payload = InstanceRenderData.Refresh(payload, block, dataOffset + (elementSize * (hint.Instances.Count + adds.Count)), hint.Instances.Count, moves);
+            data[componentIndex] = adds.Count == 0 ? payload : GrowReorderTable(payload, block, hint.Instances.Count, adds.Count);
         }
 
-        return (deleted, moved);
+        return (deleted, moved, added);
+    }
+
+    /// <summary>
+    /// The payload with <paramref name="locals"/> appended to <c>PerInstanceSMData</c> (count grown, one matrix each, the
+    /// rest of an 80-byte element zero) and <c>NumCustomDataFloats</c> zeros each appended to <c>PerInstanceSMCustomData</c>.
+    /// </summary>
+    private static byte[] AppendInstances(byte[] payload, PropertyBlock block, int dataOffset, int elementSize, int count, IReadOnlyList<FTransform> locals)
+    {
+        if (locals.Count == 0)
+        {
+            return payload;
+        }
+
+        var floats = block.Find("NumCustomDataFloats")?.Value is IntValue n ? Math.Max(0, n.Value) : 0;
+        var arrayEnd = dataOffset + (elementSize * count);
+        var customSize = System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(arrayEnd));
+        var customCount = System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(arrayEnd + 4));
+        var customEnd = arrayEnd + 8 + (customSize * customCount);
+        var w = new ByteWriter(payload.Length + (locals.Count * (elementSize + (floats * 4))));
+        w.Raw(payload.AsSpan(0, dataOffset - 4));
+        w.I32(count + locals.Count);
+        w.Raw(payload.AsSpan(dataOffset, elementSize * count));
+        Span<byte> element = stackalloc byte[80];
+        foreach (var local in locals)
+        {
+            element.Clear();
+            WriteMatrix(element, local.ToMatrixWithScale());
+            w.Raw(element[..elementSize]);
+        }
+
+        w.I32(customSize);
+        w.I32(customCount + (floats * locals.Count));
+        w.Raw(payload.AsSpan(arrayEnd + 8, customEnd - arrayEnd - 8));
+        for (var i = 0; i < floats * locals.Count; i++)
+        {
+            w.F32(0f);
+        }
+
+        w.Raw(payload.AsSpan(customEnd));
+        return w.ToArray();
+    }
+
+    /// <summary>
+    /// The payload with <paramref name="added"/> entries appended to the HISM's <c>InstanceReorderTable</c> (draw index =
+    /// array index for the new instances); unchanged for an ISM (no table).
+    /// </summary>
+    private static byte[] GrowReorderTable(byte[] payload, PropertyBlock block, int count, int added)
+    {
+        if (block.Find("InstanceReorderTable") is not { Value: ArrayValue } table)
+        {
+            return payload;
+        }
+
+        var w = new ByteWriter(payload.Length + (4 * added));
+        w.Raw(payload.AsSpan(0, table.EndOffset));
+        for (var i = 0; i < added; i++)
+        {
+            w.I32(count + i);
+        }
+
+        w.Raw(payload.AsSpan(table.EndOffset));
+        var result = w.ToArray();
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(result.AsSpan(table.SizeFieldOffset), table.Size + (4 * added));
+        var entries = System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(result.AsSpan(table.ValueOffset));
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(result.AsSpan(table.ValueOffset), entries + added);
+        return result;
     }
 
     /// <summary>

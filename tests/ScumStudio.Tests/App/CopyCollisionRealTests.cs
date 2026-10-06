@@ -42,26 +42,27 @@ public sealed class CopyCollisionRealTests
             && c.StaticMeshPath?.EndsWith(".CupressusTall_01", StringComparison.Ordinal) == true);
         Assert.Equal("SCUM_TreeStump", tree.CollisionProfile);
 
-        // Duplicating a cypress the map draws records the collision of the foliage it stands in.
+        // Duplicating a cypress the map draws adds an instance to the foliage it stands in (it collides as the foliage does;
+        // CopiedTreeRealTests reads the grown array back).
         var (foliage, instance) = map.AllActors.SelectMany(a => a.Actor.InstanceTransforms.Select(i => (Item: a, Instance: i)))
             .First(x => x.Instance.StaticMeshPath?.EndsWith(".CupressusTall_01", StringComparison.Ordinal) == true);
         var source = foliage.Actor.FindComponent(instance.ComponentName)!;
         map.SelectedInstanceKey = InstanceKey.Of(foliage.SelectableId, instance.ComponentName, instance.InstanceIndex);
         map.SelectedActorId = foliage.SelectableId;
         map.DuplicateSelectedCommand.Execute(null);
-        var copy = Assert.IsType<AddStaticMeshActorOp>(ctx.Services.Projects.Current!.Journal.Applied[^1].Op);
-        Assert.Equal(source.CollisionProfile, copy.CollisionProfile);
-        var expected = copy.CollisionProfile ?? ProjectExporter.StandingTree; // no profile of its own: the standing-tree repair
+        var copy = Assert.IsType<AddInstanceOp>(ctx.Services.Projects.Current!.Journal.Applied[^1].Op);
+        Assert.Equal(instance.ComponentName, copy.Target.Component);
 
-        // A copy made before (no profile recorded) of the same tree.
-        var old = new AddStaticMeshActorOp(Level, "CupressusTall_01_Old", instance.StaticMeshPath!, copy.Transform with { Location = copy.Transform.Location + new ScumStudio.Core.Mathematics.FVector(500f, 0f, 0f) });
+        // A mesh-actor copy made by an older version (no profile recorded) of the same tree: repaired to the standing-tree profile.
+        var at = source.WorldTransform.Translation + new ScumStudio.Core.Mathematics.FVector(500f, 0f, 0f);
+        var old = new AddStaticMeshActorOp(Level, "CupressusTall_01_Old", instance.StaticMeshPath!, new ScumStudio.Level.Model.TransformValue(at, new ScumStudio.Core.Mathematics.FRotator(0f, 0f, 0f), ScumStudio.Core.Mathematics.FVector.One));
         ctx.Services.Projects.Apply(old);
 
         var result = await new ProjectExporter().ExportAsync(ctx.Services.Projects.Current!, ctx.Services.Workspace.Catalog!,
             new ExportOptions { OutputDirectory = ctx.Combine("out"), WritePak = false });
         using var written = AssetCatalog.OpenLoose(result.StagingDirectory);
         Assert.True(written.TryLoadPackage(Level, out var package));
-        foreach (var (name, profileName) in new[] { (copy.NewName, expected), (old.NewName, ProjectExporter.StandingTree) })
+        foreach (var (name, profileName) in new[] { (old.NewName, ProjectExporter.StandingTree) })
         {
             var component = package.GetExports().Single(e => e.Name == "StaticMeshComponent0" && e.Outer?.Name == name);
             Assert.False(component.GetOrDefault("bUseDefaultCollision", true));

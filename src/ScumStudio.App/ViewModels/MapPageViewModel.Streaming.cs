@@ -28,6 +28,12 @@ public sealed partial class MapPageViewModel
     private int _readGeneration;
     private IReadOnlyList<string> _streamed = [];
 
+    // Levels shown on purpose (a cell from the world tree, an AI's show_levels, a test) stay until the camera flies off from
+    // where it was when they came up: streaming around a camera that is somewhere else replaced them half a second later
+    // (and dropped the selection with them).
+    private bool _holdStreaming;
+    private FVector? _holdCamera;
+
     /// <summary>3D view quality (saved in the settings): streaming radius, object distance, LOD detail, texture size.</summary>
     [ObservableProperty]
     private RenderQuality _renderQuality = RenderQuality.Balanced;
@@ -149,7 +155,7 @@ public sealed partial class MapPageViewModel
         _streamed = wanted;
         _loadedCell = CellAt(world, camera.X, camera.Y);
         WorldStatus = Localization.Loc.F("Map.World.Streaming", added);
-        LevelLoadCompletion = LoadLevelsAsync(wanted, landscapeStep: 4, seaPlane: false)
+        LevelLoadCompletion = LoadLevelsAsync(wanted, landscapeStep: 4, seaPlane: false, streamed: true)
             .ContinueWith(_ => WorldStatus = Localization.Loc.F("Map.World.Around", wanted.Count), TaskScheduler.FromCurrentSynchronizationContext());
     }
 

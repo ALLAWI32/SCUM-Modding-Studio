@@ -324,7 +324,8 @@ public sealed class ProjectExporter
 
             placed.Add((level, target + extension, new HashSet<string>(
                 request.StaticMeshAdds.Select(a => a.NewName).Concat(request.Copies.Select(c => c.NewName)).Concat(request.ForeignCopies.Select(c => c.NewName))
-                    .Concat(request.Transforms.Select(t => t.Actor)).Concat(request.Instances.Select(i => i.Actor)).Concat(request.SplinePatches.Select(s => s.Actor)),
+                    .Concat(request.Transforms.Select(t => t.Actor)).Concat(request.Instances.Select(i => i.Actor)).Concat(request.InstanceAdds.Select(a => a.Actor))
+                    .Concat(request.SplinePatches.Select(s => s.Actor)).Concat(request.SpawnPoints.Select(s => s.Actor)),
                 StringComparer.OrdinalIgnoreCase)));
 
             warnings.AddRange(report.Warnings.Select(w => $"{level}: {w}"));
@@ -699,18 +700,41 @@ public sealed class ProjectExporter
             }
         }
 
+        // Spawner point arrays (patrol paths, loot points) of kept pristine actors: rewritten whole from their stored elements.
+        var spawnPoints = new List<SpawnPointsPatch>();
+        foreach (var (actor, component, array, points) in state.SpawnPointOverrides.Where(s => SameLevel(s.Actor.Level, level) && !state.IsDeleted(s.Actor)))
+        {
+            if (state.IsAdded(actor))
+            {
+                warnings.Add($"{actor}: the spawn points of an added actor cannot be written yet (edit the original's instead).");
+                continue;
+            }
+
+            spawnPoints.Add(new SpawnPointsPatch(actor.Actor, component, array, points));
+        }
+
         // Instance edits: collapsed (deleted) and moved ISM/HISM instances of actors that are themselves kept. The pristine
         // instance lists come from the level document so the editor can locate and verify PerInstanceSMData.
         var instancePatches = new List<InstancePatch>();
         var hints = new Dictionary<(string Actor, string Component), InstanceArrayHint>();
-        foreach (var instance in state.DeletedInstances.Where(i => SameLevel(i.Level, level) && !state.IsDeleted(i.ActorRef)))
+        foreach (var instance in state.DeletedInstances.Where(i => SameLevel(i.Level, level) && !state.IsDeleted(i.ActorRef) && !state.IsAdded(i)))
         {
             AddInstancePatch(instance, null);
         }
 
-        foreach (var (instance, value) in state.InstanceOverrides.Where(i => SameLevel(i.Instance.Level, level) && !state.IsDeleted(i.Instance)))
+        foreach (var (instance, value) in state.InstanceOverrides.Where(i => SameLevel(i.Instance.Level, level) && !state.IsDeleted(i.Instance) && !state.IsAdded(i.Instance)))
         {
             AddInstancePatch(instance, value.ToTransform());
+        }
+
+        // Added instances (copied trees) are appended behind the stored ones, in index order, where they stand now.
+        var instanceAdds = new List<InstanceAdd>();
+        foreach (var instance in state.AddedInstances.Keys.Where(i => SameLevel(i.Level, level) && !state.IsDeleted(i)).OrderBy(i => i.Index))
+        {
+            if (EnsureHint(instance))
+            {
+                instanceAdds.Add(new InstanceAdd(instance.Actor, instance.Component, state.GetAddedInstanceTransform(instance)!.Value.ToTransform()));
+            }
         }
 
         return new LevelEditRequest
@@ -718,40 +742,52 @@ public sealed class ProjectExporter
             DeleteActors = deleted.ToList(),
             Transforms = transforms,
             Instances = instancePatches,
+            InstanceAdds = instanceAdds,
             InstanceHints = hints.Values.ToList(),
             Copies = copies,
             StaticMeshAdds = meshAdds,
             ForeignCopies = foreignCopies,
             SplinePatches = splinePatches,
+            SpawnPoints = spawnPoints,
         };
 
         void AddInstancePatch(InstanceRef instance, FTransform? local)
         {
-            var key = (instance.Actor.ToLowerInvariant(), instance.Component.ToLowerInvariant());
-            if (!hints.ContainsKey(key))
+            if (EnsureHint(instance))
             {
-                var actor = document?.FindActor(instance.Actor);
-                if (actor is null)
-                {
-                    warnings.Add($"{instance}: the actor's instance list could not be read; instance edit skipped.");
-                    return;
-                }
+                instancePatches.Add(new InstancePatch(instance.Actor, instance.Component, instance.Index, local));
+            }
+        }
 
-                var known = actor.InstanceTransforms
-                    .Where(t => string.Equals(t.ComponentName, instance.Component, StringComparison.OrdinalIgnoreCase))
-                    .OrderBy(t => t.InstanceIndex)
-                    .Select(t => t.LocalTransform)
-                    .ToList();
-                if (known.Count == 0)
-                {
-                    warnings.Add($"{instance}: component '{instance.Component}' has no stored instances; instance edit skipped.");
-                    return;
-                }
-
-                hints[key] = new InstanceArrayHint(instance.Actor, instance.Component, known);
+        // The component's pristine instance list (read once per component); false, with a warning, when it has none.
+        bool EnsureHint(InstanceRef instance)
+        {
+            var key = (instance.Actor.ToLowerInvariant(), instance.Component.ToLowerInvariant());
+            if (hints.ContainsKey(key))
+            {
+                return true;
             }
 
-            instancePatches.Add(new InstancePatch(instance.Actor, instance.Component, instance.Index, local));
+            var actor = document?.FindActor(instance.Actor);
+            if (actor is null)
+            {
+                warnings.Add($"{instance}: the actor's instance list could not be read; instance edit skipped.");
+                return false;
+            }
+
+            var known = actor.InstanceTransforms
+                .Where(t => string.Equals(t.ComponentName, instance.Component, StringComparison.OrdinalIgnoreCase))
+                .OrderBy(t => t.InstanceIndex)
+                .Select(t => t.LocalTransform)
+                .ToList();
+            if (known.Count == 0)
+            {
+                warnings.Add($"{instance}: component '{instance.Component}' has no stored instances; instance edit skipped.");
+                return false;
+            }
+
+            hints[key] = new InstanceArrayHint(instance.Actor, instance.Component, known);
+            return true;
         }
     }
 

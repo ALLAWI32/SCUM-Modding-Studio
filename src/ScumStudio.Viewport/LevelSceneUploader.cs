@@ -32,6 +32,7 @@ public sealed class LevelScene : IDisposable
     private readonly Dictionary<string, PreparedMeshAsset> _extraAssets = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<uint, (MeshHandle Bent, SceneNode Node, MeshHandle Straight, IReadOnlyList<SplineMeshParams> Spline)> _bent = [];
     private readonly HashSet<InstanceKey> _movedInstances = [];
+    private readonly HashSet<InstanceKey> _addedInstances = [];
     private Dictionary<InstanceKey, List<SceneNode>>? _instanceNodes;
     private readonly List<TerrainPart> _terrainParts = [];
     private SceneNode? _seaNode;
@@ -523,7 +524,7 @@ public sealed class LevelScene : IDisposable
     /// </summary>
     public void SetInstanceTransform(InstanceKey key, FTransform world)
     {
-        if (!InstanceNodes().TryGetValue(key, out var nodes))
+        if (!InstanceNodes().TryGetValue(key, out var nodes) && (nodes = AddInstanceNodes(key)) is null)
         {
             return;
         }
@@ -534,12 +535,58 @@ public sealed class LevelScene : IDisposable
             var moved = placement is { Spawner: { } spawner, Component: not null } && placement.Actor.FindComponent(spawner) is { } part
                 ? placement.World.GetRelativeTransform(part.WorldTransform) * world
                 : world;
+            // A marker keeps its own size (a vehicle box its real one, a capsule a person's) and follows the move and turn.
             node.LocalTransform = UeToGl.ModelMatrix(placement is not null && SpawnMarkers.IsMarker(placement.MeshPath)
-                ? placement.World with { Translation = moved.Translation }
+                ? moved with { Scale3D = placement.World.Scale3D }
                 : moved);
         }
 
         _movedInstances.Add(key);
+    }
+
+    /// <summary>
+    /// Replaces the spawn point pins of the actor <paramref name="selectableId"/> (the placements with a
+    /// <see cref="ScenePlacement.SpawnPoint"/>) with <paramref name="pins"/>: the project added, moved or removed points of
+    /// its stored point array, and the pins mirror the list as it is now (their keys are the current indices).
+    /// </summary>
+    public void ReplacePins(uint selectableId, IReadOnlyList<ScenePlacement> pins)
+    {
+        ArgumentNullException.ThrowIfNull(pins);
+        var nodes = NodesOf(selectableId);
+        foreach (var node in nodes.Where(n => n.Tag is ScenePlacement { SpawnPoint: not null }).ToList())
+        {
+            Scene.Root.Remove(node);
+            nodes.Remove(node);
+        }
+
+        if (!_byId.TryGetValue(selectableId, out var placements))
+        {
+            _byId[selectableId] = placements = [];
+        }
+
+        placements.RemoveAll(p => p.SpawnPoint is not null);
+        foreach (var pin in pins.Where(p => p.SpawnPoint is not null))
+        {
+            if (!_meshHandles.TryGetValue(pin.MeshPath, out var handle))
+            {
+                if (SpawnMarkers.AssetFor(pin.MeshPath) is not { } asset)
+                {
+                    continue;
+                }
+
+                handle = LevelSceneUploader.AddMesh(_renderer, asset, _gpuTextures); // a sentry without a point before: no capsule uploaded yet
+                _handles.Add(handle);
+                _meshHandles[pin.MeshPath] = handle;
+            }
+
+            var node = Scene.Add(handle, pin.GlModel, pin.SelectableId, pin.Name);
+            node.Tag = pin;
+            node.MaxDrawDistance = LevelSceneUploader.DrawDistanceOf(pin);
+            placements.Add(pin);
+            Index(node);
+        }
+
+        _instanceNodes = null;
     }
 
     /// <summary>Draws the instances the project moved at their new places and every other moved instance back where the level stores it.</summary>
@@ -550,10 +597,21 @@ public sealed class LevelScene : IDisposable
         {
             foreach (var node in nodes.GetValueOrDefault(key) ?? [])
             {
-                if (node.Tag is ScenePlacement placement)
+                if (_addedInstances.Contains(key))
+                {
+                    Scene.Root.Remove(node); // an added instance the project no longer has (deleted, undone)
+                    _nodesById?.GetValueOrDefault(key.SelectableId)?.Remove(node);
+                    _byId.GetValueOrDefault(key.SelectableId)?.RemoveAll(p => ReferenceEquals(p, node.Tag));
+                }
+                else if (node.Tag is ScenePlacement placement)
                 {
                     node.LocalTransform = placement.GlModel;
                 }
+            }
+
+            if (_addedInstances.Remove(key))
+            {
+                nodes.Remove(key);
             }
 
             _movedInstances.Remove(key);
@@ -563,6 +621,32 @@ public sealed class LevelScene : IDisposable
         {
             SetInstanceTransform(key, world);
         }
+    }
+
+    /// <summary>
+    /// Nodes for an instance the project added to a component (a copied tree, a key past the stored instances): a copy of a
+    /// sibling placement of the same component under the new key, so it is picked, selected, moved and hidden like the
+    /// stored ones; null when the component draws nothing here.
+    /// </summary>
+    private List<SceneNode>? AddInstanceNodes(InstanceKey key)
+    {
+        var sibling = _byId.GetValueOrDefault(key.SelectableId)?.FirstOrDefault(p =>
+            p.Instance is { } i && string.Equals(i.ComponentName, key.Component, StringComparison.OrdinalIgnoreCase));
+        if (sibling?.Instance is not { } source || !_meshHandles.TryGetValue(sibling.MeshPath, out var handle))
+        {
+            return null;
+        }
+
+        var placement = sibling with { Instance = source with { InstanceIndex = key.InstanceIndex }, Name = $"{sibling.Actor.Name}/{source.ComponentName}[{key.InstanceIndex}]" };
+        var node = Scene.Add(handle, placement.GlModel, key.SelectableId, placement.Name);
+        node.Tag = placement;
+        node.MaxDrawDistance = LevelSceneUploader.DrawDistanceOf(placement);
+        Index(node);
+        _byId[key.SelectableId].Add(placement);
+        _addedInstances.Add(key);
+        var nodes = new List<SceneNode> { node };
+        InstanceNodes()[key] = nodes;
+        return nodes;
     }
 
     /// <summary>The nodes drawing each instance key (a spawn part has its pin and the meshes of its item).</summary>

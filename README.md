@@ -30,6 +30,10 @@ vehicle paint editor** (gold, chrome, any colour, armour painted with the car), 
 spawn editor** (vehicle fuel and parts at spawn, zombie zones, sentries, animals, the game's spawn places on the map), an
 **asset browser** (thumbnails, PNG and glTF export) and a **pak mod exporter** for single player and servers.
 
+## Community
+
+Questions, mods, bug reports and release news: the **Discord** button in the app opens the community server, or join directly: https://discord.gg/ympctW5SYG
+
 ## Contents
 
 - [Video guide](https://youtu.be/rMdePE6KNnQ)

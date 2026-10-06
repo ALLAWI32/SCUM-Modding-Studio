@@ -33,6 +33,9 @@ public sealed record UiState
     /// </summary>
     public bool PickParts { get; init; } = true;
 
+    /// <summary>The gizmo's arrows follow the selected object's own axes (Discord salvador), not the world's.</summary>
+    public bool LocalAxes { get; init; } = true;
+
     /// <summary>
     /// Spawn pin layers switched off in the map's legend (<c>Loot</c>, <c>Vehicles</c>, <c>Zones</c>, ...). The two big circle
     /// kinds start off: the owner found the rings everywhere confusing before they were explained.

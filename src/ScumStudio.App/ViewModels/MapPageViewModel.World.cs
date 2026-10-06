@@ -38,6 +38,7 @@ public sealed partial class MapPageViewModel
         }
 
         IsWorldMode = true;
+        _holdStreaming = false; // the island streams around the camera at once
         var tiles = world.Packages.Where(p => p.IsMap && p.Kind == WorldPackageKind.Landscape).Select(p => p.PackagePath).ToList();
         WorldStatus = Localization.Loc.F("Map.World.Terrain", 0, tiles.Count);
         try
@@ -81,10 +82,23 @@ public sealed partial class MapPageViewModel
     /// </summary>
     public void UpdateWorldCamera(FVector cameraUe)
     {
-        if (IsWorldMode && World is { } world)
+        if (!IsWorldMode || World is not { } world)
         {
-            StreamAround(world, cameraUe);
+            return;
         }
+
+        if (_holdStreaming)
+        {
+            _holdCamera ??= cameraUe;
+            if (FVector.Distance(_holdCamera.Value, cameraUe) < Quality.StreamRadiusCm * 0.25f)
+            {
+                return; // the levels shown on purpose stay while the camera is where it was
+            }
+
+            _holdStreaming = false;
+        }
+
+        StreamAround(world, cameraUe);
     }
 
     /// <summary>The game's spawn places are shown as coloured pins (kept for the next start).</summary>

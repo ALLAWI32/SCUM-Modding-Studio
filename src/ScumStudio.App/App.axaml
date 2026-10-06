@@ -74,6 +74,7 @@
       <SolidColorBrush x:Key="AccentBrush" Color="#E87B2F" />
       <SolidColorBrush x:Key="AccentSoftBrush" Color="#2EE87B2F" />
       <SolidColorBrush x:Key="AccentStrongBrush" Color="#FF9A55" />
+      <SolidColorBrush x:Key="DiscordBrush" Color="#5865F2" />
       <SolidColorBrush x:Key="OnAccentBrush" Color="#160B03" />
       <SolidColorBrush x:Key="SuccessBrush" Color="#8DA35B" />
       <SolidColorBrush x:Key="SuccessSoftBrush" Color="#248DA35B" />

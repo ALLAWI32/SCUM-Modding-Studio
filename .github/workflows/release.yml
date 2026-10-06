@@ -35,6 +35,12 @@ jobs:
           $v = if ("${{ github.event_name }}" -eq "workflow_dispatch") { "${{ inputs.version }}" } else { "${{ github.ref_name }}".TrimStart('v') }
           "value=$v" >> $env:GITHUB_OUTPUT
 
+      - name: Report webhook (a secret, embedded in the build; without it the app cannot send reports)
+        shell: pwsh
+        env:
+          REPORT_WEBHOOK: ${{ secrets.REPORT_WEBHOOK }}
+        run: if ($env:REPORT_WEBHOOK) { Set-Content -Path src/ScumStudio.App/report-webhook.txt -Value $env:REPORT_WEBHOOK -NoNewline }
+
       - name: Build, test, publish, zip
         shell: pwsh
         run: scripts/build.ps1 -Configuration Release -Test -Publish -Zip -Version ${{ steps.version.outputs.value }}

@@ -146,31 +146,78 @@ public static class SpawnPlacesEditor
                 added++;
             }
 
-            // The value: count, the inner struct tag (its size = all items), the items.
-            var itemsLength = items.Sum(b => b.Length);
-            var header = payload.AsSpan(inner.Offset, inner.ValueOffset - inner.Offset).ToArray();
-            BinaryPrimitives.WriteInt32LittleEndian(header.AsSpan(inner.SizeFieldOffset - inner.Offset), itemsLength);
-            var value2 = new byte[4 + header.Length + itemsLength];
-            BinaryPrimitives.WriteInt32LittleEndian(value2, items.Count);
-            header.CopyTo(value2, 4);
-            var at = 4 + header.Length;
-            foreach (var b in items)
-            {
-                b.CopyTo(value2, at);
-                at += b.Length;
-            }
-
-            var result = new byte[payload.Length - tag.Size + value2.Length];
-            payload.AsSpan(0, tag.ValueOffset).CopyTo(result);
-            value2.CopyTo(result, tag.ValueOffset);
-            payload.AsSpan(tag.EndOffset).CopyTo(result.AsSpan(tag.ValueOffset + value2.Length));
-            BinaryPrimitives.WriteInt32LittleEndian(result.AsSpan(tag.SizeFieldOffset), value2.Length);
-            payload = result;
+            payload = ReplaceStructArray(payload, tag, array, items);
         }
 
         var data = Enumerable.Range(0, package.Exports.Count).Select(i => i == exportIndex ? payload : package.GetExportData(i)).ToArray();
         var bytesOut = PackageWriter.Build(PackageWriter.ToBuildInput(package) with { ExportData = data });
         return (bytesOut, new SpawnPlacesReport(deleted, moved, added, warnings));
+    }
+
+    /// <summary>
+    /// <paramref name="payload"/> with the array-of-structs <paramref name="tag"/> holding <paramref name="items"/> (each
+    /// the bytes of one tagged struct element): the count, the inner struct tag (its size = all items) and the items; the
+    /// tag's size follows. Offsets after the tag move; read the result again before patching further.
+    /// </summary>
+    internal static byte[] ReplaceStructArray(byte[] payload, PropertyTag tag, ArrayValue array, IReadOnlyList<byte[]> items)
+    {
+        var inner = array.InnerTag ?? throw new ArgumentException("Not an array of structs.", nameof(array));
+        var itemsLength = items.Sum(b => b.Length);
+        var header = payload.AsSpan(inner.Offset, inner.ValueOffset - inner.Offset).ToArray();
+        BinaryPrimitives.WriteInt32LittleEndian(header.AsSpan(inner.SizeFieldOffset - inner.Offset), itemsLength);
+        var value = new byte[4 + header.Length + itemsLength];
+        BinaryPrimitives.WriteInt32LittleEndian(value, items.Count);
+        header.CopyTo(value, 4);
+        var at = 4 + header.Length;
+        foreach (var b in items)
+        {
+            b.CopyTo(value, at);
+            at += b.Length;
+        }
+
+        var result = new byte[payload.Length - tag.Size + value.Length];
+        payload.AsSpan(0, tag.ValueOffset).CopyTo(result);
+        value.CopyTo(result, tag.ValueOffset);
+        payload.AsSpan(tag.EndOffset).CopyTo(result.AsSpan(tag.ValueOffset + value.Length));
+        BinaryPrimitives.WriteInt32LittleEndian(result.AsSpan(tag.SizeFieldOffset), value.Length);
+        return result;
+    }
+
+    /// <summary>
+    /// Writes where a spawn point is into the bytes of its struct element (offsets shifted by <paramref name="shift"/>): a
+    /// tagged <c>Transform</c> member (an item spawner marker: rotation, translation, scale) or else the element's first
+    /// vector member (a sentry's <c>LocationRelativeToSentry</c>: the location only). False when it has neither.
+    /// </summary>
+    internal static bool WritePoint(byte[] bytes, StructValue item, TransformValue value, int shift)
+    {
+        if (SpawnPlaces.Member(item, "Transform")?.Value is StructValue t)
+        {
+            var q = value.ToTransform().Rotation;
+            if (SpawnPlaces.Member(t, "Rotation")?.Value is QuatValue r)
+            {
+                Floats(bytes, r.Offset + shift, q.X, q.Y, q.Z, q.W);
+            }
+
+            if (SpawnPlaces.Member(t, "Translation")?.Value is VectorValue p)
+            {
+                Floats(bytes, p.Offset + shift, value.Location.X, value.Location.Y, value.Location.Z);
+            }
+
+            if (SpawnPlaces.Member(t, "Scale3D")?.Value is VectorValue s)
+            {
+                Floats(bytes, s.Offset + shift, value.Scale.X, value.Scale.Y, value.Scale.Z);
+            }
+
+            return true;
+        }
+
+        if (item.Properties.Select(m => m.Value).OfType<VectorValue>().FirstOrDefault() is { } location)
+        {
+            Floats(bytes, location.Offset + shift, value.Location.X, value.Location.Y, value.Location.Z);
+            return true;
+        }
+
+        return false;
     }
 
     /// <summary>Writes a place's transform (and a zone's or area's size) into its item bytes (offsets shifted by <paramref name="shift"/>).</summary>
@@ -244,7 +291,7 @@ public static class SpawnPlacesEditor
         }
     }
 
-    private static void Floats(byte[] bytes, int offset, params float[] values)
+    internal static void Floats(byte[] bytes, int offset, params float[] values)
     {
         for (var i = 0; i < values.Length; i++)
         {

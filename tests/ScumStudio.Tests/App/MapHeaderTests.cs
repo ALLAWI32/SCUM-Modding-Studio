@@ -1,3 +1,4 @@
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.VisualTree;
 using ScumStudio.App.Localization;
@@ -26,6 +27,7 @@ public sealed class MapHeaderTests
             var map = (MapPageViewModel)vm.NavigateTo("map")!;
             await map.LoadCompletion;
             await map.LoadLevelsAsync([SyntheticLevels.LevelPath]);
+            window.GetVisualDescendants().OfType<Button>().Single(b => b.Name == "UpdateButton").IsVisible = true; // as in a release build: "Up to date · x.y.z"
             foreach (var language in Loc.Languages)
             {
                 Loc.Instance.Language = language.Code;
@@ -43,6 +45,26 @@ public sealed class MapHeaderTests
                 natural.Measure(Avalonia.Size.Infinity);
                 Assert.True(text.Bounds.Width + 1 >= natural.DesiredSize.Width, $"{language.Code}: {text.Bounds.Width} < {natural.DesiredSize.Width}");
                 Assert.False(window.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Name == "FrameStats").IsVisible, language.Code);
+
+                // The top bar: the search field ends before the Discord/Support buttons begin (it squeezed under them once).
+                // Narrow (1280): the tabs are icons only; wide (1600): their names are back. Neither overlaps.
+                foreach (var width in new[] { 1280, 1600 })
+                {
+                    window.Width = width;
+                    HeadlessUi.Pump();
+                    Assert.Equal(width < MainWindowViewModel.CompactHeaderWidth, vm.IsCompactHeader);
+                    var search = window.GetVisualDescendants().OfType<TextBox>().Single(t => t.Name == "GlobalSearch");
+                    var discord = window.GetVisualDescendants().OfType<Button>().Single(b => b.Name == "DiscordButton");
+                    var searchRight = search.TranslatePoint(new Avalonia.Point(search.Bounds.Width, 0), window)!.Value.X;
+                    var discordLeft = discord.TranslatePoint(new Avalonia.Point(0, 0), window)!.Value.X;
+                    Assert.True(searchRight <= discordLeft, $"{language.Code} at {width}: search ends at {searchRight:0}, Discord starts at {discordLeft:0}");
+                    Assert.True(search.Bounds.Width >= 90, $"{language.Code} at {width}: search is {search.Bounds.Width:0} wide");
+                    var label = window.GetVisualDescendants().OfType<ListBox>().Single(l => l.Name == "NavList").GetVisualDescendants().OfType<TextBlock>().First(t => t.Text == vm.SelectedNavItem!.Title);
+                    Assert.Equal(!vm.IsCompactHeader, label.IsVisible);
+                }
+
+                window.Width = 1280;
+                HeadlessUi.Pump();
             }
         }
         finally

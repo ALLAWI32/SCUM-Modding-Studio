@@ -3,6 +3,39 @@
 All notable changes are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [semantic versioning](https://semver.org/).
 
+## [0.2.7] - 2026-10-06
+
+### New in this release
+- **Support and Report a problem** (the heart button in the title strip): PayPal and e-mail of the developer, and a
+  report box. Write in any language: the text is translated to English and lands on the developer's Discord with the
+  app's version, language, system and the last log lines (one report a minute, 1500 characters).
+- **Discord**: a button in the title strip and a Community block in the Support card open the community server's
+  permanent invite: help with mods, mods by others, bug reports and release news.
+- **French and Vietnamese** user interface languages.
+- **Local axes** (Map toolbar): the gizmo's arrows follow the selected object's own front, side and up instead of the
+  world's; a drag along an axis is continuous, the grid snap applies only while Snap is on.
+- **Effects and markers get a pin**: fires, lights, smoke, sounds, fog, NPCs, quest markers and other actors that
+  have nothing to draw show an orange (effect) or grey (marker) pin that selects, moves and deletes the actor; two
+  new legend layers switch them off.
+- **DLC plugin levels**: the island's sublevels that the game's feature plugins add (the Wild Hunter traders'
+  grottos) are listed with their cell, open with it and export to their own place in the pak.
+- **Spawn points move, copy and delete**: a sentry's patrol points and a spawner group's loot points are each their
+  own object on the map (drag it, Duplicate adds one beside it, Delete removes it; the export rewrites the stored
+  array). Spawn places are drawn as half-transparent 3D stand-ins: a person-sized capsule where a sentry, zombie or
+  trader spawns, a car shop's vehicle box at its real size, a crate at a loot point.
+
+### Fixes
+- **Fit to ground works on a multi-selection and on the game's foliage**: every selected object is set down; a tree,
+  bush or rock stays upright with its foot on the ground, a building is tilted to the slope under it.
+- **Narrow windows**: below 1420 px the title strip shows the tabs as icons only (names in the tooltips) so the
+  search field never slides under the buttons on the right.
+- **A copied tree can be chopped**: duplicating or pasting a tree, bush or rock of a foliage level adds a new instance
+  to the same foliage component (exported into its `PerInstanceSMData`; the game rebuilds the foliage tree on load),
+  so it is chopped, harvested and collided like the stock ones instead of being a plain mesh actor.
+- **Levels shown on purpose stay shown** in whole-island mode: a cell picked in the world tree or levels an AI opens
+  with `show_levels` were replaced half a second later by the levels under a camera that was somewhere else (and the
+  selection went with them); streaming now resumes once the camera flies off.
+
 ## [0.2.6] - 2026-10-06
 
 ### New in this release

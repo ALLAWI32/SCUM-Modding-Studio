@@ -56,7 +56,8 @@ public sealed class SpawnPinTests
         Assert.True(ScumStudio.Viewport.SpawnMarkers.IsMarker(asset.MeshPath));
         Assert.Equal(0f, asset.Mesh.Bounds.Min.Z);
         Assert.True(asset.Mesh.Bounds.Max.Z > 100f);
-        Assert.Equal(ScumStudio.Viewport.SpawnMarkers.Color(ScumStudio.Viewport.SpawnKind.Sentry), asset.MaterialTints[asset.Mesh.Sections[0].MaterialName]);
+        var colour = ScumStudio.Viewport.SpawnMarkers.Color(ScumStudio.Viewport.SpawnKind.Sentry);
+        Assert.Equal(colour with { W = ScumStudio.Viewport.SpawnMarkers.StandInAlpha }, asset.MaterialTints[asset.Mesh.Sections[0].MaterialName]); // a stand-in: half transparent
         Assert.Null(ScumStudio.Viewport.SpawnMarkers.AssetFor("/Game/Some/Mesh.Mesh"));
     }
 

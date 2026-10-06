@@ -107,6 +107,7 @@ public sealed record ScenePlacement(
     /// the actor itself).
     /// </summary>
     public InstanceKey? InstanceKey => Instance is { } i ? Viewport.InstanceKey.Of(SelectableId, i.ComponentName, i.InstanceIndex)
+        : SpawnPoint is { } sp ? Viewport.InstanceKey.Of(SelectableId, sp.Key, Viewport.InstanceKey.SpawnPointBase - sp.Index)
         : LootMarker is { } m ? Viewport.InstanceKey.Of(SelectableId, m.Component, Viewport.InstanceKey.LootPoint - m.Index)
         : Spawner is { } s ? Viewport.InstanceKey.Of(SelectableId, s, Viewport.InstanceKey.Part)
         : Component is { SplineMesh: not null } c ? Viewport.InstanceKey.Of(SelectableId, c.Name, Viewport.InstanceKey.Segment)
@@ -121,7 +122,7 @@ public sealed record ScenePlacement(
     /// whole actor.
     /// </summary>
     public InstanceKey? PickKey(bool parts) =>
-        InstanceKey is { } key && (key.InstanceIndex != Viewport.InstanceKey.Part || Spawner is not null
+        InstanceKey is { } key && (key.InstanceIndex != Viewport.InstanceKey.Part || Spawner is not null || SpawnPoint is not null
                                    || (parts && Component is not { IsNativeSubobject: true }))
             ? key
             : null;
@@ -131,6 +132,13 @@ public sealed record ScenePlacement(
 
     /// <summary>The pin of one loot point of a building (its item spawner component and marker index), or null.</summary>
     public (string Component, int Index)? LootMarker { get; init; }
+
+    /// <summary>
+    /// The pin of one point of a spawner's stored point array (a sentry's patrol point, a loot point of an item spawner
+    /// group): the array's key (see <see cref="Level.Spawns.SpawnPointArray.Key"/>) and the point's index in the list as
+    /// it is now. It picks, moves, copies and deletes on its own (<see cref="Viewport.InstanceKey.IsSpawnPoint"/>); null otherwise.
+    /// </summary>
+    public (string Key, int Index)? SpawnPoint { get; init; }
 
     /// <summary>
     /// The pin of a spawn part (<see cref="SpawnMarkers.IsSpawnPart"/>: a building's fixed-item spawner or vehicle box) or a
@@ -161,11 +169,24 @@ public readonly record struct InstanceKey(uint SelectableId, string Component, i
     /// </summary>
     public const int LootPoint = -1000;
 
+    /// <summary>
+    /// <see cref="InstanceIndex"/> of the first point of a spawner's stored point array (a sentry's patrol path, an item
+    /// spawner group's loot points): point <c>i</c> is <c>SpawnPointBase - i</c>, <see cref="Component"/> is the array's key.
+    /// Picked, moved, copied and deleted on its own; the pins are regenerated from the current list (<c>LevelScene.ReplacePins</c>).
+    /// </summary>
+    public const int SpawnPointBase = -1_000_000;
+
     /// <summary>True for a loot point key (see <see cref="LootPoint"/>).</summary>
-    public bool IsLootPoint => InstanceIndex <= LootPoint;
+    public bool IsLootPoint => InstanceIndex <= LootPoint && !IsSpawnPoint;
 
     /// <summary>The marker index of a loot point key.</summary>
     public int Marker => LootPoint - InstanceIndex;
+
+    /// <summary>True for a spawn point key (see <see cref="SpawnPointBase"/>).</summary>
+    public bool IsSpawnPoint => InstanceIndex <= SpawnPointBase;
+
+    /// <summary>The point's index in its array for a spawn point key.</summary>
+    public int Point => SpawnPointBase - InstanceIndex;
 
     /// <summary>Creates a key, normalising the component name.</summary>
     public static InstanceKey Of(uint selectableId, string component, int instanceIndex) =>
@@ -413,20 +434,7 @@ public sealed class LevelScenePreparer
                     $"{actor.Name}/{component.Name}", documentIndex, actor, component, null) { Spawner = spawner });
             }
 
-            // Spawn places (see SpawnMarkers.PinsOf): pins that pick as the actor use its id; a building's loot point picks as
-            // itself (the building's id with its own key: what spawns there, owner: "the pin tells me nothing"); a spawn part (a
-            // fixed-item spawner, a car shop's vehicle box) picks as that part of the building; a vehicle box the level does not
-            // store gets an id of its own (bit 19), which picks nothing.
-            foreach (var (kind, pin, picksActor, label, marker, part) in SpawnMarkers.PinsOf(actor))
-            {
-                var pinId = picksActor || marker is not null || part is not null ? id : id | (1u << (options.DocumentIdShift - 1));
-                placements.Add(new ScenePlacement(SpawnMarkers.MeshKey(kind), UeToGl.ModelMatrix(pin), pin, pinId, label, documentIndex, actor, null, null)
-                {
-                    LootMarker = marker,
-                    Spawner = part?.Name,
-                });
-            }
-
+            placements.AddRange(PinPlacements(actor, id, documentIndex, options.DocumentIdShift));
             if (!options.IncludeInstances)
             {
                 continue;
@@ -456,6 +464,28 @@ public sealed class LevelScenePreparer
             || actor.ClassName.Contains(text, StringComparison.OrdinalIgnoreCase)
             || (actor.StaticMeshPath?.Contains(text, StringComparison.OrdinalIgnoreCase) ?? false)
             || actor.Components.Any(c => c.StaticMeshPath?.Contains(text, StringComparison.OrdinalIgnoreCase) ?? false);
+    }
+
+    /// <summary>
+    /// The spawn pins of <paramref name="actor"/> (see <see cref="SpawnMarkers.PinsOf"/>): pins that pick as the actor use its
+    /// id; a building's loot point picks as itself (the building's id with its own key: what spawns there, owner: "the pin
+    /// tells me nothing"); a spawn part (a fixed-item spawner, a car shop's vehicle box) picks as that part of the building; a
+    /// point of a stored point array picks as that point; a vehicle box the level does not store gets an id of its own (bit
+    /// 19), which picks nothing. A viewport calls this again with the actor's points as the project has them.
+    /// </summary>
+    public static IEnumerable<ScenePlacement> PinPlacements(ActorRecord actor, uint id, int documentIndex, int idShift = 20)
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+        foreach (var (kind, pin, picksActor, label, marker, part, point) in SpawnMarkers.PinsOf(actor))
+        {
+            var pinId = picksActor || marker is not null || part is not null || point is not null ? id : id | (1u << (idShift - 1));
+            yield return new ScenePlacement(SpawnMarkers.MeshKey(kind), UeToGl.ModelMatrix(pin), pin, pinId, label, documentIndex, actor, null, null)
+            {
+                LootMarker = marker,
+                Spawner = part?.Name,
+                SpawnPoint = point,
+            };
+        }
     }
 
     /// <summary>

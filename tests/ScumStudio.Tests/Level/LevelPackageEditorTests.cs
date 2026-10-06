@@ -315,6 +315,37 @@ public sealed class LevelPackageEditorTests
         Assert.InRange(instances[1].LocalTransform.Scale3D.Y, 0f, 0.001f);
     }
 
+    /// <summary>Hektor (Discord): a copied tree must be a tree of the same foliage component, so it is chopped like the others.</summary>
+    [Fact]
+    public void AppendsInstancesBehindTheStoredOnes()
+    {
+        var package = Synthetic();
+        var hint = new InstanceArrayHint("Rocks_Actor", "Rocks", [SyntheticLevels.Instance0, SyntheticLevels.Instance1]);
+        var movedTo = new FTransform(new FRotator(0, 45, 0), new FVector(10, 20, 30), new FVector(2, 2, 2));
+        var planted = new FTransform(new FRotator(0, -30, 0), new FVector(300, 400, 0), new FVector(1.5f, 1.5f, 1.5f));
+        var (bytes, report) = LevelPackageEditor.Apply(package, new LevelEditRequest
+        {
+            Instances = [new InstancePatch("Rocks_Actor", "Rocks", 0, movedTo)],
+            InstanceAdds = [new InstanceAdd("Rocks_Actor", "Rocks", planted), new InstanceAdd("Rocks_Actor", "Nope", planted)],
+            InstanceHints = [hint],
+        });
+
+        Assert.Equal(1, report.AddedInstances);
+        Assert.Equal(1, report.MovedInstances);
+        Assert.Contains(report.Warnings, w => w.Contains("Rocks_Actor.Nope", StringComparison.Ordinal));
+
+        var edited = CookedPackage.Parse(bytes.UAsset, bytes.UExp);
+        var ism = ExportNamed(edited, "Rocks", "Rocks_Actor");
+        Assert.Equal(package.GetExportBytes(ism).Length + 64, edited.GetExportBytes(ism).Length); // one more FMatrix, no custom floats
+
+        var document = LoadThroughCue4Parse(bytes, "A_0_TestLevel", SyntheticLevels.LevelPath);
+        var instances = document.FindActor("Rocks_Actor")!.InstanceTransforms.OrderBy(i => i.InstanceIndex).ToList();
+        Assert.Equal(3, instances.Count);
+        Assert.True(instances[0].LocalTransform.Equals(movedTo, 0.01f), instances[0].LocalTransform.ToString());
+        Assert.True(instances[1].LocalTransform.Equals(SyntheticLevels.Instance1, 0.01f), instances[1].LocalTransform.ToString());
+        Assert.True(instances[2].LocalTransform.Equals(planted, 0.01f), instances[2].LocalTransform.ToString());
+    }
+
     [Fact]
     public void FindsTheInstanceArrayOnlyWhenTheMatricesMatch()
     {

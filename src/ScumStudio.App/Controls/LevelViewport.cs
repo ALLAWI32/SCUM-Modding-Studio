@@ -69,6 +69,13 @@ public sealed partial class LevelViewport : OpenGlControlBase
     public static readonly StyledProperty<IReadOnlyDictionary<InstanceKey, FTransform>?> InstanceTransformsProperty =
         AvaloniaProperty.Register<LevelViewport, IReadOnlyDictionary<InstanceKey, FTransform>?>(nameof(InstanceTransforms));
 
+    /// <summary>
+    /// The spawn point pins of actors whose point arrays the project changed, by selectable id (see
+    /// <see cref="LevelScene.ReplacePins"/>); an actor not listed gets the pins the level stores back.
+    /// </summary>
+    public static readonly StyledProperty<IReadOnlyDictionary<uint, IReadOnlyList<ScenePlacement>>?> PinOverridesProperty =
+        AvaloniaProperty.Register<LevelViewport, IReadOnlyDictionary<uint, IReadOnlyList<ScenePlacement>>?>(nameof(PinOverrides));
+
     /// <summary>Root world transforms (UE space) of actors the project moved, by selectable id.</summary>
     public static readonly StyledProperty<IReadOnlyDictionary<uint, FTransform>?> ActorTransformsProperty =
         AvaloniaProperty.Register<LevelViewport, IReadOnlyDictionary<uint, FTransform>?>(nameof(ActorTransforms));
@@ -125,6 +132,13 @@ public sealed partial class LevelViewport : OpenGlControlBase
     public static readonly StyledProperty<bool> AutoSnapProperty =
         AvaloniaProperty.Register<LevelViewport, bool>(nameof(AutoSnap), defaultValue: true);
 
+    /// <summary>
+    /// The gizmo's arrows follow the object's own axes (its front, side and up) instead of the world's (Discord salvador:
+    /// "the gizmo is rotated, it doesn't align with the object's orientation"). The turn ring stays level.
+    /// </summary>
+    public static readonly StyledProperty<bool> LocalAxesProperty =
+        AvaloniaProperty.Register<LevelViewport, bool>(nameof(LocalAxes), defaultValue: true);
+
     /// <summary>Part mode: a click picks the one part of a Blueprint under the cursor (a hangar's wall or lamp), not the whole Blueprint. Alt+click does it once.</summary>
     public static readonly StyledProperty<bool> PickPartsProperty =
         AvaloniaProperty.Register<LevelViewport, bool>(nameof(PickParts));
@@ -174,7 +188,9 @@ public sealed partial class LevelViewport : OpenGlControlBase
     private bool _transformsDirty;
     private bool _clonesDirty;
     private bool _bendsDirty;
+    private bool _pinsDirty;
     private readonly Dictionary<uint, ActorClone> _appliedClones = [];
+    private readonly HashSet<uint> _appliedPins = [];
     private bool _dragging;
     private GizmoAxis _dragAxis;
     private GizmoAxis _hoverAxis;
@@ -240,6 +256,7 @@ public sealed partial class LevelViewport : OpenGlControlBase
         KindIdsProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.MarkDirty(ref c._selectionDirty));
         KindInstancesProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.MarkDirty(ref c._selectionDirty));
         InstanceTransformsProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.MarkDirty(ref c._transformsDirty));
+        PinOverridesProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.MarkDirty(ref c._pinsDirty));
         HiddenIdsProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.MarkDirty(ref c._visibilityDirty));
         HiddenInstancesProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.MarkDirty(ref c._visibilityDirty));
         HiddenPinKindsProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.MarkDirty(ref c._visibilityDirty));
@@ -344,6 +361,13 @@ public sealed partial class LevelViewport : OpenGlControlBase
     {
         get => GetValue(InstanceTransformsProperty);
         set => SetValue(InstanceTransformsProperty, value);
+    }
+
+    /// <inheritdoc cref="PinOverridesProperty" />
+    public IReadOnlyDictionary<uint, IReadOnlyList<ScenePlacement>>? PinOverrides
+    {
+        get => GetValue(PinOverridesProperty);
+        set => SetValue(PinOverridesProperty, value);
     }
 
     /// <inheritdoc cref="ActorTransformsProperty" />
@@ -466,6 +490,19 @@ public sealed partial class LevelViewport : OpenGlControlBase
         get => GetValue(AutoSnapProperty);
         set => SetValue(AutoSnapProperty, value);
     }
+
+    /// <inheritdoc cref="LocalAxesProperty" />
+    public bool LocalAxes
+    {
+        get => GetValue(LocalAxesProperty);
+        set => SetValue(LocalAxesProperty, value);
+    }
+
+    /// <summary>The UE-space direction of a gizmo arrow: the object's own axis with <see cref="LocalAxes"/>, else the world's.</summary>
+    private FVector AxisUe(GizmoAxis axis, FTransform root) =>
+        LocalAxes && axis is GizmoAxis.X or GizmoAxis.Y or GizmoAxis.Z ? root.Rotation.RotateVector(GizmoMath.UeDirection(axis)) : GizmoMath.UeDirection(axis);
+
+    private Vector3 AxisGl(GizmoAxis axis, FTransform root) => UeToGl.Direction(AxisUe(axis, root));
 
     /// <inheritdoc cref="PickPartsProperty" />
     public bool PickParts
@@ -788,7 +825,9 @@ public sealed partial class LevelViewport : OpenGlControlBase
                 _visibilityDirty = true;
                 _transformsDirty = true;
                 _clonesDirty = true;
+                _pinsDirty = true;
                 _appliedClones.Clear();
+                _appliedPins.Clear();
             }
         }
 
@@ -832,6 +871,29 @@ public sealed partial class LevelViewport : OpenGlControlBase
                 _transformsDirty = true;
                 _clonesDirty = true;
                 _appliedClones.Clear();
+            }
+
+            if (_pinsDirty)
+            {
+                // Spawn point pins follow the project's point lists: rebuilt for the actors with a changed list, put back
+                // as the level stores them for the others; then selection, visibility and moves are applied to the new nodes.
+                _pinsDirty = false;
+                var wanted = PinOverrides ?? new Dictionary<uint, IReadOnlyList<ScenePlacement>>();
+                foreach (var id in _appliedPins.Where(id => !wanted.ContainsKey(id)).ToList())
+                {
+                    level.ReplacePins(id, level.Prepared.Placements.Where(p => p.SelectableId == id && p.SpawnPoint is not null).ToList());
+                    _appliedPins.Remove(id);
+                }
+
+                foreach (var (id, pins) in wanted)
+                {
+                    level.ReplacePins(id, pins);
+                    _appliedPins.Add(id);
+                }
+
+                _selectionDirty = true;
+                _visibilityDirty = true;
+                _transformsDirty = true;
             }
 
             if (_selectionDirty)
@@ -1178,7 +1240,7 @@ public sealed partial class LevelViewport : OpenGlControlBase
     protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
     {
         base.OnPropertyChanged(change);
-        if (change.Property == BrushModeProperty || change.Property == BrushRadiusProperty)
+        if (change.Property == BrushModeProperty || change.Property == BrushRadiusProperty || change.Property == LocalAxesProperty)
         {
             RequestNextFrameRendering(); // the circle shows, hides or changes size
             return;
@@ -1348,10 +1410,11 @@ public sealed partial class LevelViewport : OpenGlControlBase
                 _dragPreview = new DragPreview(SelectedId, AboutPivot(_dragStartRoot, GizmoMath.RotateYaw(_dragStartRoot, turn, _snapHeld ? RotationSnap : 0f)), SelectedInstance);
                 RequestNextFrameRendering();
             }
-            else if (GizmoMath.TryClosestParameter(origin, direction, axisOrigin, GizmoMath.GlDirection(_dragAxis), out var t, out _))
+            else if (GizmoMath.TryClosestParameter(origin, direction, axisOrigin, AxisGl(_dragAxis, _dragStartRoot), out var t, out _))
             {
-                _dragPreview = new DragPreview(SelectedId, AutoSnapped(GizmoMath.Translate(_dragStartRoot, _dragAxis, t - _dragStartParameter, _snapHeld ? TranslationSnap : 0f),
-                    GizmoMath.UeDirection(_dragAxis)), SelectedInstance);
+                // Along the arrow, as far as the mouse goes: no jump onto other objects' boxes here (Discord salvador: "the
+                // movement happens in steps"); Ctrl snaps to the grid, a free drag still joins pieces.
+                _dragPreview = new DragPreview(SelectedId, GizmoMath.Translate(_dragStartRoot, AxisUe(_dragAxis, _dragStartRoot), t - _dragStartParameter, _snapHeld ? TranslationSnap : 0f), SelectedInstance);
                 RequestNextFrameRendering();
             }
 
@@ -1967,7 +2030,7 @@ public sealed partial class LevelViewport : OpenGlControlBase
         var best = tolerance;
         foreach (var candidate in new[] { GizmoAxis.X, GizmoAxis.Y, GizmoAxis.Z })
         {
-            if (ToScreen(origin + (GizmoMath.GlDirection(candidate) * length)) is { } tip && DistanceToSegment(position, centre, tip) is var d && d < best)
+            if (ToScreen(origin + (AxisGl(candidate, root) * length)) is { } tip && DistanceToSegment(position, centre, tip) is var d && d < best)
             {
                 best = d;
                 axis = candidate;
@@ -1996,7 +2059,7 @@ public sealed partial class LevelViewport : OpenGlControlBase
         if (axis != GizmoAxis.None)
         {
             var (rayOrigin, rayDirection) = ScreenRay(position);
-            GizmoMath.TryClosestParameter(rayOrigin, rayDirection, origin, GizmoMath.GlDirection(axis), out parameter, out _);
+            GizmoMath.TryClosestParameter(rayOrigin, rayDirection, origin, AxisGl(axis, root), out parameter, out _);
             return true;
         }
 
@@ -2074,7 +2137,7 @@ public sealed partial class LevelViewport : OpenGlControlBase
 
         foreach (var axis in new[] { GizmoAxis.X, GizmoAxis.Y, GizmoAxis.Z })
         {
-            var direction = GizmoMath.GlDirection(axis);
+            var direction = AxisGl(axis, r);
             renderer.Overlay.Add(new OverlayLine(origin, origin + direction * length, GizmoMath.Color(axis, axis == active)));
             // a short tick at the tip so the handle end is visible
             var tick = Vector3.Cross(direction, Vector3.Normalize(_camera.Position - origin)) * (length * 0.06f);

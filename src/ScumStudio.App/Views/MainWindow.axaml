@@ -70,7 +70,8 @@
                 <Panel ToolTip.Tip="{Binding Tip}">
                   <StackPanel Orientation="Horizontal" Spacing="7" VerticalAlignment="Center">
                     <c:GlyphIcon Kind="{Binding IconKey}" IconSize="15" VerticalAlignment="Center" />
-                    <TextBlock Text="{Binding Title}" VerticalAlignment="Center" FontWeight="Medium" FontSize="12.5" />
+                    <TextBlock Text="{Binding Title}" VerticalAlignment="Center" FontWeight="Medium" FontSize="12.5"
+                               IsVisible="{Binding !$parent[ListBox].((vm:MainWindowViewModel)DataContext).IsCompactHeader}" />
                     <Border Classes="badge" IsVisible="{Binding HasBadge}">
                       <TextBlock Text="{Binding Badge}" />
                     </Border>
@@ -82,7 +83,7 @@
           </ListBox>
 
           <!-- Command field: Ctrl+K focuses it. -->
-          <Panel Grid.Column="2" MaxWidth="440" MinWidth="200" Margin="20,0" HorizontalAlignment="Stretch" VerticalAlignment="Center">
+          <Panel Grid.Column="2" MaxWidth="440" MinWidth="90" Margin="14,0" HorizontalAlignment="Stretch" VerticalAlignment="Center">
             <TextBox x:Name="GlobalSearch" Classes="search" Text="{Binding SearchText}" Watermark="{Binding SearchWatermark}"
                      Padding="30,4,52,4" ToolTip.Tip="{Tr Shell.Search.Tip}">
               <TextBox.KeyBindings>
@@ -96,8 +97,17 @@
             </Border>
           </Panel>
 
-          <!-- Updates (always there: "Up to date", or lit up when a newer release is out) and the project. -->
+          <!-- Support (PayPal, e-mail, report a problem), updates (always there: "Up to date", or lit up when a newer release is out) and the project. -->
           <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center" Margin="0,0,6,0">
+            <Button x:Name="DiscordButton" Classes="ghost" Padding="8,3" Command="{Binding OpenDiscordCommand}" ToolTip.Tip="{Tr Discord.Button.Tip}">
+              <c:GlyphIcon Kind="Icon.Discord" IconSize="15" Foreground="{DynamicResource DiscordBrush}" />
+            </Button>
+            <Button x:Name="SupportButton" Classes="ghost" Padding="10,3" Command="{Binding OpenSupportCommand}" ToolTip.Tip="{Tr Support.Button.Tip}">
+              <StackPanel Orientation="Horizontal" Spacing="6">
+                <c:GlyphIcon Kind="Icon.Heart" IconSize="13" Foreground="{DynamicResource AccentBrush}" />
+                <TextBlock Text="{Tr Support.Button}" FontSize="12" />
+              </StackPanel>
+            </Button>
             <Button x:Name="UpdateButton" Classes.accent="{Binding HasUpdate}" Classes.ghost="{Binding !HasUpdate}" Padding="10,3" Margin="0,0,10,0"
                     IsVisible="{Binding CanCheckUpdates}" Command="{Binding OpenUpdateCommand}" ToolTip.Tip="{Binding UpdateButtonTip}">
               <StackPanel Orientation="Horizontal" Spacing="6">
@@ -105,8 +115,8 @@
                 <TextBlock Text="{Binding UpdateButtonText}" FontSize="12" />
               </StackPanel>
             </Button>
-            <TextBlock Text="{Tr Shell.Project}" Classes="colHeader" VerticalAlignment="Center" Margin="0,1,0,0" />
-            <TextBlock x:Name="ProjectName" Text="{Binding Projects.DisplayName}" FontWeight="SemiBold" FontSize="12.5" MaxWidth="220"
+            <TextBlock Text="{Tr Shell.Project}" Classes="colHeader" VerticalAlignment="Center" Margin="0,1,0,0" IsVisible="{Binding !IsCompactHeader}" />
+            <TextBlock x:Name="ProjectName" Text="{Binding Projects.DisplayName}" FontWeight="SemiBold" FontSize="12.5" MaxWidth="150" TextTrimming="CharacterEllipsis"
                        VerticalAlignment="Center" ToolTip.Tip="{Binding Projects.DirectoryPath}" />
           </StackPanel>
           <Button Grid.Column="4" Classes="ghost square" Margin="0,0,8,0" Command="{Binding OpenSetupCommand}"
@@ -301,6 +311,88 @@
                 </DataTemplate>
               </ItemsControl.ItemTemplate>
             </ItemsControl>
+          </ScrollViewer>
+        </DockPanel>
+      </Border>
+    </Panel>
+
+    <!-- ===================================================================== Support card: support the developer, report a problem -->
+    <Panel x:Name="SupportOverlay" IsVisible="{Binding IsSupportOpen}" ZIndex="21">
+      <Border Background="{DynamicResource ScrimBrush}" />
+      <Border Classes="dialog" Width="620" MaxHeight="680" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="24">
+        <DockPanel>
+          <Border DockPanel.Dock="Top" Padding="24,20,24,16" BorderBrush="{DynamicResource StrokeSubtleBrush}" BorderThickness="0,0,0,1">
+            <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="14">
+              <Border Classes="iconTile" Width="44" Height="44" CornerRadius="{DynamicResource SmallCornerRadius}">
+                <c:GlyphIcon Kind="Icon.Heart" IconSize="22" HorizontalAlignment="Center" VerticalAlignment="Center" />
+              </Border>
+              <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
+                <TextBlock Text="{Tr Support.Title}" Classes="h1" FontSize="19" />
+                <TextBlock Text="{Tr Support.Subtitle}" Classes="muted wrap" FontSize="12.5" />
+              </StackPanel>
+              <Button Grid.Column="2" Classes="ghost square" Command="{Binding CloseSupportCommand}" VerticalAlignment="Top" ToolTip.Tip="{Tr Support.Close.Tip}">
+                <c:GlyphIcon Kind="Icon.Close" IconSize="14" />
+              </Button>
+            </Grid>
+          </Border>
+          <ScrollViewer HorizontalScrollBarVisibility="Disabled">
+            <StackPanel Margin="24,16,24,20" Spacing="18">
+              <!-- The community: the permanent Discord invite -->
+              <StackPanel Spacing="8">
+                <TextBlock Text="{Tr Support.Community.Title}" FontWeight="SemiBold" FontSize="14" />
+                <TextBlock Text="{Tr Support.Community.Text}" Classes="muted wrap" />
+                <Button x:Name="SupportDiscordButton" Classes="ghost" Command="{Binding OpenDiscordCommand}" ToolTip.Tip="{Tr Support.Discord.Tip}" HorizontalAlignment="Left">
+                  <StackPanel Orientation="Horizontal" Spacing="8">
+                    <c:GlyphIcon Kind="Icon.Discord" IconSize="16" Foreground="{DynamicResource DiscordBrush}" />
+                    <TextBlock Text="{Tr Support.Discord}" />
+                  </StackPanel>
+                </Button>
+              </StackPanel>
+
+              <!-- Support the developer -->
+              <StackPanel Spacing="8">
+                <TextBlock Text="{Tr Support.Donate.Title}" FontWeight="SemiBold" FontSize="14" />
+                <TextBlock Text="{Tr Support.Donate.Text}" Classes="muted wrap" />
+                <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
+                  <Button x:Name="PayPalButton" Classes="accent" Command="{Binding OpenPayPalCommand}" ToolTip.Tip="{Tr Support.PayPal.Tip}">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                      <c:GlyphIcon Kind="Icon.Heart" IconSize="14" />
+                      <TextBlock Text="{Tr Support.PayPal}" />
+                    </StackPanel>
+                  </Button>
+                  <Border Grid.Column="1" Classes="chip" VerticalAlignment="Center" HorizontalAlignment="Left">
+                    <TextBlock Text="{x:Static vm:MainWindowViewModel.SupportEmail}" Classes="mono" />
+                  </Border>
+                  <Button Grid.Column="2" Classes="ghost small" Content="{Tr Common.Copy}" Command="{Binding CopyEmailCommand}" ToolTip.Tip="{Tr Support.Email.Tip}" VerticalAlignment="Center" />
+                </Grid>
+              </StackPanel>
+              <Border Classes="hsep" />
+              <!-- Report a problem -->
+              <StackPanel Spacing="8">
+                <TextBlock Text="{Tr Support.Report.Title}" FontWeight="SemiBold" FontSize="14" />
+                <TextBlock Text="{Tr Support.Report.Text}" Classes="muted wrap" />
+                <StackPanel Spacing="8" IsVisible="{Binding CanReport}">
+                  <ComboBox x:Name="ReportCategoryBox" ItemsSource="{Binding ReportCategories}" SelectedItem="{Binding SelectedReportCategory}" MinWidth="180" HorizontalAlignment="Left" ToolTip.Tip="{Tr Support.Report.Category.Tip}" />
+                  <TextBox x:Name="ReportBox" Text="{Binding ReportText}" AcceptsReturn="True" TextWrapping="Wrap" Height="130" MaxLength="1500"
+                           Watermark="{Tr Support.Report.Watermark}" ToolTip.Tip="{Tr Support.Report.Box.Tip}" />
+                  <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
+                    <CheckBox IsChecked="{Binding ReportIncludeDetails}" Content="{Tr Support.Report.Details}" ToolTip.Tip="{Tr Support.Report.Details.Tip}" VerticalAlignment="Center" />
+                    <TextBlock Grid.Column="1" Text="{Binding ReportLengthText}" Classes="caption mono" HorizontalAlignment="Right" VerticalAlignment="Center" />
+                    <Button Grid.Column="2" x:Name="SendReportButton" Classes="accent" Command="{Binding SendReportCommand}" ToolTip.Tip="{Tr Support.Report.Send.Tip}">
+                      <StackPanel Orientation="Horizontal" Spacing="6">
+                        <c:GlyphIcon Kind="Icon.Send" IconSize="14" />
+                        <TextBlock Text="{Tr Support.Report.Send}" />
+                      </StackPanel>
+                    </Button>
+                  </Grid>
+                  <TextBlock Text="{Binding ReportStatus}" Classes="caption wrap" />
+                </StackPanel>
+                <StackPanel Spacing="8" IsVisible="{Binding !CanReport}">
+                  <TextBlock Text="{Tr Support.Report.Unavailable}" Classes="caption wrap" />
+                  <Button Classes="ghost" HorizontalAlignment="Left" Content="{Tr Support.Report.Issues}" Command="{Binding OpenIssuesCommand}" ToolTip.Tip="{Tr Support.Report.Issues.Tip}" />
+                </StackPanel>
+              </StackPanel>
+            </StackPanel>
           </ScrollViewer>
         </DockPanel>
       </Border>

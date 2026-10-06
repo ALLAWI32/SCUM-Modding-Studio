@@ -3,6 +3,7 @@ using ScumStudio.Core.Mathematics;
 using ScumStudio.Level.Editing;
 using ScumStudio.Level.Model;
 using ScumStudio.Level.Serialization;
+using ScumStudio.Level.Spawns;
 
 namespace ScumStudio.Tests.Level;
 
@@ -34,6 +35,8 @@ public sealed class EditOpTests
             new SetInstanceTransformOp(instance, Somewhere, Elsewhere),
             new DeleteInstanceOp(instance),
             new RestoreInstanceOp(instance),
+            new AddInstanceOp(instance with { Index = 3000 }, Somewhere),
+            new RemoveAddedInstanceOp(instance with { Index = 3000 }, new AddInstanceOp(instance with { Index = 3000 }, Somewhere)),
             new AddStaticMeshActorOp(Port, "SM_Rock_Added", Rock, Elsewhere),
             new AddBlueprintActorOp(Port, "BP_Lamp_Added", "/Game/BP/BP_Lamp.BP_Lamp_C", new ActorRef(Outpost, "BP_Lamp_C_3"), Somewhere),
             new AddBlueprintActorOp(Port, "Asian_Chest_Added", "/Script/SCUM.WorldItemSpawner", new ActorRef(Outpost, "WorldItemSpawner_1"), Somewhere)
@@ -42,6 +45,8 @@ public sealed class EditOpTests
             },
             new RemoveAddedActorOp(new ActorRef(Port, "SM_Rock_Added"), new AddStaticMeshActorOp(Port, "SM_Rock_Added", Rock, Elsewhere)),
             new BatchOp("Plant 2 rocks", [new AddStaticMeshActorOp(Port, "SM_Rock_Added", Rock, Elsewhere), new DeleteActorOp(house)]),
+            new SetSpawnPointsOp(new ActorRef(Outpost, "SentrySpawner_0"), null, "PatrolPoints", [new SpawnPoint(0, Somewhere), new SpawnPoint(1, Elsewhere)], [new SpawnPoint(1, Elsewhere), new SpawnPoint(1, Somewhere)]),
+            new SetSpawnPointsOp(new ActorRef(Outpost, "ItemSpawnerGroup_1"), "SpawnerComponent", "SpawnerMarkers", [new SpawnPoint(0, Somewhere)], []),
         ];
         return ops.Select(o => new object[] { o });
     }

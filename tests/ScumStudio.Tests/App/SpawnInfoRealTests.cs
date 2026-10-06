@@ -63,7 +63,7 @@ public sealed class SpawnInfoRealTests
         Assert.Contains(map.SpawnInfo, r => r.IsItem);
 
         // The legend: every kind has a colour; the circles start off; switching loot off hides the hangar's pins, not the hangar.
-        Assert.Equal(11, map.SpawnLayers.Count);
+        Assert.Equal(13, map.SpawnLayers.Count);
         Assert.False(map.SpawnLayers.Single(l => l.Key == "Zones").IsVisible);
         Assert.True(map.SpawnLayers.Single(l => l.Key == "Vehicles").IsVisible);
         map.SpawnLayers.Single(l => l.Key == "Loot").IsVisible = false;

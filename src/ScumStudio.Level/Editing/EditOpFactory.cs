@@ -109,6 +109,33 @@ public static class EditOpFactory
         return new SetTransformOp(actorRef, old, newValue, component);
     }
 
+    /// <summary>
+    /// A <see cref="SetSpawnPointsOp"/> giving the point array on <paramref name="component"/> of <paramref name="actor"/>
+    /// (null = its patrol points) the points <paramref name="points"/>; the old list is the current override in
+    /// <paramref name="state"/>, else the stored one.
+    /// </summary>
+    /// <exception cref="ArgumentException">The actor stores no such array.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">A point copies a stored point that does not exist.</exception>
+    public static SetSpawnPointsOp SetSpawnPoints(LevelDocument level, ActorRecord actor, string? component, IReadOnlyList<Spawns.SpawnPoint> points, EditState? state = null)
+    {
+        ArgumentNullException.ThrowIfNull(level);
+        ArgumentNullException.ThrowIfNull(actor);
+        ArgumentNullException.ThrowIfNull(points);
+        var actorRef = new ActorRef(level.PackagePath, actor.Name);
+        var array = Spawns.SpawnPointArrays.FindByComponent(actor, component)
+                    ?? throw new ArgumentException($"{actorRef} stores no spawn points{(component is null ? string.Empty : $" on '{component}'")}.", nameof(component));
+        foreach (var point in points)
+        {
+            if (point.Source < 0 || point.Source >= array.Points.Count)
+            {
+                throw new ArgumentOutOfRangeException(nameof(points), $"Point source {point.Source} is outside the {array.Points.Count} stored point(s) of {actorRef}.");
+            }
+        }
+
+        var old = state?.GetSpawnPoints(actorRef, component, array.Array) ?? array.Points;
+        return new SetSpawnPointsOp(actorRef, component, array.Array, old, points);
+    }
+
     /// <summary>A <see cref="SetTransformOp"/> for an actor added by an edit (its old value comes from <paramref name="state"/>).</summary>
     /// <exception cref="ArgumentException">The actor was not added.</exception>
     public static SetTransformOp SetAddedActorTransform(ActorRef added, TransformValue newValue, EditState state)
@@ -124,16 +151,40 @@ public static class EditOpFactory
     public static SetInstanceTransformOp SetInstanceTransform(
         LevelDocument level, ActorRecord actor, string component, int index, TransformValue newValue, EditState? state = null)
     {
-        var target = FindInstance(level, actor, component, index);
-        var old = state?.GetInstanceOverride(target) ?? TransformValue.FromTransform(actor.FindComponent(component)!.Instances[index]);
+        var target = FindInstance(level, actor, component, index, state);
+        var old = state?.GetInstanceOverride(target) ?? state?.GetAddedInstanceTransform(target)
+                  ?? TransformValue.FromTransform(actor.FindComponent(component)!.Instances[index]);
         return new SetInstanceTransformOp(target, old, newValue);
     }
 
     /// <summary>A <see cref="DeleteInstanceOp"/> for instance <paramref name="index"/> of <paramref name="component"/>.</summary>
     /// <exception cref="ArgumentOutOfRangeException">No such instance.</exception>
     /// <exception cref="ArgumentException">The component is synthesized from a Blueprint template.</exception>
-    public static DeleteInstanceOp DeleteInstance(LevelDocument level, ActorRecord actor, string component, int index) =>
-        new(FindInstance(level, actor, component, index));
+    public static DeleteInstanceOp DeleteInstance(LevelDocument level, ActorRecord actor, string component, int index, EditState? state = null) =>
+        new(FindInstance(level, actor, component, index, state));
+
+    /// <summary>
+    /// An <see cref="AddInstanceOp"/> adding an instance at <paramref name="local"/> (component space) to the stored
+    /// ISM/HISM/foliage component <paramref name="component"/>, under the first index after its stored and already added ones.
+    /// </summary>
+    /// <exception cref="ArgumentException">The component is not an instanced mesh component stored in the level.</exception>
+    public static AddInstanceOp AddInstance(LevelDocument level, ActorRecord actor, string component, TransformValue local, EditState? state = null)
+    {
+        ArgumentNullException.ThrowIfNull(level);
+        ArgumentNullException.ThrowIfNull(actor);
+        if (actor.FindComponent(component) is not { IsInstanced: true, IsSynthesized: false } c)
+        {
+            throw new ArgumentException($"{actor.Name}.{component} is not an instanced mesh component stored in the level; no instance can be added to it.", nameof(component));
+        }
+
+        var index = c.Instances.Count;
+        while (state?.IsAdded(new InstanceRef(level.PackagePath, actor.Name, c.Name, index)) == true)
+        {
+            index++;
+        }
+
+        return new AddInstanceOp(new InstanceRef(level.PackagePath, actor.Name, c.Name, index), local);
+    }
 
     /// <summary>
     /// A <see cref="DuplicateActorOp"/> copying <paramref name="actor"/> within its level, named
@@ -218,12 +269,13 @@ public static class EditOpFactory
         return string.Equals(pa, pb, StringComparison.OrdinalIgnoreCase) && string.Equals(na, nb, StringComparison.OrdinalIgnoreCase);
     }
 
-    private static InstanceRef FindInstance(LevelDocument level, ActorRecord actor, string component, int index)
+    private static InstanceRef FindInstance(LevelDocument level, ActorRecord actor, string component, int index, EditState? state)
     {
         ArgumentNullException.ThrowIfNull(level);
         ArgumentNullException.ThrowIfNull(actor);
         var c = actor.FindComponent(component);
-        if (c is not { IsInstanced: true } || index < 0 || index >= c.Instances.Count)
+        // An instance the project added (a copied tree) sits past the stored ones.
+        if (c is not { IsInstanced: true } || index < 0 || (index >= c.Instances.Count && state?.IsAdded(new InstanceRef(level.PackagePath, actor.Name, c.Name, index)) != true))
         {
             throw new ArgumentOutOfRangeException(nameof(index), $"{actor.Name}.{component} has no instance {index}.");
         }

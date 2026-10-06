@@ -104,7 +104,46 @@ public sealed class WorldIndex
     public static WorldIndex FromCatalog(AssetCatalog catalog, string root = DefaultRoot)
     {
         ArgumentNullException.ThrowIfNull(catalog);
-        return Build(catalog.PackageFiles, root, catalog.ProjectName);
+        var index = Build(catalog.PackageFiles, root, catalog.ProjectName);
+        return string.Equals(VirtualPath.Normalize(root), DefaultRoot, StringComparison.OrdinalIgnoreCase) ? index.WithPluginLevels(catalog) : index;
+    }
+
+    /// <summary>Folder of the game's feature plugins (DLC packs); each may add sublevels of The_Island.</summary>
+    public const string PluginsRoot = "SCUM/Plugins/GameFeatures";
+
+    /// <summary>
+    /// The island's sublevels that the game's DLC plugins add (<c>SCUM/Plugins/GameFeatures/&lt;Pack&gt;/Content/World/Maps/The_Island/</c>,
+    /// e.g. the Wild Hunter traders' grottos), classified like the rest. Hektor (Discord): "the traders in the Wild Hunter
+    /// packs remain after you delete everything": the app never listed those levels.
+    /// </summary>
+    public WorldIndex WithPluginLevels(AssetCatalog catalog)
+    {
+        ArgumentNullException.ThrowIfNull(catalog);
+        var plugins = new List<WorldPackage>();
+        var seen = new HashSet<string>(Packages.Select(p => p.PackagePath), StringComparer.OrdinalIgnoreCase);
+        foreach (var file in catalog.PackageFiles)
+        {
+            var path = VirtualPath.Normalize(file);
+            if (!path.StartsWith(PluginsRoot + "/", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            // SCUM/Plugins/GameFeatures/<Pack>/Content/World/Maps/The_Island/<Level>.umap
+            var island = path.IndexOf("/Content/World/Maps/The_Island/", StringComparison.OrdinalIgnoreCase);
+            if (island < 0)
+            {
+                continue;
+            }
+
+            var pluginRoot = path[..(island + "/Content/World/Maps/The_Island".Length)];
+            if (WorldNameParser.Classify(path, pluginRoot, catalog.ProjectName) is { IsMap: true } entry && seen.Add(entry.PackagePath))
+            {
+                plugins.Add(entry);
+            }
+        }
+
+        return plugins.Count == 0 ? this : new WorldIndex(Root, Sort([.. Packages, .. plugins]), CrossCheck);
     }
 
     /// <summary>

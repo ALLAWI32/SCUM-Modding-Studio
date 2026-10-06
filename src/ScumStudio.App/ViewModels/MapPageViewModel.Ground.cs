@@ -10,8 +10,10 @@ namespace ScumStudio.App.ViewModels;
 
 /// <summary>
 /// "Fit to ground" (owner: a house on a hillside should follow the slope, not stand half in the ground and half in the
-/// air; houses tilt, they do not bend like bridges): the selected objects are tilted to the slope under their footprint
-/// and set down on it, which way they face kept.
+/// air; houses tilt, they do not bend like bridges; Hektor: "fit a forest to the terrain, it's not aligning multiple
+/// objects"): the selected objects, or every member of the multi-selection, are set down on the ground. A building is
+/// tilted to the slope under its footprint; a tree, bush or rock (a copy, or one instance of the game's foliage) stays
+/// upright with its foot on the ground, the way the game plants it.
 /// </summary>
 public sealed partial class MapPageViewModel
 {
@@ -24,23 +26,51 @@ public sealed partial class MapPageViewModel
             return;
         }
 
-        var items = HasGroup
-            ? GroupItems().Where(m => m.Instance is null).Select(m => m.Item).ToList()
-            : SelectedActor is { } one && SelectedInstanceKey is null ? [one] : [];
+        var members = HasGroup
+            ? GroupItems().Select(m => (m.Item, m.Instance)).ToList()
+            : SelectedActor is { } one ? [(one, SelectedInstanceInfo())] : [];
         var ops = new List<EditOp>();
         var missed = 0;
-        foreach (var item in items.Where(i => !IsImmovable(i)))
+        foreach (var (item, sel) in members)
         {
-            if (Grounded(item) is not { } world)
+            if (sel is { Instance: { } instance })
+            {
+                // One tree, bush or rock of the game's foliage: its foot on the ground, upright as it is.
+                var space = SpaceOf(sel);
+                var world = CurrentInstanceTransform(sel).ToTransform() * space;
+                if (Planted(world, MeshBounds(instance.StaticMeshPath), IsPlant(instance.StaticMeshPath)) is not { } placed)
+                {
+                    missed++;
+                    continue;
+                }
+
+                var value = TransformValue.FromTransform(placed.GetRelativeTransform(space));
+                if (!value.IsNearlyEqual(CurrentInstanceTransform(sel)))
+                {
+                    ops.Add(EditOpFactory.SetInstanceTransform(item.Level, item.Actor, instance.ComponentName, instance.InstanceIndex, value, project.State));
+                }
+
+                continue;
+            }
+
+            if (sel is not null || IsImmovable(item))
+            {
+                continue; // a road piece or a building's part: it belongs to its road or building
+            }
+
+            var grounded = IsPlant(item.Actor.StaticMeshPath) || item.Actor.Kind == ActorKind.StaticMeshActor && item.Actor.StaticMeshPath is { } m && IsPlant(m)
+                ? Planted(WorldOf(item, null), MeshBounds(item.Actor.StaticMeshPath), true)
+                : Grounded(item);
+            if (grounded is not { } root)
             {
                 missed++;
                 continue;
             }
 
-            var value = RelativeOf(item, world) with { Scale = CurrentRootTransform(item).Scale };
-            if (!value.IsNearlyEqual(CurrentRootTransform(item)))
+            var relative = RelativeOf(item, root) with { Scale = CurrentRootTransform(item).Scale };
+            if (!relative.IsNearlyEqual(CurrentRootTransform(item)))
             {
-                ops.Add(item.IsAdded ? EditOpFactory.SetAddedActorTransform(item.Reference, value, project.State) : EditOpFactory.SetTransform(item.Level, item.Actor, value, project.State));
+                ops.Add(item.IsAdded ? EditOpFactory.SetAddedActorTransform(item.Reference, relative, project.State) : EditOpFactory.SetTransform(item.Level, item.Actor, relative, project.State));
             }
         }
 
@@ -55,6 +85,26 @@ public sealed partial class MapPageViewModel
         {
             RefreshGroup();
         }
+    }
+
+    /// <summary>True for a mesh of the game's foliage (trees, bushes, cacti, grass): the game plants it with its pivot on the ground.</summary>
+    private static bool IsPlant(string? meshPath) => meshPath is not null && meshPath.Contains("/Foliage/", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// <paramref name="world"/> set down on the ground, upright as it is: a plant with its pivot (where the game puts its
+    /// foot) on the ground, anything else with the bottom of its box on the ground. Null without ground under it.
+    /// </summary>
+    private FTransform? Planted(FTransform world, BoundingBox? bounds, bool plant)
+    {
+        var foot = plant || bounds is not { IsEmpty: false }
+            ? world.Translation
+            : world.TransformPosition(new FVector(bounds.Value.Center.X, bounds.Value.Center.Y, bounds.Value.Min.Z));
+        if (GroundAt(foot.X, foot.Y) is not { } ground)
+        {
+            return null;
+        }
+
+        return world with { Translation = world.Translation with { Z = world.Translation.Z + (ground - foot.Z) } };
     }
 
     /// <summary>

@@ -46,6 +46,8 @@ public sealed partial class MapPageViewModel
             ("Creatures", [SpawnKind.Creature]),
             ("CarShops", [SpawnKind.Vehicle]),
             ("Drops", [SpawnKind.PlayerDrop]),
+            ("Effects", [SpawnKind.Effect]),
+            ("Markers", [SpawnKind.Marker]),
         };
         return layers.Select(l => new SpawnLayerViewModel(l.Key, HexOf(SpawnMarkers.Color(l.Kinds[0])), l.Kinds, !hidden.Contains(l.Key), OnSpawnLayerChanged)).ToList();
 
@@ -93,6 +95,12 @@ public sealed partial class MapPageViewModel
         if (SelectedInstanceKey is { IsLootPoint: true } point && point.SelectableId == item.SelectableId)
         {
             markers = item.Actor.FindComponent(point.Component)?.SpawnMarkers is { } all && point.Marker < all.Count ? [all[point.Marker]] : [];
+        }
+        else if (SelectedPointInfo() is { } spawnPoint)
+        {
+            // One loot point of a spawner group: the stored marker it copies; a patrol point: nothing spawns there.
+            var source = spawnPoint.Points[spawnPoint.Index].Source;
+            markers = spawnPoint.Array.Component is { } owner && item.Actor.FindComponent(owner)?.SpawnMarkers is { } stored && source < stored.Count ? [stored[source]] : [];
         }
         else
         {
@@ -207,6 +215,8 @@ public sealed partial class SpawnLayerViewModel : ObservableObject
         "Sentries" => Loc.T("Spawn.Layer.Sentries"),
         "Creatures" => Loc.T("Spawn.Layer.Creatures"),
         "CarShops" => Loc.T("Spawn.Layer.CarShops"),
+        "Effects" => Loc.T("Spawn.Layer.Effects"),
+        "Markers" => Loc.T("Spawn.Layer.Markers"),
         _ => Loc.T("Spawn.Layer.Drops"),
     };
 
@@ -223,6 +233,8 @@ public sealed partial class SpawnLayerViewModel : ObservableObject
         "Sentries" => Loc.T("Spawn.Layer.Sentries.Tip"),
         "Creatures" => Loc.T("Spawn.Layer.Creatures.Tip"),
         "CarShops" => Loc.T("Spawn.Layer.CarShops.Tip"),
+        "Effects" => Loc.T("Spawn.Layer.Effects.Tip"),
+        "Markers" => Loc.T("Spawn.Layer.Markers.Tip"),
         _ => Loc.T("Spawn.Layer.Drops.Tip"),
     };
 

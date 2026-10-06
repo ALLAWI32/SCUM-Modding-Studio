@@ -153,7 +153,9 @@ public sealed class SpawnPartsRealTests
         Assert.Equal(SpawnMarkers.MeshKey(SpawnKind.Vehicle), pin.MeshPath);
         Assert.Equal(shop.SelectableId, pin.SelectableId);
         Assert.Equal(InstanceKey.Of(shop.SelectableId, box.Name, InstanceKey.Part), pin.InstanceKey);
-        Assert.Equal(0.7f, pin.World.Scale3D.X); // a small pin, not the box's 11 m
+        // A translucent box of the real size: the component's scale times its extent (a half size), over the metre-wide box mesh.
+        Assert.Equal(box.WorldTransform.Scale3D.X * (box.BoxExtent ?? new FVector(32f)).X * 2f / SpawnMarkers.BoxSize, pin.World.Scale3D.X, 0.001f);
+        Assert.Equal(SpawnShape.Box, SpawnMarkers.ShapeOf(SpawnKind.Vehicle));
 
         map.SelectedInstanceKey = pin.InstanceKey;
         map.SelectedActorId = shop.SelectableId;
@@ -223,25 +225,26 @@ public sealed class SpawnPartsViewportRealTests
         var pinWorld = ((ScenePlacement)pin.Tag!).World;
         await SaveAsync("spawn-drillpress-selected", spawner.WorldTransform);
 
-        // Two metres over and turned a quarter: the press goes with the spawner, the pin only moves.
+        // Two metres over and turned a quarter: the press goes with the spawner, the marker moves and turns but keeps its size.
         var to = new FTransform(FQuat.MakeFromEuler(new FVector(0f, 0f, 90f)) * spawner.WorldTransform.Rotation, spawner.WorldTransform.Translation + new FVector(200f, 0f, 0f), FVector.One);
         level.SetInstanceTransform(key, to);
         RenderAssert.Near(UeToGl.ModelMatrix(((ScenePlacement)item.Tag!).World.GetRelativeTransform(spawner.WorldTransform) * to), item.LocalTransform, 1e-3f);
-        RenderAssert.Near(UeToGl.ModelMatrix(pinWorld with { Translation = to.Translation }), pin.LocalTransform, 1e-3f);
+        RenderAssert.Near(UeToGl.ModelMatrix(to with { Scale3D = pinWorld.Scale3D }), pin.LocalTransform, 1e-3f);
         await SaveAsync("spawn-drillpress-moved", to);
         level.SetInstanceTransforms(null);
         Assert.Equal(((ScenePlacement)item.Tag!).GlModel, item.LocalTransform);
         Assert.Equal(((ScenePlacement)pin.Tag!).GlModel, pin.LocalTransform);
 
-        // A car shop's box: moved with its 11 x 5 x 3.5 scale, the pin keeps its size.
+        // A car shop's box: moved with its 11 x 5 x 3.5 scale, the translucent box keeps its real size.
         var shop = documents[1].Actors.Single(a => a.Name == "BP_Outpost_CarShop_NPC_and_VehicleSpawner_5");
         var box = shop.FindComponent("VehicleSpawnBox")!;
         var boxKey = InstanceKey.Of(LevelScenePreparer.SelectableIdOf(1, shop), box.Name, InstanceKey.Part);
         var boxPin = level.Scene.Nodes.Single(n => n.Tag is ScenePlacement { InstanceKey: { } k } && k == boxKey);
         var boxTo = box.WorldTransform with { Translation = box.WorldTransform.Translation + new FVector(0f, 300f, 0f) };
         level.SetInstanceTransform(boxKey, boxTo);
-        RenderAssert.Near(UeToGl.ModelMatrix(((ScenePlacement)boxPin.Tag!).World with { Translation = boxTo.Translation }), boxPin.LocalTransform, 1e-3f);
-        Assert.Equal(0.7f, ((ScenePlacement)boxPin.Tag!).World.Scale3D.X);
+        var boxSize = ((ScenePlacement)boxPin.Tag!).World.Scale3D;
+        RenderAssert.Near(UeToGl.ModelMatrix(boxTo with { Scale3D = boxSize }), boxPin.LocalTransform, 1e-3f);
+        Assert.Equal(box.WorldTransform.Scale3D.X * (box.BoxExtent ?? new FVector(32f)).X * 2f / SpawnMarkers.BoxSize, boxSize.X, 0.001f);
 
         async Task SaveAsync(string name, FTransform at)
         {

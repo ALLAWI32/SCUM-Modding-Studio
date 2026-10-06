@@ -371,6 +371,7 @@ public sealed class LevelDocument
                 OverrideMaterials = c.OverrideMaterials,
                 SpawnMarkers = c.SpawnMarkers ?? [],
                 CollisionProfile = c.CollisionProfile,
+                BoxExtent = c.BoxExtent,
                 PropertyNames = c.PropertyNames,
                 UsesTemplateValues = c.UsesTemplateValues,
                 IsSynthesized = c.IsSynthesized,

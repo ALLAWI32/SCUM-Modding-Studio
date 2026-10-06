@@ -404,6 +404,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IDisposable
             item.OnLanguageChanged();
         }
 
+        RefreshSupportTexts();
+
         foreach (var pill in new[] { GamePill, ServerPill, KeyPill, AiPill })
         {
             pill.RefreshLabel();

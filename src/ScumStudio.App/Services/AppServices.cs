@@ -66,6 +66,7 @@ public sealed class AppServices : IDisposable
         Projects = new ProjectSession(this, LoggerFactory.CreateLogger<ProjectSession>());
         Mcp = new AppMcpService(this);
         Thumbnails = new ThumbnailService(Path.Combine(DataDirectory, "cache", "thumbnails"), LoggerFactory.CreateLogger<ThumbnailService>());
+        Reports = new ReportService(LoggerFactory.CreateLogger<ReportService>());
     }
 
     /// <summary>Raised (on the calling thread) after settings were saved through <see cref="UpdateSettings"/>.</summary>
@@ -121,6 +122,9 @@ public sealed class AppServices : IDisposable
 
     /// <summary>Tile and row pictures (disk cache under the data folder).</summary>
     public ThumbnailService Thumbnails { get; }
+
+    /// <summary>"Report a problem": reports translated to English and posted to the owner's Discord.</summary>
+    public ReportService Reports { get; }
 
     /// <summary>Creates the services.</summary>
     public static AppServices Create(AppServicesOptions? options = null) => new(options ?? new AppServicesOptions());

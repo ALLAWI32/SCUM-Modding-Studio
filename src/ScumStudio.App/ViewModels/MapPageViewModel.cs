@@ -71,6 +71,7 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
         var ui = services.Settings.Load().Ui;
         _translationSnap = ui.TranslationSnap;
         _rotationSnap = ui.RotationSnapDegrees;
+        _localAxes = services.UiState.Current.LocalAxes;
         _renderQuality = ui.RenderQuality;
         _showSpawns = services.UiState.Current.ShowSpawnPoints;
         _pickParts = services.UiState.Current.PickParts;
@@ -553,12 +554,22 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
         bool Over(FVector p) => tiles.Any(t => p.X >= t.BoundsMin.X && p.X <= t.BoundsMax.X && p.Y >= t.BoundsMin.Y && p.Y <= t.BoundsMax.Y);
     }
 
-    /// <summary>Reads <paramref name="packagePaths"/> and prepares their scene on a worker thread, then shows it.</summary>
-    public async Task LoadLevelsAsync(IReadOnlyList<string> packagePaths, int landscapeStep = 1, bool seaPlane = true)
+    /// <summary>
+    /// Reads <paramref name="packagePaths"/> and prepares their scene on a worker thread, then shows it. In world mode a set
+    /// loaded on purpose (not by the streamer, <paramref name="streamed"/>) stays until the camera flies off from where it is.
+    /// </summary>
+    public async Task LoadLevelsAsync(IReadOnlyList<string> packagePaths, int landscapeStep = 1, bool seaPlane = true, bool streamed = false)
     {
         if (_services.Workspace.Catalog is not { } catalog || packagePaths.Count == 0)
         {
             return;
+        }
+
+        if (!streamed)
+        {
+            _holdStreaming = true;
+            _holdCamera = null;
+            _streamed = packagePaths; // what is shown: kept within the streamer's reach once it resumes
         }
 
         _loadCts?.Cancel();
@@ -795,7 +806,7 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
             }
         }
 
-        if (TryApplyInstanceDrag(selectableId, rootWorld))
+        if (TryApplyPointDrag(selectableId, rootWorld) || TryApplyInstanceDrag(selectableId, rootWorld))
         {
             return;
         }
@@ -1085,6 +1096,7 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
 
         ActorTransforms = moved;
         InstanceTransforms = CollectInstanceTransforms(state);
+        PinOverrides = CollectPinOverrides(state);
     }
 
     /// <summary>The current relative transform of the selected actor's root: the project's override or addition, else the pristine value.</summary>
@@ -1172,6 +1184,12 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
         }
 
         var value = new TransformValue(location, new FRotator(rotation.X, rotation.Y, rotation.Z), scale);
+        if (SelectedPointInfo() is { } point)
+        {
+            ApplyPointTransform(point, value);
+            return;
+        }
+
         if (SelectedInstanceInfo() is { } sel)
         {
             ApplyInstanceTransform(sel, value);
@@ -1194,6 +1212,12 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
         }
 
         _copiedGroup = null;
+        if (SelectedPointInfo() is { } point)
+        {
+            DuplicatePoint(point); // a spawn point has nothing to paste: Copy adds one beside it, like Duplicate
+            return;
+        }
+
         if (SelectedInstanceInfo() is { } sel)
         {
             CopyInstance(sel);
@@ -1319,6 +1343,12 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
             return;
         }
 
+        if (SelectedPointInfo() is { } point)
+        {
+            DuplicatePoint(point);
+            return;
+        }
+
         if (SelectedInstanceInfo() is { } sel)
         {
             DuplicateInstance(sel);
@@ -1407,6 +1437,12 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
 
         if (SelectedActor is not { } item)
         {
+            return;
+        }
+
+        if (SelectedPointInfo() is { } point)
+        {
+            DeletePoint(point);
             return;
         }
 

@@ -16,6 +16,7 @@ public sealed class EditStateTests
     {
         var duplicate = new DuplicateActorOp(House, "StaticMeshActor_12_Copy", Somewhere);
         var added = new AddStaticMeshActorOp(Port, "SM_Rock_Added", Rock, Elsewhere);
+        var planted = new AddInstanceOp(Pebble with { Index = 9 }, Somewhere);
         return
         [
             new DeleteActorOp(Crate),
@@ -25,6 +26,10 @@ public sealed class EditStateTests
             new SetTransformOp(duplicate.Created, Somewhere, Elsewhere),
             new SetInstanceTransformOp(Pebble, TransformValue.Identity, Somewhere),
             new DeleteInstanceOp(Pebble with { Index = 4 }),
+            planted,
+            new RemoveAddedInstanceOp(planted.Target, planted),
+            new AddInstanceOp(Pebble with { Index = 10 }, Somewhere),
+            new SetInstanceTransformOp(Pebble with { Index = 10 }, Somewhere, Elsewhere),
             added,
             new DeleteAllOfKindOp(new KindMatch(MatchBy.StaticMesh, Rock), EditScope.ForLevel(Port),
                 [new ActorRef(Port, "Rock_1"), new ActorRef(Port, "Rock_2")], [new InstanceRef(Port, "Foliage", "ISM", 0)]),
@@ -70,6 +75,9 @@ public sealed class EditStateTests
         Assert.True(state.IsDeleted(Pebble with { Index = 4 }));
         Assert.False(state.IsDeleted(Pebble));
         Assert.Equal(Somewhere, state.GetInstanceOverride(Pebble));
+        Assert.False(state.IsAdded(Pebble with { Index = 9 })); // planted, taken out again
+        Assert.Null(state.GetInstanceOverride(Pebble with { Index = 9 }));
+        Assert.Equal(Elsewhere, state.GetAddedInstanceTransform(Pebble with { Index = 10 }));
         Assert.Equal(Elsewhere, state.GetTransformOverride(House));
         Assert.Null(state.GetTransformOverride(House, "Door"));
         Assert.True(state.IsAdded(new ActorRef(Outpost, "staticmeshactor_12_copy")));
@@ -100,6 +108,8 @@ public sealed class EditStateTests
         Assert.NotNull(state.Validate(new RestoreActorOp(House)));
         Assert.NotNull(state.Validate(new RestoreInstanceOp(Pebble)));
         Assert.NotNull(state.Validate(new RemoveAddedActorOp(Crate, new DuplicateActorOp(House, "Crate_1", Somewhere))));
+        Assert.NotNull(state.Validate(new RemoveAddedInstanceOp(Pebble, new AddInstanceOp(Pebble, Somewhere))));
+        Assert.NotNull(state.Validate(new AddInstanceOp(Pebble with { Index = -1 }, Somewhere)));
         Assert.NotNull(state.Validate(new DeleteAllOfKindOp(new KindMatch(MatchBy.Class, "X"), EditScope.Island, [], [])));
         Assert.NotNull(state.Validate(new DeleteAllOfKindOp(new KindMatch(MatchBy.Class, "X"), EditScope.Island, [House, House], [])));
         Assert.NotNull(state.Validate(new AddStaticMeshActorOp(Port, "X", " ", Somewhere)));
@@ -141,6 +151,19 @@ public sealed class EditStateTests
         state.Apply(add);
         state.Apply(new SetTransformOp(add.Created, Somewhere, Elsewhere));
         state.Apply(new RemoveAddedActorOp(add.Created, add));
+        Assert.True(state.IsEmpty);
+    }
+
+    [Fact]
+    public void RemovingAnAddedInstanceClearsItsEdits()
+    {
+        var state = new EditState();
+        var add = new AddInstanceOp(Pebble with { Index = 9 }, Somewhere);
+        state.Apply(add);
+        Assert.NotNull(state.Validate(add)); // the index is taken
+        state.Apply(new SetInstanceTransformOp(add.Target, Somewhere, Elsewhere));
+        Assert.Equal(Elsewhere, state.GetAddedInstanceTransform(add.Target));
+        state.Apply(new RemoveAddedInstanceOp(add.Target, add));
         Assert.True(state.IsEmpty);
     }
 

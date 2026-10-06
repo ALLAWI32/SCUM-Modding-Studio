@@ -64,6 +64,9 @@ public sealed record ComponentRecord(
     /// </summary>
     public string? CollisionProfile { get; init; }
 
+    /// <summary>Box components (a car shop's vehicle box): the half size in component space, before the component's scale; null for other components.</summary>
+    public FVector? BoxExtent { get; init; }
+
     /// <summary>Full class path (e.g. <c>/Script/Engine.StaticMeshComponent</c>).</summary>
     public string ClassPath { get; init; } = string.Empty;
 

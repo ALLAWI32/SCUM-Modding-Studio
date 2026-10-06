@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using ScumStudio.Level.Model;
 using ScumStudio.Level.Serialization;
+using ScumStudio.Level.Spawns;
 
 namespace ScumStudio.Level.Editing;
 
@@ -22,6 +23,8 @@ namespace ScumStudio.Level.Editing;
 [JsonDerivedType(typeof(SetInstanceTransformOp), "setInstanceTransform")]
 [JsonDerivedType(typeof(DeleteInstanceOp), "deleteInstance")]
 [JsonDerivedType(typeof(RestoreInstanceOp), "restoreInstance")]
+[JsonDerivedType(typeof(AddInstanceOp), "addInstance")]
+[JsonDerivedType(typeof(RemoveAddedInstanceOp), "removeAddedInstance")]
 [JsonDerivedType(typeof(AddStaticMeshActorOp), "addStaticMeshActor")]
 [JsonDerivedType(typeof(AddBlueprintActorOp), "addBlueprintActor")]
 [JsonDerivedType(typeof(RemoveAddedActorOp), "removeAddedActor")]
@@ -32,6 +35,7 @@ namespace ScumStudio.Level.Editing;
 [JsonDerivedType(typeof(BatchOp), "batch")]
 [JsonDerivedType(typeof(BendActorOp), "bendActor")]
 [JsonDerivedType(typeof(SwaySegmentOp), "swaySegment")]
+[JsonDerivedType(typeof(SetSpawnPointsOp), "setSpawnPoints")]
 public abstract record EditOp
 {
     /// <summary>The operation that exactly undoes this one.</summary>
@@ -347,6 +351,40 @@ public readonly record struct BendValue(float Degrees, float Sway1 = 0f, float S
     }
 }
 
+/// <summary>
+/// Replaces the point list of a spawner's stored array (a sentry's patrol path, an item spawner's loot points; see
+/// <see cref="SpawnPointArrays"/>): points moved, added (as copies of stored ones) or left out. The exporter rebuilds the
+/// array from the stored elements, so every other field of a point stays as it was.
+/// </summary>
+/// <param name="Target">The spawner actor.</param>
+/// <param name="Component">The component storing the array, or null for the actor's own array.</param>
+/// <param name="Array">The array property name.</param>
+/// <param name="Old">The points before the edit.</param>
+/// <param name="New">The points after the edit.</param>
+public sealed record SetSpawnPointsOp(ActorRef Target, string? Component, string Array, IReadOnlyList<SpawnPoint> Old, IReadOnlyList<SpawnPoint> New) : EditOp
+{
+    /// <inheritdoc />
+    public override EditOp Inverse() => this with { Old = New, New = Old };
+
+    /// <inheritdoc />
+    public override string Describe() => string.Create(CultureInfo.InvariantCulture,
+        $"Spawn points of {Target}{(Component is null ? string.Empty : "." + Component)} {Array}: {New.Count} point(s) (was {Old.Count})");
+
+    /// <inheritdoc />
+    public override IReadOnlyList<string> GetTouchedLevels() => [Target.Level];
+
+    /// <inheritdoc />
+    public override ActorRef? GetPrimaryTarget() => Target;
+
+    /// <inheritdoc />
+    public bool Equals(SetSpawnPointsOp? other) =>
+        other is not null && Target == other.Target && string.Equals(Component, other.Component, StringComparison.OrdinalIgnoreCase)
+        && string.Equals(Array, other.Array, StringComparison.OrdinalIgnoreCase) && Old.SequenceEqual(other.Old) && New.SequenceEqual(other.New);
+
+    /// <inheritdoc />
+    public override int GetHashCode() => HashCode.Combine(Target, Old.Count, New.Count);
+}
+
 /// <summary>Sets the component-space transform of one ISM/HISM instance.</summary>
 /// <param name="Target">The instance.</param>
 /// <param name="Old">Transform before the edit.</param>
@@ -392,6 +430,47 @@ public sealed record RestoreInstanceOp(InstanceRef Target) : EditOp
 
     /// <inheritdoc />
     public override string Describe() => $"Restore instance {Target}";
+
+    /// <inheritdoc />
+    public override IReadOnlyList<string> GetTouchedLevels() => [Target.Level];
+
+    /// <inheritdoc />
+    public override ActorRef? GetPrimaryTarget() => Target.ActorRef;
+}
+
+/// <summary>
+/// Adds one instance to a stored ISM/HISM/foliage component: a copied tree becomes a new tree of the same foliage
+/// component, chopped, harvested and collided like the stock ones (Hektor, Discord: a copy written as a plain mesh actor
+/// could not be chopped; SCUM's cut/harvest data lives on the foliage component). <paramref name="Target"/>.Index is the
+/// next free index after the component's stored instances; the export appends it to <c>PerInstanceSMData</c>.
+/// </summary>
+/// <param name="Target">The new instance (its index is not in the pristine package).</param>
+/// <param name="Transform">Component-space transform (as <see cref="SetInstanceTransformOp"/> uses).</param>
+public sealed record AddInstanceOp(InstanceRef Target, TransformValue Transform) : EditOp
+{
+    /// <inheritdoc />
+    public override EditOp Inverse() => new RemoveAddedInstanceOp(Target, this);
+
+    /// <inheritdoc />
+    public override string Describe() => $"Add instance {Target} at {Format(Transform)}";
+
+    /// <inheritdoc />
+    public override IReadOnlyList<string> GetTouchedLevels() => [Target.Level];
+
+    /// <inheritdoc />
+    public override ActorRef? GetPrimaryTarget() => Target.ActorRef;
+}
+
+/// <summary>Removes an instance created by <see cref="AddInstanceOp"/>; its inverse is that operation.</summary>
+/// <param name="Target">The added instance.</param>
+/// <param name="Original">The operation that added it.</param>
+public sealed record RemoveAddedInstanceOp(InstanceRef Target, EditOp Original) : EditOp
+{
+    /// <inheritdoc />
+    public override EditOp Inverse() => Original;
+
+    /// <inheritdoc />
+    public override string Describe() => $"Remove added instance {Target}";
 
     /// <inheritdoc />
     public override IReadOnlyList<string> GetTouchedLevels() => [Target.Level];

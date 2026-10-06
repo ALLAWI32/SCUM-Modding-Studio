@@ -374,10 +374,12 @@ public sealed partial class Cue4ParseLevelReader
         int? InstanceEndCullDistance,
         IReadOnlyList<string?>? OverrideMaterials = null,
         IReadOnlyList<SpawnMarker>? SpawnMarkers = null,
-        string? CollisionProfile = null)
+        string? CollisionProfile = null,
+        FVector? BoxExtent = null)
     {
         public LevelExportData ApplyTo(LevelExportData header) => header with
         {
+            BoxExtent = BoxExtent,
             InstanceEndCullDistance = InstanceEndCullDistance,
             IsLoaded = true,
             IsComponent = IsComponent,

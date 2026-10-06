@@ -47,3 +47,6 @@ Thumbs.db
 # Agent worktrees (workflow isolation)
 /.claude/worktrees/
 dist/
+
+# ---- Report a problem: the Discord webhook is a build-time secret ----
+src/ScumStudio.App/report-webhook.txt

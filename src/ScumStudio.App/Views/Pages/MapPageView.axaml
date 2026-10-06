@@ -63,6 +63,7 @@
               <TextBlock Text="{Binding BrushRadiusText}" Classes="caption mono" VerticalAlignment="Center" MinWidth="38" />
             </StackPanel>
             <ToggleButton Classes="ghost" Padding="8,4" x:Name="SnapButton" Content="{Tr Map.Snap}" IsChecked="{Binding #Viewport3d.AutoSnap}" ToolTip.Tip="{Tr Map.Snap.Tip}" IsVisible="{Binding HasView}" />
+            <ToggleButton Classes="ghost" Padding="8,4" x:Name="LocalAxesButton" Content="{Tr Map.LocalAxes}" IsChecked="{Binding LocalAxes}" ToolTip.Tip="{Tr Map.LocalAxes.Tip}" IsVisible="{Binding HasView}" />
             <Button Classes="ghost" Padding="8,4" x:Name="DroneButton" Content="{Tr Map.Drone}" Click="OnDroneClick" ToolTip.Tip="{Tr Map.Drone.Tip}" IsVisible="{Binding HasView}" />
             <Button Classes="ghost" Padding="8,4" Content="{Tr Map.FrameAll}" Click="OnFrameAllClick" ToolTip.Tip="{Tr Map.FrameAll.Tip}" IsVisible="{Binding HasScene}" />
             <Button Classes="ghost" Padding="8,4" Content="{Tr Map.FrameSelection}" Command="{Binding FrameSelectionCommand}" ToolTip.Tip="{Tr Map.FrameSelection.Tip}" IsVisible="{Binding HasSelectedActor}" />
@@ -377,8 +378,8 @@
           <Panel x:Name="ViewportContent">
             <c:ViewportGrid Background="{DynamicResource ViewportBrush}" AxisXBrush="{DynamicResource AxisXBrush}" AxisYBrush="{DynamicResource AxisYBrush}" IsVisible="{Binding !HasView}" />
             <c:LevelViewport x:Name="Viewport3d" Scene="{Binding PreparedScene}" PickParts="{Binding PickParts}" BrushMode="{Binding BrushSelect}" BrushRadius="{Binding BrushRadius}" SelectedId="{Binding SelectedActorId, Mode=TwoWay}" SelectedInstance="{Binding SelectedInstanceKey, Mode=TwoWay}" Backdrop="{Binding WorldBackdrop}" KeepCamera="{Binding IsWorldMode}" Quality="{Binding RenderQuality}" KindIds="{Binding KindSelectionIds}" KindInstances="{Binding KindSelectionInstances}" InstanceTransforms="{Binding InstanceTransforms}"
-                             HiddenIds="{Binding HiddenActorIds}" HiddenInstances="{Binding HiddenInstanceKeys}" HiddenPinKinds="{Binding HiddenPinKinds}"
-                             ActorTransforms="{Binding ActorTransforms}" Clones="{Binding Clones}"
+                             HiddenIds="{Binding HiddenActorIds}" HiddenInstances="{Binding HiddenInstanceKeys}" HiddenPinKinds="{Binding HiddenPinKinds}" PinOverrides="{Binding PinOverrides}"
+                             ActorTransforms="{Binding ActorTransforms}" Clones="{Binding Clones}" LocalAxes="{Binding LocalAxes}"
                              SelectedRootWorld="{Binding SelectedRootWorld}" TranslationSnap="{Binding TranslationSnap}" RotationSnap="{Binding RotationSnap}"
                              ExtraMeshes="{Binding ExtraMeshes}" Bends="{Binding Bends}" SegmentBends="{Binding SegmentBends}" ShapeHandles="{Binding ShapeHandles}" ScaleHandles="{Binding ScaleHandles}" LegHandle="{Binding LegHandle}" GroupWorlds="{Binding GroupWorlds}" IsVisible="{Binding HasView}" />
             <!-- drone mode: crosshair + what the keys do -->

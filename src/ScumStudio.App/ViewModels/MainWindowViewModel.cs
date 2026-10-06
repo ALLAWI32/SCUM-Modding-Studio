@@ -31,7 +31,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IDisposable
             new NavItemViewModel("vehicles", "Vehicles", "Icon.Vehicle", null, () => Track(new VehiclesPageViewModel(services, OpenSetup))),
             new NavItemViewModel("weapons", "Weapons", "Icon.Weapon", null, () => Track(new WeaponsPageViewModel(services, OpenSetup))),
             new NavItemViewModel("spawns", "Spawns", "Icon.Pin", null, () => Track(new SpawnsPageViewModel(services, OpenSetup))),
-            new NavItemViewModel("assets", "Assets", "Icon.Assets", null, () => Track(new AssetsPageViewModel(services, OpenSetup, PlaceMeshInMap))),
+            new NavItemViewModel("assets", "Assets", "Icon.Assets", null, () => Track(new AssetsPageViewModel(services, OpenSetup, PlaceInMap))),
             new NavItemViewModel("projects", "Projects", "Icon.Projects", null, () => Track(new ProjectsPageViewModel(services))),
             new NavItemViewModel("settings", "Settings", "Icon.Settings", null, () => Track(new SettingsPageViewModel(services, OpenSetup))),
         ];
@@ -171,12 +171,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IDisposable
         return item.Page;
     }
 
-    /// <summary>Switches to the Map page and adds a new actor drawing <paramref name="meshObjectPath"/> there.</summary>
-    public void PlaceMeshInMap(string meshObjectPath)
+    /// <summary>Switches to the Map page and places <paramref name="objectPath"/> there (a mesh, or a copy of a placed Blueprint).</summary>
+    public void PlaceInMap(string objectPath)
     {
         if (NavigateTo("map") is MapPageViewModel map)
         {
-            map.AddMeshActor(meshObjectPath);
+            map.AddObject(objectPath);
         }
     }
 

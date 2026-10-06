@@ -24,8 +24,9 @@ public sealed record PakWriterOptions
     public string ProjectName { get; init; } = PakPaths.DefaultProjectName;
 
     /// <summary>
-    /// When true (default), only <c>SCUM/Content/**</c> and <c>SCUM/AssetRegistry.bin</c> from a staging directory
-    /// are packed; anything else (reports, notes) is skipped with a warning.
+    /// When true (default), only game content (<c>SCUM/Content/**</c>, plugin content <c>SCUM/Plugins/**/Content/**</c>)
+    /// and <c>SCUM/AssetRegistry.bin</c> from a staging directory are packed; anything else (reports, notes) is skipped
+    /// with a warning (see <see cref="PakPaths.IsModPakEntry"/>).
     /// </summary>
     public bool OnlyGameContent { get; init; } = true;
 

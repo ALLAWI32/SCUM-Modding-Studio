@@ -375,11 +375,25 @@ public sealed class LevelDocument
                 UsesTemplateValues = c.UsesTemplateValues,
                 IsSynthesized = c.IsSynthesized,
                 TemplatePath = c.IsSynthesized ? c.TemplatePath : null,
+                IsNativeSubobject = !c.IsSynthesized && IsDefaultSubobjectPath(c.TemplatePath),
                 IsStaticMeshComponent = c.IsStaticMeshComponent || c.StaticMesh is not null,
                 IsVisible = c.IsVisible,
                 ChildActorClassPath = c.ChildActorClassPath,
                 ChildActor = c.ChildActor is { } child && _exports.ContainsKey(child) ? child : null,
             };
+        }
+
+        /// <summary>True when <paramref name="template"/> is a subobject of a class default object (<c>….Default__X_C:Name</c>).</summary>
+        private static bool IsDefaultSubobjectPath(string? template)
+        {
+            var cut = template?.LastIndexOfAny([':', '.']) ?? -1;
+            if (template is null || cut <= 0)
+            {
+                return false;
+            }
+
+            var outer = template[(template.LastIndexOfAny([':', '.', '/'], cut - 1) + 1)..cut];
+            return outer.StartsWith("Default__", StringComparison.Ordinal);
         }
 
         private (int? Root, bool Inferred) FindRoot(LevelExportData actor, List<LevelExportData> components)

@@ -35,7 +35,7 @@ public sealed class RecentProjectViewModel
 }
 
 /// <summary>A mod imported into the open project (see <see cref="ProjectMods"/>).</summary>
-public sealed partial class ImportedModViewModel
+public sealed partial class ImportedModViewModel : ObservableObject
 {
     private readonly Func<ImportedModViewModel, Task> _remove;
 
@@ -58,6 +58,20 @@ public sealed partial class ImportedModViewModel
 
     /// <summary>"3 maps, 120 assets".</summary>
     public string Summary { get; }
+
+    /// <summary>
+    /// True when Export mod puts the mod into the project's pak (the default); off, it stays installed as its own pak (a
+    /// big map) and the project's pak, mounted after it, still wins where both have a file.
+    /// </summary>
+    public bool IsCarried
+    {
+        get => ProjectMods.IsCarried(Folder);
+        set
+        {
+            ProjectMods.SetCarried(Folder, value);
+            OnPropertyChanged();
+        }
+    }
 
     /// <summary>Takes the mod out of the project.</summary>
     [RelayCommand]

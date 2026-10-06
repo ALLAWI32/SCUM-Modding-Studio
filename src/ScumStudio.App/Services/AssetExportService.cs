@@ -46,7 +46,7 @@ public static class AssetExportService
         return image;
     }
 
-    /// <summary>Extracts LOD 0 of the package's static or skeletal mesh and writes it as glTF (+ .bin).</summary>
+    /// <summary>Extracts the finest LOD the cook kept of the package's static or skeletal mesh and writes it as glTF (+ .bin).</summary>
     /// <returns>The files written.</returns>
     /// <exception cref="InvalidDataException">The package holds no mesh.</exception>
     public static Task<IReadOnlyList<string>> ExportMeshGltfAsync(AssetCatalog catalog, string packagePath, string outputPath, CancellationToken cancellationToken = default)

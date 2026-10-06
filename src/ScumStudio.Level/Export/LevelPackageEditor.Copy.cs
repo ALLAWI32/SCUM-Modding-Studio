@@ -113,6 +113,15 @@ public static partial class LevelPackageEditor
                 var source = package.Exports[members[k]];
                 var payload = payloads[k];
                 RemapReferences(payload, blocks[k].Properties, remap);
+                if (k == 0 && blocks[0].Find(ParentComponentProperty)?.Value is ObjectValue { Index: > 0 } parent && !remap.ContainsKey(parent.Index)
+                    && parent.Offset >= 0 && parent.Offset + 4 <= payload.Length)
+                {
+                    // A copy of a building's door (a child actor) is no child of the building's component, which still spawns
+                    // the original: a child actor nobody owns does not begin play in a streamed level, a door that never opens
+                    // (salvador, Discord). It stays attached to that component (its transform is relative to it).
+                    BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(parent.Offset), 0);
+                }
+
                 var first = -1;
                 if (source.FirstExportDependency >= 0)
                 {

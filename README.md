@@ -186,7 +186,8 @@ included in this repository.</sub>
   - **Landscape**: the ground look of the whole island (Game, Snow, Desert, Autumn, All grass), tree swaps (an oak
     drawn as a pine everywhere) and **Fit to ground** for the selection.
   - **Extend** (`Ctrl+E`): lay a copy right after the selected wall, road or tunnel piece; press again to keep building.
-  - **Add object**: type or paste an object path (copied from Assets) to place it in front of the camera.
+  - **Add object**: type or paste an object path (copied from Assets) to place it in front of the camera: a mesh, a
+    Blueprint (a copy of one the game placed on the island) or an item (spawned by a world item spawner).
 - **Shape** handles in the 3D view:
   - **Blue diamonds** push the curve right or left (same way: an arc, opposite ways: an S); the **blue arrow** over each
     raises or lowers the middle (a hump or a wave).
@@ -242,7 +243,8 @@ included in this repository.</sub>
 
 - **Objects** (by category, with building sets) or **All files** (by folder).
 - Tiles or a compact list; the filter (`class:StaticMesh` keeps one class).
-- Details of the selected package: **Export PNG**, **Export glTF**, **Place in map**, copy the object path.
+- Details of the selected package: **Export PNG**, **Export glTF**, **Place in map** (meshes, Blueprints and items),
+  copy the object path.
 
 ### Projects
 

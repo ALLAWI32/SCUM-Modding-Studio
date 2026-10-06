@@ -161,6 +161,16 @@ public sealed class AssetCatalog : IDisposable
                     options.AesKey is null ? "no AES key was provided" : "the AES key does not match");
             }
 
+            // CUE4Parse inflates zlib through a native library this app does not ship: such a pak (Hektor's map) is read by
+            // unpacking it, which inflates in .NET (PakFileSource, the Import mod button).
+            var zlib = CUE4Parse.Compression.ZlibHelper.Instance is null
+                ? provider.Files.Values.OfType<FPakEntry>().Count(e => e.IsCompressed && e.CompressionMethod == CUE4Parse.Compression.CompressionMethod.Zlib)
+                : 0;
+            if (zlib > 0)
+            {
+                logger.LogWarning("{Count} file(s) are zlib-compressed and cannot be read straight from the pak: import it (Projects → Import mod) or unpack it (scumstudio pak unpack) and open the folder.", zlib);
+            }
+
             logger.LogDebug("Mounted {Mounted} of {Total} containers from {Source}.", mounted, containers.Count, full);
             var display = containers.Count == 1 ? containers[0] : $"{containers.Count} containers in {full}";
             return new AssetCatalog(provider, true, AssetSourceKind.Paks, display, options.ProjectName, options.Logger, full);

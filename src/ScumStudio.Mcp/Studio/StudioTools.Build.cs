@@ -469,7 +469,7 @@ public sealed partial class StudioTools
 
         var catalog = RequireCatalog();
         var walker = new PackageDependencyWalker(catalog, _logger);
-        var levels = RequireWorld().Packages.Where(p => p.IsMap && p.Kind is WorldPackageKind.Poi or WorldPackageKind.TvBase or WorldPackageKind.Landscape or WorldPackageKind.Misc)
+        var levels = RequireWorld().Packages.Where(p => p.IsContentLevel)
             .Select(p => p.PackagePath)
             .AsParallel().WithDegreeOfParallelism(4)
             .Where(p =>

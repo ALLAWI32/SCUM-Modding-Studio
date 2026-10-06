@@ -35,10 +35,10 @@ internal sealed class GroundProbe
         _level = level;
     }
 
-    /// <summary>Map sublevels (POI, TV base, misc, landscape tile) whose tile bounds contain the point, smallest first.</summary>
+    /// <summary>Map sublevels (POI, TV base, abandoned city, misc, landscape tile) whose tile bounds contain the point, smallest first.</summary>
     public IReadOnlyList<WorldPackage> LevelsAt(float x, float y) =>
         _world.Packages
-            .Where(p => p.IsMap && p.Cell is not null && p.Kind is WorldPackageKind.Poi or WorldPackageKind.Landscape or WorldPackageKind.TvBase or WorldPackageKind.Misc
+            .Where(p => p.IsContentLevel && p.Cell is not null
                         && p.Tile is { BoundsValid: true } t && x >= t.BoundsMin.X && x <= t.BoundsMax.X && y >= t.BoundsMin.Y && y <= t.BoundsMax.Y)
             .OrderBy(p => p.Kind == WorldPackageKind.Landscape)
             .ThenBy(p => (p.Tile!.BoundsMax.X - p.Tile.BoundsMin.X) * (p.Tile.BoundsMax.Y - p.Tile.BoundsMin.Y))

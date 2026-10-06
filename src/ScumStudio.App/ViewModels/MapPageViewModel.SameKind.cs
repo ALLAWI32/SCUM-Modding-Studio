@@ -243,7 +243,7 @@ public sealed partial class MapPageViewModel
         var have = loaded.Select(d => d.PackagePath).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var walker = new PackageDependencyWalker(catalog, _services.Logger);
         var candidates = world.Packages
-            .Where(p => p.IsMap && p.Kind is WorldPackageKind.Poi or WorldPackageKind.Landscape or WorldPackageKind.TvBase or WorldPackageKind.Misc
+            .Where(p => p.IsContentLevel
                         && !have.Contains(p.PackagePath))
             .Select(p => p.PackagePath)
             .ToList();

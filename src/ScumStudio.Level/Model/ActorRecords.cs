@@ -107,6 +107,14 @@ public sealed record ComponentRecord(
     public string? TemplatePath { get; init; }
 
     /// <summary>
+    /// True for a component the actor's C++ class creates (its template is a subobject of a class default object,
+    /// <c>…BP_Door.Default__BP_Door_C:Door Mesh</c>), not one of its Blueprint's parts (<c>…_GEN_VARIABLE</c> templates): a
+    /// door's leaf. Salvador (Discord): "When I duplicate an openable door and place it somewhere else, it doesn't open in
+    /// the game" - a click on the leaf picked it as a part and its copy was a plain mesh, so a click takes the whole actor.
+    /// </summary>
+    public bool IsNativeSubobject { get; init; }
+
+    /// <summary>
     /// True for a static mesh component (class chain reaches <c>StaticMeshComponent</c>, e.g. SCUM's
     /// <c>InteriorStaticMeshComponent</c>, or a <c>StaticMesh</c> property is present).
     /// </summary>
@@ -135,6 +143,12 @@ public sealed record SpawnMarker(FTransform Local, string Preset, float Probabil
     /// <c>World_Shelf</c>), or null for a world spawner's fixed item.
     /// </summary>
     public string? PresetPath { get; init; }
+
+    /// <summary>
+    /// A world spawner's fixed item: the class path of the item it always spawns (<c>_item</c>, e.g.
+    /// <c>/Game/.../BP_Work_Drillpress_01.BP_Work_Drillpress_01_C</c>), or null for a loot point.
+    /// </summary>
+    public string? ItemClassPath { get; init; }
 }
 
 /// <summary>

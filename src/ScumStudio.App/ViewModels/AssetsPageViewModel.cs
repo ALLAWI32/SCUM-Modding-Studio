@@ -41,8 +41,8 @@ public sealed partial class AssetsPageViewModel : PageViewModel, ISearchablePage
     private bool _suppressFolderRefresh;
     private readonly Action<string>? _placeMesh;
 
-    /// <summary>True when the selected asset is a static mesh and a Map page can place it.</summary>
-    public bool CanPlaceInMap => _placeMesh is not null && string.Equals(SelectedItem?.Entry.ClassName, "StaticMesh", StringComparison.OrdinalIgnoreCase);
+    /// <summary>True when the selected asset is a static mesh or a Blueprint and a Map page can place it.</summary>
+    public bool CanPlaceInMap => _placeMesh is not null && AssetDetailsViewModel.IsPlaceable(SelectedItem?.Entry.ClassName);
 
     /// <summary>Creates the page and loads the workspace catalog when one is open.</summary>
     public AssetsPageViewModel(AppServices services, Action? openSetup = null, Action<string>? placeMesh = null)
@@ -685,11 +685,11 @@ public sealed partial class AssetsPageViewModel : PageViewModel, ISearchablePage
         }
     }
 
-    /// <summary>Places the selected static mesh as a new actor in the level loaded on the Map page.</summary>
+    /// <summary>Places the selected static mesh or Blueprint in the level loaded on the Map page.</summary>
     [RelayCommand]
     private void PlaceInMap()
     {
-        if (SelectedItem?.Entry is { } entry && _placeMesh is { } place && string.Equals(entry.ClassName, "StaticMesh", StringComparison.OrdinalIgnoreCase))
+        if (SelectedItem?.Entry is { } entry && _placeMesh is { } place && AssetDetailsViewModel.IsPlaceable(entry.ClassName))
         {
             place(entry.ObjectPath);
         }

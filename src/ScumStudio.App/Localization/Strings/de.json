@@ -388,7 +388,7 @@
   "Assets.ExportGltf": "glTF exportieren",
   "Assets.ExportGltf.Tip": "Dieses Mesh als glTF 2.0 speichern (öffnet sich in Blender und anderen 3D-Programmen).",
   "Assets.PlaceInMap": "Auf der Karte platzieren",
-  "Assets.PlaceInMap.Tip": "Dieses Mesh als neuen Actor in das auf der Kartenseite geladene Level einfügen (vor der Kamera)",
+  "Assets.PlaceInMap.Tip": "Dieses Mesh oder diesen Blueprint vor der Kamera in das auf der Kartenseite geladene Level einfügen (ein Blueprint wird von einem kopiert, den das Spiel irgendwo auf der Insel platziert hat)",
   "Assets.CopyPath.Tip": "Objektpfad kopieren (auf der Kartenseite unter „Objekt hinzufügen“ oder dort mit Ctrl+V einfügen)",
   "Assets.MaterialSection": "MATERIAL",
   "Assets.DetailsSection": "DETAILS",
@@ -1113,5 +1113,10 @@
   "Map.Trees.PutBack.Done": "{0} ist wieder wie im Spiel",
   "Map.Trees.Pick.Tip": "Der Baum des Spiels, der überall auf der Insel ersetzt wird.",
   "Map.Trees.PickWith.Tip": "Der Baum, der an seiner Stelle gezeichnet wird (mit eigener Kollision).",
-  "Map.Trees.PutBack.Tip": "Zeichnet wieder den Baum des Spiels."
+  "Map.Trees.PutBack.Tip": "Zeichnet wieder den Baum des Spiels.",
+  "Mods.Carry": "In meinem Pak",
+  "Mods.Carry.Tip": "An: „Mod exportieren“ packt diesen Mod in dein Pak. Aus: er bleibt ein eigenes Pak (selbst auf Server und bei Spielern installieren, für eine große Karte); dein Pak lädt danach, deine Änderungen gewinnen trotzdem.",
+  "Map.SpawnPart.Note": "Ein Spawn-Ort dieses Gebäudes: ziehen Sie ihn oder geben Sie eine neue Position ein und klicken Sie auf „Transformation anwenden“. Kopieren, Duplizieren und Löschen sind dafür aus: Er hat kein eigenes Modell, und was das Spiel mit einem entfernten Spawner macht, ist nicht bekannt.",
+  "Map.BlueprintNotPlaced": "Dieser Blueprint steht nirgends auf der Insel",
+  "Map.BlueprintNotPlacedDetail": "„{0}“ ist nirgends auf der Insel platziert, es gibt also nichts zu kopieren. Hinzufügen lassen sich nur Blueprints, die das Spiel in einem Level platziert hat (und Gegenstände)."
 }

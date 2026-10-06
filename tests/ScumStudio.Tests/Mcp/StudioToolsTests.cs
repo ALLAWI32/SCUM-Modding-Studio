@@ -1,5 +1,8 @@
 using System.Text.Json.Nodes;
+using ScumStudio.Core.Mathematics;
 using ScumStudio.Level.Editing;
+using ScumStudio.Level.Model;
+using ScumStudio.Level.Reading;
 using ScumStudio.Mcp.Protocol;
 using ScumStudio.Mcp.Studio;
 using ScumStudio.Tests.Fixtures;
@@ -142,6 +145,40 @@ public sealed class StudioToolsTests(ITestOutputHelper output)
         Assert.True(File.Exists(pak), pak);
         Assert.EndsWith("pakchunk900-AiTest_P.pak", pak, StringComparison.Ordinal);
         Assert.True(export["exports"]![0]!["levels"]!.GetValue<int>() >= 2);
+    }
+
+    [Fact]
+    public async Task ADoorCopiedToAnotherLevelLandsWhereTheDoorIs()
+    {
+        if (Environment.GetEnvironmentVariable("SCUM_PAKS") is not { Length: > 0 } paks || !Directory.Exists(paks))
+        {
+            return; // needs the real game files
+        }
+
+        // The saloon's door is a child actor: its root is placed relative to the building's component (all zero), so a copy
+        // into another level without a location landed at the world origin.
+        const string door = "BP_SingleDoorSaloonOutpost_Flip_GEN_VARIABLE_BP_SingleDoorSaloonOutpost_Flip_C_CAT_0";
+        using var temp = new LevelTempDirectory();
+        using var host = new HeadlessStudioHost();
+        var client = new Client(StudioTools.CreateServer(host), output);
+        await client.CallAsync("open_source", new { path = paks });
+        await client.CallAsync("create_project", new { folder = temp.Combine("projects"), name = "Doors" });
+        var saloon = LevelDocument.Load(new Cue4ParseLevelReader(host.Catalog!), MapSlice.MapsPath + Saloon);
+        var world = saloon.FindActor(door)!.WorldTransform;
+        Assert.True(world.Translation.Size() > 10_000f, world.ToString());
+
+        await client.CallAsync("copy_actor_to_level", new { sourceLevel = Saloon, actor = door, targetLevel = Exterior });
+        var copy = Assert.IsType<AddBlueprintActorOp>(host.Project!.Journal.Applied[^1].Op);
+        Assert.True(FVector.Distance(world.Translation, copy.Transform.Location) < 1f, copy.Transform.ToString());
+
+        // Moved first: the copy lands where the moved door is.
+        await client.CallAsync("move_actor", new { level = Saloon, actor = door, offset = new[] { 0, 0, 100 } });
+        var moved = host.Project.State.GetTransformOverride(new ActorRef(MapSlice.MapsPath + Saloon, door))!.Value;
+        var slot = saloon.Actors.SelectMany(a => a.Components).Single(c => c.ExportIndex == saloon.FindActor(door)!.Root!.AttachParent);
+        await client.CallAsync("copy_actor_to_level", new { sourceLevel = Saloon, actor = door, targetLevel = Exterior });
+        var movedCopy = Assert.IsType<AddBlueprintActorOp>(host.Project.Journal.Applied[^1].Op);
+        Assert.True(FVector.Distance((moved.ToTransform() * slot.WorldTransform).Translation, movedCopy.Transform.Location) < 1f, movedCopy.Transform.ToString());
+        Assert.True(FVector.Distance(world.Translation, movedCopy.Transform.Location) > 50f);
     }
 
     [FixturesFact]

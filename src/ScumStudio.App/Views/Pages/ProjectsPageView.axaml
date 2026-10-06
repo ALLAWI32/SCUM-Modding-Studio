@@ -162,12 +162,13 @@
           <ItemsControl ItemsSource="{Binding ImportedMods}" IsVisible="{Binding HasImportedMods}">
             <ItemsControl.ItemTemplate>
               <DataTemplate x:DataType="vm:ImportedModViewModel">
-                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8" Margin="0,2">
+                <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8" Margin="0,2">
                   <StackPanel>
                     <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
                     <TextBlock Text="{Binding Summary}" Classes="caption" />
                   </StackPanel>
-                  <Button Grid.Column="1" Classes="ghost small" Content="{Tr Mods.Remove}" Command="{Binding RemoveCommand}" ToolTip.Tip="{Tr Mods.Remove.Tip}" VerticalAlignment="Center" />
+                  <CheckBox Grid.Column="1" Content="{Tr Mods.Carry}" IsChecked="{Binding IsCarried}" ToolTip.Tip="{Tr Mods.Carry.Tip}" VerticalAlignment="Center" />
+                  <Button Grid.Column="2" Classes="ghost small" Content="{Tr Mods.Remove}" Command="{Binding RemoveCommand}" ToolTip.Tip="{Tr Mods.Remove.Tip}" VerticalAlignment="Center" />
                 </Grid>
               </DataTemplate>
             </ItemsControl.ItemTemplate>

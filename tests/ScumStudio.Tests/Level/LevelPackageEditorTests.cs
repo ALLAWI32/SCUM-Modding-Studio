@@ -406,6 +406,40 @@ public sealed class LevelPackageEditorTests
     }
 
     [Fact]
+    public void ACopiedChildActorIsNoChildOfTheComponentButStaysAttachedToIt()
+    {
+        // Salvador (Discord): a duplicated door did not open in the game. A building's door is a child actor (ParentComponent
+        // -> the building's ChildActorComponent, which still spawns the original): its copy must not claim that component.
+        var p = MinimalLevel();
+        var building = p.Export("Building", p.ScriptClass(Engine, "Actor"), 2);
+        var slot = p.Export("DoorSlot", p.ScriptClass(Engine, "ChildActorComponent"), building);
+        var door = p.Export("Door_CAT", p.ScriptClass(Engine, "Actor"), 2);
+        var doorRoot = p.Export("Root", p.ScriptClass(Engine, "SceneComponent"), door);
+        p.SetPayload(2, p.Properties(native: w => LevelTail(w, [3, building, door])));
+        p.SetPayload(building, p.Properties(t => t.Object("RootComponent", slot)));
+        p.SetPayload(slot, p.Properties(t => t.Object("ChildActor", door)));
+        p.SetPayload(door, p.Properties(t =>
+        {
+            t.Object("RootComponent", doorRoot);
+            t.Object("ParentComponent", slot);
+        }));
+        p.SetPayload(doorRoot, p.Properties(t => t.Object("AttachParent", slot)));
+        var built = p.Build();
+
+        var (bytes, report) = LevelPackageEditor.Apply(CookedPackage.Parse(built.UAsset, built.UExp),
+            new LevelEditRequest { Copies = [new ActorCopy("Door_CAT", "Door_CAT_Copy", null)] });
+
+        Assert.Equal(new[] { "Door_CAT_Copy" }, report.AddedActors);
+        Assert.Empty(report.Warnings);
+        var edited = CookedPackage.Parse(bytes.UAsset, bytes.UExp);
+        int Reference(string name, string outer, string property) => ((ObjectValue)edited.ReadProperties(ExportNamed(edited, name, outer)).Find(property)!.Value).Index;
+        Assert.Equal(0, Reference("Door_CAT_Copy", "PersistentLevel", "ParentComponent"));
+        Assert.Equal(slot, Reference("Root", "Door_CAT_Copy", "AttachParent"));
+        Assert.Equal(slot, Reference("Door_CAT", "PersistentLevel", "ParentComponent")); // the original is still the slot's
+        Assert.Equal(door, Reference("DoorSlot", "Building", "ChildActor"));
+    }
+
+    [Fact]
     public void AddsBentSplineMeshActorsTheReaderBendsBack()
     {
         var package = Synthetic();

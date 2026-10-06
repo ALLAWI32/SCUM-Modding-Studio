@@ -36,6 +36,10 @@ public sealed class EditOpTests
             new RestoreInstanceOp(instance),
             new AddStaticMeshActorOp(Port, "SM_Rock_Added", Rock, Elsewhere),
             new AddBlueprintActorOp(Port, "BP_Lamp_Added", "/Game/BP/BP_Lamp.BP_Lamp_C", new ActorRef(Outpost, "BP_Lamp_C_3"), Somewhere),
+            new AddBlueprintActorOp(Port, "Asian_Chest_Added", "/Script/SCUM.WorldItemSpawner", new ActorRef(Outpost, "WorldItemSpawner_1"), Somewhere)
+            {
+                Item = "/Game/ConZ_Files/Items/Equipment/Active_Items/Asian_Chest.Asian_Chest_C",
+            },
             new RemoveAddedActorOp(new ActorRef(Port, "SM_Rock_Added"), new AddStaticMeshActorOp(Port, "SM_Rock_Added", Rock, Elsewhere)),
             new BatchOp("Plant 2 rocks", [new AddStaticMeshActorOp(Port, "SM_Rock_Added", Rock, Elsewhere), new DeleteActorOp(house)]),
         ];
@@ -134,6 +138,13 @@ public sealed class EditOpTests
         var transplant = new AddBlueprintActorOp(Port, "BP_Lamp_Added", "/Game/BP/BP_Lamp.BP_Lamp_C", new ActorRef(Outpost, "BP_Lamp_C_3"), Somewhere);
         Assert.Equal(new[] { Port }, transplant.GetTouchedLevels()); // the source level is only read
         Assert.Equal(new ActorRef(Port, "BP_Lamp_Added"), transplant.GetPrimaryTarget());
+
+        // A journal written before copies could change their item still loads (no item: the source's), and a copied world
+        // item spawner says what it is and what it spawns.
+        Assert.Null(Assert.IsType<AddBlueprintActorOp>(EditOp.FromJson(transplant.ToJson())).Item);
+        Assert.DoesNotContain("\"item\"", transplant.ToJson(), StringComparison.Ordinal);
+        var spawner = transplant with { ClassPath = "/Script/SCUM.WorldItemSpawner", Item = "/Game/Items/Asian_Chest.Asian_Chest_C" };
+        Assert.StartsWith("Add WorldItemSpawner (Asian_Chest) as ", spawner.Describe(), StringComparison.Ordinal);
 
         var instance = new DeleteInstanceOp(new InstanceRef(Outpost, "Foliage", "ISM", 7));
         Assert.Equal(new ActorRef(Outpost, "Foliage"), instance.GetPrimaryTarget());

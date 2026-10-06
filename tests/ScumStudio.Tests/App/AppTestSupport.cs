@@ -34,7 +34,8 @@ internal sealed class AppTestContext : IDisposable
     /// </summary>
     public static AppTestContext Create(bool inline = true, IDialogService? dialogs = null, Func<CancellationToken, Task<string?>>? keyFinder = null)
     {
-        var directory = Path.Combine(Path.GetTempPath(), "scumstudio-app-tests", Guid.NewGuid().ToString("N"));
+        _ = SweepOnce.Value;
+        var directory = Path.Combine(Root, Guid.NewGuid().ToString("N"));
         System.IO.Directory.CreateDirectory(directory);
         var emptySteam = Path.Combine(directory, "no-steam");
         var services = AppServices.Create(new AppServicesOptions
@@ -58,12 +59,39 @@ internal sealed class AppTestContext : IDisposable
     public void Dispose()
     {
         Services.Dispose();
-        try
+        Delete(Directory);
+    }
+
+    private static readonly string Root = Path.Combine(Path.GetTempPath(), "scumstudio-app-tests");
+
+    // Real-file tests export whole levels here; folders a test could not delete (a file still open) filled the drive.
+    private static readonly Lazy<bool> SweepOnce = new(() =>
+    {
+        if (System.IO.Directory.Exists(Root))
         {
-            System.IO.Directory.Delete(Directory, recursive: true);
+            foreach (var old in new DirectoryInfo(Root).EnumerateDirectories().Where(d => d.LastWriteTimeUtc < DateTime.UtcNow.AddHours(-2)))
+            {
+                Delete(old.FullName);
+            }
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+
+        return true;
+    });
+
+    private static void Delete(string directory)
+    {
+        for (var attempt = 0; attempt < 5 && System.IO.Directory.Exists(directory); attempt++)
         {
+            try
+            {
+                System.IO.Directory.Delete(directory, recursive: true);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                GC.Collect(); // a disposed reader's file handle or mapping still waiting for its finalizer
+                GC.WaitForPendingFinalizers();
+                Thread.Sleep(100);
+            }
         }
     }
 }

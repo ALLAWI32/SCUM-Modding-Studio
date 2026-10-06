@@ -52,14 +52,14 @@ public sealed partial class MapPageViewModel
         _services.Dispatcher.Invoke(() => RenderQuality = _services.Settings.Load().Ui.RenderQuality);
 
     /// <summary>
-    /// The map sublevels (POI, TV base, misc, landscape tile; not Pripyat or island-wide data) whose tile bounds come within
+    /// The map sublevels (POI, TV base, abandoned city, misc, landscape tile; not island-wide data) whose tile bounds come within
     /// <paramref name="radius"/> (cm, 3D, so flying high loads nothing) of <paramref name="camera"/>; non-landscape first.
     /// A level the project built on far outside its own bounds also counts by where those edits are
     /// (<paramref name="edits"/>: level → box around them), so a long new bridge never unloads under the camera.
     /// </summary>
     public static List<string> LevelsAround(WorldIndex world, FVector camera, float radius, IReadOnlyDictionary<string, (FVector Min, FVector Max)>? edits = null) =>
         world.Packages
-            .Where(p => p.IsMap && p.Cell is not null && p.Kind is WorldPackageKind.Poi or WorldPackageKind.Landscape or WorldPackageKind.TvBase or WorldPackageKind.Misc
+            .Where(p => p.IsContentLevel && p.Cell is not null
                         && p.Tile is { BoundsValid: true } t
                         && (DistanceSquared(t.BoundsMin, t.BoundsMax, camera) <= radius * radius
                             || (edits?.TryGetValue(p.PackagePath, out var e) == true && DistanceSquared(e.Min, e.Max, camera) <= radius * radius)))
@@ -161,14 +161,7 @@ public sealed partial class MapPageViewModel
     {
         lock (_readGate)
         {
-            if (!ReferenceEquals(_readerCatalog, catalog))
-            {
-                _reader = new Cue4ParseLevelReader(catalog, new Cue4ParseLevelReaderOptions(), _services.Logger);
-                _readerCatalog = catalog;
-                _documents.Clear();
-                _waterData = null;
-            }
-
+            UseReader(catalog);
             _readGeneration++;
             var documents = new List<LevelDocument>(packagePaths.Count + 1);
             foreach (var path in packagePaths)
@@ -205,6 +198,36 @@ public sealed partial class MapPageViewModel
             }
 
             return documents;
+        }
+    }
+
+    /// <summary>
+    /// One level's document, from the cache or read (worker thread): the level an added copy comes from, which need not be
+    /// loaded.
+    /// </summary>
+    private LevelDocument ReadDocument(AssetCatalog catalog, string packagePath, CancellationToken ct)
+    {
+        lock (_readGate)
+        {
+            UseReader(catalog);
+            if (!_documents.TryGetValue(packagePath, out var entry))
+            {
+                _documents[packagePath] = entry = (LevelDocument.Load(_reader!, packagePath, ct), _readGeneration);
+            }
+
+            return entry.Document;
+        }
+    }
+
+    /// <summary>Starts a new reader (and forgets what the old one read) when the catalog changed. Under <see cref="_readGate"/>.</summary>
+    private void UseReader(AssetCatalog catalog)
+    {
+        if (!ReferenceEquals(_readerCatalog, catalog))
+        {
+            _reader = new Cue4ParseLevelReader(catalog, new Cue4ParseLevelReaderOptions(), _services.Logger);
+            _readerCatalog = catalog;
+            _documents.Clear();
+            _waterData = null;
         }
     }
 }

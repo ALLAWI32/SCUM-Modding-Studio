@@ -67,7 +67,8 @@ public sealed class SpawnInfoRealTests
         Assert.False(map.SpawnLayers.Single(l => l.Key == "Zones").IsVisible);
         Assert.True(map.SpawnLayers.Single(l => l.Key == "Vehicles").IsVisible);
         map.SpawnLayers.Single(l => l.Key == "Loot").IsVisible = false;
-        Assert.Contains(key, map.HiddenInstanceKeys);
+        Assert.Contains(SpawnKind.Loot, map.HiddenPinKinds); // the viewport hides only the pins of that kind
+        Assert.DoesNotContain(key, map.HiddenInstanceKeys);
         Assert.DoesNotContain(hangar.SelectableId, map.HiddenActorIds);
         Assert.Contains("Loot", ctx.Services.UiState.Current.HiddenSpawnLayers);
     }

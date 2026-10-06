@@ -152,6 +152,10 @@ public sealed partial class MapPageViewModel
             {
                 ops.Add(new DeleteInstanceOp(new InstanceRef(item.Level.PackagePath, item.Name, instance.ComponentName, instance.InstanceIndex)));
             }
+            else if (SpawnMarkers.IsSpawnPart(item.Actor, sel.Component))
+            {
+                continue; // a spawner is not deleted either (see IsSpawnPartSelected)
+            }
             else
             {
                 // A road or bridge piece goes the way a single one does: scaled to nothing (see DeleteInstance).
@@ -422,11 +426,12 @@ public sealed partial class MapPageViewModel
                 continue;
             }
 
-            // A Blueprint's parts and a road's pieces count on their own (parts only in part mode, as a click does).
+            // A Blueprint's parts and a road's pieces count on their own (parts only in part mode, as a click does; a door's
+            // leaf is never a part: ScenePlacement.PickKey).
             var holders = item.Actor.InstanceTransforms.Select(i => i.ComponentName).ToHashSet(StringComparer.OrdinalIgnoreCase);
             var meshes = item.Actor.Components.Where(c => c.StaticMeshPath is not null && !holders.Contains(c.Name)).ToList();
             var pieces = meshes.Where(c => c.SplineMesh is not null
-                || (PickParts && !c.IsSynthesized && c.ExportIndex >= 0 && c.ExportIndex != item.Actor.RootComponent)).ToList();
+                || (PickParts && !c.IsSynthesized && !c.IsNativeSubobject && c.ExportIndex >= 0 && c.ExportIndex != item.Actor.RootComponent)).ToList();
             if (pieces.Count > 0)
             {
                 foreach (var c in pieces)

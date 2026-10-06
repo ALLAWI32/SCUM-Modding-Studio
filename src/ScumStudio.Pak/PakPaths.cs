@@ -51,13 +51,15 @@ public static class PakPaths
     }
 
     /// <summary>
-    /// True when <paramref name="virtualPath"/> is a file a SCUM mod pak may carry:
-    /// anything below <c>&lt;Project&gt;/Content/</c>, or <c>&lt;Project&gt;/AssetRegistry.bin</c>.
+    /// True when <paramref name="virtualPath"/> is a file a SCUM mod pak may carry: anything below
+    /// <c>&lt;Project&gt;/Content/</c>, below a plugin's content (<c>&lt;Project&gt;/Plugins/…/Content/</c>: Hektor's map
+    /// has a GameFeature level there), or <c>&lt;Project&gt;/AssetRegistry.bin</c>.
     /// </summary>
     public static bool IsModPakEntry(string virtualPath, string projectName = DefaultProjectName)
     {
         var path = VirtualPath.Normalize(virtualPath);
         return path.StartsWith(projectName + "/Content/", StringComparison.OrdinalIgnoreCase)
+               || (path.StartsWith(projectName + "/Plugins/", StringComparison.OrdinalIgnoreCase) && path.Contains("/Content/", StringComparison.OrdinalIgnoreCase))
                || string.Equals(path, projectName + "/AssetRegistry.bin", StringComparison.OrdinalIgnoreCase);
     }
 

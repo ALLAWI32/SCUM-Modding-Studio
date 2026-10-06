@@ -9,9 +9,9 @@
 
     <!-- ===== Header ===== -->
     <Border DockPanel.Dock="Top" Classes="pageHeader">
-      <Grid ColumnDefinitions="Auto,Auto,*,Auto" ColumnSpacing="14">
-        <Border Grid.Column="0" Classes="pageGlyph"><c:GlyphIcon Kind="{Binding IconKey}" IconSize="22" /></Border>
-        <StackPanel Grid.Column="1" Spacing="2" VerticalAlignment="Center">
+      <Grid ColumnDefinitions="Auto,Auto,*,Auto" RowDefinitions="*,Auto" ColumnSpacing="14">
+        <Border Grid.Column="0" Grid.RowSpan="2" VerticalAlignment="Center" Classes="pageGlyph"><c:GlyphIcon Kind="{Binding IconKey}" IconSize="22" /></Border>
+        <StackPanel Grid.Column="1" Grid.RowSpan="2" Spacing="2" VerticalAlignment="Center">
           <TextBlock Text="{Binding Title}" Classes="pageTitle" />
           <TextBlock Text="{Binding Subtitle}" Classes="muted" />
         </StackPanel>
@@ -224,36 +224,6 @@
                       </Button.Flyout>
                     </Button>
           </WrapPanel>
-          <!-- One line of fixed height that never wraps: a wrapping status (loading text, live frame stats) made the header
-               grow and shrink and the 3D view below it jump (owner: "the view shakes while it loads"). -->
-          <Grid x:Name="ViewStatus" Height="24" ClipToBounds="True" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,*" ColumnSpacing="6">
-            <Border Classes="chip" IsVisible="{Binding HasScene}" ToolTip.Tip="{Binding LoadStatus}" MaxWidth="300">
-              <StackPanel Orientation="Horizontal" Spacing="6">
-                <c:GlyphIcon Kind="Icon.Cube3d" IconSize="13" VerticalAlignment="Center" />
-                <TextBlock Text="{Binding LoadedLevelsCaption}" TextTrimming="CharacterEllipsis" />
-              </StackPanel>
-            </Border>
-            <Border Grid.Column="1" Classes="chip" IsVisible="{Binding IsWorldMode}" MaxWidth="240">
-              <TextBlock Text="{Binding WorldStatus}" TextTrimming="CharacterEllipsis" />
-            </Border>
-            <Border Grid.Column="2" Classes="chip" IsVisible="{Binding HasKindSelection}" BorderBrush="{DynamicResource AccentBrush}">
-              <TextBlock Text="{Binding KindSelectionText}" />
-            </Border>
-            <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="6" IsVisible="{Binding HasKindRadius}">
-              <Slider x:Name="KindRadiusSlider" Width="150" Minimum="0" Maximum="500" SmallChange="5" LargeChange="25" TickFrequency="5" IsSnapToTickEnabled="True"
-                      Value="{Binding KindRadius}" VerticalAlignment="Center" ToolTip.Tip="{Tr Map.Kind.Radius.Tip}" />
-              <TextBlock Text="{Binding KindRadiusText}" Classes="caption mono" VerticalAlignment="Center" MinWidth="44" />
-            </StackPanel>
-            <StackPanel Grid.Column="4" Orientation="Horizontal" Spacing="8" Width="300">
-              <ProgressBar IsIndeterminate="True" Width="90" VerticalAlignment="Center" IsVisible="{Binding IsLoadingLevel}" />
-              <TextBlock Text="{Binding LoadStatus}" Classes="caption" Width="200" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" IsVisible="{Binding IsLoadingLevel}" />
-            </StackPanel>
-            <TextBlock Grid.Column="5" Classes="caption" VerticalAlignment="Center" IsVisible="{Binding HasView}" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding #Viewport3d.GpuName}">
-              <Run Text="{Binding #Viewport3d.SpeedText}" />
-              <Run Text=" · " />
-              <Run Text="{Binding #Viewport3d.FrameInfo}" />
-            </TextBlock>
-          </Grid>
         </StackPanel>
         <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
           <Border Classes="chip" IsVisible="{Binding Session.HasProject}" VerticalAlignment="Center">
@@ -285,6 +255,48 @@
           </Button>
           <Button Classes="ghost" Content="{Tr Common.Close}" Command="{Binding CloseProjectCommand}" IsVisible="{Binding Session.HasProject}" ToolTip.Tip="{Tr Projects.Close.Tip}" />
         </StackPanel>
+        <!-- One line of fixed height that never wraps: a wrapping status (loading text, live frame stats) made the header
+             grow and shrink and the 3D view below it jump (owner: "the view shakes while it loads"). -->
+        <!-- Owner and Discord (Russian): the loading text ran into the frame stats in a narrow header. Docked pieces never
+             overlap: the chips on the left, the loading text takes all the room that is left (the frame stats step aside
+             while a level loads), cut with "…" when even that is too little. -->
+        <DockPanel x:Name="ViewStatus" Grid.Row="1" Grid.Column="2" Grid.ColumnSpan="2" Margin="12,6,0,0" Height="24" ClipToBounds="True">
+          <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" Spacing="6">
+            <Border Classes="chip" IsVisible="{Binding HasScene}" ToolTip.Tip="{Binding LoadStatus}" MaxWidth="240">
+              <StackPanel Orientation="Horizontal" Spacing="6">
+                <c:GlyphIcon Kind="Icon.Cube3d" IconSize="13" VerticalAlignment="Center" />
+                <TextBlock Text="{Binding LoadedLevelsCaption}" TextTrimming="CharacterEllipsis" />
+              </StackPanel>
+            </Border>
+            <Border Classes="chip" IsVisible="{Binding IsWorldMode}" MaxWidth="220" ToolTip.Tip="{Binding WorldStatus}">
+              <TextBlock Text="{Binding WorldStatus}" TextTrimming="CharacterEllipsis" />
+            </Border>
+            <Border Classes="chip" IsVisible="{Binding HasKindSelection}" BorderBrush="{DynamicResource AccentBrush}">
+              <TextBlock Text="{Binding KindSelectionText}" />
+            </Border>
+            <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding HasKindRadius}">
+              <Slider x:Name="KindRadiusSlider" Width="150" Minimum="0" Maximum="500" SmallChange="5" LargeChange="25" TickFrequency="5" IsSnapToTickEnabled="True"
+                      Value="{Binding KindRadius}" VerticalAlignment="Center" ToolTip.Tip="{Tr Map.Kind.Radius.Tip}" />
+              <TextBlock Text="{Binding KindRadiusText}" Classes="caption mono" VerticalAlignment="Center" MinWidth="44" />
+            </StackPanel>
+          </StackPanel>
+          <TextBlock x:Name="FrameStats" DockPanel.Dock="Right" Classes="caption" VerticalAlignment="Center" Margin="8,0,0,0" MaxWidth="340" TextTrimming="CharacterEllipsis"
+                     ToolTip.Tip="{Binding #Viewport3d.GpuName}">
+            <TextBlock.IsVisible>
+              <MultiBinding Converter="{x:Static BoolConverters.And}">
+                <Binding Path="HasView" />
+                <Binding Path="!IsLoadingLevel" />
+              </MultiBinding>
+            </TextBlock.IsVisible>
+            <Run Text="{Binding #Viewport3d.SpeedText}" />
+            <Run Text=" · " />
+            <Run Text="{Binding #Viewport3d.FrameInfo}" />
+          </TextBlock>
+          <DockPanel x:Name="LoadingStatus" Margin="8,0,0,0" IsVisible="{Binding IsLoadingLevel}">
+            <ProgressBar DockPanel.Dock="Left" IsIndeterminate="True" Width="90" MinWidth="0" VerticalAlignment="Center" />
+            <TextBlock Text="{Binding LoadStatus}" Classes="caption" Margin="8,0,0,0" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" ToolTip.Tip="{Binding LoadStatus}" />
+          </DockPanel>
+        </DockPanel>
       </Grid>
     </Border>
 
@@ -365,7 +377,7 @@
           <Panel x:Name="ViewportContent">
             <c:ViewportGrid Background="{DynamicResource ViewportBrush}" AxisXBrush="{DynamicResource AxisXBrush}" AxisYBrush="{DynamicResource AxisYBrush}" IsVisible="{Binding !HasView}" />
             <c:LevelViewport x:Name="Viewport3d" Scene="{Binding PreparedScene}" PickParts="{Binding PickParts}" BrushMode="{Binding BrushSelect}" BrushRadius="{Binding BrushRadius}" SelectedId="{Binding SelectedActorId, Mode=TwoWay}" SelectedInstance="{Binding SelectedInstanceKey, Mode=TwoWay}" Backdrop="{Binding WorldBackdrop}" KeepCamera="{Binding IsWorldMode}" Quality="{Binding RenderQuality}" KindIds="{Binding KindSelectionIds}" KindInstances="{Binding KindSelectionInstances}" InstanceTransforms="{Binding InstanceTransforms}"
-                             HiddenIds="{Binding HiddenActorIds}" HiddenInstances="{Binding HiddenInstanceKeys}"
+                             HiddenIds="{Binding HiddenActorIds}" HiddenInstances="{Binding HiddenInstanceKeys}" HiddenPinKinds="{Binding HiddenPinKinds}"
                              ActorTransforms="{Binding ActorTransforms}" Clones="{Binding Clones}"
                              SelectedRootWorld="{Binding SelectedRootWorld}" TranslationSnap="{Binding TranslationSnap}" RotationSnap="{Binding RotationSnap}"
                              ExtraMeshes="{Binding ExtraMeshes}" Bends="{Binding Bends}" SegmentBends="{Binding SegmentBends}" ShapeHandles="{Binding ShapeHandles}" ScaleHandles="{Binding ScaleHandles}" LegHandle="{Binding LegHandle}" GroupWorlds="{Binding GroupWorlds}" IsVisible="{Binding HasView}" />

@@ -76,4 +76,12 @@ public sealed record WorldPackage(
 
     /// <summary>True for a sublevel: a level package other than the persistent level.</summary>
     public bool IsSublevel => IsMap && Kind != WorldPackageKind.Persistent;
+
+    /// <summary>
+    /// True for a sublevel that holds what stands on the island: a POI, landscape tile, TV base, abandoned-city or misc
+    /// level (not the persistent level, lighting data or far-view proxies). The abandoned city's 378 levels (about 101,000
+    /// objects) were once left out, so the map never showed them.
+    /// </summary>
+    public bool IsContentLevel => IsMap && Kind is WorldPackageKind.Poi or WorldPackageKind.Landscape or WorldPackageKind.TvBase
+        or WorldPackageKind.Pripyat or WorldPackageKind.Misc;
 }

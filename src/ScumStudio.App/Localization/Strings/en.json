@@ -388,7 +388,7 @@
   "Assets.ExportGltf": "Export glTF",
   "Assets.ExportGltf.Tip": "Save this mesh as glTF 2.0 (opens in Blender and other 3D tools).",
   "Assets.PlaceInMap": "Place in map",
-  "Assets.PlaceInMap.Tip": "Add this mesh as a new actor in the level loaded on the Map page (placed in front of the camera)",
+  "Assets.PlaceInMap.Tip": "Add this mesh or Blueprint to the level loaded on the Map page, in front of the camera (a Blueprint is copied from one the game placed somewhere on the island)",
   "Assets.CopyPath.Tip": "Copy the object path (paste it in the Map page's Add object, or with Ctrl+V there)",
   "Assets.MaterialSection": "MATERIAL",
   "Assets.DetailsSection": "DETAILS",
@@ -1113,5 +1113,10 @@
   "Map.Trees.PutBack.Done": "{0} is the game's own again",
   "Map.Trees.Pick.Tip": "The game's tree to replace everywhere on the island.",
   "Map.Trees.PickWith.Tip": "The tree drawn in its place (with its own collision).",
-  "Map.Trees.PutBack.Tip": "Draws the game's own tree again."
+  "Map.Trees.PutBack.Tip": "Draws the game's own tree again.",
+  "Mods.Carry": "In my pak",
+  "Mods.Carry.Tip": "On: Export mod puts this mod into your pak. Off: it stays its own pak (install it on the server and for players yourself, for a big map); your pak loads after it, so your edits still win.",
+  "Map.SpawnPart.Note": "A spawn place of this building: drag it, or type a new location and Apply transform. Copy, Duplicate and Delete are off for it: it has no mesh of its own, and what the game does with a removed spawner is not known.",
+  "Map.BlueprintNotPlaced": "This Blueprint is not on the island",
+  "Map.BlueprintNotPlacedDetail": "'{0}' is not placed anywhere on the island, so there is nothing to copy. Only Blueprints the game placed in a level (and items) can be added."
 }

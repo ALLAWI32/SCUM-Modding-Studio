@@ -25,14 +25,14 @@ public sealed class LevelScene : IDisposable
     private readonly Dictionary<string, MeshHandle> _meshHandles;
     private readonly Dictionary<uint, List<ScenePlacement>> _byId;
     private readonly Dictionary<uint, List<(SceneNode Node, ScenePlacement? Source)>> _clones = [];
-    private readonly Dictionary<uint, (uint SourceId, string? MeshPath)> _cloneSources = [];
+    private readonly Dictionary<uint, (uint SourceId, string? MeshPath, IReadOnlyList<ScenePlacement>? Placements)> _cloneSources = [];
     private Dictionary<uint, List<SceneNode>>? _nodesById;
     private readonly HashSet<uint> _movedActors = [];
     private readonly Dictionary<string, GpuTexture> _gpuTextures;
     private readonly Dictionary<string, PreparedMeshAsset> _extraAssets = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<uint, (MeshHandle Bent, SceneNode Node, MeshHandle Straight, IReadOnlyList<SplineMeshParams> Spline)> _bent = [];
     private readonly HashSet<InstanceKey> _movedInstances = [];
-    private Dictionary<InstanceKey, SceneNode>? _instanceNodes;
+    private Dictionary<InstanceKey, List<SceneNode>>? _instanceNodes;
     private readonly List<TerrainPart> _terrainParts = [];
     private SceneNode? _seaNode;
 
@@ -165,7 +165,8 @@ public sealed class LevelScene : IDisposable
             _bentSegments.Remove(key);
         }
 
-        if (spline is null || !InstanceNodes().TryGetValue(key, out var node) || node.Tag is not ScenePlacement placement || node.Mesh is not { } shown)
+        var node = InstanceNodes().GetValueOrDefault(key)?[0];
+        if (spline is null || node?.Tag is not ScenePlacement placement || node.Mesh is not { } shown)
         {
             return;
         }
@@ -258,11 +259,12 @@ public sealed class LevelScene : IDisposable
     /// <summary>
     /// Adds (or moves) a clone of the actor <paramref name="sourceId"/> under the id <paramref name="cloneId"/>, with its
     /// root at <paramref name="rootWorld"/>; the clone's nodes carry placements with the new id, so hiding and picking work.
-    /// Returns the number of nodes the clone has (0 when the source has no drawable placement).
+    /// Returns the number of nodes the clone has (0 when the source has no drawable placement). With
+    /// <paramref name="placements"/> (an actor of a level that is not loaded) those are cloned instead of the source's.
     /// </summary>
-    public int AddClone(uint cloneId, uint sourceId, FTransform rootWorld, string name, string? meshPath = null)
+    public int AddClone(uint cloneId, uint sourceId, FTransform rootWorld, string name, string? meshPath = null, IReadOnlyList<ScenePlacement>? placements = null)
     {
-        if (_clones.TryGetValue(cloneId, out var drawn) && _cloneSources.GetValueOrDefault(cloneId) == (sourceId, meshPath))
+        if (_clones.TryGetValue(cloneId, out var drawn) && _cloneSources.GetValueOrDefault(cloneId) == (sourceId, meshPath, placements))
         {
             // The same copy somewhere else (a move, or every copy again after a drag): its nodes move, nothing is rebuilt.
             var moved = new List<ScenePlacement>(drawn.Count);
@@ -282,7 +284,7 @@ public sealed class LevelScene : IDisposable
                 moved.Add(placement);
             }
 
-            if (sourceId != 0)
+            if (sourceId != 0 || placements is not null)
             {
                 _byId[cloneId] = moved;
             }
@@ -291,7 +293,7 @@ public sealed class LevelScene : IDisposable
         }
 
         RemoveClone(cloneId);
-        if (sourceId == 0)
+        if (sourceId == 0 && placements is null)
         {
             // A new mesh actor: one node drawing the mesh at the root.
             if (meshPath is null || !_meshHandles.TryGetValue(meshPath, out var meshHandle))
@@ -301,18 +303,18 @@ public sealed class LevelScene : IDisposable
 
             var meshNode = Scene.Add(meshHandle, UeToGl.ModelMatrix(rootWorld), cloneId, name);
             _clones[cloneId] = [(meshNode, null)];
-            _cloneSources[cloneId] = (sourceId, meshPath);
+            _cloneSources[cloneId] = (sourceId, meshPath, null);
             Index(meshNode);
             return 1;
         }
 
-        if (!_byId.TryGetValue(sourceId, out var sources))
+        if ((placements ?? _byId.GetValueOrDefault(sourceId)) is not { } sources)
         {
             return 0;
         }
 
         var nodes = new List<(SceneNode Node, ScenePlacement? Source)>();
-        var placements = new List<ScenePlacement>();
+        var copies = new List<ScenePlacement>();
         foreach (var source in sources)
         {
             if (!_meshHandles.TryGetValue(source.MeshPath, out var handle))
@@ -325,13 +327,13 @@ public sealed class LevelScene : IDisposable
             node.Tag = placement;
             node.MaxDrawDistance = LevelSceneUploader.DrawDistanceOf(placement);
             nodes.Add((node, source));
-            placements.Add(placement);
+            copies.Add(placement);
             Index(node);
         }
 
         _clones[cloneId] = nodes;
-        _cloneSources[cloneId] = (sourceId, meshPath);
-        _byId[cloneId] = placements;
+        _cloneSources[cloneId] = (sourceId, meshPath, placements);
+        _byId[cloneId] = copies;
         return nodes.Count;
     }
 
@@ -514,14 +516,30 @@ public sealed class LevelScene : IDisposable
         }
     }
 
-    /// <summary>Draws one instance at <paramref name="world"/> (UE world space), e.g. while it is dragged.</summary>
+    /// <summary>
+    /// Draws one instance (or part) at <paramref name="world"/> (UE world space), e.g. while it is dragged. A spawn part
+    /// moves its pin and the item it spawns along: the item keeps its offset from the spawner, the pin stays upright at its
+    /// own size (a car shop's box is scaled 11 x 5 x 3.5: a pin scaled with it would stand 4 m tall).
+    /// </summary>
     public void SetInstanceTransform(InstanceKey key, FTransform world)
     {
-        if (InstanceNodes().TryGetValue(key, out var node))
+        if (!InstanceNodes().TryGetValue(key, out var nodes))
         {
-            node.LocalTransform = UeToGl.ModelMatrix(world);
-            _movedInstances.Add(key);
+            return;
         }
+
+        foreach (var node in nodes)
+        {
+            var placement = node.Tag as ScenePlacement;
+            var moved = placement is { Spawner: { } spawner, Component: not null } && placement.Actor.FindComponent(spawner) is { } part
+                ? placement.World.GetRelativeTransform(part.WorldTransform) * world
+                : world;
+            node.LocalTransform = UeToGl.ModelMatrix(placement is not null && SpawnMarkers.IsMarker(placement.MeshPath)
+                ? placement.World with { Translation = moved.Translation }
+                : moved);
+        }
+
+        _movedInstances.Add(key);
     }
 
     /// <summary>Draws the instances the project moved at their new places and every other moved instance back where the level stores it.</summary>
@@ -530,9 +548,12 @@ public sealed class LevelScene : IDisposable
         var nodes = InstanceNodes();
         foreach (var key in _movedInstances.Where(k => moved is null || !moved.ContainsKey(k)).ToList())
         {
-            if (nodes.TryGetValue(key, out var node) && node.Tag is ScenePlacement placement)
+            foreach (var node in nodes.GetValueOrDefault(key) ?? [])
             {
-                node.LocalTransform = placement.GlModel;
+                if (node.Tag is ScenePlacement placement)
+                {
+                    node.LocalTransform = placement.GlModel;
+                }
             }
 
             _movedInstances.Remove(key);
@@ -544,7 +565,8 @@ public sealed class LevelScene : IDisposable
         }
     }
 
-    private Dictionary<InstanceKey, SceneNode> InstanceNodes()
+    /// <summary>The nodes drawing each instance key (a spawn part has its pin and the meshes of its item).</summary>
+    private Dictionary<InstanceKey, List<SceneNode>> InstanceNodes()
     {
         if (_instanceNodes is null)
         {
@@ -553,7 +575,12 @@ public sealed class LevelScene : IDisposable
             {
                 if (node.Tag is ScenePlacement { InstanceKey: { } key })
                 {
-                    _instanceNodes.TryAdd(key, node);
+                    if (!_instanceNodes.TryGetValue(key, out var list))
+                    {
+                        _instanceNodes[key] = list = [];
+                    }
+
+                    list.Add(node);
                 }
             }
         }

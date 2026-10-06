@@ -54,8 +54,8 @@ public enum SpawnKind
 
 /// <summary>
 /// The game's spawn places, drawn as coloured pins: actors that only spawn things (no mesh of their own) get a pin that
-/// picks and moves like any object; loot points and vehicle boxes inside buildings get pins that show where they are
-/// (they move with their building). The pins are generated meshes (<see cref="MeshKey"/>), so the scene pipeline draws,
+/// picks and moves like any object; loot points inside buildings get pins that show where they are (they move with their
+/// building); a building's fixed-item spawners and vehicle boxes pick and move as parts of it (<see cref="IsSpawnPart"/>). The pins are generated meshes (<see cref="MeshKey"/>), so the scene pipeline draws,
 /// culls and picks them like the game's meshes.
 /// </summary>
 public static class SpawnMarkers
@@ -95,6 +95,19 @@ public static class SpawnMarkers
     public static bool IsLootSpawner(ActorRecord actor) => actor.ClassName is "ItemSpawnerGroup" or "WorldItemSpawner";
 
     /// <summary>
+    /// True for a spawn component a building stores that picks and moves on its own, as a part: a world item spawner of one
+    /// fixed item (a house's drill press, stove or fridge) or a car shop's vehicle box (Discord igor: "there is no
+    /// interaction with certain spawn objects"). Not the actor's root: that is the actor itself.
+    /// </summary>
+    public static bool IsSpawnPart(ActorRecord actor, ComponentRecord component)
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+        ArgumentNullException.ThrowIfNull(component);
+        return component is { IsSynthesized: false, ExportIndex: >= 0 } && component.ExportIndex != actor.RootComponent
+            && (component.ClassName == "VehicleSpawnBoxComponent" || component.SpawnMarkers is [{ ItemClassPath: not null }]);
+    }
+
+    /// <summary>
     /// The spawn kind of an actor that only spawns things (a pin at the actor), or null. Loot spawners are not here: their
     /// pins are their loot points.
     /// </summary>
@@ -123,58 +136,59 @@ public static class SpawnMarkers
     }
 
     /// <summary>
-    /// Every pin of <paramref name="actor"/>: (kind, where, whether it picks as the actor, label, and for a building's loot
-    /// point its spawner component and marker index). Loot points come from the item spawners' markers (a spawner group's
-    /// pick as the group; a building's pick as themselves), a sentry spawner adds its patrol points, a car shop its vehicle
-    /// boxes, the other spawners stand at the actor.
+    /// Every pin of <paramref name="actor"/>: (kind, where, whether it picks as the actor, label, for a building's loot
+    /// point its spawner component and marker index, and for a spawn part (<see cref="IsSpawnPart"/>) its component). Loot
+    /// points come from the item spawners' markers (a spawner group's pick as the group; a building's pick as themselves), a
+    /// sentry spawner adds its patrol points, a car shop its vehicle boxes, the other spawners stand at the actor.
     /// </summary>
-    public static IEnumerable<(SpawnKind Kind, FTransform Pin, bool PicksActor, string Label, (string Component, int Index)? Marker)> PinsOf(ActorRecord actor)
+    public static IEnumerable<(SpawnKind Kind, FTransform Pin, bool PicksActor, string Label, (string Component, int Index)? Marker, ComponentRecord? Part)> PinsOf(ActorRecord actor)
     {
         ArgumentNullException.ThrowIfNull(actor);
         var lootSpawner = IsLootSpawner(actor);
         var points = 0;
         foreach (var component in actor.Components.Where(c => c.IsSceneComponent))
         {
+            var part = IsSpawnPart(actor, component) ? component : null;
             for (var i = 0; i < component.SpawnMarkers.Count; i++)
             {
                 var m = component.SpawnMarkers[i];
                 points++;
                 yield return (SpawnKind.Loot, PinAt(m.Local * component.WorldTransform, SpawnKind.Loot, inside: !lootSpawner), lootSpawner,
-                    $"{actor.Name}/{component.Name} [{i}] {m.Preset} {m.Probability:0.#}% x{m.MinQuantity}-{m.MaxQuantity}", lootSpawner ? null : (component.Name, i));
+                    $"{actor.Name}/{component.Name} [{i}] {m.Preset} {m.Probability:0.#}% x{m.MinQuantity}-{m.MaxQuantity}", lootSpawner || part is not null ? null : (component.Name, i), part);
             }
 
             if (component.ClassName == "VehicleSpawnBoxComponent")
             {
-                yield return (SpawnKind.Vehicle, PinAt(component.WorldTransform, SpawnKind.Vehicle, inside: true), false, $"{actor.Name}/{component.Name}", null);
+                yield return (SpawnKind.Vehicle, PinAt(component.WorldTransform, SpawnKind.Vehicle, inside: true), false, $"{actor.Name}/{component.Name}", null, part);
             }
         }
 
         // A trade post's traders stand where its NPCs do; the pins pick the trade post (move, copy, delete it whole).
         foreach (var trader in actor.TraderMarkers)
         {
-            yield return (SpawnKind.Trader, PinAt(trader.Local * actor.WorldTransform, SpawnKind.Trader), true, $"{trader.Name} ({trader.Type})", null);
+            yield return (SpawnKind.Trader, PinAt(trader.Local * actor.WorldTransform, SpawnKind.Trader), true, $"{trader.Name} ({trader.Type})", null, null);
         }
 
         if (lootSpawner && points == 0)
         {
-            yield return (SpawnKind.Loot, PinAt(actor.WorldTransform, SpawnKind.Loot), true, actor.Name, null);
+            yield return (SpawnKind.Loot, PinAt(actor.WorldTransform, SpawnKind.Loot), true, actor.Name, null, null);
         }
 
         if (KindOf(actor) is { } kind)
         {
-            yield return (kind, PinAt(actor.WorldTransform, kind), true, actor.Name, null);
+            yield return (kind, PinAt(actor.WorldTransform, kind), true, actor.Name, null, null);
             if (kind is SpawnKind.Zone or SpawnKind.Animal)
             {
                 // The zone's ellipse (the root's scale is its size in metres) or the area's circle, flat around the centre.
                 var t = actor.WorldTransform;
                 var yaw = FQuat.MakeFromEuler(new FVector(0f, 0f, t.Rotation.Rotator().Yaw));
-                yield return (kind == SpawnKind.Zone ? SpawnKind.ZoneRing : SpawnKind.AnimalRing, new FTransform(yaw, t.Translation, new FVector(t.Scale3D.X, t.Scale3D.Y, 1f)), true, actor.Name, null);
+                yield return (kind == SpawnKind.Zone ? SpawnKind.ZoneRing : SpawnKind.AnimalRing, new FTransform(yaw, t.Translation, new FVector(t.Scale3D.X, t.Scale3D.Y, 1f)), true, actor.Name, null, null);
             }
 
             for (var i = 0; i < actor.PatrolPoints.Count; i++)
             {
                 var at = new FTransform(actor.WorldTransform.TransformPosition(actor.PatrolPoints[i]));
-                yield return (SpawnKind.Patrol, PinAt(at, SpawnKind.Patrol, inside: true), true, $"{actor.Name} patrol {i + 1}", null);
+                yield return (SpawnKind.Patrol, PinAt(at, SpawnKind.Patrol, inside: true), true, $"{actor.Name} patrol {i + 1}", null, null);
             }
         }
     }

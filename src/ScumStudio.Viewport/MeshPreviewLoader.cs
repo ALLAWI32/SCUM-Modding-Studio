@@ -358,8 +358,7 @@ public sealed class MeshPreviewLoader
             try
             {
                 // The first LOD that still has render data (cooked meshes may strip LOD 0 for far-only or hidden parts).
-                var lod = MeshExtractor.Describe(mesh).Lods.FirstOrDefault(l => !l.IsStripped)?.Index ?? 0;
-                data = MeshExtractor.Extract(mesh, lod);
+                data = MeshExtractor.Extract(mesh);
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {

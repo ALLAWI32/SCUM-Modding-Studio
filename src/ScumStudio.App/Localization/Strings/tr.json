@@ -388,7 +388,7 @@
   "Assets.ExportGltf": "glTF olarak aktar",
   "Assets.ExportGltf.Tip": "Bu modeli glTF 2.0 olarak kaydedin (Blender ve diğer 3B araçlarda açılır).",
   "Assets.PlaceInMap": "Haritaya yerleştir",
-  "Assets.PlaceInMap.Tip": "Bu modeli Harita sayfasında yüklü seviyeye yeni bir aktör olarak ekleyin (kameranın önüne yerleştirilir)",
+  "Assets.PlaceInMap.Tip": "Bu modeli veya Blueprint'i Harita sayfasında yüklü seviyeye kameranın önüne ekleyin (Blueprint, oyunun adada bir yere yerleştirdiği birinden kopyalanır)",
   "Assets.CopyPath.Tip": "Nesne yolunu kopyalayın (Harita sayfasındaki Nesne ekle'ye yapıştırın veya orada Ctrl+V ile)",
   "Assets.MaterialSection": "MATERYAL",
   "Assets.DetailsSection": "AYRINTILAR",
@@ -1113,5 +1113,10 @@
   "Map.Trees.PutBack.Done": "{0} yine oyundaki gibi",
   "Map.Trees.Pick.Tip": "Adanın her yerinde değiştirilecek oyun ağacı.",
   "Map.Trees.PickWith.Tip": "Yerine çizilecek ağaç (kendi çarpışmasıyla).",
-  "Map.Trees.PutBack.Tip": "Oyunun kendi ağacını yeniden çizer."
+  "Map.Trees.PutBack.Tip": "Oyunun kendi ağacını yeniden çizer.",
+  "Mods.Carry": "Pak'imde",
+  "Mods.Carry.Tip": "Açık: Mod dışa aktar bu modu senin pak'ine koyar. Kapalı: kendi pak'i olarak kalır (büyük bir harita için sunucuya ve oyunculara kendin kur); senin pak'in ondan sonra yüklenir, düzenlemelerin yine geçerli olur.",
+  "Map.SpawnPart.Note": "Bu binanın bir doğma noktası: sürükleyin ya da yeni bir konum yazıp «Dönüşümü uygula» düğmesine basın. Kopyala, Çoğalt ve Sil bunun için kapalı: kendi modeli yok ve oyunun kaldırılmış bir doğma noktasıyla ne yaptığı bilinmiyor.",
+  "Map.BlueprintNotPlaced": "Bu Blueprint adada yok",
+  "Map.BlueprintNotPlacedDetail": "'{0}' adada hiçbir yere yerleştirilmemiş, bu yüzden kopyalanacak bir şey yok. Yalnızca oyunun bir seviyeye yerleştirdiği Blueprint'ler (ve eşyalar) eklenebilir."
 }

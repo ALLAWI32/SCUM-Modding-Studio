@@ -69,8 +69,9 @@ public sealed class SpawnPinTests
         var pins = placements.Where(p => p.MeshPath == ScumStudio.Viewport.SpawnMarkers.MeshKey(ScumStudio.Viewport.SpawnKind.Vehicle)).ToList();
 
         Assert.NotEmpty(pins);
-        // Inside the shop's Blueprint: half size, and an id of their own that picks nothing (they move with the shop).
-        Assert.All(pins, p => Assert.Equal(0.5f, p.World.Scale3D.X));
-        Assert.All(pins, p => Assert.NotEqual(ScumStudio.Viewport.LevelScenePreparer.SelectableIdOf(0, p.Actor), p.SelectableId));
+        // Inside the shop's Blueprint: a small pin that picks its box as a part of the shop (Discord igor: the click picked nothing).
+        Assert.All(pins, p => Assert.Equal(0.7f, p.World.Scale3D.X));
+        Assert.All(pins, p => Assert.Equal(ScumStudio.Viewport.LevelScenePreparer.SelectableIdOf(0, p.Actor), p.SelectableId));
+        Assert.All(pins, p => Assert.Equal(ScumStudio.Viewport.InstanceKey.Part, p.InstanceKey!.Value.InstanceIndex));
     }
 }

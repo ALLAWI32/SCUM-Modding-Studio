@@ -83,6 +83,29 @@ public sealed class HangarPartsRealTests
         Assert.Null(slide.Component);
         Assert.DoesNotContain(hangar.SelectableId, map.ActorTransforms.Keys);
 
+        // 5. Salvador (Discord): "When I duplicate an openable door and place it somewhere else, it doesn't open in the game."
+        // A click on the door's leaf takes the door even in part mode (its class is what opens), so Duplicate copies the door,
+        // not a plain mesh of its leaf; the hangar's own parts stay parts.
+        var leaf = map.PreparedScene!.Placements.Single(p => p.Actor.Name == Door && p.Component?.Name == "Door Mesh");
+        Assert.True(leaf.Component!.IsNativeSubobject);
+        Assert.False(hangar.Actor.FindComponent("SM_Airplane_Hangar")!.IsNativeSubobject);
+        Assert.False(hangar.Actor.FindComponent("StaticMesh21")!.IsNativeSubobject);
+        Assert.Equal(shell, map.PreparedScene!.Placements.First(p => p.InstanceKey == shell).PickKey(map.PickParts));
+        Assert.Null(leaf.PickKey(map.PickParts));
+        map.SelectedInstanceKey = leaf.PickKey(map.PickParts);
+        map.SelectedActorId = leaf.SelectableId;
+        Assert.Same(door, map.SelectedActor);
+        map.DuplicateSelectedCommand.Execute(null);
+        var doorCopy = Assert.IsType<DuplicateActorOp>(journal.Applied[^1].Op);
+        Assert.Equal(Door, doorCopy.Source.Actor);
+
+        // 6. A project that hid the leaf as a part (scale 0) before this still draws it hidden: its key did not change.
+        var leafKey = InstanceKey.Of(door.SelectableId, "Door Mesh", InstanceKey.Part);
+        Assert.Equal(leafKey, leaf.InstanceKey);
+        var leafRelative = leaf.Component.Relative;
+        ctx.Services.Projects.Apply(new SetTransformOp(door.Reference, leafRelative, leafRelative with { Scale = FVector.Zero }, "Door Mesh"));
+        Assert.Equal(0f, map.InstanceTransforms[leafKey].Scale3D.X, 3);
+
         // The mod: only the shell's component moved, the shelf is where it was, the copy and the door are written.
         var result = await new ProjectExporter().ExportAsync(ctx.Services.Projects.Current!, ctx.Services.Workspace.Catalog!,
             new ExportOptions { OutputDirectory = ctx.Combine("out"), WritePak = false });
@@ -96,5 +119,12 @@ public sealed class HangarPartsRealTests
         Assert.Equal(oldHangar.FindComponent("StaticMesh21")!.WorldTransform.Translation, newHangar.FindComponent("StaticMesh21")!.WorldTransform.Translation);
         Assert.Equal(before.FindActor(Door)!.Root!.WorldTransform.Translation.X + 200f, after.FindActor(Door)!.Root!.WorldTransform.Translation.X, 1f);
         Assert.Contains(after.Actors, a => a.Name == paste.NewName && a.StaticMeshPath is { } m && m.EndsWith(".SM_Storage_Shelves_03", StringComparison.Ordinal));
+
+        // The door's copy is a door, no child of the hangar's component (that one spawns the original), attached to it still.
+        var (oldDoor, copiedDoor) = (before.FindActor(Door)!, after.FindActor(doorCopy.NewName)!);
+        Assert.Equal(oldDoor.ClassPath, copiedDoor.ClassPath);
+        Assert.Null(copiedDoor.ParentComponent);
+        Assert.Equal(oldDoor.Root!.AttachParent, copiedDoor.Root!.AttachParent);
+        Assert.Equal(oldDoor.ParentComponent, after.FindActor(Door)!.ParentComponent);
     }
 }

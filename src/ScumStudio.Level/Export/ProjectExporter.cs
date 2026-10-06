@@ -668,7 +668,10 @@ public sealed class ProjectExporter
                     }
 
                     var sourceRootName = sourceDocuments?.Invoke(blueprint.Source.Level)?.FindActor(blueprint.Source.Actor)?.Root is { IsSynthesized: false } sr ? sr.Name : null;
-                    foreignCopies.Add(new ForeignActorCopy(sourcePackage, blueprint.Source.Actor, blueprint.NewName, state.GetAddedTransform(added) ?? blueprint.Transform, sourceRootName));
+                    foreignCopies.Add(new ForeignActorCopy(sourcePackage, blueprint.Source.Actor, blueprint.NewName, state.GetAddedTransform(added) ?? blueprint.Transform, sourceRootName)
+                    {
+                        Item = blueprint.Item,
+                    });
                     break;
                 default:
                     warnings.Add($"{added}: this kind of added actor cannot be exported without the source level.");
@@ -907,7 +910,8 @@ public sealed class ProjectExporter
         }
     }
 
-    private static (byte[] UAsset, byte[] UExp, byte[]? UBulk) ReadPackageFiles(AssetCatalog catalog, CUE4Parse.FileProvider.Objects.GameFile file)
+    /// <summary>A package's <c>.uasset</c>/<c>.umap</c>, <c>.uexp</c> and (when there is one) <c>.ubulk</c> bytes.</summary>
+    internal static (byte[] UAsset, byte[] UExp, byte[]? UBulk) ReadPackageFiles(AssetCatalog catalog, CUE4Parse.FileProvider.Objects.GameFile file)
     {
         var path = file.Path.Replace('\\', '/');
         var dot = path.LastIndexOf('.');

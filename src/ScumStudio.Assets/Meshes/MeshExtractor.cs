@@ -23,7 +23,8 @@ namespace ScumStudio.Assets.Meshes;
 /// kept (see <see cref="Export.GltfExporter"/>).</para>
 /// <para>UVs are as stored (origin top-left, V down), the same convention as glTF. Normals are unpacked from the
 /// cooked 8-bit tangent basis and re-normalised. Skeletal meshes are extracted in their bind pose.</para>
-/// <para>LOD indices refer to the asset's LOD list; stripped LODs (no render data) cannot be extracted.</para>
+/// <para>LOD indices refer to the asset's LOD list; asking for a stripped LOD (no render data) gives the next LOD that has
+/// render data.</para>
 /// </remarks>
 public static class MeshExtractor
 {
@@ -32,7 +33,7 @@ public static class MeshExtractor
 
     /// <summary>Extracts LOD <paramref name="lod"/> of a static or skeletal mesh.</summary>
     /// <exception cref="NotSupportedException"><paramref name="mesh"/> is neither a static nor a skeletal mesh.</exception>
-    /// <exception cref="InvalidDataException">The LOD does not exist or has no render data.</exception>
+    /// <exception cref="InvalidDataException">The LOD does not exist or neither it nor a later LOD has render data.</exception>
     public static MeshData Extract(UObject mesh, int lod = 0) => mesh switch
     {
         UStaticMesh sm => ExtractStaticMesh(sm, lod),
@@ -45,7 +46,7 @@ public static class MeshExtractor
     /// finest first) with the cooked screen-size thresholds (<c>FStaticMeshRenderData.ScreenSize</c>). Stripped LODs
     /// and LODs the game never selects (threshold 0) are left out; skeletal meshes give one LOD.
     /// </summary>
-    /// <exception cref="InvalidDataException">LOD <paramref name="firstLod"/> does not exist or has no render data.</exception>
+    /// <exception cref="InvalidDataException">LOD <paramref name="firstLod"/> does not exist or neither it nor a later LOD has render data.</exception>
     public static MeshLodChain ExtractLods(UObject mesh, int firstLod = 0, int maxLods = 8) => mesh switch
     {
         UStaticMesh sm => ExtractStaticMeshLods(sm, firstLod, maxLods),
@@ -58,6 +59,7 @@ public static class MeshExtractor
     {
         ArgumentNullException.ThrowIfNull(mesh);
         var lods = mesh.RenderData?.LODs ?? throw new InvalidDataException($"{mesh.Name} has no render data.");
+        firstLod = WithRenderData(firstLod, lods.Length, i => lods[i].SkipLod);
         CheckLod(mesh.Name, firstLod, lods.Length, lods.Length > firstLod && firstLod >= 0 && lods[firstLod].SkipLod);
         if (!mesh.TryConvert(out CStaticMesh converted))
         {
@@ -103,6 +105,7 @@ public static class MeshExtractor
     {
         ArgumentNullException.ThrowIfNull(mesh);
         var lods = mesh.RenderData?.LODs ?? throw new InvalidDataException($"{mesh.Name} has no render data.");
+        lod = WithRenderData(lod, lods.Length, i => lods[i].SkipLod);
         CheckLod(mesh.Name, lod, lods.Length, lods.Length > lod && lod >= 0 && lods[lod].SkipLod);
         if (!mesh.TryConvert(out CStaticMesh converted))
         {
@@ -121,6 +124,7 @@ public static class MeshExtractor
     {
         ArgumentNullException.ThrowIfNull(mesh);
         var lods = mesh.LODModels ?? throw new InvalidDataException($"{mesh.Name} has no LOD models.");
+        lod = WithRenderData(lod, lods.Length, i => lods[i].SkipLod);
         CheckLod(mesh.Name, lod, lods.Length, lods.Length > lod && lod >= 0 && lods[lod].SkipLod);
         if (!mesh.TryConvert(out CSkeletalMesh converted))
         {
@@ -178,6 +182,22 @@ public static class MeshExtractor
 
         var bones = mesh.ReferenceSkeleton?.FinalRefBoneInfo?.Length ?? 0;
         return new MeshAssetInfo(mesh.Name, MeshAssetKind.Skeletal, ToBox(mesh.ImportedBounds), SkeletalSlots(mesh), lods, bones);
+    }
+
+    /// <summary>
+    /// <paramref name="lod"/>, or the next LOD after it that has render data. SCUM cooks some meshes with their finest LODs
+    /// stripped (MinLOD 1: the hangar chairs, wheelie bins, wall lights, lavender); the game draws the first LOD it has.
+    /// Failing on LOD 0 left about 193,000 placements off the map (Discord: a green wheelie bin, chairs) and the Assets
+    /// page could not export those meshes ("some static meshes can't be exported").
+    /// </summary>
+    private static int WithRenderData(int lod, int count, Func<int, bool> stripped)
+    {
+        while (lod >= 0 && lod < count - 1 && stripped(lod))
+        {
+            lod++;
+        }
+
+        return lod;
     }
 
     private static void CheckLod(string name, int lod, int count, bool stripped)

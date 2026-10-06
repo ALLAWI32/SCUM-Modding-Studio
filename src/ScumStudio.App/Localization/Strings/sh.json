@@ -388,7 +388,7 @@
   "Assets.ExportGltf": "Izvezi glTF",
   "Assets.ExportGltf.Tip": "Sačuvaj ovaj model kao glTF 2.0 (otvara se u Blenderu i drugim 3D alatima).",
   "Assets.PlaceInMap": "Postavi na mapu",
-  "Assets.PlaceInMap.Tip": "Dodaj ovaj model kao novog aktera u nivo učitan na stranici Mapa (postavlja se ispred kamere)",
+  "Assets.PlaceInMap.Tip": "Dodaj ovaj model ili Blueprint u nivo učitan na stranici Mapa, ispred kamere (Blueprint se kopira od jednog koji je igra postavila negde na ostrvu)",
   "Assets.CopyPath.Tip": "Kopiraj putanju objekta (zalijepi je u Dodaj objekat na stranici Mapa, ili tamo s Ctrl+V)",
   "Assets.MaterialSection": "MATERIJAL",
   "Assets.DetailsSection": "DETALJI",
@@ -1113,5 +1113,10 @@
   "Map.Trees.PutBack.Done": "{0} je opet kao u igri",
   "Map.Trees.Pick.Tip": "Stablo iz igre koje se zamjenjuje svugdje na ostrvu.",
   "Map.Trees.PickWith.Tip": "Stablo koje se crta umjesto njega (sa svojom kolizijom).",
-  "Map.Trees.PutBack.Tip": "Ponovo crta stablo iz igre."
+  "Map.Trees.PutBack.Tip": "Ponovo crta stablo iz igre.",
+  "Mods.Carry": "U mom paku",
+  "Mods.Carry.Tip": "Uključeno: Izvezi mod stavlja ovaj mod u tvoj pak. Isključeno: ostaje svoj pak (sam ga instaliraj na server i igračima, za veliku mapu); tvoj pak se učitava poslije njega, pa tvoje izmjene i dalje pobjeđuju.",
+  "Map.SpawnPart.Note": "Mjesto spawna ove zgrade: povucite ga ili upišite novi položaj i kliknite „Primijeni transformaciju”. Kopiraj, Dupliciraj i Obriši su isključeni za njega: nema vlastiti model, a nije poznato šta igra radi s uklonjenim spawnerom.",
+  "Map.BlueprintNotPlaced": "Ovog Blueprinta nema na ostrvu",
+  "Map.BlueprintNotPlacedDetail": "'{0}' nije postavljen nigde na ostrvu, pa nema šta da se kopira. Mogu se dodati samo Blueprintovi koje je igra postavila u nivo (i predmeti)."
 }

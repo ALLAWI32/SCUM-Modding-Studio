@@ -103,13 +103,27 @@ public sealed record ScenePlacement(
     /// The instance key of this placement: an ISM/HISM instance, or one spline mesh piece (a road, river bank or bridge
     /// segment, <see cref="InstanceKey.Segment"/>) so a click picks that piece, not the whole road; or one part of a
     /// Blueprint the level stores (<see cref="InstanceKey.Part"/>: a wall, shelf or lamp of a hangar), picked only in part
-    /// mode; null otherwise (the root component: that is the actor itself).
+    /// mode; a spawn part's pin or drawn item (<see cref="Spawner"/>) is that part; null otherwise (the root component: that is
+    /// the actor itself).
     /// </summary>
     public InstanceKey? InstanceKey => Instance is { } i ? Viewport.InstanceKey.Of(SelectableId, i.ComponentName, i.InstanceIndex)
         : LootMarker is { } m ? Viewport.InstanceKey.Of(SelectableId, m.Component, Viewport.InstanceKey.LootPoint - m.Index)
+        : Spawner is { } s ? Viewport.InstanceKey.Of(SelectableId, s, Viewport.InstanceKey.Part)
         : Component is { SplineMesh: not null } c ? Viewport.InstanceKey.Of(SelectableId, c.Name, Viewport.InstanceKey.Segment)
         : Component is { IsSynthesized: false, ExportIndex: >= 0 } part && part.ExportIndex != Actor.RootComponent
             ? Viewport.InstanceKey.Of(SelectableId, part.Name, Viewport.InstanceKey.Part)
+            : null;
+
+    /// <summary>
+    /// What a click on this placement selects inside its actor: <see cref="InstanceKey"/>, except that a part is taken only
+    /// with <paramref name="parts"/> (part mode or Alt) or as a spawn part, and never for a component the actor's C++ class
+    /// makes (<see cref="ComponentRecord.IsNativeSubobject"/>, a door's leaf: the door is copied, not its mesh); null = the
+    /// whole actor.
+    /// </summary>
+    public InstanceKey? PickKey(bool parts) =>
+        InstanceKey is { } key && (key.InstanceIndex != Viewport.InstanceKey.Part || Spawner is not null
+                                   || (parts && Component is not { IsNativeSubobject: true }))
+            ? key
             : null;
 
     /// <summary>Distance (cm) beyond which the game does not draw this placement (HISM/foliage <c>InstanceEndCullDistance</c>); 0 = always drawn.</summary>
@@ -117,6 +131,13 @@ public sealed record ScenePlacement(
 
     /// <summary>The pin of one loot point of a building (its item spawner component and marker index), or null.</summary>
     public (string Component, int Index)? LootMarker { get; init; }
+
+    /// <summary>
+    /// The pin of a spawn part (<see cref="SpawnMarkers.IsSpawnPart"/>: a building's fixed-item spawner or vehicle box) or a
+    /// mesh of the item such a spawner spawns (its drill press, stove or fridge, drawn under <c>Spawner/...</c>): the part's
+    /// component name, so a click picks that part and pin and item move together; null otherwise.
+    /// </summary>
+    public string? Spawner { get; init; }
 }
 
 /// <summary>
@@ -160,7 +181,11 @@ public readonly record struct InstanceKey(uint SelectableId, string Component, i
 /// <param name="RootWorld">World transform of the clone's root component (UE space).</param>
 /// <param name="Name">Actor name of the clone.</param>
 /// <param name="MeshPath">For a new mesh actor (<paramref name="SourceId"/> 0): the static mesh to draw at <paramref name="RootWorld"/>.</param>
-public sealed record ActorClone(uint Id, uint SourceId, FTransform RootWorld, string Name, string? MeshPath = null);
+/// <param name="Placements">
+/// For a copy of an actor whose level is not loaded (<paramref name="SourceId"/> 0): that actor's placements, read from its
+/// level, cloned instead of a loaded actor's.
+/// </param>
+public sealed record ActorClone(uint Id, uint SourceId, FTransform RootWorld, string Name, string? MeshPath = null, IReadOnlyList<ScenePlacement>? Placements = null);
 
 /// <summary>
 /// A curve the viewport draws with its draggable handles (Shape menu): two that push it sideways, one on each end that
@@ -381,17 +406,25 @@ public sealed class LevelScenePreparer
                     continue;
                 }
 
+                // A spawner's drawn item (Spawner/ItemMesh0) picks and moves as that spawner part.
+                var slash = component.IsSynthesized ? component.Name.IndexOf('/', StringComparison.Ordinal) : -1;
+                var spawner = slash > 0 && actor.FindComponent(component.Name[..slash]) is { } owner && SpawnMarkers.IsSpawnPart(actor, owner) ? owner.Name : null;
                 placements.Add(new ScenePlacement(component.StaticMeshPath, UeToGl.ModelMatrix(component.WorldTransform), component.WorldTransform, id,
-                    $"{actor.Name}/{component.Name}", documentIndex, actor, component, null));
+                    $"{actor.Name}/{component.Name}", documentIndex, actor, component, null) { Spawner = spawner });
             }
 
             // Spawn places (see SpawnMarkers.PinsOf): pins that pick as the actor use its id; a building's loot point picks as
-            // itself (the building's id with its own key: what spawns there, owner: "the pin tells me nothing"); vehicle boxes
-            // inside buildings get an id of their own (bit 19), which picks nothing. Both move with their building.
-            foreach (var (kind, pin, picksActor, label, marker) in SpawnMarkers.PinsOf(actor))
+            // itself (the building's id with its own key: what spawns there, owner: "the pin tells me nothing"); a spawn part (a
+            // fixed-item spawner, a car shop's vehicle box) picks as that part of the building; a vehicle box the level does not
+            // store gets an id of its own (bit 19), which picks nothing.
+            foreach (var (kind, pin, picksActor, label, marker, part) in SpawnMarkers.PinsOf(actor))
             {
-                var pinId = picksActor || marker is not null ? id : id | (1u << (options.DocumentIdShift - 1));
-                placements.Add(new ScenePlacement(SpawnMarkers.MeshKey(kind), UeToGl.ModelMatrix(pin), pin, pinId, label, documentIndex, actor, null, null) { LootMarker = marker });
+                var pinId = picksActor || marker is not null || part is not null ? id : id | (1u << (options.DocumentIdShift - 1));
+                placements.Add(new ScenePlacement(SpawnMarkers.MeshKey(kind), UeToGl.ModelMatrix(pin), pin, pinId, label, documentIndex, actor, null, null)
+                {
+                    LootMarker = marker,
+                    Spawner = part?.Name,
+                });
             }
 
             if (!options.IncludeInstances)
@@ -832,6 +865,11 @@ public sealed class LevelScenePreparer
     public ExtraMesh? PrepareMesh(string meshPath, LevelSceneOptions? options = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(meshPath);
+        if (SpawnMarkers.AssetFor(meshPath) is { } marker)
+        {
+            return new ExtraMesh(marker, new Dictionary<string, TextureImage>()); // a spawn pin of a copied spawner
+        }
+
         var textures = new Dictionary<string, TextureImage>(StringComparer.OrdinalIgnoreCase);
         var materials = new Dictionary<string, MaterialLook>(StringComparer.OrdinalIgnoreCase);
         return TryLoadMesh(meshPath, options ?? new LevelSceneOptions(), textures, materials, out var asset, out _) ? new ExtraMesh(asset, textures) : null;

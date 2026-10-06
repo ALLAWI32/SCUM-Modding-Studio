@@ -227,8 +227,14 @@ public sealed partial class AssetDetailsViewModel : ViewModelBase
     /// <summary>True for meshes.</summary>
     public bool CanExportGltf => AssetExportService.IsMeshClass(ClassName);
 
-    /// <summary>True for a static mesh, which the Map page can place as a new actor.</summary>
-    public bool CanPlaceInMap => string.Equals(ClassName, "StaticMesh", StringComparison.OrdinalIgnoreCase);
+    /// <summary>True for a static mesh or a Blueprint, which the Map page can place.</summary>
+    public bool CanPlaceInMap => IsPlaceable(ClassName);
+
+    /// <summary>
+    /// True for the classes the Map page places: a static mesh (a new actor) or a Blueprint (a copy of a placed one; the
+    /// catalogue says Blueprint, a cooked header BlueprintGeneratedClass).
+    /// </summary>
+    public static bool IsPlaceable(string? className) => className is "StaticMesh" or "Blueprint" or "BlueprintGeneratedClass";
 
     /// <summary>True when a 3D preview is loaded.</summary>
     public bool HasPreview => Preview is not null;

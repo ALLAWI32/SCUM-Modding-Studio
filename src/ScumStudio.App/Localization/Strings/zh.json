@@ -388,7 +388,7 @@
   "Assets.ExportGltf": "导出 glTF",
   "Assets.ExportGltf.Tip": "将此网格保存为 glTF 2.0（可在 Blender 等 3D 工具中打开）。",
   "Assets.PlaceInMap": "放置到地图",
-  "Assets.PlaceInMap.Tip": "将此网格作为新 Actor 添加到地图页面已加载的关卡中（放在镜头前方）",
+  "Assets.PlaceInMap.Tip": "将此网格或 Blueprint 添加到地图页面已加载的关卡中，放在镜头前方（Blueprint 是从游戏在岛上某处放置的一个复制而来）",
   "Assets.CopyPath.Tip": "复制物体路径（粘贴到地图页面的“添加物体”中，或在那里按 Ctrl+V）",
   "Assets.MaterialSection": "材质",
   "Assets.DetailsSection": "详情",
@@ -1113,5 +1113,10 @@
   "Map.Trees.PutBack.Done": "{0} 已恢复为游戏原样",
   "Map.Trees.Pick.Tip": "要在全岛替换的游戏树木。",
   "Map.Trees.PickWith.Tip": "画在它位置上的树（带有自己的碰撞）。",
-  "Map.Trees.PutBack.Tip": "重新画回游戏原本的树。"
+  "Map.Trees.PutBack.Tip": "重新画回游戏原本的树。",
+  "Mods.Carry": "放进我的 pak",
+  "Mods.Carry.Tip": "开：导出模组时把这个模组放进你的 pak。关：它保持为独立的 pak（大地图请自行安装到服务器和玩家端）；你的 pak 在它之后加载，所以你的修改仍然优先。",
+  "Map.SpawnPart.Note": "这栋建筑的一个刷新点：拖动它，或输入新位置后点「应用变换」。复制、复制一份和删除对它不可用：它没有自己的模型，也不知道游戏会怎样处理被移除的刷新点。",
+  "Map.BlueprintNotPlaced": "岛上没有这个 Blueprint",
+  "Map.BlueprintNotPlacedDetail": "“{0}”在岛上任何地方都没有放置，因此没有可复制的东西。只能添加游戏放置在关卡中的 Blueprint（以及物品）。"
 }

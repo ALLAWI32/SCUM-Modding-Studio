@@ -54,7 +54,8 @@ public static class ProjectMods
                 throw new InvalidDataException($"{Path.GetFileName(pakPath)} could not be opened (an encrypted pak needs its own key).");
             }
 
-            foreach (var path in source.EnumerateArchiveFiles(Path.GetFileName(pakPath)))
+            // Only what the game loads: Hektor's map pak also held 210 MB of JSON dumps and pictures from his tools.
+            foreach (var path in source.EnumerateArchiveFiles(Path.GetFileName(pakPath)).Where(IsGameFile))
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var data = await source.ReadBytesAsync(path, cancellationToken).ConfigureAwait(false) ?? throw new IOException($"Could not read {path}.");
@@ -80,6 +81,37 @@ public static class ProjectMods
         return (target, files);
     }
 
+    private static readonly HashSet<string> GameFileExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".uasset", ".umap", ".uexp", ".ubulk", ".uptnl", ".bin", ".ushaderbytecode", ".locres", ".locmeta",
+    };
+
+    /// <summary>True for a file the game reads from a pak (packages, the asset registry, shaders, translations).</summary>
+    public static bool IsGameFile(string path) => GameFileExtensions.Contains(Path.GetExtension(path));
+
+    /// <summary>File that marks a mod the export leaves out (the server and players install it on its own).</summary>
+    public const string NotCarriedMarker = ".not-in-export";
+
+    /// <summary>
+    /// True when the export puts the mod into the project's pak (the default). A big mod (Hektor's map: 5.8 GB) can stay
+    /// installed as its own pak instead: the game mounts our <c>_P</c> pak over it, so the project's edits still win.
+    /// </summary>
+    public static bool IsCarried(string modFolder) => !File.Exists(Path.Combine(modFolder, NotCarriedMarker));
+
+    /// <summary>Sets whether the export puts the mod into the project's pak.</summary>
+    public static void SetCarried(string modFolder, bool carried)
+    {
+        var marker = Path.Combine(modFolder, NotCarriedMarker);
+        if (carried)
+        {
+            File.Delete(marker);
+        }
+        else
+        {
+            File.WriteAllText(marker, "Export mod leaves this imported mod out of the project's pak.\n");
+        }
+    }
+
     /// <summary>Removes an imported mod.</summary>
     public static void Remove(string modFolder)
     {
@@ -100,14 +132,14 @@ public static class ProjectMods
             ? Directory.EnumerateFiles(staging, "*", SearchOption.AllDirectories).Select(f => Path.GetRelativePath(staging, f)).ToHashSet(StringComparer.OrdinalIgnoreCase)
             : [];
         var carried = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var folder in modFolders)
+        foreach (var folder in modFolders.Where(IsCarried))
         {
             if (AssetCatalog.FindLooseProjectRoot(folder, projectName) is not { } root)
             {
                 continue;
             }
 
-            foreach (var file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
+            foreach (var file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories).Where(IsGameFile))
             {
                 var relative = Path.Combine(projectName, Path.GetRelativePath(root, file));
                 if (!written.Contains(relative))

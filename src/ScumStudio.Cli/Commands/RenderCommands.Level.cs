@@ -91,9 +91,9 @@ internal sealed partial class RenderCommands
                 {
                     if (MapCell.TryParse(name, out var cell))
                     {
-                        // Same set the app's Map page loads for a cell (MapPageViewModel.CellPackages): POI, TV base and misc sublevels, then the landscape tiles.
+                        // Same set the app's Map page loads for a cell (MapPageViewModel.CellPackages): POI, TV base, abandoned-city and misc sublevels, then the landscape tiles.
                         var cellLevels = index.InCell(cell)
-                            .Where(p => p.IsMap && p.Kind is WorldPackageKind.Poi or WorldPackageKind.Landscape or WorldPackageKind.TvBase or WorldPackageKind.Misc)
+                            .Where(p => p.IsContentLevel)
                             .OrderBy(p => p.Kind == WorldPackageKind.Landscape)
                             .Select(p => p.PackagePath)
                             .ToList();

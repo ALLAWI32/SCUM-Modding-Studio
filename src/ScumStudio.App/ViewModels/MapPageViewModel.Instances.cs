@@ -86,6 +86,16 @@ public sealed partial class MapPageViewModel
         item.ClassName.StartsWith("Landscape", StringComparison.Ordinal)
         || item.ClassName is "InstancedFoliageActor" or "LevelBounds" or "WorldSettings" or "ConZWorldSettings";
 
+    /// <summary>
+    /// True when a spawn part is selected (a house's fixed-item spawner, a car shop's vehicle box): it moves, but it has no
+    /// mesh to copy and what the game does with a deleted (scaled to nothing) spawner is not known, so Copy, Duplicate and
+    /// Delete are off for it.
+    /// </summary>
+    private bool IsSpawnPartSelected => SelectedInstanceInfo() is { Instance: null } sel && SpawnMarkers.IsSpawnPart(sel.Item.Actor, sel.Component);
+
+    /// <summary>True when the selected instance or part has no mesh (Copy and Duplicate place its mesh: nothing to place).</summary>
+    private bool IsMeshlessSelected => SelectedInstanceInfo() is { } sel && MeshOf(sel) is null;
+
     /// <summary>The selected instance with its actor and component, or null.</summary>
     private SelectedInstance? SelectedInstanceInfo() =>
         SelectedInstanceKey is { } key && SelectedActor is { } item && item.SelectableId == key.SelectableId ? InstanceInfo(item, key) : null;
@@ -114,10 +124,21 @@ public sealed partial class MapPageViewModel
         ? _services.Projects.Current?.State.GetTransformOverride(sel.Item.Reference, sel.Component.Name) ?? sel.Component.Relative
         : _services.Projects.Current?.State.GetInstanceOverride(RefOf(sel)) ?? TransformValue.FromTransform(sel.Instance.LocalTransform);
 
-    /// <summary>World transform the selection's local transform is relative to: the component (instances) or its parent (segments).</summary>
-    private static FTransform SpaceOf(SelectedInstance sel) => sel.Instance is null
-        ? sel.Component.RelativeTransform.Inverse() * sel.Component.WorldTransform
-        : sel.Component.WorldTransform;
+    /// <summary>World transform the selection's local transform is relative to: the component (instances) or its parent (segments, parts).</summary>
+    private static FTransform SpaceOf(SelectedInstance sel)
+    {
+        if (sel.Instance is not null)
+        {
+            return sel.Component.WorldTransform;
+        }
+
+        // World = Relative * Parent, undone exactly: Relative.Inverse() is only exact for an even scale (a car shop's vehicle
+        // box, 11 x 5 x 3.5 and turned, had its gizmo 5 m off).
+        var (relative, world) = (sel.Component.RelativeTransform, sel.Component.WorldTransform);
+        var scale = world.Scale3D * UeMath.SafeScaleReciprocal(relative.Scale3D);
+        var rotation = world.Rotation * relative.Rotation.Inverse();
+        return new FTransform(rotation, world.Translation - rotation.RotateVector(scale * relative.Translation), scale);
+    }
 
     /// <summary>Properties, gizmo and edit fields for the current selection (one instance, or the actor).</summary>
     private void ShowSelection(ActorItemViewModel? item)
@@ -179,6 +200,11 @@ public sealed partial class MapPageViewModel
         };
         if (sel.Instance is null)
         {
+            if (SpawnMarkers.IsSpawnPart(sel.Item.Actor, sel.Component))
+            {
+                rows.Insert(1, new PropertyRow(Localization.Loc.T("Map.Row.Spawn"), Localization.Loc.T("Map.SpawnPart.Note")));
+            }
+
             if (state?.GetTransformOverride(sel.Item.Reference, sel.Component.Name) is not null)
             {
                 rows.Add(new PropertyRow(Localization.Loc.T("Map.Row.State"), Localization.Loc.T("Map.State.Changed")));

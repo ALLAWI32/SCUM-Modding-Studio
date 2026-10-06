@@ -75,7 +75,8 @@ public abstract record EditOp
         var slash = p.LastIndexOf('/');
         var name = slash < 0 ? p : p[(slash + 1)..];
         var dot = name.IndexOf('.');
-        return dot < 0 ? name : name[..dot];
+        // A native class (/Script/SCUM.WorldItemSpawner) is named after the dot, an asset (/Game/X/SM_Rock.SM_Rock) before it.
+        return dot < 0 ? name : p.StartsWith("/Script/", StringComparison.OrdinalIgnoreCase) ? name[(dot + 1)..] : name[..dot];
     }
 
     /// <summary>Formats a transform for summaries.</summary>
@@ -445,11 +446,18 @@ public sealed record AddBlueprintActorOp(string Level, string NewName, string Cl
     [JsonIgnore]
     public ActorRef Created => new(Level, NewName);
 
+    /// <summary>
+    /// For a copy of a world item spawner: the item class it spawns instead of its source's
+    /// (<c>/Game/ConZ_Files/Items/X/Asian_Chest.Asian_Chest_C</c>), or null to spawn the same. Items are never placed as
+    /// actors, so any item is placed this way.
+    /// </summary>
+    public string? Item { get; init; }
+
     /// <inheritdoc />
     public override EditOp Inverse() => new RemoveAddedActorOp(Created, this);
 
     /// <inheritdoc />
-    public override string Describe() => $"Add {Short(ClassPath)} as {Created} (from {Source}) at {Format(Transform)}";
+    public override string Describe() => $"Add {Short(ClassPath)}{(Item is null ? string.Empty : $" ({Short(Item)})")} as {Created} (from {Source}) at {Format(Transform)}";
 
     /// <inheritdoc />
     public override IReadOnlyList<string> GetTouchedLevels() => [Level];

@@ -125,6 +125,8 @@ public static partial class LevelPackageEditor
     private const string LevelClassName = "Level";
     private const string PersistentLevelName = "PersistentLevel";
     private const string RootComponentProperty = "RootComponent";
+    private const string ParentComponentProperty = "ParentComponent"; // a child actor's: the ChildActorComponent that spawned it
+    private const string ItemProperty = "_item"; // a world item spawner's item: a soft path to its class
     private const string StructPropertyType = "StructProperty";
     private const int VectorSize = 12;
 

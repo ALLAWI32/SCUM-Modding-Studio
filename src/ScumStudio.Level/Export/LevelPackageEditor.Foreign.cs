@@ -15,7 +15,11 @@ namespace ScumStudio.Level.Export;
 /// <param name="NewName">Object name of the copy in the edited level (unique).</param>
 /// <param name="RootTransform">Relative transform of the copy's root component; null keeps the source's.</param>
 /// <param name="RootComponent">Name of the source's root component when the actor stores no <c>RootComponent</c> property.</param>
-public sealed record ForeignActorCopy(CookedPackage Source, string SourceActor, string NewName, TransformValue? RootTransform, string? RootComponent = null);
+public sealed record ForeignActorCopy(CookedPackage Source, string SourceActor, string NewName, TransformValue? RootTransform, string? RootComponent = null)
+{
+    /// <summary>For a copied world item spawner: the item class written into its <c>_item</c>, or null to keep the source's.</summary>
+    public string? Item { get; init; }
+}
 
 /// <summary>
 /// Copying actors between cooked level packages. The source actor's exports — its components and the child actors
@@ -120,6 +124,7 @@ public static partial class LevelPackageEditor
             }
 
             var newActors = new List<int>();
+            var itemWritten = false;
             for (var k = 0; k < members.Count; k++)
             {
                 var member = members[k];
@@ -127,6 +132,14 @@ public static partial class LevelPackageEditor
                 var payload = payloads[k];
                 RemapNames(payload, blocks[k].Properties, blocks[k].EndOffset);
                 RemapObjects(payload, blocks[k].Properties, copy.NewName);
+                if (copy.Item is { } item && blocks[k].Find(ItemProperty)?.Value is SoftObjectValue soft && soft.Offset >= 0 && soft.Offset + 8 <= payload.Length)
+                {
+                    // The spawner's item is a soft path (an FName, then an empty sub path): the same size with another name.
+                    var itemName = MakeName(item, names, wide, addedNames);
+                    BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(soft.Offset), itemName.Index);
+                    BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(soft.Offset + 4), itemName.Number);
+                    itemWritten = true;
+                }
                 if (k == 0 || rootOld >= 0 && member == rootOld)
                 {
                     // nothing extra: the transform is patched below once the names are in the target table
@@ -187,6 +200,11 @@ public static partial class LevelPackageEditor
                 {
                     data[_exportMap[rootOld + 1] - 1] = patched;
                 }
+            }
+
+            if (copy.Item is not null && !itemWritten)
+            {
+                warnings.Add($"'{copy.NewName}': {copy.SourceActor} spawns no item, so {copy.Item} was not set.");
             }
 
             if (_dropped.Count > 0)

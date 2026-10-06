@@ -54,6 +54,10 @@ public sealed partial class LevelViewport : OpenGlControlBase
     public static readonly StyledProperty<IReadOnlySet<InstanceKey>?> HiddenInstancesProperty =
         AvaloniaProperty.Register<LevelViewport, IReadOnlySet<InstanceKey>?>(nameof(HiddenInstances));
 
+    /// <summary>Spawn pin kinds that must not be drawn (switched off in the legend): only the pins, not what they stand in.</summary>
+    public static readonly StyledProperty<IReadOnlySet<SpawnKind>?> HiddenPinKindsProperty =
+        AvaloniaProperty.Register<LevelViewport, IReadOnlySet<SpawnKind>?>(nameof(HiddenPinKinds));
+
     /// <summary>
     /// The single ISM/HISM/foliage instance selected (one tree, rock or plank) — its <see cref="InstanceKey.SelectableId"/>
     /// equals <see cref="SelectedId"/> — or null when a whole actor is selected. Two-way: picking an instance sets it.
@@ -238,6 +242,7 @@ public sealed partial class LevelViewport : OpenGlControlBase
         InstanceTransformsProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.MarkDirty(ref c._transformsDirty));
         HiddenIdsProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.MarkDirty(ref c._visibilityDirty));
         HiddenInstancesProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.MarkDirty(ref c._visibilityDirty));
+        HiddenPinKindsProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.MarkDirty(ref c._visibilityDirty));
         ActorTransformsProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.MarkDirty(ref c._transformsDirty));
         ClonesProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.MarkDirty(ref c._clonesDirty));
         BendsProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.MarkDirty(ref c._bendsDirty));
@@ -281,6 +286,13 @@ public sealed partial class LevelViewport : OpenGlControlBase
     {
         get => GetValue(HiddenInstancesProperty);
         set => SetValue(HiddenInstancesProperty, value);
+    }
+
+    /// <inheritdoc cref="HiddenPinKindsProperty" />
+    public IReadOnlySet<SpawnKind>? HiddenPinKinds
+    {
+        get => GetValue(HiddenPinKindsProperty);
+        set => SetValue(HiddenPinKindsProperty, value);
     }
 
     /// <inheritdoc cref="BackdropProperty" />
@@ -846,9 +858,12 @@ public sealed partial class LevelViewport : OpenGlControlBase
                     if (!level.HasMesh(extra.Asset.MeshPath))
                     {
                         level.AddMesh(extra);
-                        foreach (var waiting in _appliedClones.Where(c => string.Equals(c.Value.MeshPath, extra.Asset.MeshPath, StringComparison.OrdinalIgnoreCase)).Select(c => c.Key).ToList())
+                        foreach (var waiting in _appliedClones.Where(c => string.Equals(c.Value.MeshPath, extra.Asset.MeshPath, StringComparison.OrdinalIgnoreCase)
+                                     || c.Value.Placements?.Any(p => string.Equals(p.MeshPath, extra.Asset.MeshPath, StringComparison.OrdinalIgnoreCase)) == true)
+                                     .Select(c => c.Key).ToList())
                         {
-                            _appliedClones.Remove(waiting); // re-add now that the mesh exists
+                            level.RemoveClone(waiting); // re-add now that the mesh exists (a copy from an unloaded level drew without it)
+                            _appliedClones.Remove(waiting);
                         }
                     }
                 }
@@ -865,7 +880,7 @@ public sealed partial class LevelViewport : OpenGlControlBase
                 {
                     if (!_appliedClones.TryGetValue(clone.Id, out var applied) || applied != clone)
                     {
-                        level.AddClone(clone.Id, clone.SourceId, clone.RootWorld, clone.Name, clone.MeshPath);
+                        level.AddClone(clone.Id, clone.SourceId, clone.RootWorld, clone.Name, clone.MeshPath, clone.Placements);
                         _appliedClones[clone.Id] = clone;
                     }
                 }
@@ -924,12 +939,18 @@ public sealed partial class LevelViewport : OpenGlControlBase
                 _visibilityDirty = false;
                 var hidden = HiddenIds;
                 var hiddenInstances = HiddenInstances;
+                var hiddenPins = HiddenPinKinds;
                 foreach (var node in level.Scene.Nodes)
                 {
                     var visible = node.SelectableId == 0 || hidden is null || !hidden.Contains(node.SelectableId);
                     if (visible && hiddenInstances is { Count: > 0 } && node.Tag is ScenePlacement { InstanceKey: { } key })
                     {
                         visible = !hiddenInstances.Contains(key);
+                    }
+
+                    if (visible && hiddenPins is { Count: > 0 } && node.Tag is ScenePlacement pin && SpawnMarkers.KindOfMesh(pin.MeshPath) is { } kind)
+                    {
+                        visible = !hiddenPins.Contains(kind);
                     }
 
                     node.Visible = visible;
@@ -1016,10 +1037,9 @@ public sealed partial class LevelViewport : OpenGlControlBase
 
             var id = result?.Node.SelectableId ?? 0u;
             // Shift+click takes the whole actor (all of a road, all of a foliage actor) instead of the one piece under the cursor;
-            // a part of a Blueprint is picked on its own only in part mode (or with Alt).
-            var instance = !_pickWhole && result?.Node.Tag is ScenePlacement { InstanceKey: { } key } && (key.InstanceIndex != InstanceKey.Part || _pickPart)
-                ? key
-                : (InstanceKey?)null;
+            // a part of a Blueprint is picked on its own only in part mode (or with Alt), a spawn part (its pin or the item it
+            // spawns: a house's drill press, a car shop's vehicle box) always, a door's leaf never (ScenePlacement.PickKey).
+            var instance = !_pickWhole && result?.Node.Tag is ScenePlacement placed ? placed.PickKey(_pickPart) : null;
             if (_pickToggle)
             {
                 _pickToggle = false;

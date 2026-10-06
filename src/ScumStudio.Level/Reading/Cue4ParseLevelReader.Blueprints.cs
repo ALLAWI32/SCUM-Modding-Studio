@@ -483,7 +483,8 @@ public sealed partial class Cue4ParseLevelReader
         public override int GetHashCode() => System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(this);
     }
 
-    private readonly record struct PendingChildActor(int Id, string Name, UObject Object);
+    /// <summary>A child actor component to expand; <paramref name="ItemClassPath"/> instead names a world item spawner's fixed item.</summary>
+    private readonly record struct PendingChildActor(int Id, string Name, UObject Object, string? ItemClassPath = null);
 
     /// <summary>Expands the Blueprint actors of one level into synthesized components (see <see cref="LevelData.SynthesizedComponents"/>).</summary>
     private sealed class BlueprintExpansion(Cue4ParseLevelReader reader, IPackage level, LevelExportData[] exports, List<string> warnings)
@@ -517,6 +518,13 @@ public sealed partial class Cue4ParseLevelReader
                         && reader.TryLoad(level, index, warnings) is { } obj)
                     {
                         childActors.Add(new PendingChildActor(index, cac.Name, obj));
+                    }
+                    else if (exports[index] is { IsComponent: true, SpawnMarkers: [{ ItemClassPath: { } item }] } spawner
+                             && reader.TryLoad(level, index, warnings) is { } spawnerObj)
+                    {
+                        // A world item spawner's fixed item (a house's drill press, stove, fridge) is drawn where it spawns
+                        // (Discord igor: "there is no interaction with certain spawn objects", only an empty pin showed).
+                        childActors.Add(new PendingChildActor(index, spawner.Name, spawnerObj, item));
                     }
                 }
             }
@@ -645,13 +653,24 @@ public sealed partial class Cue4ParseLevelReader
 
             var templates = new TemplateChain(reader, cac.Object);
             var ignored = false;
-            if (!reader.TryGetProperty(templates, "ChildActorClass", out FPackageIndex classIndex, ref ignored) || classIndex.IsNull)
+            string classPath;
+            bool isBlueprintClass;
+            if (cac.ItemClassPath is { } itemClass)
+            {
+                // A spawned item: its class only (no child actor template).
+                classPath = itemClass;
+                isBlueprintClass = !itemClass.StartsWith("/Script/", StringComparison.OrdinalIgnoreCase);
+            }
+            else if (reader.TryGetProperty(templates, "ChildActorClass", out FPackageIndex classIndex, ref ignored) && !classIndex.IsNull)
+            {
+                classPath = reader.ObjectPathOf(classIndex);
+                isBlueprintClass = IsBlueprintClassReference(classIndex, classPath);
+            }
+            else
             {
                 return;
             }
 
-            var classPath = reader.ObjectPathOf(classIndex);
-            var isBlueprintClass = IsBlueprintClassReference(classIndex, classPath);
             var blueprint = isBlueprintClass ? reader.GetBlueprint(classPath) : null;
             if (isBlueprintClass && blueprint is null)
             {
@@ -660,7 +679,7 @@ public sealed partial class Cue4ParseLevelReader
 
             Package? templatePackage = null;
             var templateExport = -1;
-            if (reader.TryGetProperty(templates, "ChildActorTemplate", out FPackageIndex templateIndex, ref ignored)
+            if (cac.ItemClassPath is null && reader.TryGetProperty(templates, "ChildActorTemplate", out FPackageIndex templateIndex, ref ignored)
                 && templateIndex is { IsExport: true, Owner: Package tp })
             {
                 templatePackage = tp;

@@ -136,7 +136,7 @@ internal sealed partial class AssetCommands : ICommandModule
                         {
                             var simple = MeshCollision.Read(staticMesh);
                             PrintCollision(simple);
-                            if (staticMesh.RenderData?.LODs is { Length: > 0 } lods && lods[0].PositionVertexBuffer?.Verts.Length > 0)
+                            if (staticMesh.RenderData?.LODs?.FirstOrDefault(l => !l.SkipLod)?.PositionVertexBuffer?.Verts.Length > 0)
                             {
                                 var boxes = Level.Model.PieceCollision.MeshBoxes(MeshExtractor.ExtractStaticMesh(staticMesh, 0), simple);
                                 Console.Out.WriteLine($"collision when bent: {boxes.Count} box(es), the largest:");

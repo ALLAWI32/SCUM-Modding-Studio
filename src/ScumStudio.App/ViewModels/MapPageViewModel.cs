@@ -521,10 +521,10 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
         }
     }
 
-    /// <summary>POI sublevels of <paramref name="cell"/> plus its landscape tiles.</summary>
+    /// <summary>POI, TV base, abandoned-city and misc sublevels of <paramref name="cell"/>, then its landscape tiles.</summary>
     public static IReadOnlyList<string> CellPackages(WorldIndex world, MapCell cell) =>
         world.InCell(cell)
-            .Where(p => p.IsMap && p.Kind is WorldPackageKind.Poi or WorldPackageKind.Landscape or WorldPackageKind.TvBase or WorldPackageKind.Misc)
+            .Where(p => p.IsContentLevel)
             .OrderBy(p => p.Kind == WorldPackageKind.Landscape)
             .Select(p => p.PackagePath)
             .ToList();
@@ -725,8 +725,7 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
         }
 
         // Spawn pins off (all of them, or the kinds switched off in the legend).
-        HideSpawnPins(hidden, hiddenInstances);
-
+        HiddenPinKinds = HiddenSpawnKinds();
         HiddenActorIds = hidden;
         HiddenInstanceKeys = hiddenInstances;
         DeleteSelectedCommand.NotifyCanExecuteChanged();
@@ -848,11 +847,13 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
     /// <summary>
     /// Rebuilds the entity list: the pristine actors plus the actors the project added to the loaded levels (duplicates
     /// as synthetic records of their source, new mesh actors as bare StaticMeshActors), with ids above <see cref="AddedIdBase"/>.
+    /// A copy of an actor whose level is not loaded is drawn with that actor's placements, read from its level.
     /// </summary>
     private void RefreshAddedActors()
     {
         var state = _services.Projects.Current?.State;
         var added = new List<ActorItemViewModel>();
+        var foreign = new Dictionary<uint, IReadOnlyList<ScenePlacement>>();
         if (state is not null && PreparedScene is { } scene)
         {
             var levels = scene.Documents.ToDictionary(d => d.PackagePath, StringComparer.OrdinalIgnoreCase);
@@ -889,8 +890,9 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
                         item = new ActorItemViewModel(document, record, id) { IsAdded = true };
                         break;
                     case AddBlueprintActorOp blueprint when PristineOf(blueprint.Source) is { } bpSource:
-                        // The source level is loaded too: draw the copy by cloning the source's placements.
-                        item = new ActorItemViewModel(document, bpSource.Actor with { Name = blueprint.NewName, ExportIndex = -1 - (int)(id - AddedIdBase), WorldTransform = RootWorldOf(bpSource, transform) }, id)
+                        // The source level is loaded too: draw the copy by cloning the source's placements. The copy hangs on
+                        // nothing (the export drops a parent that is not copied), so its place is a world place.
+                        item = new ActorItemViewModel(document, bpSource.Actor with { Name = blueprint.NewName, ExportIndex = -1 - (int)(id - AddedIdBase), WorldTransform = transform.ToTransform() }, id)
                         {
                             IsAdded = true,
                             SourceId = bpSource.SelectableId,
@@ -903,6 +905,11 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
                             ClassName = blueprint.ClassPath[(blueprint.ClassPath.LastIndexOf('.') + 1)..],
                         };
                         item = new ActorItemViewModel(document, bpRecord, id) { IsAdded = true };
+                        if (ForeignPlacements(blueprint.Source) is { } placements)
+                        {
+                            foreign[id] = placements;
+                        }
+
                         break;
                 }
 
@@ -922,6 +929,14 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
             if (item.SourceId != 0)
             {
                 clones.Add(new ActorClone(item.SelectableId, item.SourceId, drawnAt, item.Name));
+            }
+            else if (foreign.TryGetValue(item.SelectableId, out var placements))
+            {
+                clones.Add(new ActorClone(item.SelectableId, 0, drawnAt, item.Name, Placements: placements));
+                foreach (var mesh in placements.Select(p => p.MeshPath).Distinct(StringComparer.OrdinalIgnoreCase))
+                {
+                    EnsureMeshLoaded(mesh);
+                }
             }
             else if (item.Actor.StaticMeshPath is { } mesh)
             {
@@ -973,7 +988,8 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
 
     /// <summary>
     /// Adds the object <paramref name="text"/> names (<c>/Game/…/SM_Crate</c>, its object path, or just <c>SM_Crate</c>)
-    /// in front of the camera. Meshes only: a Blueprint is placed by copying one that is already in a level.
+    /// in front of the camera: a mesh as a new mesh actor, a Blueprint as a copy of one placed somewhere on the island
+    /// (<see cref="AddBlueprintAsync"/>, finished in <see cref="AddCompletion"/>).
     /// </summary>
     public bool AddObject(string text)
     {
@@ -994,11 +1010,11 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
             return false;
         }
 
-        if (known.ClassName == "Blueprint")
+        var className = known.PackagePath is not null ? known.ClassName : _services.Workspace.Catalog?.GetMainClassName(package);
+        if (className is "Blueprint" or "BlueprintGeneratedClass")
         {
-            _services.Notifications.Warning(Localization.Loc.T("Map.NoBlueprintByPath"),
-                Localization.Loc.T("Map.NoBlueprintByPathDetail"));
-            return false;
+            AddCompletion = AddBlueprintAsync(package);
+            return true;
         }
 
         return AddMeshActor(package + "." + package[(package.LastIndexOf('/') + 1)..]);
@@ -1029,7 +1045,7 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
             return false;
         }
 
-        var document = scene.Documents.FirstOrDefault(d => !d.Name.StartsWith("Landscape_", StringComparison.OrdinalIgnoreCase)) ?? scene.Documents[0];
+        var document = NewObjectLevel(scene);
         var at = AimPointProvider?.Invoke() ?? FVector.Zero;
         try
         {
@@ -1165,7 +1181,7 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
         ApplyRootTransform(item, value, Localization.Loc.T("Map.Moved"));
     }
 
-    private bool CanCopySelected() => SelectedActor is not null && !IsLootPointSelected;
+    private bool CanCopySelected() => SelectedActor is not null && !IsLootPointSelected && !IsMeshlessSelected;
 
     /// <summary>Remembers the selected actor (or instance) for Paste.</summary>
     [RelayCommand(CanExecute = nameof(CanCopySelected))]
@@ -1254,7 +1270,8 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
                 case AddStaticMeshActorOp mesh:
                     return EditOpFactory.AddStaticMeshActor(target, mesh.StaticMesh, transform, state, reserved) with { CollisionProfile = mesh.CollisionProfile };
                 case AddBlueprintActorOp blueprint:
-                    return new AddBlueprintActorOp(target.PackagePath, EditOpFactory.UniqueActorName(target, BaseName(item) + "_Added", state, reserved), blueprint.ClassPath, blueprint.Source, transform);
+                    // A copy of a placed item spawner spawns the same item (Item), not the item of the spawner it was made from.
+                    return blueprint with { Level = target.PackagePath, NewName = EditOpFactory.UniqueActorName(target, BaseName(item) + "_Added", state, reserved), Transform = transform };
                 case DuplicateActorOp duplicate when PristineOf(duplicate.Source) is { } source:
                     item = source;
                     break;
@@ -1285,7 +1302,7 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
         SelectedActor = AllActors.FirstOrDefault(a => a.IsAdded && created is not null && ActorRef.Comparer.Equals(a.Reference, created)) ?? SelectedActor;
     }
 
-    private bool CanDuplicateSelected() => SelectedActor is { IsDeleted: false } && !IsLootPointSelected;
+    private bool CanDuplicateSelected() => SelectedActor is { IsDeleted: false } && !IsLootPointSelected && !IsMeshlessSelected;
 
     /// <summary>Copies the selected pristine actor 2 m along +X (the copy is exported as a copy of the source's exports).</summary>
     [RelayCommand(CanExecute = nameof(CanDuplicateSelected))]
@@ -1367,7 +1384,7 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
         static string Fmt(FormattableString s) => s.ToString(CultureInfo.InvariantCulture);
     }
 
-    private bool CanDeleteSelected() => HasKindSelection || (SelectedActor is { IsDeleted: false } && !IsLootPointSelected); // a loot point moves with its building
+    private bool CanDeleteSelected() => HasKindSelection || (SelectedActor is { IsDeleted: false } && !IsLootPointSelected && !IsSpawnPartSelected); // a loot point moves with its building, a spawn part is not deleted
 
     partial void OnKindSelectionTextChanged(string? value) => DeleteSelectedCommand.NotifyCanExecuteChanged(); // a brushed set has no single selected object
 

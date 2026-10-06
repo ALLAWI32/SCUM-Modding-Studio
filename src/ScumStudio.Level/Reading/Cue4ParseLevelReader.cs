@@ -494,7 +494,10 @@ public sealed partial class Cue4ParseLevelReader : ILevelReader
             && TryGetProperty(templates, "_item", out FSoftObjectPath item, ref ignored) && SoftPathText(item) is { Length: > 0 } itemPath)
         {
             var itemName = itemPath[(itemPath.LastIndexOf('.') + 1)..];
-            markers = [new SpawnMarker(FTransform.Identity, itemName.EndsWith("_C", StringComparison.Ordinal) ? itemName[..^2] : itemName, 100, 1, 1)];
+            markers = [new SpawnMarker(FTransform.Identity, itemName.EndsWith("_C", StringComparison.Ordinal) ? itemName[..^2] : itemName, 100, 1, 1)
+            {
+                ItemClassPath = AssetPaths.NormalizeObjectPath(itemPath, _catalog.ProjectName),
+            }];
         }
 
         // What it collides as (SCUM's tree foliage blocks players as SCUM_TreeStump while the tree mesh's own default does not).

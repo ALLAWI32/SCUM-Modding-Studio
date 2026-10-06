@@ -3,6 +3,27 @@
 All notable changes are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [semantic versioning](https://semver.org/).
 
+## [0.2.6] - 2026-10-06
+
+### New in this release
+- **Place any Blueprint from Assets** (and the Map's Add object box): the app finds one the game placed somewhere on the
+  island and copies it to where the camera aims, even when its level is not loaded. An item (a drill press, a chest,
+  a lamp) is placed the way the game places fixed items: a world item spawner set to spawn it.
+- **Machines in houses**: the drill presses, lathes, stoves and fridges a building spawns are drawn on the map, and
+  their spawn point can be selected and moved (it was only a pin you could look at). Car shop vehicle spots select
+  and move too.
+- **Imported mods**: a per-mod **In my pak** switch (a big map can stay its own pak); a level in a game plugin folder
+  goes into the pak; tools' JSON dumps and pictures are left out of the import.
+
+### Fixes
+- **Objects missing from the map**: meshes the game cooks without their finest detail level (chairs, wheelie bins,
+  wall lights, speakers, cameras, lavender: about 193,000 placements) were dropped; they are drawn, picked, copied
+  and exported now, and the Assets page exports them to glTF/OBJ.
+- **The abandoned city** (378 levels of cell C_0) loads in the whole-island view and with its cell.
+- **A copied door opens**: a click on a door's leaf takes the door (not a plain mesh of it), and a building's door
+  duplicated in its own level is no longer tied to the original building.
+- **Map header**: the loading text no longer runs into other text; it has its own line with room in every language.
+
 ## [0.2.5] - 2026-10-03
 
 ### New in this release

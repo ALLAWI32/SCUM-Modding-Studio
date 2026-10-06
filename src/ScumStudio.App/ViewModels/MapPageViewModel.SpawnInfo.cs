@@ -69,30 +69,12 @@ public sealed partial class MapPageViewModel
         ? SpawnLayers.Where(l => !l.IsVisible).SelectMany(l => l.Kinds).ToHashSet()
         : Enum.GetValues<SpawnKind>().ToHashSet();
 
-    /// <summary>Hides the pins of the switched-off kinds: a building's loot point by its key, the other pins by their id.</summary>
-    private void HideSpawnPins(HashSet<uint> hidden, HashSet<InstanceKey> hiddenInstances)
-    {
-        var kinds = HiddenSpawnKinds();
-        if (kinds.Count == 0 || PreparedScene is not { } scene)
-        {
-            return;
-        }
-
-        foreach (var p in scene.Placements)
-        {
-            if (SpawnMarkers.KindOfMesh(p.MeshPath) is { } kind && kinds.Contains(kind))
-            {
-                if (p.LootMarker is not null && p.InstanceKey is { } key)
-                {
-                    hiddenInstances.Add(key);
-                }
-                else
-                {
-                    hidden.Add(p.SelectableId);
-                }
-            }
-        }
-    }
+    /// <summary>
+    /// The pin kinds the map does not draw (bound to the viewport, which hides only those pins: not the building or the item
+    /// a pin stands in, not the other pins of the same actor).
+    /// </summary>
+    [ObservableProperty]
+    private IReadOnlySet<SpawnKind> _hiddenPinKinds = new HashSet<SpawnKind>();
 
     /// <summary>True when one loot point of a building is selected (it shows what spawns there; it moves with its building).</summary>
     public bool IsLootPointSelected => SelectedInstanceKey is { IsLootPoint: true } key && SelectedActor?.SelectableId == key.SelectableId;
@@ -114,7 +96,8 @@ public sealed partial class MapPageViewModel
         }
         else
         {
-            markers = SelectedInstanceInfo() is null ? item.Actor.Components.SelectMany(c => c.SpawnMarkers).ToList() : [];
+            // A spawn part (a house's drill press spawner): its own item; another part or instance: nothing.
+            markers = SelectedInstanceInfo() is { } part ? [.. part.Component.SpawnMarkers] : item.Actor.Components.SelectMany(c => c.SpawnMarkers).ToList();
         }
 
         var group = SelectedInstanceInfo() is null && SpawnMarkers.KindOf(item.Actor) == SpawnKind.VehiclePlace ? item.Actor.ClassPath : null;

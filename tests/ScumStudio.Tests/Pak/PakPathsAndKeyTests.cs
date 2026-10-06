@@ -22,6 +22,8 @@ public sealed class PakPathsAndKeyTests
     [InlineData("scum/assetregistry.bin", true)]
     [InlineData("SCUM/Content", false)]
     [InlineData("SCUM/Config/DefaultGame.ini", false)]
+    [InlineData("SCUM/Plugins/GameFeatures/WoodlandHunterPack/Content/World/Maps/The_Island/C_2_Outpost_HuntersGrotto.umap", true)]
+    [InlineData("SCUM/Plugins/GameFeatures/WoodlandHunterPack/WoodlandHunterPack.uplugin", false)]
     [InlineData("readme.txt", false)]
     public void IsModPakEntry(string path, bool expected) => Assert.Equal(expected, PakPaths.IsModPakEntry(path));
 

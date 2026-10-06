@@ -484,13 +484,22 @@ public sealed partial class StudioTools
         var name = call.RequireString("actor");
         var actor = source.FindActor(name) ?? throw new ToolArgumentException($"'{name}' is not a stored actor of {source.Name}.");
         var reference = new ActorRef(sourcePath, name);
-        var current = project.State.GetTransformOverride(reference) ?? actor.Root?.Relative ?? TransformValue.FromTransform(actor.WorldTransform);
+        var sameLevel = string.Equals(sourcePath, targetPath, StringComparison.OrdinalIgnoreCase);
+        var moved = project.State.GetTransformOverride(reference);
+        var current = moved ?? actor.Root?.Relative ?? TransformValue.FromTransform(actor.WorldTransform);
+        if (!sameLevel && actor.Root?.AttachParent is { } attach
+            && source.Actors.SelectMany(a => a.Components).FirstOrDefault(c => c.ExportIndex == attach) is { } parent)
+        {
+            // A copy in another level stands in the world: a building's door is relative to its component (all zero there).
+            current = TransformValue.FromTransform(moved is { } m ? m.ToTransform() * parent.WorldTransform : actor.WorldTransform);
+        }
+
         var transform = new TransformValue(
             call.GetVector3("location") is { } l ? ToVector(l) : current.Location,
             call.GetVector3("rotation") is { } r ? ToRotator(r) : current.Rotation,
             call.GetVector3("scale") is { } s ? ToVector(s) : current.Scale);
         EditOp op;
-        if (string.Equals(sourcePath, targetPath, StringComparison.OrdinalIgnoreCase))
+        if (sameLevel)
         {
             op = new DuplicateActorOp(reference, EditOpFactory.UniqueActorName(target, name + "_Copy", project.State), transform);
         }

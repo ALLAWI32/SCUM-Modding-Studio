@@ -388,7 +388,7 @@
   "Assets.ExportGltf": "Exportar glTF",
   "Assets.ExportGltf.Tip": "Guardar esta malla como glTF 2.0 (se abre en Blender y otras herramientas 3D).",
   "Assets.PlaceInMap": "Colocar en el mapa",
-  "Assets.PlaceInMap.Tip": "Añadir esta malla como un actor nuevo en el nivel cargado en la página Mapa (colocado delante de la cámara)",
+  "Assets.PlaceInMap.Tip": "Añadir esta malla o Blueprint al nivel cargado en la página Mapa, delante de la cámara (un Blueprint se copia de uno que el juego colocó en algún lugar de la isla)",
   "Assets.CopyPath.Tip": "Copiar la ruta del objeto (pégala en Añadir objeto de la página Mapa, o con Ctrl+V allí)",
   "Assets.MaterialSection": "MATERIAL",
   "Assets.DetailsSection": "DETALLES",
@@ -1113,5 +1113,10 @@
   "Map.Trees.PutBack.Done": "{0} vuelve a ser el del juego",
   "Map.Trees.Pick.Tip": "El árbol del juego que se reemplaza en toda la isla.",
   "Map.Trees.PickWith.Tip": "El árbol que se dibuja en su lugar (con su propia colisión).",
-  "Map.Trees.PutBack.Tip": "Vuelve a dibujar el árbol del juego."
+  "Map.Trees.PutBack.Tip": "Vuelve a dibujar el árbol del juego.",
+  "Mods.Carry": "En mi pak",
+  "Mods.Carry.Tip": "Activado: Exportar mod mete este mod en tu pak. Desactivado: queda como su propio pak (instálalo tú en el servidor y a los jugadores, para un mapa grande); tu pak se carga después, así que tus cambios siguen ganando.",
+  "Map.SpawnPart.Note": "Un punto de aparición de este edificio: arrástralo o escribe una nueva posición y pulsa «Aplicar transformación». Copiar, Duplicar y Eliminar están desactivados para él: no tiene modelo propio y no se sabe qué hace el juego con un generador eliminado.",
+  "Map.BlueprintNotPlaced": "Este Blueprint no está en la isla",
+  "Map.BlueprintNotPlacedDetail": "'{0}' no está colocado en ningún lugar de la isla, así que no hay nada que copiar. Solo se pueden añadir los Blueprints que el juego colocó en un nivel (y los objetos)."
 }

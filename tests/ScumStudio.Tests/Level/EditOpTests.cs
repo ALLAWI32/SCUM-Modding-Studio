@@ -47,6 +47,8 @@ public sealed class EditOpTests
             new BatchOp("Plant 2 rocks", [new AddStaticMeshActorOp(Port, "SM_Rock_Added", Rock, Elsewhere), new DeleteActorOp(house)]),
             new SetSpawnPointsOp(new ActorRef(Outpost, "SentrySpawner_0"), null, "PatrolPoints", [new SpawnPoint(0, Somewhere), new SpawnPoint(1, Elsewhere)], [new SpawnPoint(1, Elsewhere), new SpawnPoint(1, Somewhere)]),
             new SetSpawnPointsOp(new ActorRef(Outpost, "ItemSpawnerGroup_1"), "SpawnerComponent", "SpawnerMarkers", [new SpawnPoint(0, Somewhere)], []),
+            new ReplaceMeshOp(house, null, Rock, "/Game/ConZ_Files/Models/Rocks/SM_Boulder.SM_Boulder"),
+            new ReplaceMeshOp(new ActorRef(Port, "LandscapeStreamingProxy_0"), "SplineMeshComponent_12", Rock, "/Game/ConZ_Files/Models/Roads/SM_Road_02.SM_Road_02"),
         ];
         return ops.Select(o => new object[] { o });
     }
@@ -103,6 +105,40 @@ public sealed class EditOpTests
 
         // Two children creating the same actor are rejected before anything changes.
         Assert.NotNull(state.Validate(new BatchOp("Twice", [new AddStaticMeshActorOp(Port, "X", Rock, Somewhere), new AddStaticMeshActorOp(Port, "X", Rock, Elsewhere)])));
+    }
+
+    [Fact]
+    public void ABatchIsCheckedAgainstItsOwnEarlierEditsAndSkipsWhatAnActorDeleteCovers()
+    {
+        // The brush adds a tree, then its whole actor: the owner's first bulk delete was journaled, then stopped at that
+        // tree ("already deleted") with 2000 edits unapplied. Now the instance delete is covered by the actor delete.
+        var boathouse = new ActorRef(Outpost, "BP_River_Boathouse_5");
+        var plank = new InstanceRef(Outpost, "BP_River_Boathouse_5", "HierarchicalInstancedStaticMesh5", 1);
+        var house = new ActorRef(Outpost, "StaticMeshActor_12");
+        var batch = new BatchOp("Deleted 3 objects", [new DeleteActorOp(boathouse), new DeleteInstanceOp(plank), new DeleteActorOp(house)]);
+        var state = new EditState();
+        Assert.Null(state.Validate(batch));
+        state.Apply(batch);
+        Assert.Equal(2, state.DeletedActors.Count);
+        Assert.Empty(state.DeletedInstances); // the plank went with its actor
+        Assert.True(state.IsDeleted(plank));
+        state.Apply(batch.Inverse());
+        Assert.True(state.IsEmpty);
+
+        // An instance deleted before the batch stays deleted when the batch is undone (the batch never deleted it).
+        state.Apply(new DeleteInstanceOp(plank));
+        state.Apply(batch);
+        state.Apply(batch.Inverse());
+        Assert.Equal(plank, Assert.Single(state.DeletedInstances));
+        Assert.Empty(state.DeletedActors);
+        state.Apply(new RestoreInstanceOp(plank));
+        Assert.True(state.IsEmpty);
+
+        // An edit that an earlier edit of the same batch makes impossible is refused up front, nothing half applied.
+        var conflict = new BatchOp("Half", [new DeleteActorOp(house), new SetTransformOp(house, Somewhere, Elsewhere)]);
+        Assert.Contains("is deleted", state.Validate(conflict)!, StringComparison.Ordinal);
+        Assert.Throws<InvalidOperationException>(() => state.Apply(conflict));
+        Assert.True(state.IsEmpty);
     }
 
     [Fact]

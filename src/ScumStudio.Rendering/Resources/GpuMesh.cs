@@ -62,12 +62,15 @@ public sealed class GpuMesh : IDisposable
 
     /// <summary>Uploads <paramref name="mesh"/>; sections draw with the texture of their material in <paramref name="materialTextures"/>, else <paramref name="texture"/>.</summary>
     public unsafe GpuMesh(GL gl, int id, PreparedMesh mesh, GpuTexture? texture = null, IReadOnlyDictionary<string, GpuTexture>? materialTextures = null,
-        IReadOnlyDictionary<string, float>? materialAlphaCutoffs = null, IReadOnlyDictionary<string, Vector4>? materialTints = null)
+        IReadOnlyDictionary<string, float>? materialAlphaCutoffs = null, IReadOnlyDictionary<string, Vector4>? materialTints = null,
+        bool shimmer = false, bool billboard = false)
     {
         _gl = gl ?? throw new ArgumentNullException(nameof(gl));
         ArgumentNullException.ThrowIfNull(mesh);
         Id = id;
         Name = mesh.Name;
+        Shimmer = shimmer;
+        Billboard = billboard;
         Bounds = mesh.Bounds;
         IndexCount = mesh.Indices.Length;
         VertexCount = mesh.VertexCount;
@@ -126,6 +129,12 @@ public sealed class GpuMesh : IDisposable
 
     /// <summary>Mesh name.</summary>
     public string Name { get; }
+
+    /// <summary>A stand-in: its translucent sections pulse in opacity with the renderer's time (<see cref="SceneRenderer.Time"/>).</summary>
+    public bool Shimmer { get; }
+
+    /// <summary>A camera-facing card: the mesh's x/y span the camera's right and up at each instance's origin.</summary>
+    public bool Billboard { get; }
 
     /// <summary>Local bounds in the renderer's GL world units.</summary>
     public BoundingBox Bounds { get; }

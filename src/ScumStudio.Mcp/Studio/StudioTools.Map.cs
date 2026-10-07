@@ -1,6 +1,7 @@
 using ScumStudio.Assets.Catalog;
 using ScumStudio.Core.Mathematics;
 using ScumStudio.Level.Editing;
+using ScumStudio.Level.Export;
 using ScumStudio.Level.Model;
 using ScumStudio.Level.World;
 using ScumStudio.Mcp.Protocol;
@@ -463,6 +464,17 @@ public sealed partial class StudioTools
         if (!catalog.PackageExists(mesh))
         {
             throw new ToolArgumentException($"Static mesh not found: {mesh}. Use search_assets with className StaticMesh.");
+        }
+
+        if (FarModels.IsFarViewMesh(mesh))
+        {
+            throw new ToolArgumentException($"{mesh} is a far-view model (blurred, no collision, merged with its surroundings): copy the real building instead.");
+        }
+
+        if (FarModels.IsUndersideMesh(mesh, catalog))
+        {
+            throw new ToolArgumentException($"{mesh} is the underside of the water (flipped normals, underwater material): the game never shows it as a placed object."
+                + (FarModels.TopSideOf(mesh, catalog) is { } top ? $" Place {top} instead." : string.Empty));
         }
 
         var transform = new TransformValue(

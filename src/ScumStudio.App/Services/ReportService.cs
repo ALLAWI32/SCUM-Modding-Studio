@@ -17,9 +17,6 @@ public enum ReportCategory
 
     /// <summary>A wish.</summary>
     Idea,
-
-    /// <summary>A question.</summary>
-    Question,
 }
 
 /// <summary>The outcome of a report: sent, or why not.</summary>

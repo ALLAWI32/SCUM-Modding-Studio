@@ -72,7 +72,6 @@ public sealed class Tutorial3SpawnsRecorder
 
             // A loot point out in the open (not inside another actor's mesh box, so the camera sees it, unlike a shelf under a
             // roof) with the most loot points around it: the camera looks at that spot for the first four steps.
-            var lootMesh = SpawnMarkers.MeshKey(SpawnKind.Loot);
             var meshes = map.PreparedScene.Meshes;
             var rooms = placements.Where(p => !SpawnMarkers.IsMarker(p.MeshPath) && meshes.ContainsKey(p.MeshPath))
                 .Select(p => (p.SelectableId, Box: LevelSceneUploader.TransformBounds(meshes[p.MeshPath].Mesh.Bounds, p.GlModel)))
@@ -84,10 +83,10 @@ public sealed class Tutorial3SpawnsRecorder
                 return !rooms.Any(r => r.SelectableId != pin.SelectableId && r.Box.Contains(at));
             }
 
-            var lootPins = placements.Where(p => p.MeshPath == lootMesh && p.InstanceKey is { IsLootPoint: true }).ToList();
+            var lootPins = placements.Where(p => SpawnMarkers.KindOfMesh(p.MeshPath) == SpawnKind.Loot && p.InstanceKey is { IsLootPoint: true }).ToList();
             var open = lootPins.Where(Outdoors).ToList();
             var lootPin = open.MaxBy(p => open.Count(o => FVector.Distance(o.World.Translation, p.World.Translation) < 800f))
-                ?? lootPins.FirstOrDefault() ?? placements.First(p => p.MeshPath == lootMesh);
+                ?? lootPins.FirstOrDefault() ?? placements.First(p => SpawnMarkers.KindOfMesh(p.MeshPath) == SpawnKind.Loot);
             var lootOwner = map.AllActors.First(a => a.SelectableId == lootPin.SelectableId);
             rec.FrameAt(lootPin.World.Translation, radiusCm: 600f, pitch: -45f, shift: 0.3f); // left of centre: the legend flyout covers the middle
 

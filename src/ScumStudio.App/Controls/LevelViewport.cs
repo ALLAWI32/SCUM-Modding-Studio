@@ -88,6 +88,14 @@ public sealed partial class LevelViewport : OpenGlControlBase
     public static readonly StyledProperty<IReadOnlyDictionary<InstanceKey, Level.Model.SplineMeshParams>?> SegmentBendsProperty =
         AvaloniaProperty.Register<LevelViewport, IReadOnlyDictionary<InstanceKey, Level.Model.SplineMeshParams>?>(nameof(SegmentBends));
 
+    /// <summary>Actors drawn with another mesh in place of their own (the Replace tool; see <see cref="LevelScene.SetActorMesh"/>).</summary>
+    public static readonly StyledProperty<IReadOnlyDictionary<uint, string>?> ReplacedMeshesProperty =
+        AvaloniaProperty.Register<LevelViewport, IReadOnlyDictionary<uint, string>?>(nameof(ReplacedMeshes));
+
+    /// <summary>Road pieces and building parts drawn with another mesh (see <see cref="LevelScene.SetSegmentBend"/> and <see cref="LevelScene.SetPartMesh"/>).</summary>
+    public static readonly StyledProperty<IReadOnlyDictionary<InstanceKey, string>?> PartMeshesProperty =
+        AvaloniaProperty.Register<LevelViewport, IReadOnlyDictionary<InstanceKey, string>?>(nameof(PartMeshes));
+
     /// <summary>The selected piece's curve with its two handles (Shape): drawn over the view and dragged sideways.</summary>
     public static readonly StyledProperty<ShapeHandleInfo?> ShapeHandlesProperty =
         AvaloniaProperty.Register<LevelViewport, ShapeHandleInfo?>(nameof(ShapeHandles));
@@ -178,8 +186,13 @@ public sealed partial class LevelViewport : OpenGlControlBase
     private RenderTarget? _target;
     private LevelScene? _level;
     private PreparedLevelScene? _pendingScene;
+    private PreparedLevelScene? _stagedScene; // on its way to the GPU (see GpuMeshCache.Stage)
     private bool _sceneDirty;
     private bool _backdropDirty;
+
+    // Milliseconds a frame may spend sending a new scene's meshes and textures: little while the camera moves, more at rest.
+    private const double StageBudgetMovingMs = 4.0;
+    private const double StageBudgetRestingMs = 30.0;
     private LevelScene? _backdrop;
     private object? _backdropHiddenFor;
     private static readonly object EmptyMarker = new();
@@ -201,7 +214,10 @@ public sealed partial class LevelViewport : OpenGlControlBase
     private (int X, int Y)? _pendingPick;
     private (int X, int Y, bool Paint)? _pendingBrush;
     private Vector3? _brushPointGl;
+    private Vector3? _brushFromGl;
+    private float? _brushGroundY;
     private bool _brushing;
+    private bool _brushEndPending;
     private Point _lastPointer;
     private Point _pressPointer;
     private bool _looking;
@@ -264,10 +280,13 @@ public sealed partial class LevelViewport : OpenGlControlBase
         ClonesProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.MarkDirty(ref c._clonesDirty));
         BendsProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.MarkDirty(ref c._bendsDirty));
         SegmentBendsProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.MarkDirty(ref c._bendsDirty));
+        ReplacedMeshesProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.MarkDirty(ref c._bendsDirty));
+        PartMeshesProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.MarkDirty(ref c._bendsDirty));
         ShapeHandlesProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.RequestNextFrameRendering());
         ScaleHandlesProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.RequestNextFrameRendering());
         LegHandleProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.RequestNextFrameRendering());
         SelectedRootWorldProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.RequestNextFrameRendering());
+        CanScaleProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.RequestNextFrameRendering());
         ExtraMeshesProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.MarkDirty(ref c._clonesDirty));
     }
 
@@ -389,6 +408,20 @@ public sealed partial class LevelViewport : OpenGlControlBase
     {
         get => GetValue(SegmentBendsProperty);
         set => SetValue(SegmentBendsProperty, value);
+    }
+
+    /// <inheritdoc cref="ReplacedMeshesProperty" />
+    public IReadOnlyDictionary<uint, string>? ReplacedMeshes
+    {
+        get => GetValue(ReplacedMeshesProperty);
+        set => SetValue(ReplacedMeshesProperty, value);
+    }
+
+    /// <inheritdoc cref="PartMeshesProperty" />
+    public IReadOnlyDictionary<InstanceKey, string>? PartMeshes
+    {
+        get => GetValue(PartMeshesProperty);
+        set => SetValue(PartMeshesProperty, value);
     }
 
     /// <inheritdoc cref="ShapeHandlesProperty" />
@@ -525,8 +558,14 @@ public sealed partial class LevelViewport : OpenGlControlBase
         set => SetValue(BrushRadiusProperty, value);
     }
 
-    /// <summary>Raised on the UI thread while the brush paints: the UE world point under the circle's centre.</summary>
-    public event EventHandler<FVector>? BrushPainted;
+    /// <summary>
+    /// Raised on the UI thread while the brush paints: the circle's centre now and where it was at the stroke's previous
+    /// dab (UE world), so a fast sweep covers the whole way between them. The first dab of a stroke has From = To.
+    /// </summary>
+    public event EventHandler<(FVector From, FVector To)>? BrushPainted;
+
+    /// <summary>Raised on the UI thread when the painting button is let go, after the stroke's last <see cref="BrushPainted"/>.</summary>
+    public event EventHandler? BrushStrokeEnded;
 
     /// <summary>How close (cm) a neighbour's face must come for auto-snap to take it.</summary>
     public float SnapReach { get; set; } = 30f;
@@ -700,27 +739,60 @@ public sealed partial class LevelViewport : OpenGlControlBase
         return bounds;
     }
 
-    // The gizmo stands in the middle of the selection, not at its root (owner: "the circle shows at the end of the bridge;
-    // it should be in the middle of the object"): the middle in the root's own space, so it moves and turns with it.
-    private (uint Id, InstanceKey? Instance, FTransform? Root, object? Bends)? _pivotFor;
+    // The gizmo stands on what the user sees selected, not at its root (owner: "the circle shows at the end of the bridge;
+    // it should be in the middle of the object"; a trader's globe stood 13 m away among the car shop's vehicles): its
+    // middle in the root's own space, so it moves and turns with it. Placed again when the selection, its place or the
+    // scene changes (meshes arrive after a selection), never during a drag; a long piece's slides with the camera.
+    private object? _pivotFor;
     private FVector _pivotLocal;
+    private (Vector3 Eye, Vector3 Look)? _pivotView;
+
+    /// <summary>For tests without a GL scene: the drawn parts of the selection (mesh box, model matrix, mesh path) instead of the scene's.</summary>
+    internal IReadOnlyList<(BoundingBox Box, Matrix4x4 World, string? Mesh)>? PivotPartsForTests { get; set; }
+
+    /// <summary>Where the gizmo stands (GL), for tests; null without a selection.</summary>
+    internal Vector3? GizmoOrigin => SelectedRootWorld is { } root ? Frame(root).Origin : null;
+
+    /// <summary>True when the selection is a member of a multi-selection: the gizmo stands in the middle of them all (no scale cubes: one would grow, the rest not).</summary>
+    private bool InGroup() => GroupWorlds is { Count: > 1 } group && group.Any(m => m.Id == SelectedId && m.Instance == SelectedInstance);
 
     /// <summary>Where the gizmo of the selection is (UE world) when its root is at <paramref name="root"/>.</summary>
     private FVector PivotOf(FTransform root)
     {
-        if (!_dragging && _pivotFor != (SelectedId, SelectedInstance, SelectedRootWorld, Bends))
+        if (!_dragging && !_freeDragging)
         {
-            _pivotFor = (SelectedId, SelectedInstance, SelectedRootWorld, Bends);
-            _pivotLocal = FVector.Zero;
-            var scale = SelectedRootWorld?.Scale3D ?? FVector.Zero;
-            if (_level is { } level && SelectedRootWorld is { } start && MathF.Abs(scale.X * scale.Y * scale.Z) > 1e-9f
-                && SelectionBounds(level) is { IsEmpty: false } bounds)
+            var key = (SelectedId, SelectedInstance, SelectedRootWorld, Bends, GroupWorlds, _level, _level?.Scene.Version, PivotPartsForTests);
+            var moved = _pivotView is { } view
+                && (Vector3.Distance(view.Eye, _camera.Position) > MathF.Max(500f, 0.2f * Vector3.Distance(view.Eye, UeToGl.Point(root.TransformPosition(_pivotLocal))))
+                    || Vector3.Dot(view.Look, _camera.Forward) < 0.97f);
+            if (moved || !key.Equals(_pivotFor))
             {
-                _pivotLocal = start.InverseTransformPosition(UeToGl.ToUePoint(bounds.Center));
+                _pivotFor = key;
+                PlacePivot();
             }
         }
 
         return root.TransformPosition(_pivotLocal);
+    }
+
+    /// <summary>Puts the gizmo on the middle of the drawn selection (<see cref="GizmoMath.PivotParts"/>), a long piece's where the camera looks (<see cref="GizmoMath.PivotLocal"/>).</summary>
+    private void PlacePivot()
+    {
+        _pivotLocal = FVector.Zero;
+        _pivotView = null;
+        if (SelectedRootWorld is not { } start || MathF.Abs(start.Scale3D.X * start.Scale3D.Y * start.Scale3D.Z) < 1e-9f)
+        {
+            return;
+        }
+
+        var instance = SelectedInstance is { } selected && selected.SelectableId == SelectedId ? selected : (InstanceKey?)null;
+        var members = InGroup() ? GroupWorlds!.Select(m => (m.Id, m.Instance)).ToList() : [(SelectedId, instance)];
+        var parts = PivotPartsForTests ?? (_level is { } level ? GizmoMath.PivotParts(level.Scene.Nodes, members) : []);
+
+        // One piece can be long (a road, bridge, fence or wall); a building of many meshes or a multi-selection stands in its middle.
+        var (pivot, slides) = GizmoMath.PivotLocal(GizmoMath.LocalBox(parts, start), start, parts.Count == 1 ? parts[0].Mesh : null, _camera.Position, _camera.Forward);
+        _pivotLocal = pivot;
+        _pivotView = slides ? (_camera.Position, _camera.Forward) : null;
     }
 
     /// <summary><paramref name="moved"/> (turned about its root) turned about the middle instead, which keeps its move.</summary>
@@ -773,6 +845,7 @@ public sealed partial class LevelViewport : OpenGlControlBase
         _level?.Dispose();
         _level = null;
         _gpuMeshes.Clear(); // the context and every mesh in it go away with the renderer
+        _stagedScene = null;
         _target?.Dispose();
         _target = null;
         _renderer?.Dispose();
@@ -806,14 +879,37 @@ public sealed partial class LevelViewport : OpenGlControlBase
         if (_sceneDirty)
         {
             _sceneDirty = false;
-            // The same scene uploaded again (the page came back, the view docked back) keeps the camera where it was.
-            var reupload = ReferenceEquals(_pendingScene, _uploadedScene);
-            _level?.Dispose();
-            _level = null;
-            _uploadedScene = null;
-            if (_pendingScene is { } prepared)
+            _stagedScene = _level is not null && ReferenceEquals(_pendingScene, _uploadedScene) ? null : _pendingScene;
+            if (_pendingScene is null)
             {
-                _level = LevelSceneUploader.Upload(_renderer, prepared, cache: _gpuMeshes);
+                _level?.Dispose();
+                _level = null;
+                _uploadedScene = null;
+            }
+        }
+
+        if (_stagedScene is { } prepared)
+        {
+            // A new scene's meshes and textures go to the GPU a few milliseconds a frame (more while the camera rests) while
+            // the current one stays on screen; then it is shown at once, keeping the nodes of the levels both scenes have
+            // (owner: "it stutters while I fly": every streaming step re-uploaded and rebuilt the whole scene).
+            // The new levels' nodes are built on a worker meanwhile (LevelScene.Prebuild), so the switch only hangs them in.
+            if (_gpuMeshes.Stage(_renderer, prepared, _wasContinuous ? StageBudgetMovingMs : StageBudgetRestingMs) && (_level?.Prebuild(prepared) ?? true))
+            {
+                _stagedScene = null;
+                // The same scene uploaded again (the page came back, the view docked back) keeps the camera where it was.
+                var reupload = ReferenceEquals(prepared, _uploadedScene);
+                if (_level is null)
+                {
+                    _level = LevelSceneUploader.Upload(_renderer, prepared, cache: _gpuMeshes);
+                    _appliedClones.Clear();
+                    _appliedPins.Clear();
+                }
+                else
+                {
+                    _level.Update(prepared); // clones and replaced pins of the levels that stay are still drawn
+                }
+
                 _gpuMeshes.Trim(_renderer);
                 _uploadedScene = prepared;
                 if (!KeepCamera && !reupload && !ViewBounds(_level).IsEmpty)
@@ -826,8 +922,10 @@ public sealed partial class LevelViewport : OpenGlControlBase
                 _transformsDirty = true;
                 _clonesDirty = true;
                 _pinsDirty = true;
-                _appliedClones.Clear();
-                _appliedPins.Clear();
+            }
+            else
+            {
+                RequestNextFrameRendering();
             }
         }
 
@@ -953,6 +1051,33 @@ public sealed partial class LevelViewport : OpenGlControlBase
             if (_bendsDirty)
             {
                 _bendsDirty = false;
+
+                // Replaced meshes first: a bend is built over the mesh the node shows.
+                var replaced = ReplacedMeshes;
+                foreach (var id in level.SwappedActors.Where(id => replaced is null || !replaced.ContainsKey(id)).ToList())
+                {
+                    level.SetActorMesh(id, null);
+                }
+
+                foreach (var (id, mesh) in replaced ?? new Dictionary<uint, string>())
+                {
+                    level.SetActorMesh(id, mesh);
+                }
+
+                var parts = PartMeshes;
+                foreach (var key in level.SwappedParts.Where(k => parts is null || !parts.ContainsKey(k)).ToList())
+                {
+                    level.SetPartMesh(key, null);
+                }
+
+                foreach (var (key, mesh) in parts ?? new Dictionary<InstanceKey, string>())
+                {
+                    if (key.InstanceIndex == InstanceKey.Part)
+                    {
+                        level.SetPartMesh(key, mesh);
+                    }
+                }
+
                 var bends = Bends;
                 foreach (var id in level.BentIds.Where(id => bends is null || !bends.ContainsKey(id)).ToList())
                 {
@@ -972,7 +1097,7 @@ public sealed partial class LevelViewport : OpenGlControlBase
 
                 foreach (var (key, spline) in pieces ?? new Dictionary<InstanceKey, Level.Model.SplineMeshParams>())
                 {
-                    level.SetSegmentBend(key, spline);
+                    level.SetSegmentBend(key, spline, parts?.GetValueOrDefault(key));
                 }
             }
 
@@ -1131,21 +1256,14 @@ public sealed partial class LevelViewport : OpenGlControlBase
             }
         }
 
-        if (_pendingBrush is { } brush && _level is { } brushed)
+        if (_pendingBrush is { } brush)
         {
-            _pendingBrush = null;
-            var hit = _renderer.Pick(_target, brushed.Scene, _camera, brush.X, brush.Y);
-            _brushPointGl = hit?.WorldPosition;
-            if (brush.Paint && hit is not null)
-            {
-                var ue = UeToGl.ToUePoint(hit.WorldPosition);
-                Dispatcher.UIThread.Post(() => BrushPainted?.Invoke(this, ue));
-            }
-
+            ResolveBrush(_level is { } brushed ? _renderer.Pick(_target, brushed.Scene, _camera, brush.X, brush.Y)?.WorldPosition : null);
             RequestNextFrameRendering(); // the circle is drawn where the cursor now is
         }
 
         RenderStats stats;
+        _renderer.Time = (float)(now % 3600.0); // the stand-ins' glint; wrapped so a long session keeps float precision
         if (_level is { } scene)
         {
             if (_backdrop is { } island)
@@ -1214,7 +1332,20 @@ public sealed partial class LevelViewport : OpenGlControlBase
         {
             RequestNextFrameRendering();
         }
+        else if (_level is { HasShimmer: true } && !_shimmerQueued)
+        {
+            // Stand-ins keep glinting at rest: a frame every 40 ms (25 fps) is smooth for a 1.5 s pulse and cheap.
+            // ponytail: runs while any stand-in is in the scene, hidden layers included; gate on the spawn layers if it costs.
+            _shimmerQueued = true;
+            DispatcherTimer.RunOnce(() =>
+            {
+                _shimmerQueued = false;
+                RequestNextFrameRendering();
+            }, TimeSpan.FromMilliseconds(40));
+        }
     }
+
+    private bool _shimmerQueued;
 
     private static readonly Rendering.SceneGraph.Scene EmptyScene = new();
 
@@ -1302,6 +1433,7 @@ public sealed partial class LevelViewport : OpenGlControlBase
         {
             // Brush: holding the button paints; nothing is grabbed or moved (Ctrl+click still takes one object out).
             _brushing = true;
+            _brushFromGl = null; // a new stroke
             QueueBrush(point.Position, paint: true);
             e.Pointer.Capture(this);
             return;
@@ -1314,13 +1446,9 @@ public sealed partial class LevelViewport : OpenGlControlBase
             return;
         }
 
-        if (point.Properties.IsLeftButtonPressed && TryHitGizmo(point.Position, out var axis, out var parameter) && SelectedRootWorld is { } root)
+        if (point.Properties.IsLeftButtonPressed && TryHitGizmo(point.Position, out var handle) && SelectedRootWorld is { } root)
         {
-            _dragging = true;
-            _dragAxis = axis;
-            _dragStartRoot = root;
-            _dragStartParameter = parameter;
-            BeginAutoSnap(SelectedId, SelectedInstance);
+            BeginGizmoDrag(handle, point.Position, root);
             e.Pointer.Capture(this);
             RequestNextFrameRendering();
             return;
@@ -1401,23 +1529,7 @@ public sealed partial class LevelViewport : OpenGlControlBase
         }
         if (_dragging)
         {
-            var (origin, direction) = ScreenRay(position);
-            var axisOrigin = UeToGl.Point(PivotOf(_dragStartRoot));
-            if (_dragAxis == GizmoAxis.Yaw)
-            {
-                // The turn follows the mouse around the ring's centre on screen, whatever the viewing angle; it turns about the middle.
-                var turn = GizmoMath.AngleDelta(_dragStartParameter, ScreenAngle(position, _ringScreenCentre)) * _ringSense;
-                _dragPreview = new DragPreview(SelectedId, AboutPivot(_dragStartRoot, GizmoMath.RotateYaw(_dragStartRoot, turn, _snapHeld ? RotationSnap : 0f)), SelectedInstance);
-                RequestNextFrameRendering();
-            }
-            else if (GizmoMath.TryClosestParameter(origin, direction, axisOrigin, AxisGl(_dragAxis, _dragStartRoot), out var t, out _))
-            {
-                // Along the arrow, as far as the mouse goes: no jump onto other objects' boxes here (Discord salvador: "the
-                // movement happens in steps"); Ctrl snaps to the grid, a free drag still joins pieces.
-                _dragPreview = new DragPreview(SelectedId, GizmoMath.Translate(_dragStartRoot, AxisUe(_dragAxis, _dragStartRoot), t - _dragStartParameter, _snapHeld ? TranslationSnap : 0f), SelectedInstance);
-                RequestNextFrameRendering();
-            }
-
+            UpdateGizmoDrag(position);
             e.Handled = true;
             return;
         }
@@ -1431,12 +1543,7 @@ public sealed partial class LevelViewport : OpenGlControlBase
 
         if (!_panning && SelectedRootWorld is not null)
         {
-            var hover = TryHitGizmo(position, out var axis, out _) ? axis : GizmoAxis.None;
-            if (hover != _hoverAxis)
-            {
-                _hoverAxis = hover;
-                RequestNextFrameRendering();
-            }
+            UpdateHover(position);
         }
 
         if (_panning)
@@ -1456,6 +1563,15 @@ public sealed partial class LevelViewport : OpenGlControlBase
         {
             _brushing = false;
             e.Pointer.Capture(null);
+            if (_pendingBrush is { Paint: true })
+            {
+                _brushEndPending = true; // raised right after that last dab (ResolveBrush)
+            }
+            else
+            {
+                Dispatcher.UIThread.Post(() => BrushStrokeEnded?.Invoke(this, EventArgs.Empty));
+            }
+
             e.Handled = true;
             return;
         }
@@ -1470,10 +1586,8 @@ public sealed partial class LevelViewport : OpenGlControlBase
 
         if (_dragging)
         {
-            _dragging = false;
-            _dragAxis = GizmoAxis.None;
             e.Pointer.Capture(null);
-            CommitDragPreview();
+            EndGizmoDrag();
             e.Handled = true;
             return;
         }
@@ -1730,7 +1844,74 @@ public sealed partial class LevelViewport : OpenGlControlBase
 
         var scaling = RenderScaling();
         _pendingBrush = ((int)(position.X * scaling), (int)(position.Y * scaling), paint);
+        if (_renderer is null)
+        {
+            ResolveBrush(null); // no OpenGL (headless): nothing to pick, the ground under the cursor still counts
+        }
+
         RequestNextFrameRendering();
+    }
+
+    /// <summary>
+    /// Places the brush circle for the queued cursor position and, while painting, raises <see cref="BrushPainted"/>
+    /// from the stroke's previous centre to this one. <paramref name="hitGl"/> is what the pick found under the cursor.
+    /// </summary>
+    private void ResolveBrush(Vector3? hitGl)
+    {
+        if (_pendingBrush is not { } brush)
+        {
+            return;
+        }
+
+        _pendingBrush = null;
+        var (w, h) = PixelSize();
+        var (origin, direction) = _camera.ScreenRay(brush.X, brush.Y, Math.Max(1, w), Math.Max(1, h));
+        var centre = BrushCentre(origin, direction, hitGl);
+        _brushPointGl = centre;
+        if (brush.Paint)
+        {
+            var stroke = (UeToGl.ToUePoint(_brushFromGl ?? centre), UeToGl.ToUePoint(centre));
+            _brushFromGl = centre;
+            Dispatcher.UIThread.Post(() => BrushPainted?.Invoke(this, stroke));
+            if (_brushEndPending)
+            {
+                _brushEndPending = false;
+                Dispatcher.UIThread.Post(() => BrushStrokeEnded?.Invoke(this, EventArgs.Empty));
+            }
+        }
+    }
+
+    /// <summary>
+    /// The brush circle's centre (GL) for a mouse ray (owner: "everything inside the circle", not only what the cursor is
+    /// on): what the pick hit, else the terrain under the ray, else the level plane of the last ground the brush touched,
+    /// at most <see cref="MaxPickDistanceLarge"/> away across the ground (towards the sky: that far straight ahead), so the
+    /// circle follows the cursor over empty ground and the sky too.
+    /// </summary>
+    private Vector3 BrushCentre(Vector3 origin, Vector3 direction, Vector3? hitGl)
+    {
+        if (hitGl is null && ((Scene?.HeightField?.RaycastGl(origin, direction, _camera.FarPlane) ?? Backdrop?.HeightField?.RaycastGl(origin, direction, _camera.FarPlane)) is { } ground))
+        {
+            hitGl = UeToGl.Point(new FVector(ground.Position.X, ground.Position.Y, ground.Position.Z));
+        }
+
+        if (hitGl is { } hit)
+        {
+            _brushGroundY = hit.Y;
+            return hit;
+        }
+
+        var y = _brushGroundY ?? (_level is { } level && !ViewBounds(level).IsEmpty ? ViewBounds(level).Min.Y : 0f);
+        var flat = new Vector2(direction.X, direction.Z);
+        var length = flat.Length();
+        if (length < 1e-6f)
+        {
+            return new Vector3(origin.X, y, origin.Z); // straight down (or up)
+        }
+
+        var t = MathF.Abs(direction.Y) > 1e-6f ? (y - origin.Y) / direction.Y : -1f;
+        var across = MathF.Min(t > 0f ? t * length : float.MaxValue, MathF.Max(MaxPickDistance, MaxPickDistanceLarge));
+        flat /= length;
+        return new Vector3(origin.X + (flat.X * across), y, origin.Z + (flat.Y * across));
     }
 
     private void QueuePick(Point position, bool grab, bool whole = false, bool toggle = false, bool part = false)
@@ -1773,6 +1954,7 @@ public sealed partial class LevelViewport : OpenGlControlBase
             return false;
         }
 
+        PivotOf(root); // the press may have just selected it: place its pivot before the drag freezes it
         _freeDragging = true;
         _dragStartRoot = root;
         _freeMove = Vector3.Zero;
@@ -1954,8 +2136,8 @@ public sealed partial class LevelViewport : OpenGlControlBase
         return moved with { Translation = new FVector(t.X + offset.X, t.Y + offset.Y, t.Z + offset.Z) };
     }
 
-    /// <summary>Ends a drag: the previewed transform goes to the journal through <see cref="TransformDragged"/>.</summary>
-    private void CommitDragPreview()
+    /// <summary>Ends a drag: the previewed transform goes to the journal through <see cref="TransformDragged"/> (<paramref name="scaled"/>: its scale too).</summary>
+    private void CommitDragPreview(bool scaled = false)
     {
         var preview = _dragPreview;
         _dragPreview = null;
@@ -1967,7 +2149,7 @@ public sealed partial class LevelViewport : OpenGlControlBase
         _snappedTo = null;
         if (preview is not null && !preview.Root.Equals(_dragStartRoot, 1e-3f))
         {
-            TransformDragged?.Invoke(this, new TransformDragEventArgs(preview.Id, preview.Root));
+            TransformDragged?.Invoke(this, new TransformDragEventArgs(preview.Id, preview.Root, scaled));
         }
 
         RequestNextFrameRendering();
@@ -2008,67 +2190,6 @@ public sealed partial class LevelViewport : OpenGlControlBase
         return _camera.ScreenRay((float)(position.X * scaling), (float)(position.Y * scaling), Math.Max(1, w), Math.Max(1, h));
     }
 
-    private bool TryHitGizmo(Point position, out GizmoAxis axis, out float parameter)
-    {
-        axis = GizmoAxis.None;
-        parameter = 0f;
-        if (SelectedId == 0 || SelectedRootWorld is not { } root || _level is null)
-        {
-            return false;
-        }
-
-        // Hit-tested on screen (a fixed number of pixels around each drawn line): the old test in world units became
-        // erratic when the ring was seen at a grazing angle and grabbed the wrong handle.
-        var origin = UeToGl.Point(PivotOf(root));
-        var length = GizmoMath.HandleLength(Vector3.Distance(_camera.Position, origin));
-        if (ToScreen(origin) is not { } centre)
-        {
-            return false;
-        }
-
-        const double tolerance = 9; // pixels
-        var best = tolerance;
-        foreach (var candidate in new[] { GizmoAxis.X, GizmoAxis.Y, GizmoAxis.Z })
-        {
-            if (ToScreen(origin + (AxisGl(candidate, root) * length)) is { } tip && DistanceToSegment(position, centre, tip) is var d && d < best)
-            {
-                best = d;
-                axis = candidate;
-            }
-        }
-
-        var ring = GizmoMath.RingPoints(origin, GizmoMath.RingRadius(length));
-        for (var i = 1; i < ring.Length; i++)
-        {
-            // Axis handles win near their lines (3 px), so the ring never steals a click aimed at an arrow.
-            if (ToScreen(ring[i - 1]) is { } a && ToScreen(ring[i]) is { } b && DistanceToSegment(position, a, b) is var d && d + 3 < best)
-            {
-                best = d + 3;
-                axis = GizmoAxis.Yaw;
-            }
-        }
-
-        if (axis == GizmoAxis.Yaw)
-        {
-            _ringScreenCentre = centre;
-            _ringSense = RingSense(origin, GizmoMath.RingRadius(length), centre);
-            parameter = ScreenAngle(position, centre);
-            return true;
-        }
-
-        if (axis != GizmoAxis.None)
-        {
-            var (rayOrigin, rayDirection) = ScreenRay(position);
-            GizmoMath.TryClosestParameter(rayOrigin, rayDirection, origin, AxisGl(axis, root), out parameter, out _);
-            return true;
-        }
-
-        return false;
-    }
-
-    private Point _ringScreenCentre;
-    private float _ringSense = 1f;
-
     /// <summary>Where a GL point is drawn, in control coordinates; null when it is behind the camera.</summary>
     private Point? ToScreen(Vector3 gl)
     {
@@ -2099,51 +2220,6 @@ public sealed partial class LevelViewport : OpenGlControlBase
 
     /// <summary>Angle in degrees of <paramref name="p"/> around <paramref name="centre"/> on screen.</summary>
     private static float ScreenAngle(Point p, Point centre) => (float)(Math.Atan2(p.Y - centre.Y, p.X - centre.X) * 180 / Math.PI);
-
-    /// <summary>
-    /// +1 when turning the object right (UE yaw up) runs the same way round on screen as the mouse angle, -1 when the view
-    /// mirrors it (seen from below). Taken from two points of the drawn ring; a ring seen edge-on keeps +1.
-    /// </summary>
-    private float RingSense(Vector3 origin, float radius, Point centre)
-    {
-        var x = GizmoMath.GlDirection(GizmoAxis.X) * radius;
-        var y = GizmoMath.GlDirection(GizmoAxis.Y) * radius;
-        if (ToScreen(origin + x) is not { } a || ToScreen(origin + y) is not { } b)
-        {
-            return 1f;
-        }
-
-        var turn = GizmoMath.AngleDelta(ScreenAngle(a, centre), ScreenAngle(b, centre));
-        return MathF.Abs(turn) is < 15f or > 165f ? 1f : MathF.Sign(turn);
-    }
-
-    private void BuildGizmoOverlay(SceneRenderer renderer, FTransform? root)
-    {
-        renderer.Overlay.Clear();
-        if (root is not { } r || SelectedId == 0)
-        {
-            return;
-        }
-
-        var origin = UeToGl.Point(PivotOf(r));
-        var length = GizmoMath.HandleLength(Vector3.Distance(_camera.Position, origin));
-        var active = _dragging ? _dragAxis : _hoverAxis;
-        var ring = GizmoMath.RingPoints(origin, GizmoMath.RingRadius(length));
-        var ringColor = GizmoMath.Color(GizmoAxis.Yaw, active == GizmoAxis.Yaw);
-        for (var i = 1; i < ring.Length; i++)
-        {
-            renderer.Overlay.Add(new OverlayLine(ring[i - 1], ring[i], ringColor));
-        }
-
-        foreach (var axis in new[] { GizmoAxis.X, GizmoAxis.Y, GizmoAxis.Z })
-        {
-            var direction = AxisGl(axis, r);
-            renderer.Overlay.Add(new OverlayLine(origin, origin + direction * length, GizmoMath.Color(axis, axis == active)));
-            // a short tick at the tip so the handle end is visible
-            var tick = Vector3.Cross(direction, Vector3.Normalize(_camera.Position - origin)) * (length * 0.06f);
-            renderer.Overlay.Add(new OverlayLine(origin + direction * length - tick, origin + direction * length + tick, GizmoMath.Color(axis, axis == active)));
-        }
-    }
 
     private sealed record DragPreview(uint Id, FTransform Root, InstanceKey? Instance = null);
 
@@ -2222,4 +2298,5 @@ public sealed partial class LevelViewport : OpenGlControlBase
 /// <summary>Arguments of <see cref="LevelViewport.TransformDragged"/>.</summary>
 /// <param name="Id">Selectable id of the dragged actor.</param>
 /// <param name="RootWorld">New root world transform (UE space).</param>
-public sealed record TransformDragEventArgs(uint Id, FTransform RootWorld);
+/// <param name="Scaled">True when a scale cube was dragged: the transform's scale is meant, not only its place and turn.</param>
+public sealed record TransformDragEventArgs(uint Id, FTransform RootWorld, bool Scaled = false);

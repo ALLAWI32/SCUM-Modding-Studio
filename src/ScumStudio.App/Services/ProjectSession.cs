@@ -90,13 +90,25 @@ public sealed partial class ProjectSession : ObservableObject, IDisposable
         return project;
     }
 
-    /// <summary>Opens the project in <paramref name="path"/> (the folder or its <c>project.json</c>).</summary>
+    /// <summary>Opens the project in <paramref name="path"/> (the folder, a file in it, or a folder holding just one project).</summary>
+    /// <exception cref="FileNotFoundException">No project there (the message says what to pick).</exception>
     public async Task<Project> OpenAsync(string path, CancellationToken cancellationToken = default)
     {
-        var project = await Project.OpenAsync(path, cancellationToken: cancellationToken).ConfigureAwait(false);
+        var directory = Project.Find(path) ?? throw new FileNotFoundException(Localization.Loc.F("Projects.NotAProject", path));
+        var project = await Project.OpenAsync(directory, cancellationToken: cancellationToken).ConfigureAwait(false);
         foreach (var warning in project.Journal.Warnings)
         {
             _logger.LogWarning("Journal: {Warning}", warning);
+        }
+
+        foreach (var problem in project.ReplayProblems)
+        {
+            _logger.LogWarning("Journal: {Problem}", problem);
+        }
+
+        if (project.ReplayProblems.Count > 0)
+        {
+            _services.Notifications.Warning(Localization.Loc.T("Project.ReplaySkipped"), Localization.Loc.F("Project.ReplaySkipped.Body", project.ReplayProblems.Count, project.ReplayProblems[0]));
         }
 
         _logger.LogInformation("Opened project {Name} ({Count} journal entries).", project.Manifest.Name, project.History.Count);

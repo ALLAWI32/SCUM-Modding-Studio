@@ -540,9 +540,11 @@ public sealed class AssetRegistryFile
         ArgumentNullException.ThrowIfNull(template);
         ArgumentNullException.ThrowIfNull(tags);
         var tpl = _assets[template.Index];
-        if (tpl.Numbers.Any(n => n != 0))
+        if (tpl.Numbers[2] != 0)
         {
-            throw new NotSupportedException("Template asset uses numbered names.");
+            // Only the class name is taken over from the template (the other names are the new ones, numberless): a
+            // template in a numbered folder (a trader personality under .../Outpost_B_4) is fine.
+            throw new NotSupportedException("Template asset uses a numbered class name.");
         }
 
         var first = _n[NNumberlessPairs];

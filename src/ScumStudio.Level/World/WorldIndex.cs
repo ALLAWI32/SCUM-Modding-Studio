@@ -201,21 +201,25 @@ public sealed class WorldIndex
     /// <summary>
     /// Returns a copy whose sublevels carry their cooked <c>FWorldTileInfo</c> (<see cref="WorldPackage.Tile"/>), read from
     /// each package header in <paramref name="catalog"/>, with <see cref="WorldPackage.ParentPackagePath"/> resolved against
-    /// this index. A package that cannot be read keeps no tile (logged at debug level). ~1,900 headers take a few seconds
-    /// from paks; <paramref name="progress"/> receives the number of packages processed.
+    /// this index. A package that cannot be read keeps no tile (logged at debug level). The headers are read side by side
+    /// (~3,200 packages: about a second one by one); <paramref name="progress"/> receives the number of packages processed.
     /// </summary>
     public WorldIndex WithTileInfo(AssetCatalog catalog, ILogger? logger = null, IProgress<int>? progress = null, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(catalog);
         logger ??= NullLogger.Instance;
+        var tiles = new WorldTileInfo?[Packages.Count];
+        var parallel = new ParallelOptions { CancellationToken = cancellationToken, MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount - 1) };
+        Parallel.For(0, Packages.Count, parallel, i => tiles[i] = Packages[i].IsSublevel ? TryReadTile(catalog, Packages[i], logger) : null);
         var packages = new List<WorldPackage>(Packages.Count);
         var done = 0;
         var read = 0;
-        foreach (var p in Packages)
+        for (var i = 0; i < Packages.Count; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            var p = Packages[i];
             var updated = p;
-            if (p.IsSublevel && TryReadTile(catalog, p, logger) is { } tile)
+            if (tiles[i] is { } tile)
             {
                 read++;
                 updated = p with { Tile = tile, ParentPackagePath = ResolveParent(tile) };

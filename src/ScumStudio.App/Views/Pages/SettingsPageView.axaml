@@ -57,6 +57,9 @@
             <ComboBox x:Name="QualityPicker" ItemsSource="{Binding RenderQualities}" SelectedItem="{Binding RenderQuality}" MinWidth="220"
                       ToolTip.Tip="{Tr Settings.Quality.Tip}" />
           </StackPanel>
+          <CheckBox x:Name="ReopenLastProject" IsChecked="{Binding ReopenLastProject}" Content="{Tr Settings.ReopenLast}" ToolTip.Tip="{Tr Settings.ReopenLast.Tip}" />
+          <!-- Owner: the toolbar button for this was pointless; the choice lives here now -->
+          <CheckBox x:Name="LocalAxes" IsChecked="{Binding LocalAxes}" Content="{Tr Map.LocalAxes}" ToolTip.Tip="{Tr Map.LocalAxes.Tip}" />
         </StackPanel>
       </Border>
 
@@ -183,6 +186,23 @@
           <TextBlock x:Name="McpActivity" Classes="caption wrap" Text="{Binding McpActivity}" IsVisible="{Binding HasMcpActivity}" />
           <TextBlock Classes="caption wrap" Text="{Tr Settings.AiControl.Safety}" />
         </StackPanel>
+      </Border>
+
+      <!-- Prefabs: the saved selections' library -->
+      <Border x:Name="PrefabsCard" Classes="card">
+        <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12">
+          <Border Grid.Column="0" Classes="iconTile" VerticalAlignment="Top"><c:GlyphIcon Kind="Icon.Layers" IconSize="20" HorizontalAlignment="Center" VerticalAlignment="Center" /></Border>
+          <StackPanel Grid.Column="1" Spacing="4">
+            <TextBlock Text="{Tr Settings.Prefabs}" Classes="h2" />
+            <TextBlock Text="{Tr Settings.Prefabs.Caption}" Classes="caption wrap" />
+            <TextBlock Text="{Tr Settings.Prefabs.Folder}" Classes="label" Margin="0,4,0,0" />
+            <SelectableTextBlock Text="{Binding PrefabsFolder}" Classes="mono" Foreground="{DynamicResource TextMutedBrush}" />
+          </StackPanel>
+          <StackPanel Grid.Column="2" Spacing="8" VerticalAlignment="Center">
+            <Button x:Name="OpenPrefabsFolderButton" Content="{Tr Common.OpenFolder}" Command="{Binding OpenPrefabsFolderCommand}" HorizontalAlignment="Stretch" ToolTip.Tip="{Tr Settings.Prefabs.OpenFolder.Tip}" />
+            <Button x:Name="SettingsImportPrefabButton" Content="{Tr Map.Prefabs.Import}" Command="{Binding ImportPrefabCommand}" HorizontalAlignment="Stretch" ToolTip.Tip="{Tr Settings.Prefabs.Import.Tip}" />
+          </StackPanel>
+        </Grid>
       </Border>
 
       <!-- About -->

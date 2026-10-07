@@ -48,6 +48,7 @@ internal sealed class AppTestContext : IDisposable
             ToastLifetime = null,
             LocatorFactory = logger => new GameLocator(new GameLocatorOptions { SteamRoots = [emptySteam], ServerSearchRoots = [] }, logger),
             KeyFinder = keyFinder ?? (_ => Task.FromResult<string?>(null)),
+            ProjectsFolder = Path.Combine(directory, "projects"), // never the real Documents\ScumStudio Projects
         });
         return new AppTestContext(directory, services);
     }
@@ -113,7 +114,7 @@ internal sealed class ScriptedDialogService : IDialogService
 
     public Queue<string?> OpenFiles { get; } = new();
 
-    public Task<string?> OpenFileAsync(string title, string extension, string filterName) =>
+    public Task<string?> OpenFileAsync(string title, string extension, string filterName, string? startFolder = null) =>
         Task.FromResult(OpenFiles.Count > 0 ? OpenFiles.Dequeue() : null);
 
     public Task SetClipboardTextAsync(string text)

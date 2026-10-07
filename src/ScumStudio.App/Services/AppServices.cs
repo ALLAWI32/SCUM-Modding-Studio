@@ -32,6 +32,9 @@ public sealed record AppServicesOptions
 
     /// <summary>Mirror the log to standard output.</summary>
     public bool LogToConsole { get; init; } = true;
+
+    /// <summary>Where new projects go and are listed from (default: <c>Documents/ScumStudio Projects</c>; tests use a temporary one).</summary>
+    public string? ProjectsFolder { get; init; }
 }
 
 /// <summary>
@@ -45,6 +48,7 @@ public sealed class AppServices : IDisposable
     private AppServices(AppServicesOptions options)
     {
         DataDirectory = Path.GetFullPath(options.DataDirectory ?? StudioHome.GetDirectory());
+        ProjectsFolder = options.ProjectsFolder ?? ViewModels.ProjectsPageViewModel.DefaultProjectsFolder();
         Dispatcher = options.Dispatcher ?? new AvaloniaUiDispatcher();
         Dialogs = options.Dialogs ?? new NullDialogService();
         _locatorFactory = options.LocatorFactory ?? (logger => new GameLocator(logger: logger));
@@ -67,6 +71,8 @@ public sealed class AppServices : IDisposable
         Mcp = new AppMcpService(this);
         Thumbnails = new ThumbnailService(Path.Combine(DataDirectory, "cache", "thumbnails"), LoggerFactory.CreateLogger<ThumbnailService>());
         Reports = new ReportService(LoggerFactory.CreateLogger<ReportService>());
+        Prefabs = new PrefabLibrary(Path.Combine(DataDirectory, "Prefabs"));
+        Economy = new ProjectEconomy(this);
     }
 
     /// <summary>Raised (on the calling thread) after settings were saved through <see cref="UpdateSettings"/>.</summary>
@@ -77,6 +83,9 @@ public sealed class AppServices : IDisposable
 
     /// <summary>Data folder.</summary>
     public string DataDirectory { get; }
+
+    /// <summary>Where new projects go and are listed from (see <see cref="AppServicesOptions.ProjectsFolder"/>).</summary>
+    public string ProjectsFolder { get; }
 
     /// <summary>Finds the game's AES key online, or null (see <see cref="OnlineKeyFinder"/>).</summary>
     public Func<CancellationToken, Task<string?>> FindKeyOnline { get; }
@@ -126,6 +135,12 @@ public sealed class AppServices : IDisposable
     /// <summary>"Report a problem": reports translated to English and posted to the owner's Discord.</summary>
     public ReportService Reports { get; }
 
+    /// <summary>Saved selections (plain JSON files under the data folder, independent of any project).</summary>
+    public PrefabLibrary Prefabs { get; }
+
+    /// <summary>The open project's economy (<c>EconomyOverride.json</c>), kept in step with the traders on the map.</summary>
+    public ProjectEconomy Economy { get; }
+
     /// <summary>Creates the services.</summary>
     public static AppServices Create(AppServicesOptions? options = null) => new(options ?? new AppServicesOptions());
 
@@ -164,6 +179,7 @@ public sealed class AppServices : IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
+        Economy.Dispose();
         Thumbnails.Dispose();
         Mcp.Dispose();
         Projects.Dispose();

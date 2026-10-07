@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Logging;
+using ScumStudio.Assets.Catalog;
 using ScumStudio.Assets.Textures;
 using ScumStudio.Level.Model;
 
@@ -28,6 +30,16 @@ public sealed class LevelPrepareCache
 
     /// <summary>The number of the preparation in progress (entries remember the last one that used them).</summary>
     internal int Generation { get; private set; }
+
+    /// <summary>
+    /// The spawn place models of the last preparation's game files (<see cref="SpawnModels"/>), kept across preparations
+    /// and option changes; a viewport that redraws an actor's pins uses the same, so they keep the scene's meshes.
+    /// </summary>
+    public SpawnModels? SpawnModels { get; private set; }
+
+    /// <summary>The models for <paramref name="catalog"/> (new ones when the game files changed).</summary>
+    internal SpawnModels ModelsFor(AssetCatalog catalog, ILogger logger) =>
+        SpawnModels is { } models && ReferenceEquals(models.Catalog, catalog) ? models : SpawnModels = new SpawnModels(catalog, logger);
 
     /// <summary>Distinct meshes kept (diagnostics).</summary>
     public int MeshCount

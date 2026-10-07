@@ -29,6 +29,7 @@ public sealed class SceneRenderer : IDisposable
     private readonly ShaderProgram _lineProgram;
     private readonly GpuTexture _white;
     private readonly uint _emptyVao;
+    private readonly ShaderProgram _strokeProgram;
     private readonly uint _lineVao;
     private readonly uint _lineVbo;
     private readonly uint _indirectBuffer;
@@ -52,6 +53,7 @@ public sealed class SceneRenderer : IDisposable
         _pickProgram = new ShaderProgram(_gl, "pick", ShaderSources.MeshVertex, ShaderSources.PickFragment);
         _gridProgram = new ShaderProgram(_gl, "grid", ShaderSources.GridVertex, ShaderSources.GridFragment);
         _lineProgram = new ShaderProgram(_gl, "line", ShaderSources.LineVertex, ShaderSources.LineFragment);
+        _strokeProgram = new ShaderProgram(_gl, "stroke", ShaderSources.StrokeVertex, ShaderSources.StrokeFragment);
         _white = GpuTexture.Solid(_gl, 255, 255, 255);
         _emptyVao = _gl.GenVertexArray();
         _lineVao = _gl.GenVertexArray();
@@ -70,10 +72,19 @@ public sealed class SceneRenderer : IDisposable
     public RenderSettings Settings { get; set; } = new();
 
     /// <summary>
+    /// Seconds the next frame is drawn at: drives the opacity pulse of shimmering meshes (<see cref="GpuMesh.Shimmer"/>,
+    /// a 1.5 s period). The caller advances it (the viewport from its clock); it stays 0 where frames must not change.
+    /// </summary>
+    public float Time { get; set; }
+
+    /// <summary>
     /// Line segments drawn on top of the scene by the next <see cref="Render"/> (no depth test): gizmos, helpers. Replace
     /// or clear the list from the render thread.
     /// </summary>
     public List<OverlayLine> Overlay { get; } = [];
+
+    /// <summary>Filled triangles drawn on top of the scene before <see cref="Overlay"/> (no depth test): gizmo heads and cubes.</summary>
+    public List<OverlayTriangle> OverlayTriangles { get; } = [];
 
     /// <summary>Uploaded meshes by id.</summary>
     public IReadOnlyDictionary<int, GpuMesh> Meshes => _meshes;
@@ -97,14 +108,17 @@ public sealed class SceneRenderer : IDisposable
     /// <summary>
     /// Uploads prepared vertex data (every LOD) and returns a handle for scene nodes. Each material section draws with
     /// the texture of its <see cref="PreparedSection.Material"/> in <paramref name="materialTextures"/>, else with
-    /// <paramref name="texture"/> (textures are not owned by the renderer).
+    /// <paramref name="texture"/> (textures are not owned by the renderer). <paramref name="shimmer"/>: a stand-in whose
+    /// translucent sections pulse with <see cref="Time"/> (<see cref="GpuMesh.Shimmer"/>); <paramref name="billboard"/>: a
+    /// camera-facing card (<see cref="GpuMesh.Billboard"/>).
     /// </summary>
     public MeshHandle AddMesh(PreparedMesh mesh, GpuTexture? texture = null, IReadOnlyDictionary<string, GpuTexture>? materialTextures = null,
-        IReadOnlyDictionary<string, float>? materialAlphaCutoffs = null, IReadOnlyDictionary<string, Vector4>? materialTints = null)
+        IReadOnlyDictionary<string, float>? materialAlphaCutoffs = null, IReadOnlyDictionary<string, Vector4>? materialTints = null,
+        bool shimmer = false, bool billboard = false)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         var id = _nextMeshId++;
-        var gpu = new GpuMesh(_gl, id, mesh, texture, materialTextures, materialAlphaCutoffs, materialTints);
+        var gpu = new GpuMesh(_gl, id, mesh, texture, materialTextures, materialAlphaCutoffs, materialTints, shimmer, billboard);
         _meshes[id] = gpu;
         GlErrors.Check(_gl, $"uploading mesh '{mesh.Name}'");
         return new MeshHandle(id, mesh.Name, mesh.Bounds);
@@ -218,6 +232,11 @@ public sealed class SceneRenderer : IDisposable
         _meshProgram.Set("uLightColor", s.LightColor);
         _meshProgram.Set("uHighlight", s.HighlightColor);
         _meshProgram.Set("uCameraPosition", camera.Position);
+        _meshProgram.Set("uCameraRight", camera.Right);
+        _meshProgram.Set("uCameraUp", camera.Up);
+        _meshProgram.Set("uBillboard", 0);
+        _meshProgram.Set("uShimmer", 0);
+        _meshProgram.Set("uTime", Time);
         _meshProgram.Set("uEncodeSrgb", s.EncodeSrgb ? 1 : 0);
         _meshProgram.Set("uFogColor", s.FogColor);
         _meshProgram.Set("uFogDensity", MathF.Max(0f, s.FogDensity));
@@ -236,6 +255,8 @@ public sealed class SceneRenderer : IDisposable
         var hasTexture = -1;
         var cutoff = -1f;
         var sectionTint = new Vector4(-1f);
+        var shimmer = false;
+        var billboard = false;
         List<DrawRange>? translucent = null;
         foreach (var draw in _draws)
         {
@@ -276,9 +297,9 @@ public sealed class SceneRenderer : IDisposable
             _gl.Disable(EnableCap.Blend);
         }
 
-        if (Overlay.Count > 0)
+        if (Overlay.Count > 0 || OverlayTriangles.Count > 0)
         {
-            DrawOverlay(viewProj);
+            DrawOverlay(viewProj, target.Width, target.Height);
         }
 
         GpuTexture.UnbindSampler(_gl);
@@ -331,6 +352,18 @@ public sealed class SceneRenderer : IDisposable
             {
                 _meshProgram.Set("uSectionTint", draw.Tint);
                 sectionTint = draw.Tint;
+            }
+
+            if (draw.Mesh.Shimmer != shimmer)
+            {
+                _meshProgram.Set("uShimmer", draw.Mesh.Shimmer ? 1 : 0);
+                shimmer = draw.Mesh.Shimmer;
+            }
+
+            if (draw.Mesh.Billboard != billboard)
+            {
+                _meshProgram.Set("uBillboard", draw.Mesh.Billboard ? 1 : 0);
+                billboard = draw.Mesh.Billboard;
             }
 
             if (!ReferenceEquals(draw.Mesh.Detail, boundDetail))
@@ -435,7 +468,7 @@ public sealed class SceneRenderer : IDisposable
         return result;
     }
 
-    /// <summary>Deletes all meshes and programs (textures passed to <see cref="AddMesh(PreparedMesh, GpuTexture?, IReadOnlyDictionary{string, GpuTexture}?, IReadOnlyDictionary{string, float}?, IReadOnlyDictionary{string, System.Numerics.Vector4}?)"/> are not owned).</summary>
+    /// <summary>Deletes all meshes and programs (textures passed to <see cref="AddMesh(PreparedMesh, GpuTexture?, IReadOnlyDictionary{string, GpuTexture}?, IReadOnlyDictionary{string, float}?, IReadOnlyDictionary{string, System.Numerics.Vector4}?, bool, bool)"/> are not owned).</summary>
     public void Dispose()
     {
         if (_disposed)
@@ -454,6 +487,7 @@ public sealed class SceneRenderer : IDisposable
         _pickProgram.Dispose();
         _gridProgram.Dispose();
         _lineProgram.Dispose();
+        _strokeProgram.Dispose();
         _gl.DeleteVertexArray(_lineVao);
         _gl.DeleteBuffer(_lineVbo);
         _gl.DeleteBuffer(_indirectBuffer);
@@ -482,11 +516,21 @@ public sealed class SceneRenderer : IDisposable
 
         _pickProgram.Use();
         _pickProgram.Set("uViewProj", viewProj);
+        _pickProgram.Set("uCameraRight", camera.Right);
+        _pickProgram.Set("uCameraUp", camera.Up);
+        _pickProgram.Set("uBillboard", 0);
+        var billboard = false;
         foreach (var draw in _draws)
         {
             // Translucent nodes pick only when they are objects (placed water, glass); the sea lets clicks through.
             if (!draw.Translucent || draw.Pickable)
             {
+                if (draw.Mesh.Billboard != billboard)
+                {
+                    _pickProgram.Set("uBillboard", draw.Mesh.Billboard ? 1 : 0);
+                    billboard = draw.Mesh.Billboard;
+                }
+
                 draw.Mesh.DrawIndirect(draw.FirstCommand, draw.CommandCount);
             }
         }
@@ -510,20 +554,32 @@ public sealed class SceneRenderer : IDisposable
     {
         var state = _batchers.GetValue(scene, _ => new BatchState());
         var batcher = state.Batcher;
+        var partials = batcher.PartialBuilds;
+        var start = System.Diagnostics.Stopwatch.GetTimestamp();
         var batches = batcher.Get(scene);
         if (state.UploadedBuild != batcher.Builds)
         {
+            var built = System.Diagnostics.Stopwatch.GetElapsedTime(start).TotalMilliseconds;
+            var (sent, sentInstances) = (0, 0);
+
+            // A partial rebuild keeps the batches of the meshes it did not touch: their records are on the GPU already.
+            var uploaded = new HashSet<RenderBatch>(batches.Batches.Count, ReferenceEqualityComparer.Instance);
             foreach (var batch in batches.Batches)
             {
-                if (_meshes.TryGetValue(batch.Mesh.Id, out var mesh))
+                uploaded.Add(batch);
+                if (!state.Uploaded.Contains(batch) && _meshes.TryGetValue(batch.Mesh.Id, out var mesh))
                 {
                     mesh.SetInstances(batch.Instances);
+                    sent++;
+                    sentInstances += batch.Instances.Length;
                 }
             }
 
+            state.Uploaded = uploaded;
             state.UploadedBuild = batcher.Builds;
             batcher.ClearUpdates();
             BatchUploads++;
+            LastRebuild = new BatchRebuild(batcher.PartialBuilds != partials, sent, sentInstances, built, System.Diagnostics.Stopwatch.GetElapsedTime(start).TotalMilliseconds - built);
         }
         else if (batcher.PendingUpdates.Count > 0)
         {
@@ -633,47 +689,115 @@ public sealed class SceneRenderer : IDisposable
         return batches;
     }
 
-    private unsafe void DrawOverlay(in Matrix4x4 viewProj)
+    private unsafe void DrawOverlay(in Matrix4x4 viewProj, int width, int height)
     {
         var s = Settings;
-        var data = new float[Overlay.Count * 2 * 7];
-        var k = 0;
-        foreach (var line in Overlay)
-        {
-            foreach (var (point, color) in new[] { (line.Start, line.Color), (line.End, line.Color) })
-            {
-                data[k++] = point.X;
-                data[k++] = point.Y;
-                data[k++] = point.Z;
-                data[k++] = color.X;
-                data[k++] = color.Y;
-                data[k++] = color.Z;
-                data[k++] = color.W;
-            }
-        }
-
         _gl.Disable(EnableCap.DepthTest);
+        _gl.Disable(EnableCap.CullFace);
         _gl.Enable(EnableCap.Blend);
         _gl.BlendFuncSeparate(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha, BlendingFactor.One, BlendingFactor.OneMinusSrcAlpha);
-        _lineProgram.Use();
-        _lineProgram.Set("uViewProj", viewProj);
-        _lineProgram.Set("uEncodeSrgb", s.EncodeSrgb ? 1 : 0);
         _gl.BindVertexArray(_lineVao);
         _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _lineVbo);
-        _gl.BufferData<float>(BufferTargetARB.ArrayBuffer, data, BufferUsageARB.DynamicDraw);
-        const uint stride = 7 * sizeof(float);
-        _gl.EnableVertexAttribArray(0);
-        _gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, stride, (void*)0);
-        _gl.EnableVertexAttribArray(1);
-        _gl.VertexAttribPointer(1, 4, VertexAttribPointerType.Float, false, stride, (void*)(3 * sizeof(float)));
-        _gl.LineWidth(2f);
-        _gl.DrawArrays(PrimitiveType.Lines, 0, (uint)(Overlay.Count * 2));
-        _gl.LineWidth(1f);
+        if (OverlayTriangles.Count > 0)
+        {
+            // Filled shapes first: position + colour through the plain line program.
+            var data = new float[OverlayTriangles.Count * 3 * 7];
+            var k = 0;
+            foreach (var triangle in OverlayTriangles)
+            {
+                foreach (var point in new[] { triangle.A, triangle.B, triangle.C })
+                {
+                    data[k++] = point.X;
+                    data[k++] = point.Y;
+                    data[k++] = point.Z;
+                    data[k++] = triangle.Color.X;
+                    data[k++] = triangle.Color.Y;
+                    data[k++] = triangle.Color.Z;
+                    data[k++] = triangle.Color.W;
+                }
+            }
+
+            _lineProgram.Use();
+            _lineProgram.Set("uViewProj", viewProj);
+            _lineProgram.Set("uEncodeSrgb", s.EncodeSrgb ? 1 : 0);
+            _gl.BufferData<float>(BufferTargetARB.ArrayBuffer, data, BufferUsageARB.DynamicDraw);
+            const uint stride = 7 * sizeof(float);
+            _gl.EnableVertexAttribArray(0);
+            _gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, stride, (void*)0);
+            _gl.EnableVertexAttribArray(1);
+            _gl.VertexAttribPointer(1, 4, VertexAttribPointerType.Float, false, stride, (void*)(3 * sizeof(float)));
+            _gl.DisableVertexAttribArray(2);
+            _gl.DisableVertexAttribArray(3);
+            _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)(OverlayTriangles.Count * 3));
+        }
+
+        if (Overlay.Count > 0)
+        {
+            // Lines as screen-space quads: start, end, colour, (end, side, width) and the polyline neighbours per corner,
+            // six corners a line. A neighbour equal to the end itself means a square cap there.
+            const int floats = 19;
+            var data = new float[Overlay.Count * 6 * floats];
+            var k = 0;
+            ReadOnlySpan<(float End, float Side)> corners = [(0f, -1f), (1f, -1f), (1f, 1f), (0f, -1f), (1f, 1f), (0f, 1f)];
+            foreach (var line in Overlay)
+            {
+                var prev = line.Prev ?? line.Start;
+                var next = line.Next ?? line.End;
+                foreach (var (end, side) in corners)
+                {
+                    data[k++] = line.Start.X;
+                    data[k++] = line.Start.Y;
+                    data[k++] = line.Start.Z;
+                    data[k++] = line.End.X;
+                    data[k++] = line.End.Y;
+                    data[k++] = line.End.Z;
+                    data[k++] = line.Color.X;
+                    data[k++] = line.Color.Y;
+                    data[k++] = line.Color.Z;
+                    data[k++] = line.Color.W;
+                    data[k++] = end;
+                    data[k++] = side;
+                    data[k++] = MathF.Max(line.Width, 0.5f);
+                    data[k++] = prev.X;
+                    data[k++] = prev.Y;
+                    data[k++] = prev.Z;
+                    data[k++] = next.X;
+                    data[k++] = next.Y;
+                    data[k++] = next.Z;
+                }
+            }
+
+            _strokeProgram.Use();
+            _strokeProgram.Set("uViewProj", viewProj);
+            _strokeProgram.Set("uViewport", new Vector2(Math.Max(1, width), Math.Max(1, height)));
+            _strokeProgram.Set("uEncodeSrgb", s.EncodeSrgb ? 1 : 0);
+            _gl.BufferData<float>(BufferTargetARB.ArrayBuffer, data, BufferUsageARB.DynamicDraw);
+            const uint stride = floats * sizeof(float);
+            _gl.EnableVertexAttribArray(0);
+            _gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, stride, (void*)0);
+            _gl.EnableVertexAttribArray(1);
+            _gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, stride, (void*)(3 * sizeof(float)));
+            _gl.EnableVertexAttribArray(2);
+            _gl.VertexAttribPointer(2, 4, VertexAttribPointerType.Float, false, stride, (void*)(6 * sizeof(float)));
+            _gl.EnableVertexAttribArray(3);
+            _gl.VertexAttribPointer(3, 3, VertexAttribPointerType.Float, false, stride, (void*)(10 * sizeof(float)));
+            _gl.EnableVertexAttribArray(4);
+            _gl.VertexAttribPointer(4, 3, VertexAttribPointerType.Float, false, stride, (void*)(13 * sizeof(float)));
+            _gl.EnableVertexAttribArray(5);
+            _gl.VertexAttribPointer(5, 3, VertexAttribPointerType.Float, false, stride, (void*)(16 * sizeof(float)));
+            _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)(Overlay.Count * 6));
+            _gl.DisableVertexAttribArray(2);
+            _gl.DisableVertexAttribArray(3);
+            _gl.DisableVertexAttribArray(4);
+            _gl.DisableVertexAttribArray(5);
+        }
+
         _gl.BindVertexArray(0);
         _gl.BindBuffer(BufferTargetARB.ArrayBuffer, 0);
         _gl.Disable(EnableCap.Blend);
+        _gl.Enable(EnableCap.CullFace);
         _gl.Enable(EnableCap.DepthTest);
-        GlErrors.Drain(_gl); // a driver may refuse LineWidth > 1 in core profiles; the lines still draw
+        GlErrors.Drain(_gl);
     }
 
     private void DrawGrid(RenderSettings s, FlyCamera camera, float aspect, in Matrix4x4 viewProj, bool reverseZ)
@@ -757,12 +881,18 @@ public sealed class SceneRenderer : IDisposable
     /// <summary>How many times a scene's batches were rebuilt and their instances uploaded (diagnostics, tests).</summary>
     public int BatchUploads { get; private set; }
 
+    /// <summary>The last rebuild of a scene's batches (diagnostics): partial or not, what it sent and where its time went.</summary>
+    public BatchRebuild? LastRebuild { get; private set; }
+
     /// <summary>The batches of one scene and which of its builds the GPU instance buffers hold.</summary>
     private sealed class BatchState
     {
         public SceneBatcher Batcher { get; } = new();
 
         public int UploadedBuild { get; set; } = -1;
+
+        /// <summary>The batches whose records the meshes' instance buffers hold.</summary>
+        public HashSet<RenderBatch> Uploaded { get; set; } = new(ReferenceEqualityComparer.Instance);
     }
 
     private readonly record struct DrawRange(GpuMesh Mesh, GpuTexture? Texture, int IndexCount, int FirstCommand, int CommandCount, int Instances, bool Translucent, float AlphaCutoff, Vector4 Tint, bool Pickable);

@@ -31,6 +31,14 @@ public sealed record MeshCollisionInfo(IReadOnlyList<CollisionBox> Boxes, int Co
 {
     /// <summary>The collision profile a component gets by default (<c>DefaultInstance.CollisionProfileName</c>), or null.</summary>
     public string? DefaultProfile { get; init; }
+
+    /// <summary>
+    /// Which of <c>Pawn</c> (a player walking) and <c>PhysicsBody</c> (a knocked-out player's ragdoll) the mesh's default
+    /// collision lets through: no simple shapes and no triangle collision, collision off (or query/physics only), or a
+    /// stored response other than block (the cooked <c>DefaultInstance</c> keeps the channels that differ from their
+    /// default, e.g. SCUM_Foliage's Pawn and PhysicsBody Ignore; SCUM_Solid_Wall, the rocks' profile, keeps none of them).
+    /// </summary>
+    public IReadOnlyList<string> LetsThrough { get; init; } = [];
 }
 
 /// <summary>Reads a static mesh's simple collision (see <see cref="MeshCollisionInfo"/>).</summary>
@@ -90,7 +98,55 @@ public static class MeshCollision
         var profile = setup.TryGetValue(out CUE4Parse.UE4.Assets.Objects.FStructFallback def, "DefaultInstance")
                       && def.TryGetValue(out CUE4Parse.UE4.Objects.UObject.FName name, "CollisionProfileName") && !name.IsNone ? name.Text : null;
         return new MeshCollisionInfo(boxes, geom?.ConvexElems?.Length ?? 0, geom?.BoxElems?.Length ?? 0, geom?.SphereElems?.Length ?? 0, geom?.SphylElems?.Length ?? 0, flag,
-            (g.A, g.B, g.C, g.D)) { DefaultProfile = profile };
+            (g.A, g.B, g.C, g.D)) { DefaultProfile = profile, LetsThrough = LetsThrough(setup, boxes.Count + (geom?.ConvexElems?.Length ?? 0) > 0 || flag == "CTF_UseComplexAsSimple") };
+    }
+
+    private static readonly string[] Blockers = ["Pawn", "PhysicsBody"];
+
+    private static string[] LetsThrough(UBodySetup setup, bool hasShapes)
+    {
+        if (!hasShapes)
+        {
+            return Blockers; // nothing a sweep or a body can hit
+        }
+
+        if (!setup.TryGetValue(out CUE4Parse.UE4.Assets.Objects.FStructFallback def, "DefaultInstance"))
+        {
+            return [];
+        }
+
+        var enabled = def.Properties.FirstOrDefault(p => p.Name.Text == "CollisionEnabled")?.Tag?.GenericValue?.ToString() ?? string.Empty;
+        if (enabled.EndsWith("NoCollision", StringComparison.Ordinal))
+        {
+            return Blockers;
+        }
+
+        var through = new List<string>();
+        if (enabled.EndsWith("PhysicsOnly", StringComparison.Ordinal))
+        {
+            through.Add("Pawn"); // a walking player is moved by queries
+        }
+
+        if (enabled.EndsWith("QueryOnly", StringComparison.Ordinal))
+        {
+            through.Add("PhysicsBody"); // a ragdoll is simulated
+        }
+
+        if (def.TryGetValue(out CUE4Parse.UE4.Assets.Objects.FStructFallback responses, "CollisionResponses")
+            && responses.TryGetValue(out CUE4Parse.UE4.Assets.Objects.FStructFallback[] channels, "ResponseArray"))
+        {
+            foreach (var channel in channels)
+            {
+                var name = channel.TryGetValue(out CUE4Parse.UE4.Objects.UObject.FName n, "Channel") ? n.Text : string.Empty;
+                var response = channel.Properties.FirstOrDefault(p => p.Name.Text == "Response")?.Tag?.GenericValue?.ToString() ?? string.Empty;
+                if (Blockers.Contains(name) && !response.EndsWith("Block", StringComparison.Ordinal) && !through.Contains(name))
+                {
+                    through.Add(name);
+                }
+            }
+        }
+
+        return [.. through];
     }
 
     private static FVector V(CUE4Parse.UE4.Objects.Core.Math.FVector v) => new(v.X, v.Y, v.Z);

@@ -71,6 +71,7 @@ internal static class SyntheticLevels
         p.SetPayload(houseMesh, p.Properties(t =>
         {
             t.Object("StaticMesh", rock);
+            t.ObjectArray("OverrideMaterials", rock); // a repainted slot (any object reference serves)
             t.Vector("RelativeLocation", 1000, 0, 0);
             t.Rotator("RelativeRotation", 0, 90, 0);
             t.Vector("RelativeScale3D", 2, 2, 2);
@@ -79,6 +80,7 @@ internal static class SyntheticLevels
         {
             t.Object("AttachParent", houseMesh);
             t.Object("StaticMesh", rock);
+            t.ObjectArray("OverrideMaterials", rock);
             t.Vector("RelativeLocation", 100, 0, 0);
         }, w => w.I32(0)));
         p.SetPayload(rocks, p.Properties());

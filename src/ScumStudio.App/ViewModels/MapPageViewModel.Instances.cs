@@ -335,6 +335,23 @@ public sealed partial class MapPageViewModel
 
     private void DeleteInstance(SelectedInstance sel)
     {
+        if (LeavesNothingDrawn(sel.Item, [sel]))
+        {
+            // The last part or instance of the actor: the actor goes whole (its fire, lights and collision with it).
+            try
+            {
+                var entry = _services.Projects.Apply(new DeleteActorOp(sel.Item.Reference));
+                _services.Notifications.Info(Localization.Loc.T("Map.Deleted"), entry.Op.Describe());
+                RefreshHiddenIds();
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or IOException)
+            {
+                _services.Notifications.Error(Localization.Loc.T("Map.DeleteFailed"), ex.Message);
+            }
+
+            return;
+        }
+
         if (sel.Instance is null)
         {
             // ponytail: a segment is removed by scaling it to zero (drawn and collided as nothing, written by the existing

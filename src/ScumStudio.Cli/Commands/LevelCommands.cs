@@ -582,10 +582,11 @@ internal sealed partial class ProjectCommands : ICommandModule
 
     private static void WriteWarnings(Project project, ILogger logger)
     {
-        foreach (var w in project.Journal.Warnings)
+        foreach (var w in project.Journal.Warnings.Concat(project.ReplayProblems))
         {
             logger.LogWarning("{Warning}", w);
         }
+
     }
 }
 

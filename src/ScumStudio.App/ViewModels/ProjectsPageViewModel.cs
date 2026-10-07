@@ -9,16 +9,26 @@ using ScumStudio.Level.Projects;
 
 namespace ScumStudio.App.ViewModels;
 
-/// <summary>A recent project entry.</summary>
-public sealed class RecentProjectViewModel
+/// <summary>One card of "Your projects": a project found in the projects folder or opened before.</summary>
+public sealed class ProjectCardViewModel
 {
-    /// <summary>Creates an entry.</summary>
-    public RecentProjectViewModel(string path, IAsyncRelayCommand<string?> open)
+    /// <summary>Creates the card, reading the edit count and last-edit time from the folder.</summary>
+    public ProjectCardViewModel(string path, bool isCurrent, IAsyncRelayCommand<string?> open, IRelayCommand<string?> showInFolder)
     {
         Path = path;
         Name = System.IO.Path.GetFileNameWithoutExtension(System.IO.Path.TrimEndingDirectorySeparator(path));
         Exists = Project.Exists(path);
+        IsCurrent = isCurrent;
         OpenCommand = open;
+        ShowInFolderCommand = showInFolder;
+        if (Exists)
+        {
+            var journal = System.IO.Path.Combine(path, Project.JournalFileName);
+            Edits = CountEdits(journal);
+            LastEdited = new[] { journal, System.IO.Path.Combine(path, Project.ManifestFileName) }.Where(File.Exists).Max(File.GetLastWriteTime);
+        }
+
+        Details = Exists ? Loc.F("Projects.Card.Details", Edits, LastEdited.ToString("g", CultureInfo.CurrentCulture)) : path;
     }
 
     /// <summary>Project folder.</summary>
@@ -30,8 +40,54 @@ public sealed class RecentProjectViewModel
     /// <summary>False when the folder no longer holds a project.</summary>
     public bool Exists { get; }
 
+    /// <summary>True for the project open now.</summary>
+    public bool IsCurrent { get; }
+
+    /// <summary>True when another card has the same name: the card shows <see cref="Path"/> to tell them apart.</summary>
+    public bool ShowFolder { get; set; }
+
+    /// <summary>Number of edits in the journal (undone ones included, as in the open project's "Edits" row).</summary>
+    public int Edits { get; }
+
+    /// <summary>Last time the journal or manifest was written (local time).</summary>
+    public DateTime LastEdited { get; }
+
+    /// <summary>"Edits: 12 · last edited 06/10/2026 14:02", or the path of a missing project.</summary>
+    public string Details { get; }
+
     /// <summary>Opens the project (parameter: <see cref="Path"/>).</summary>
     public IAsyncRelayCommand<string?> OpenCommand { get; }
+
+    /// <summary>Shows the project folder in the file manager (parameter: <see cref="Path"/>).</summary>
+    public IRelayCommand<string?> ShowInFolderCommand { get; }
+
+    // ponytail: counts lines by text instead of parsing JSON; the journal is compact and "type" is a top-level field.
+    private static int CountEdits(string journal)
+    {
+        try
+        {
+            // The open project keeps its journal open for appending: share write access to read it.
+            using var reader = new StreamReader(new FileStream(journal, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete));
+            var count = 0;
+            while (reader.ReadLine() is { } line)
+            {
+                count += line.Contains("\"type\":\"edit\"", StringComparison.Ordinal) ? 1 : 0;
+            }
+
+            return count;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return 0;
+        }
+    }
+}
+
+/// <summary>A project opened before whose folder is gone: "Not found: C:\...\MyMapMod.ssproj".</summary>
+public sealed record MissingProjectRow(string Path)
+{
+    /// <summary>The line shown for it.</summary>
+    public string Text => Loc.F("Projects.NotFound", Path);
 }
 
 /// <summary>A mod imported into the open project (see <see cref="ProjectMods"/>).</summary>
@@ -78,10 +134,11 @@ public sealed partial class ImportedModViewModel : ObservableObject
     private Task RemoveAsync() => _remove(this);
 }
 
-/// <summary>Projects page: create/open projects, recent list, the open project's manifest and the mod export.</summary>
+/// <summary>Projects page: your projects (one click to open), create/open, the open project's manifest and the mod export.</summary>
 public sealed partial class ProjectsPageViewModel : PageViewModel, IDisposable
 {
     private readonly AppServices _services;
+    private string? _shownCurrent;
 
     /// <summary>A view model for the Dump window.</summary>
     public DumpViewModel CreateDump() => new(_services);
@@ -91,7 +148,7 @@ public sealed partial class ProjectsPageViewModel : PageViewModel, IDisposable
         : base("projects", "Projects", "Every edit lives in a project: a folder with project.json, journal.jsonl and notes.md")
     {
         _services = services;
-        _newProjectFolder = DefaultProjectsFolder();
+        _newProjectFolder = services.ProjectsFolder;
         var settings = _services.Settings.Load();
         _exportFolder = string.IsNullOrWhiteSpace(settings.ClientModsOutputFolder) ? DefaultExportFolder() : settings.ClientModsOutputFolder;
         _exportServer = !string.IsNullOrWhiteSpace(settings.ServerPaksFolder);
@@ -104,10 +161,15 @@ public sealed partial class ProjectsPageViewModel : PageViewModel, IDisposable
     /// <summary>The project session.</summary>
     public ProjectSession Session => _services.Projects;
 
-    /// <summary>Recent projects.</summary>
+    /// <summary>Your projects: every project in the projects folder and every one opened before; the open one, then newest edit first.</summary>
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(HasRecent))]
-    private IReadOnlyList<RecentProjectViewModel> _recentProjects = [];
+    [NotifyPropertyChangedFor(nameof(HasProjects), nameof(RecentProject), nameof(HasRecentProject), nameof(OpenRecentText))]
+    private IReadOnlyList<ProjectCardViewModel> _projects = [];
+
+    /// <summary>Projects opened before whose folder is gone (listed under the cards with Remove).</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasMissingProjects))]
+    private IReadOnlyList<MissingProjectRow> _missingProjects = [];
 
     /// <summary>Manifest rows of the open project.</summary>
     [ObservableProperty]
@@ -160,8 +222,24 @@ public sealed partial class ProjectsPageViewModel : PageViewModel, IDisposable
     /// <summary>Results of the last export (one per cook).</summary>
     public IReadOnlyList<ExportResult> LastExport { get; private set; } = [];
 
-    /// <summary>True when there are recent projects.</summary>
-    public bool HasRecent => RecentProjects.Count > 0;
+    /// <summary>True when <see cref="Projects"/> has a card.</summary>
+    public bool HasProjects => Projects.Count > 0;
+
+    /// <summary>True when a project opened before is gone.</summary>
+    public bool HasMissingProjects => MissingProjects.Count > 0;
+
+    /// <summary>The project offered by "Open MyMapMod" while none is open: the last one opened, else the last one edited.</summary>
+    public ProjectCardViewModel? RecentProject =>
+        _services.Settings.Load().RecentProjects.Select(p => Projects.FirstOrDefault(c => PathComparer.Equals(c.Path, Path.TrimEndingDirectorySeparator(p))))
+            .FirstOrDefault(c => c is not null) ?? Projects.FirstOrDefault();
+
+    /// <summary>True when there is a project to offer in the empty "Current project" card.</summary>
+    public bool HasRecentProject => RecentProject is not null;
+
+    /// <summary>"Open MyMapMod".</summary>
+    public string OpenRecentText => RecentProject is { } recent ? Loc.F("Projects.OpenNamed", recent.Name) : string.Empty;
+
+    private static StringComparer PathComparer => OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
 
     /// <summary>True after an export ran.</summary>
     public bool HasExportResult => ExportRows.Count > 0;
@@ -175,12 +253,76 @@ public sealed partial class ProjectsPageViewModel : PageViewModel, IDisposable
     /// <summary><c>Documents/ScumStudio Exports</c>.</summary>
     public static string DefaultExportFolder() => Path.Combine(DocumentsFolder(), "ScumStudio Exports");
 
-    /// <summary>Re-reads recent projects and the open project.</summary>
+    /// <summary>
+    /// The project folders to list: <c>*.ssproj</c> folders with a <c>project.json</c> in <paramref name="folders"/>, then
+    /// <paramref name="recent"/> (kept even when gone, so the card can say "missing"); duplicates removed.
+    /// </summary>
+    public static IReadOnlyList<string> FindProjects(IEnumerable<string> folders, IEnumerable<string> recent)
+    {
+        var found = new List<string>();
+        foreach (var folder in folders.Where(Directory.Exists))
+        {
+            try
+            {
+                found.AddRange(Directory.EnumerateDirectories(Path.GetFullPath(folder), "*" + Project.FolderExtension).Where(Project.Exists));
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // An unreadable folder lists nothing; the recent list still shows its projects.
+            }
+        }
+
+        var comparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+        return found.Concat(recent).Select(Path.TrimEndingDirectorySeparator).Distinct(comparer).ToList();
+    }
+
+    /// <summary>
+    /// Rebuilds the "Your projects" cards (the projects folder, the new-project folder and the recent list); recent
+    /// projects whose folder is gone go to <see cref="MissingProjects"/> instead.
+    /// </summary>
+    public void RefreshProjects()
+    {
+        var current = _shownCurrent = _services.Projects.DirectoryPath;
+        var cards = FindProjects([_services.ProjectsFolder, NewProjectFolder], _services.Settings.Load().RecentProjects)
+            .Select(p => new ProjectCardViewModel(p, current is not null && PathComparer.Equals(p, current), OpenRecentCommand, ShowInFolderCommand))
+            .OrderByDescending(c => c.IsCurrent)
+            .ThenByDescending(c => c.LastEdited)
+            .ToList();
+        foreach (var twin in cards.Where(c => c.Exists).GroupBy(c => c.Name, StringComparer.OrdinalIgnoreCase).Where(g => g.Count() > 1).SelectMany(g => g))
+        {
+            twin.ShowFolder = true;
+        }
+
+        MissingProjects = cards.Where(c => !c.Exists).Select(c => new MissingProjectRow(c.Path)).ToList();
+        Projects = cards.Where(c => c.Exists).ToList();
+    }
+
+    /// <summary>Takes a project whose folder is gone off the recent list (nothing on disk changes).</summary>
+    [RelayCommand]
+    private void RemoveMissing(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return;
+        }
+
+        _services.UpdateSettings(s => s with
+        {
+            RecentProjects = s.RecentProjects.Where(p => !PathComparer.Equals(Path.TrimEndingDirectorySeparator(p), path)).ToList(),
+            LastProjectPath = s.LastProjectPath is { } last && PathComparer.Equals(Path.TrimEndingDirectorySeparator(last), path) ? null : s.LastProjectPath,
+        }); // SettingsChanged refreshes the page
+    }
+
+    /// <summary>Re-reads your projects and the open project.</summary>
     public void Refresh()
     {
+        RefreshProjects();
+        RefreshCurrent();
+    }
+
+    private void RefreshCurrent()
+    {
         ImportedMods = _services.Projects.Mods.Select(f => new ImportedModViewModel(f, RemoveModAsync)).ToList();
-        var open = OpenRecentCommand;
-        RecentProjects = _services.Settings.Load().RecentProjects.Select(p => new RecentProjectViewModel(p, open)).ToList();
         var project = _services.Projects.Current;
         CurrentRows = project is null
             ? []
@@ -261,7 +403,13 @@ public sealed partial class ProjectsPageViewModel : PageViewModel, IDisposable
             ExportModName = project.Manifest.Name;
         }
 
-        Refresh();
+        // Every edit raises Changed: re-read the project folders only when another project opened or it closed.
+        if (!string.Equals(_services.Projects.DirectoryPath, _shownCurrent, StringComparison.Ordinal))
+        {
+            RefreshProjects();
+        }
+
+        RefreshCurrent();
     }
 
     private void OnCatalogChanged(object? sender, EventArgs e) => _services.Dispatcher.Invoke(RefreshExportState);
@@ -306,7 +454,7 @@ public sealed partial class ProjectsPageViewModel : PageViewModel, IDisposable
     [RelayCommand]
     private async Task OpenAsync()
     {
-        if (await _services.Dialogs.PickFolderAsync(Loc.T("Projects.PickProject")).ConfigureAwait(true) is { } folder)
+        if (await _services.Dialogs.PickFolderAsync(Loc.T("Projects.PickProject"), _services.ProjectsFolder).ConfigureAwait(true) is { } folder)
         {
             await OpenRecentAsync(folder).ConfigureAwait(true);
         }
@@ -344,7 +492,8 @@ public sealed partial class ProjectsPageViewModel : PageViewModel, IDisposable
             return;
         }
 
-        if (await _services.Dialogs.OpenFileAsync(Loc.T("Mods.Pick"), "pak", Loc.T("Mods.PakFiles")).ConfigureAwait(true) is not { } pak)
+        var exports = Directory.Exists(Path.Combine(ExportFolder, "Client")) ? Path.Combine(ExportFolder, "Client") : ExportFolder;
+        if (await _services.Dialogs.OpenFileAsync(Loc.T("Mods.Pick"), "pak", Loc.T("Mods.PakFiles"), exports).ConfigureAwait(true) is not { } pak)
         {
             return;
         }
@@ -416,15 +565,29 @@ public sealed partial class ProjectsPageViewModel : PageViewModel, IDisposable
     private bool CanOpenExportFolder() => !string.IsNullOrEmpty(LastExportFolder) && Directory.Exists(LastExportFolder);
 
     [RelayCommand(CanExecute = nameof(CanOpenExportFolder))]
-    private void OpenExportFolder()
+    private void OpenExportFolder() => Reveal(LastExportFolder!, select: false, Loc.T("Projects.ExportFolder"));
+
+    /// <summary>Shows a project's folder selected in Explorer (its parent folder elsewhere).</summary>
+    [RelayCommand]
+    private void ShowInFolder(string? path)
+    {
+        if (!string.IsNullOrWhiteSpace(path))
+        {
+            Reveal(path, select: true, Loc.T("Projects.ShowInFolder"));
+        }
+    }
+
+    private void Reveal(string path, bool select, string title)
     {
         try
         {
-            Process.Start(new ProcessStartInfo(LastExportFolder!) { UseShellExecute = true });
+            Process.Start(select && OperatingSystem.IsWindows()
+                ? new ProcessStartInfo("explorer.exe", $"/select,\"{path}\"")
+                : new ProcessStartInfo(select ? Path.GetDirectoryName(path)! : path) { UseShellExecute = true });
         }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or PlatformNotSupportedException or FileNotFoundException)
         {
-            _services.Notifications.Info(Loc.T("Projects.ExportFolder"), LastExportFolder);
+            _services.Notifications.Info(title, path);
         }
     }
 }

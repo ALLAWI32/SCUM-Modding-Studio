@@ -90,30 +90,15 @@ public sealed class Tutorial2LandscapeRecorder
             var landscape = HeadlessUi.FindNamed<Button>(window, "LandscapeButton")!;
             landscape.Flyout!.ShowAt(landscape);
             HeadlessUi.Pump();
-            rec.Shot("Landscape: ground looks, tree swaps, Fit to ground",
-                "The Landscape button opens one menu for the whole island: a look for the ground, a tree swap, and Fit to ground for the selected objects.",
+            rec.Shot("Landscape: tree swaps and Fit to ground",
+                "The Landscape button opens one menu: a tree swap for the whole island, and Fit to ground for the selected objects.",
                 landscape);
 
-            // 3-5. Ground looks: Snow, Desert, back to Game.
-            foreach (var (look, caption, narration) in new[]
-            {
-                (GroundLook.Snow, "Ground look: Snow for the whole island", "Pick Snow and the mod gives the whole island snow ground. The 3D view keeps the game's own textures; the change shows in the game after Export mod, and History has one row for it."),
-                (GroundLook.Desert, "Ground look: Desert, sand instead of grass", "Desert does the same with sand. Each pick is its own History row, so Ctrl+Z takes it back."),
-                (GroundLook.Game, "Ground look: Game puts the normal ground back", "Game restores the normal ground. Nothing in the game files is touched; a look lives in your mod only."),
-            })
-            {
-                var option = map.GroundLookOptions.Single(o => o.Look == look);
-                option.Choose.Execute(null);
-                HeadlessUi.Pump();
-                Assert.True(option.IsCurrent);
-                rec.Shot(caption, narration, HeadlessUi.Find<RadioButton>(window).FirstOrDefault(r => ReferenceEquals(r.DataContext, option)));
-            }
-
-            // 6. Trees: every oak drawn as a pine.
+            // 3. Trees: every oak drawn as a pine.
             var oak = map.Trees.First(t => t.Name.Contains("Oak", StringComparison.OrdinalIgnoreCase));
             var pine = map.Trees.First(t => t.Name.Contains("Pine", StringComparison.OrdinalIgnoreCase));
-            map.TreeToSwap = oak;
-            map.TreeSwapWith = pine;
+            map.TreeToSwap.Selected = oak;
+            map.TreeSwapWith.Selected = pine;
             map.SwapTreeCommand.Execute(null);
             HeadlessUi.Pump();
             Assert.Single(map.TreeSwaps);

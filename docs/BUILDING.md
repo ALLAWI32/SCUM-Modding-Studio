@@ -21,8 +21,8 @@ one (9/10) builds the .NET 8 projects. `RollForward=Major` (Directory.Build.prop
 `scripts\build.ps1` (PowerShell 5.1 or 7) checks the SDK, stops leftover build servers, restores, builds and prints a clear
 FAILED line with the reason. Options: `-Configuration Release`, `-Test [-Fixtures <dir>] [-MapSlice <dir>]`, `-Publish`
 (self-contained single-file `dist\ScumStudio\ScumStudio.App.exe` + `scumstudio.exe`), `-Clean`, `-LowMemory`.
-Run it with `powershell -ExecutionPolicy Bypass -File scripts\build.ps1`. If Visual Studio hangs or crashes while
-building, close it, run `scripts\build.ps1 -Clean -LowMemory` and open the solution again.
+Run it with `powershell -ExecutionPolicy Bypass -File scripts\build.ps1`. Troubleshooting for Visual Studio hangs/crashes:
+HANDOFF.md §5.1.
 
 ## Open, build and run in Visual Studio 2022
 

@@ -11,6 +11,11 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+    <!-- Loading levels reads and decodes meshes on every core and allocates gigabytes on the way: the workstation GC
+         stopped those threads over 200 times per load (8-10 s of a 13-19 s streamed load, PerfRealTests). The server GC
+         collects in parallel; dynamic adaptation (DATAS) sizes its heaps to the app so the peak memory stays where it was. -->
+    <ServerGarbageCollection>true</ServerGarbageCollection>
+    <GarbageCollectionAdaptationMode>1</GarbageCollectionAdaptationMode>
   </PropertyGroup>
 
   <ItemGroup>

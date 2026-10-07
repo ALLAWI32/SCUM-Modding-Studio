@@ -39,6 +39,38 @@ public sealed class ScumFileProvider : AbstractVfsFileProvider
     }
 
     /// <summary>
+    /// Registers every plugin that has content under its mount name (<c>WoodlandHunterPack</c> ->
+    /// <c>SCUM/Plugins/GameFeatures/WoodlandHunterPack</c>): the engine mounts a plugin's <c>Content</c> at <c>/&lt;Plugin&gt;/</c>
+    /// and the DLC levels reference their Blueprint classes, templates and meshes that way; with the virtual path known,
+    /// <c>FixPath</c> (and so every import CUE4Parse resolves) finds the files. What
+    /// CUE4Parse's own <c>.uplugin</c> scan would record, without reading the plugin descriptors.
+    /// </summary>
+    /// <returns>Number of plugins added.</returns>
+    public int RegisterPluginRoots()
+    {
+        var added = 0;
+        foreach (var path in Files.Keys)
+        {
+            var plugins = path.IndexOf("/Plugins/", StringComparison.OrdinalIgnoreCase);
+            var content = plugins < 0 ? -1 : path.IndexOf("/Content/", plugins, StringComparison.OrdinalIgnoreCase);
+            if (content < 0)
+            {
+                continue;
+            }
+
+            var folder = path[..content];
+            var name = folder[(folder.LastIndexOf('/') + 1)..];
+            if (!VirtualPaths.ContainsKey(name))
+            {
+                VirtualPaths[name] = folder;
+                added++;
+            }
+        }
+
+        return added;
+    }
+
+    /// <summary>
     /// Adds every cooked file below <paramref name="projectDirectory"/> (the folder that contains <c>Content/</c>)
     /// under the virtual root <c><paramref name="projectName"/>/</c>.
     /// </summary>

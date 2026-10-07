@@ -46,7 +46,7 @@ public sealed class TradersRealTests
         Assert.EndsWith("BP_ArmsDealer_01_C", marker.NpcClass, StringComparison.Ordinal);
 
         // The pin stands where the NPC does and picks the trade post.
-        var pin = map.PreparedScene!.Placements.Single(p => p.MeshPath == SpawnMarkers.MeshKey(SpawnKind.Trader) && ReferenceEquals(p.Actor, armory.Actor));
+        var pin = map.PreparedScene!.Placements.Single(p => SpawnMarkers.KindOfMesh(p.MeshPath) == SpawnKind.Trader && ReferenceEquals(p.Actor, armory.Actor));
         Assert.Equal(armory.SelectableId, pin.SelectableId);
         var where = (marker.Local * armory.Actor.WorldTransform).Translation;
         Assert.Equal(where.X, pin.World.Translation.X, 1f);

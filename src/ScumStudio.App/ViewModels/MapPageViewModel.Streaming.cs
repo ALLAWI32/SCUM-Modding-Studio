@@ -170,12 +170,13 @@ public sealed partial class MapPageViewModel
             UseReader(catalog);
             _readGeneration++;
             var documents = new List<LevelDocument>(packagePaths.Count + 1);
+            var read = _reader!.ReadAhead(packagePaths.Where(p => !_documents.ContainsKey(p)).ToList(), ct); // the new levels, side by side
             foreach (var path in packagePaths)
             {
                 ct.ThrowIfCancellationRequested();
                 if (!_documents.TryGetValue(path, out var entry))
                 {
-                    entry = (LevelDocument.Load(_reader!, path, ct), 0);
+                    entry = (read[path].Value, 0);
                 }
 
                 _documents[path] = entry with { Used = _readGeneration };

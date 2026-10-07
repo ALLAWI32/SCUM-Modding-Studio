@@ -137,7 +137,7 @@ public sealed class ProjectTests
     }
 
     [Fact]
-    public void RefusesAJournalThatDoesNotReplay()
+    public void OpensAJournalThatDoesNotReplayWithWhatStillAppliesAndListsTheRest()
     {
         using var temp = new LevelTempDirectory();
         var dir = temp.Combine("Mod.ssproj");
@@ -146,20 +146,33 @@ public sealed class ProjectTests
             project.Apply(new DeleteActorOp(new ActorRef(Outpost, "A")));
         }
 
-        // Hand-edited journal: the same actor deleted twice.
+        // Hand-edited journal: the same actor deleted twice (an older version journaled bulk deletes it then applied only
+        // halfway, so the edits after them were made against that half: the project must still open).
         var journalPath = Path.Combine(dir, Project.JournalFileName);
         var lines = File.ReadAllLines(journalPath).ToList();
         lines.Add(lines[1].Replace("\"seq\":1", "\"seq\":2", StringComparison.Ordinal));
         File.WriteAllLines(journalPath, lines);
 
-        var ex = Assert.Throws<InvalidDataException>(() => Project.Open(dir));
-        Assert.Contains("does not replay", ex.Message, StringComparison.Ordinal);
+        using (var opened = Project.Open(dir))
+        {
+            var problem = Assert.Single(opened.ReplayProblems);
+            Assert.Contains("edit #2", problem, StringComparison.Ordinal);
+            Assert.Contains("does not replay", problem, StringComparison.Ordinal);
+            Assert.Equal(2, opened.History.Count);
+            Assert.Single(opened.State.DeletedActors);
+        }
 
-        // The failed open released the journal file.
+        // The open released the journal file; a clean journal lists no problem.
         File.WriteAllLines(journalPath, lines.Take(2));
         using var ok = Project.Open(dir);
+        Assert.Empty(ok.ReplayProblems);
         Assert.Single(ok.Journal.Applied);
     }
+
+    /// <summary>Appends <paramref name="op"/> to a closed project's journal unchecked, as 0.2.7 could.</summary>
+    internal static void AppendUnchecked(string projectDirectory, int seq, EditOp op) =>
+        File.AppendAllText(Path.Combine(projectDirectory, Project.JournalFileName),
+            $"{{\"seq\":{seq},\"at\":\"2026-10-06T18:02:30+00:00\",\"type\":\"edit\",\"edit\":{JsonSerializer.Serialize(op, global::ScumStudio.Level.Serialization.LevelJson.Compact)}}}\n");
 
     [Fact]
     public void ReportsMissingProjects()
@@ -171,6 +184,28 @@ public sealed class ProjectTests
         Assert.Throws<InvalidDataException>(() => Project.Open(temp.Path));
         File.WriteAllText(temp.Combine(Project.ManifestFileName), "{\"format\":\"other/1\",\"name\":\"x\"}");
         Assert.Throws<InvalidDataException>(() => Project.Open(temp.Path));
+    }
+
+    [Fact]
+    public void FindAcceptsAFileInsideOrTheOnlyProjectInAFolder()
+    {
+        // A folder dialog lets a user pick the project, a file in it, or its parent (Documents\ScumStudio Projects).
+        using var temp = new LevelTempDirectory();
+        var parent = temp.Combine("ScumStudio Projects");
+        var first = System.IO.Path.Combine(parent, "MyMapMod.ssproj");
+        Project.Create(first, "MyMapMod").Dispose();
+        Assert.Equal(first, Project.Find(first));
+        Assert.Equal(first, Project.Find(System.IO.Path.Combine(first, Project.JournalFileName)));
+        Assert.Equal(first, Project.Find(System.IO.Path.Combine(first, Project.ManifestFileName)));
+        Assert.Equal(first, Project.Find(parent));
+        using (Project.Open(parent))
+        {
+        }
+
+        Project.Create(System.IO.Path.Combine(parent, "Second.ssproj"), "Second").Dispose();
+        Assert.Null(Project.Find(parent)); // two projects: which one is not ours to guess
+        Assert.Null(Project.Find(temp.Combine("nowhere")));
+        Assert.Null(Project.Find(" "));
     }
 
     [Fact]

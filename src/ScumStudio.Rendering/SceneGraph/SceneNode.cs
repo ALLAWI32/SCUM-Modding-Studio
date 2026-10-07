@@ -127,7 +127,10 @@ public sealed class SceneNode
     /// <summary>On the top node of a tree: true when a logged change was structural (needs a rebuild rather than a patch).</summary>
     internal bool StructuralChange { get; set; }
 
-    /// <summary>The batch result this node's instance record lives in (set by <see cref="SceneBatcher.Build"/>), or null.</summary>
+    /// <summary>On the top node of a tree: true when changes were dropped past <see cref="MaxChangeLog"/> (the log is incomplete: rebuild everything).</summary>
+    internal bool LogOverflow { get; set; }
+
+    /// <summary>The batch result this node's instance record lives in (set by <see cref="SceneBatcher.Get"/>), or null.</summary>
     internal BatchResult? SlotOwner { get; set; }
 
     /// <summary>Batch index of the node's instance record in <see cref="SlotOwner"/>.</summary>
@@ -151,7 +154,7 @@ public sealed class SceneNode
         child.Parent?.Remove(child);
         child.Parent = this;
         _children.Add(child);
-        Touch(structural: true);
+        Touch(structural: true, child);
         return child;
     }
 
@@ -169,20 +172,25 @@ public sealed class SceneNode
 
         _children.RemoveAt(index);
         child.Parent = null;
-        Touch(structural: true);
+        Touch(structural: true, child);
         return true;
     }
 
     /// <summary>Removes all children.</summary>
     public void Clear()
     {
-        foreach (var child in _children)
+        var removed = _children.ToArray();
+        _children.Clear();
+        foreach (var child in removed)
         {
             child.Parent = null;
+            Touch(structural: true, child);
         }
 
-        _children.Clear();
-        Touch(structural: true);
+        if (removed.Length == 0)
+        {
+            Touch(structural: true);
+        }
     }
 
     /// <summary>This node and all descendants, depth first.</summary>
@@ -215,7 +223,9 @@ public sealed class SceneNode
         Touch(structural);
     }
 
-    private void Touch(bool structural)
+    // A structural change logs the node it is about: the changed node, or the subtree added or removed (not its parent), so a
+    // batcher can rebuild only the meshes that subtree draws.
+    private void Touch(bool structural, SceneNode? subject = null)
     {
         var node = this;
         while (true)
@@ -234,11 +244,12 @@ public sealed class SceneNode
             // Past the cap a rebuild is cheaper than patching anyway (and a scene nobody renders stops growing the log).
             if (log.Count < MaxChangeLog)
             {
-                log.Add(this);
+                log.Add(subject ?? this);
             }
             else
             {
                 node.StructuralChange = true;
+                node.LogOverflow = true;
             }
 
             node.StructuralChange |= structural;

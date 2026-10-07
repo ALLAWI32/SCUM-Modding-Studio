@@ -41,15 +41,6 @@ public sealed partial class GroundLookOption : ObservableObject
     public ICommand Choose { get; }
 }
 
-/// <summary>A tree of the game, for the Landscape menu's tree swap.</summary>
-/// <param name="Name">Its mesh name.</param>
-/// <param name="PackagePath">Its mesh package.</param>
-public sealed record TreeChoice(string Name, string PackagePath)
-{
-    /// <inheritdoc />
-    public override string ToString() => Name;
-}
-
 /// <summary>A tree the project draws as another one.</summary>
 public sealed class TreeSwapRow
 {
@@ -79,31 +70,37 @@ public sealed class TreeSwapRow
 /// </summary>
 public sealed partial class MapPageViewModel
 {
-    private IReadOnlyList<TreeChoice>? _trees;
+    private IReadOnlyList<ReplaceCandidate>? _trees;
+    private ObjectPicker? _treeToSwap;
+    private ObjectPicker? _treeSwapWith;
 
     /// <summary>The ground looks, the project's one marked.</summary>
     public IReadOnlyList<GroundLookOption> GroundLookOptions { get; private set; } = [];
 
-    /// <summary>Every tree of the game (for the swap pickers).</summary>
-    public IReadOnlyList<TreeChoice> Trees => _trees ??= AssetDumper.Packages
+    /// <summary>Every tree of the game (the family of both swap cards, with their pictures).</summary>
+    public IReadOnlyList<ReplaceCandidate> Trees => _trees ??= AssetDumper.Packages
         .Where(p => p.ClassName == "StaticMesh" && p.PackagePath.Contains("/Foliage/", StringComparison.OrdinalIgnoreCase)
                     && p.PackagePath.Contains("/Trees/", StringComparison.OrdinalIgnoreCase)
                     && !p.PackagePath.Contains("Debris", StringComparison.OrdinalIgnoreCase) && !p.PackagePath.Contains("Chunk", StringComparison.OrdinalIgnoreCase)
                     && !p.PackagePath.Contains("Branch", StringComparison.OrdinalIgnoreCase) && !p.PackagePath.EndsWith("_Menu", StringComparison.OrdinalIgnoreCase))
-        .Select(p => new TreeChoice(TreeSwapRow.Leaf(p.PackagePath), p.PackagePath))
-        .DistinctBy(t => t.PackagePath, StringComparer.OrdinalIgnoreCase)
+        .Select(p => p.PackagePath)
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .Select(p => new ReplaceCandidate(new ReplaceChoice(TreeSwapRow.Leaf(p), p, false, false), LoadReplaceThumbnailAsync))
         .OrderBy(t => t.Name, StringComparer.OrdinalIgnoreCase)
         .ToList();
 
-    /// <summary>The tree to replace.</summary>
-    [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(SwapTreeCommand))]
-    private TreeChoice? _treeToSwap;
+    /// <summary>The left card: the game's tree to replace.</summary>
+    public ObjectPicker TreeToSwap => _treeToSwap ??= TreePicker();
 
-    /// <summary>The tree drawn in its place.</summary>
-    [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(SwapTreeCommand))]
-    private TreeChoice? _treeSwapWith;
+    /// <summary>The right card: the tree drawn in its place.</summary>
+    public ObjectPicker TreeSwapWith => _treeSwapWith ??= TreePicker();
+
+    private ObjectPicker TreePicker()
+    {
+        var picker = new ObjectPicker(SwapTreeCommand.NotifyCanExecuteChanged);
+        picker.SetItems(Trees);
+        return picker;
+    }
 
     /// <summary>The project's tree swaps.</summary>
     [ObservableProperty]
@@ -130,7 +127,7 @@ public sealed partial class MapPageViewModel
             option.IsCurrent = option.Look == current;
         }
 
-        var trees = Trees.Select(t => t.PackagePath).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var trees = Trees.Select(t => t.Choice.PackagePath).ToHashSet(StringComparer.OrdinalIgnoreCase);
         TreeSwaps = state?.AssetReplacements.Where(r => trees.Contains(r.Key))
             .OrderBy(r => r.Key, StringComparer.OrdinalIgnoreCase)
             .Select(r => new TreeSwapRow(r.Key, r.Value, PutTreeBack))
@@ -157,13 +154,13 @@ public sealed partial class MapPageViewModel
         RefreshLooks();
     }
 
-    private bool CanSwapTree() => TreeToSwap is { } a && TreeSwapWith is { } b && !string.Equals(a.PackagePath, b.PackagePath, StringComparison.OrdinalIgnoreCase);
+    private bool CanSwapTree() => TreeToSwap.Selected is { } a && TreeSwapWith.Selected is { } b && !ReferenceEquals(a, b);
 
-    /// <summary>Draws <see cref="TreeSwapWith"/> wherever the game has <see cref="TreeToSwap"/> (the whole island).</summary>
+    /// <summary>Draws the right card's tree wherever the game has the left card's (the whole island).</summary>
     [RelayCommand(CanExecute = nameof(CanSwapTree))]
     private void SwapTree()
     {
-        if (_services.Projects.Current is not { } project || TreeToSwap is not { } tree || TreeSwapWith is not { } with)
+        if (_services.Projects.Current is not { } project || TreeToSwap.Selected?.Choice is not { } tree || TreeSwapWith.Selected?.Choice is not { } with)
         {
             _services.Notifications.Warning(Loc.T("History.NoProject"), Loc.T("Map.Looks.NeedProject"));
             return;

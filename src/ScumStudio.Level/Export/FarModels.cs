@@ -53,6 +53,70 @@ public static class FarModels
     public static bool IsFarViewMesh(string path) =>
         path.Contains("/Distant_Models/", StringComparison.OrdinalIgnoreCase) || path.Contains("/HLOD/", StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// True for the underside of the water: a lake surface's <c>_FN</c> twin (flipped normals, all faces looking down) or
+    /// any mesh drawn with the underwater-view material <c>MI_UnderwaterSurface_*</c>. The game shows these only from under
+    /// the water (one-sided, culled from above), so placed as a plain actor they never appear; the studio drew them because
+    /// its viewport culls no back faces. The owner placed four of them as lakes and saw nothing in the game.
+    /// <paramref name="catalog"/> (optional) lets the material rule be checked on meshes without the <c>_FN</c> name.
+    /// </summary>
+    public static bool IsUndersideMesh(string path, AssetCatalog? catalog = null)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        var name = path[(path.LastIndexOf('/') + 1)..];
+        var dot = name.IndexOf('.', StringComparison.Ordinal);
+        if (dot >= 0)
+        {
+            name = name[..dot];
+        }
+
+        if (name.EndsWith("_FN", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (catalog is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            return catalog.TryLoadObject<UStaticMesh>(path, out var mesh)
+                && Assets.Meshes.MeshExtractor.DescribeStaticMesh(mesh).Materials.Any(m => IsUnderwaterMaterial(m.MaterialPath));
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>True for the underwater-view materials (<c>MI_UnderwaterSurface_Lake</c>, their master <c>M_UnderwaterSurface</c>).</summary>
+    public static bool IsUnderwaterMaterial(string materialPath)
+    {
+        ArgumentNullException.ThrowIfNull(materialPath);
+        var name = materialPath[(materialPath.LastIndexOf('/') + 1)..];
+        return name.StartsWith("MI_UnderwaterSurface", StringComparison.OrdinalIgnoreCase) || name.StartsWith("M_UnderwaterSurface", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// The visible twin of an underside mesh (<c>LakeWaterSurface_C_1_FN</c> → <c>LakeWaterSurface_C_1</c>) when the source has
+    /// it, else null.
+    /// </summary>
+    public static string? TopSideOf(string path, AssetCatalog catalog)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        ArgumentNullException.ThrowIfNull(catalog);
+        var package = path.LastIndexOf('.') is var dot && dot > path.LastIndexOf('/') ? path[..dot] : path;
+        if (!package.EndsWith("_FN", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var twin = package[..^3];
+        return catalog.PackageExists(twin) ? twin + "." + twin[(twin.LastIndexOf('/') + 1)..] : null;
+    }
+
     /// <summary>How far past an object's bounds a far-model vertex still counts as the object's (far models are simplified).</summary>
     public const float Margin = 50f;
 

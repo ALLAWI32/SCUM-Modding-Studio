@@ -36,6 +36,7 @@ namespace ScumStudio.Level.Editing;
 [JsonDerivedType(typeof(BendActorOp), "bendActor")]
 [JsonDerivedType(typeof(SwaySegmentOp), "swaySegment")]
 [JsonDerivedType(typeof(SetSpawnPointsOp), "setSpawnPoints")]
+[JsonDerivedType(typeof(ReplaceMeshOp), "replaceMesh")]
 public abstract record EditOp
 {
     /// <summary>The operation that exactly undoes this one.</summary>
@@ -385,6 +386,31 @@ public sealed record SetSpawnPointsOp(ActorRef Target, string? Component, string
     public override int GetHashCode() => HashCode.Combine(Target, Old.Count, New.Count);
 }
 
+/// <summary>
+/// Draws another static mesh on a stored mesh component (the Replace tool: a road piece becomes another road piece, a
+/// wall another wall): the component's <c>StaticMesh</c> is rewritten, everything else about it stays. The fitted scale
+/// travels as a <see cref="SetTransformOp"/> beside it in one <see cref="BatchOp"/>; a spline piece needs none, its
+/// curve fits the new mesh to the old length.
+/// </summary>
+/// <param name="Target">The actor.</param>
+/// <param name="Component">Component name; null for the root component.</param>
+/// <param name="Old">Mesh object path before the edit.</param>
+/// <param name="New">Mesh object path after the edit.</param>
+public sealed record ReplaceMeshOp(ActorRef Target, string? Component, string Old, string New) : EditOp
+{
+    /// <inheritdoc />
+    public override EditOp Inverse() => this with { Old = New, New = Old };
+
+    /// <inheritdoc />
+    public override string Describe() => $"Replace {Short(Old)} with {Short(New)} on {Target}{(Component is null ? string.Empty : "." + Component)}";
+
+    /// <inheritdoc />
+    public override IReadOnlyList<string> GetTouchedLevels() => [Target.Level];
+
+    /// <inheritdoc />
+    public override ActorRef? GetPrimaryTarget() => Target;
+}
+
 /// <summary>Sets the component-space transform of one ISM/HISM instance.</summary>
 /// <param name="Target">The instance.</param>
 /// <param name="Old">Transform before the edit.</param>
@@ -532,17 +558,49 @@ public sealed record AddBlueprintActorOp(string Level, string NewName, string Cl
     /// </summary>
     public string? Item { get; init; }
 
+    /// <summary>
+    /// For a copy of a trade post placed as a new trader: who it is and which outpost it belongs to (see
+    /// <see cref="TraderPost"/>); null for any other Blueprint.
+    /// </summary>
+    public TraderPost? Trader { get; init; }
+
+    /// <summary>
+    /// For a copy of a mechanic's lift (<c>BP_CarLift</c>, <c>BP_BikeLift</c>): the actor name, in the same level, of the
+    /// mechanic's trade post it serves (written into its <c>_assignedTradePost</c>); null for any other Blueprint.
+    /// </summary>
+    public string? Mechanic { get; init; }
+
     /// <inheritdoc />
     public override EditOp Inverse() => new RemoveAddedActorOp(Created, this);
 
     /// <inheritdoc />
-    public override string Describe() => $"Add {Short(ClassPath)}{(Item is null ? string.Empty : $" ({Short(Item)})")} as {Created} (from {Source}) at {Format(Transform)}";
+    public override string Describe() => Trader is { } trader
+        ? $"Add trader {(trader.Name.Length > 0 ? trader.Name : trader.Type)} ({trader.Type}, {trader.Outpost}) as {Created} (from {Source}) at {Format(Transform)}"
+        : Mechanic is { } mechanic
+        ? $"Add {Short(ClassPath)} for {mechanic} as {Created} (from {Source}) at {Format(Transform)}"
+        : $"Add {Short(ClassPath)}{(Item is null ? string.Empty : $" ({Short(Item)})")} as {Created} (from {Source}) at {Format(Transform)}";
 
     /// <inheritdoc />
     public override IReadOnlyList<string> GetTouchedLevels() => [Level];
 
     /// <inheritdoc />
     public override ActorRef? GetPrimaryTarget() => Created;
+}
+
+/// <summary>
+/// A trade post placed as a trader of its own (owner: "place a trader anywhere"). The copy gets a personality of its own
+/// (a copy of the source post's <c>TraderPersonalityDataAsset</c> named <paramref name="Name"/> with its own
+/// <c>TraderPersistentId</c>: the name is its section in the server's <c>EconomyOverride.json</c>) and belongs to the outpost
+/// <paramref name="Outpost"/> (its <c>_outpost.OutpostName</c>). A stock outpost's trader joins that outpost; a new outpost
+/// name gets a <c>BP_TradeOutpostManager</c> of its own in the trader's level, listing it in <c>_assignedTradePosts</c>.
+/// </summary>
+/// <param name="Name">The trader's <c>HumanReadableTraderName</c> (<c>A_3_Armory</c>); empty for a bank (no trader, no economy).</param>
+/// <param name="Type">Trader type (<c>Armorer</c>, <c>GeneralGoods</c>, <c>Mechanic</c> …, <c>Bank</c>).</param>
+/// <param name="Outpost">Outpost name (<c>Outpost_A_0</c> joins A_0; <c>Outpost_A_3</c> is a new outpost).</param>
+public sealed record TraderPost(string Name, string Type, string Outpost)
+{
+    /// <summary>Object path of the source post's personality (copied under <see cref="Name"/>); null for a bank.</summary>
+    public string? Personality { get; init; }
 }
 
 /// <summary>

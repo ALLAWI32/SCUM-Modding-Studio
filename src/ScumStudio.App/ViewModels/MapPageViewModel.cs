@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using ScumStudio.App.Services;
 using ScumStudio.Assets.Catalog;
 using ScumStudio.Core.Mathematics;
+using ScumStudio.Level.Economy;
 using ScumStudio.Level.Editing;
 using ScumStudio.Level.Model;
 using ScumStudio.Level.Projects;
@@ -77,10 +78,14 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
         _pickParts = services.UiState.Current.PickParts;
         _services = services;
         _openSetup = openSetup ?? (() => { });
+        _services.UiState.Changed += OnUiStateChanged;
         _services.Workspace.CatalogChanged += OnCatalogChanged;
         _services.Projects.PropertyChanged += OnProjectsPropertyChanged;
         _services.Projects.Changed += OnProjectChanged;
         _services.SettingsChanged += OnSettingsChangedQuality;
+        _services.Prefabs.Changed += OnPrefabsChanged;
+        RefreshPrefabs();
+        SyncPaintPalette();
         if (_services.Workspace.Catalog is { } catalog)
         {
             _loadTask = LoadWorldAsync(catalog);
@@ -359,6 +364,12 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
     /// <summary>Completes when the current level load finished (tests).</summary>
     public Task LevelLoadCompletion { get; private set; } = Task.CompletedTask;
 
+    /// <summary>Where the last level load spent its time (read and prepare on a worker, show on the UI thread).</summary>
+    internal LoadTimings? LastLoadTimings { get; private set; }
+
+    /// <summary>Milliseconds of one level load.</summary>
+    internal sealed record LoadTimings(double ReadMs, double PrepareMs, double ShowMs, long ReadMb, long PrepareMb);
+
     /// <summary>True when a world index is loaded.</summary>
     public bool HasWorld => World is not null;
 
@@ -388,6 +399,7 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
 
         UpdateEmptyState();
         RefreshKindSelection();
+        RefreshPrefabs();
     }
 
     /// <summary>Shows <paramref name="index"/> in the tree.</summary>
@@ -475,10 +487,21 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
     public void Dispose()
     {
         _loadCts?.Cancel();
+        _services.UiState.Changed -= OnUiStateChanged;
         _services.Workspace.CatalogChanged -= OnCatalogChanged;
         _services.Projects.PropertyChanged -= OnProjectsPropertyChanged;
         _services.Projects.Changed -= OnProjectChanged;
         _services.SettingsChanged -= OnSettingsChangedQuality;
+        _services.Prefabs.Changed -= OnPrefabsChanged;
+    }
+
+    /// <summary>The Settings page changed a choice the map shows (Local axes).</summary>
+    private void OnUiStateChanged(UiState state)
+    {
+        if (LocalAxes != state.LocalAxes)
+        {
+            LocalAxes = state.LocalAxes;
+        }
     }
 
     /// <summary>Creates a project in <paramref name="parentFolder"/> named <see cref="NewProjectName"/>.</summary>
@@ -581,20 +604,41 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
         try
         {
             var textureSize = Quality.TextureSize;
+            var (readMs, readMb, prepareMb) = (0.0, 0L, 0L);
+            var shown = PreparedScene;
             var prepared = await Task.Run(() =>
             {
+                var clock = System.Diagnostics.Stopwatch.StartNew();
+                var allocated = GC.GetTotalAllocatedBytes(); // the whole process: what the read and the prepare make the collector clean up
                 var documents = ReadDocuments(catalog, world, packagePaths, ct);
-                var options = new LevelSceneOptions { TextureSize = textureSize, LandscapeStep = Math.Max(1, landscapeStep), SeaPlane = seaPlane ? null : false };
+                readMs = clock.Elapsed.TotalMilliseconds;
+                readMb = (GC.GetTotalAllocatedBytes() - allocated) >> 20;
+
+                // A level that stays keeps its slot (its actors their ids), so the viewport keeps its nodes and GPU data.
+                var options = new LevelSceneOptions
+                {
+                    TextureSize = textureSize,
+                    LandscapeStep = Math.Max(1, landscapeStep),
+                    SeaPlane = seaPlane ? null : false,
+                    DocumentSlots = LevelScenePreparer.SlotsAfter(documents, shown),
+                };
                 var progress = new Progress<(int Done, int Total, string Item)>(p =>
                     LoadStatus = Localization.Loc.F("Map.Preparing", p.Done + 1, p.Total, p.Item[(p.Item.LastIndexOf('/') + 1)..]));
-                return new LevelScenePreparer(catalog, _services.Logger).Prepare(documents, options, progress, ct, _prepareCache);
+                allocated = GC.GetTotalAllocatedBytes();
+                var scene = new LevelScenePreparer(catalog, _services.Logger).Prepare(documents, options, progress, ct, _prepareCache);
+                prepareMb = (GC.GetTotalAllocatedBytes() - allocated) >> 20;
+                return scene;
             }, ct).ConfigureAwait(true);
             if (ct.IsCancellationRequested)
             {
                 return;
             }
 
+            var showing = System.Diagnostics.Stopwatch.StartNew();
             ShowScene(prepared);
+            LastLoadTimings = new LoadTimings(readMs, prepared.Elapsed.TotalMilliseconds, showing.Elapsed.TotalMilliseconds, readMb, prepareMb);
+            _services.Logger.LogInformation("Showing {Levels} level(s): read {Read:0} ms ({ReadMb} MB allocated), prepare {Prepare:0} ms ({PrepareMb} MB), on a worker; show {Show:0} ms on the UI thread.",
+                prepared.Documents.Count, readMs, readMb, prepared.Elapsed.TotalMilliseconds, prepareMb, LastLoadTimings.ShowMs);
         }
         catch (OperationCanceledException)
         {
@@ -626,7 +670,7 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
         _loadingMeshes.Clear();
         PreparedScene = prepared;
         _pristineActors = prepared.Documents
-            .SelectMany((d, i) => d.Actors.Select(a => new ActorItemViewModel(d, a, LevelScenePreparer.SelectableIdOf(i, a))))
+            .SelectMany((d, i) => d.Actors.Select(a => new ActorItemViewModel(d, a, prepared.IdOf(i, a))))
             .ToList();
         _pristineByRef = ByReference(_pristineActors);
         RefreshEdits();
@@ -685,11 +729,14 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
         ShowSelection(value);
         OnPropertyChanged(nameof(HasSelectedPart)); // the part key comes first, its building right after
         OnPropertyChanged(nameof(IsLootPointSelected));
+        OnPropertyChanged(nameof(HasSelectedTrader));
         SelectWholeCommand.NotifyCanExecuteChanged();
         DeleteSelectedCommand.NotifyCanExecuteChanged();
         CopySelectedCommand.NotifyCanExecuteChanged();
         DuplicateSelectedCommand.NotifyCanExecuteChanged();
         ApplyTransformCommand.NotifyCanExecuteChanged();
+        SavePrefabCommand.NotifyCanExecuteChanged();
+        ReplaceCommand.NotifyCanExecuteChanged();
     }
 
     partial void OnSelectedActorIdChanged(uint value)
@@ -763,6 +810,7 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
             RefreshAddedActors();
             RefreshHiddenIds();
             RefreshTransforms();
+            RefreshReplacements();
             RefreshBends();
             RefreshGroup();
             var again = keepId == 0 ? null : ActorOf(keepId);
@@ -793,10 +841,10 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
     /// Applies a gizmo drag: the actor's root moved to <paramref name="rootWorld"/> (UE world space); converted back to
     /// the root's relative transform and journaled like <see cref="ApplyTransformCommand"/>.
     /// </summary>
-    public void ApplyDraggedTransform(uint selectableId, FTransform rootWorld)
+    public void ApplyDraggedTransform(uint selectableId, FTransform rootWorld, bool scaled = false)
     {
-        // Dragging one object of the multi-selection moves them all (rigidly, scale untouched).
-        if (HasGroup && ActorOf(selectableId) is { } dragged)
+        // Dragging one object of the multi-selection moves them all (rigidly, scale untouched); a scale cube scales the one.
+        if (!scaled && HasGroup && ActorOf(selectableId) is { } dragged)
         {
             var key = SelectedInstanceKey is { } k && k.SelectableId == selectableId ? k : (InstanceKey?)null;
             var before = WorldOf(dragged, key is { } kk ? InstanceInfo(dragged, kk) : null) with { Scale3D = FVector.One };
@@ -816,8 +864,10 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
             return;
         }
 
-        // A drag moves and turns; the scale stays (a bent actor is drawn at scale 1, its scale is in the curve).
-        ApplyRootTransform(item, RelativeOf(item, rootWorld) with { Scale = CurrentRootTransform(item).Scale }, Localization.Loc.T("Map.Moved"));
+        // A drag moves and turns; the scale stays (a bent actor is drawn at scale 1, its scale is in the curve) unless a
+        // scale cube was dragged (the gizmo hides them for bent objects, see GizmoCanScale).
+        var relative = RelativeOf(item, rootWorld);
+        ApplyRootTransform(item, scaled ? relative : relative with { Scale = CurrentRootTransform(item).Scale }, Localization.Loc.T("Map.Moved"));
     }
 
     /// <summary>Journals a new relative root transform for <paramref name="item"/> (pristine or added) and refreshes the scene.</summary>
@@ -894,16 +944,22 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
                         break;
                     case AddStaticMeshActorOp mesh:
                         var record = new ActorRecord(-1 - (int)(id - AddedIdBase), mesh.NewName, "/Script/Engine.StaticMeshActor", null, [], transform.ToTransform(),
-                            ActorKind.StaticMeshActor, mesh.StaticMesh, [])
+                            ActorKind.StaticMeshActor, state.GetMeshOverride(reference) ?? mesh.StaticMesh, [])
                         {
                             ClassName = "StaticMeshActor",
                         };
-                        item = new ActorItemViewModel(document, record, id) { IsAdded = true };
+                        item = new ActorItemViewModel(document, record, id) { IsAdded = true, IsHiddenInGame = ScumStudio.Level.Export.FarModels.IsUndersideMesh(record.StaticMeshPath!) };
                         break;
                     case AddBlueprintActorOp blueprint when PristineOf(blueprint.Source) is { } bpSource:
                         // The source level is loaded too: draw the copy by cloning the source's placements. The copy hangs on
                         // nothing (the export drops a parent that is not copied), so its place is a world place.
-                        item = new ActorItemViewModel(document, bpSource.Actor with { Name = blueprint.NewName, ExportIndex = -1 - (int)(id - AddedIdBase), WorldTransform = transform.ToTransform() }, id)
+                        item = new ActorItemViewModel(document, bpSource.Actor with
+                        {
+                            Name = blueprint.NewName,
+                            ExportIndex = -1 - (int)(id - AddedIdBase),
+                            WorldTransform = transform.ToTransform(),
+                            TraderMarkers = PlacedTraderMarkers(blueprint, bpSource.Actor.TraderMarkers),
+                        }, id)
                         {
                             IsAdded = true,
                             SourceId = bpSource.SelectableId,
@@ -914,6 +970,7 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
                             ActorKind.Blueprint, null, [])
                         {
                             ClassName = blueprint.ClassPath[(blueprint.ClassPath.LastIndexOf('.') + 1)..],
+                            TraderMarkers = PlacedTraderMarkers(blueprint, []),
                         };
                         item = new ActorItemViewModel(document, bpRecord, id) { IsAdded = true };
                         if (ForeignPlacements(blueprint.Source) is { } placements)
@@ -976,6 +1033,7 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
                 if (t.IsCompletedSuccessfully && t.Result is { } extra && ReferenceEquals(PreparedScene, scene))
                 {
                     ExtraMeshes = [.. ExtraMeshes, extra];
+                    RefreshBends(); // a replaced piece's bend is shaped over the new mesh's bounds
                 }
                 else if (t.IsFaulted)
                 {
@@ -1041,6 +1099,16 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
         if (ScumStudio.Level.Export.FarModels.IsFarViewMesh(meshObjectPath))
         {
             _services.Notifications.Warning(Localization.Loc.T("Map.FarModel"), Localization.Loc.F("Map.FarModelDetail", meshObjectPath[(meshObjectPath.LastIndexOf('/') + 1)..]));
+            return false;
+        }
+
+        // The underside of a lake (its _FN twin, the underwater material): drawn here, never in the game.
+        var catalog = _services.Workspace.Catalog;
+        if (ScumStudio.Level.Export.FarModels.IsUndersideMesh(meshObjectPath, catalog))
+        {
+            var top = catalog is null ? null : ScumStudio.Level.Export.FarModels.TopSideOf(meshObjectPath, catalog);
+            _services.Notifications.Warning(Localization.Loc.T("Map.Underside"), Localization.Loc.F("Map.UndersideDetail",
+                meshObjectPath[(meshObjectPath.LastIndexOf('/') + 1)..], top is null ? Localization.Loc.T("Map.Underside.TopSurface") : top[(top.LastIndexOf('/') + 1)..]));
             return false;
         }
 
@@ -1252,8 +1320,15 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
             return;
         }
 
-        if (CopiedActor is not { } copied || PreparedScene is not { } scene || scene.Documents.Count == 0)
+        if (CopiedActor is not { } copied)
         {
+            _services.Notifications.Info(Localization.Loc.T("Map.NothingToPaste"), Localization.Loc.T("Map.NothingToPasteDetail"));
+            return;
+        }
+
+        if (PreparedScene is not { } scene || scene.Documents.Count == 0)
+        {
+            _services.Notifications.Warning(Localization.Loc.T("Map.NoLevelLoaded"), Localization.Loc.T("Map.NoLevelLoadedDetail"));
             return;
         }
 
@@ -1265,15 +1340,16 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
 
         var target = SelectedActor?.Level ?? scene.Documents.FirstOrDefault(d => !d.Name.StartsWith("Landscape_", StringComparison.OrdinalIgnoreCase)) ?? scene.Documents[0];
         var at = AimPointProvider?.Invoke() ?? copied.Actor.WorldTransform.Translation;
-        var world = RootWorldOf(copied, CurrentRootTransform(copied)) with { Translation = at };
         try
         {
+            // The copied item may come from a level the island streamed out since: its own record is all that is needed.
+            var world = RootWorldOf(copied, CurrentRootTransform(copied)) with { Translation = at };
             var op = CopyOp(copied, target, world, project.State);
             var entry = _services.Projects.Apply(op);
             _services.Notifications.Info(Localization.Loc.T("Map.Pasted"), entry.Op.Describe());
             SelectCreated(op);
         }
-        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or IOException)
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or IOException or KeyNotFoundException or InvalidDataException)
         {
             _services.Notifications.Error(Localization.Loc.T("Map.PasteFailed"), ex.Message);
         }
@@ -1294,8 +1370,17 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
                 case AddStaticMeshActorOp mesh:
                     return EditOpFactory.AddStaticMeshActor(target, mesh.StaticMesh, transform, state, reserved) with { CollisionProfile = mesh.CollisionProfile };
                 case AddBlueprintActorOp blueprint:
-                    // A copy of a placed item spawner spawns the same item (Item), not the item of the spawner it was made from.
-                    return blueprint with { Level = target.PackagePath, NewName = EditOpFactory.UniqueActorName(target, BaseName(item) + "_Added", state, reserved), Transform = transform };
+                    // A copy of a placed item spawner spawns the same item (Item), not the item of the spawner it was made from;
+                    // a copy of a placed trader is a trader of its own (its name is its economy section and its id).
+                    return blueprint with
+                    {
+                        Level = target.PackagePath,
+                        NewName = EditOpFactory.UniqueActorName(target, BaseName(item) + "_Added", state, reserved),
+                        Transform = transform,
+                        Trader = blueprint.Trader is { Name.Length: > 0 } trader
+                            ? trader with { Name = FreeDefaultName(CellOf(target) ?? TraderPosts.CellOf(trader.Name) ?? "X_0", trader.Type, reserved) }
+                            : blueprint.Trader,
+                    };
                 case DuplicateActorOp duplicate when PristineOf(duplicate.Source) is { } source:
                     item = source;
                     break;
@@ -1403,6 +1488,10 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
         if (item.IsDeleted)
         {
             rows.Add(new PropertyRow(Localization.Loc.T("Map.Row.State"), Localization.Loc.T("Map.State.Deleted")));
+        }
+        else if (item.IsHiddenInGame)
+        {
+            rows.Add(new PropertyRow(Localization.Loc.T("Map.Row.State"), Localization.Loc.T("Map.State.HiddenInGame")));
         }
         else if (item.IsAdded)
         {
@@ -1630,7 +1719,11 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
     }
 
     /// <summary>Any journal change (this page, another page or an AI client): re-derive the edits shown in the scene.</summary>
-    private void OnProjectChanged(object? sender, EventArgs e) => RefreshEdits();
+    private void OnProjectChanged(object? sender, EventArgs e)
+    {
+        SyncPaintPalette();
+        RefreshEdits();
+    }
 
     private void OnCatalogChanged(object? sender, EventArgs e)
     {
@@ -1849,7 +1942,7 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
     [RelayCommand]
     private async Task NewProjectAsync()
     {
-        var folder = ProjectsPageViewModel.DefaultProjectsFolder();
+        var folder = _services.ProjectsFolder;
         var name = string.IsNullOrWhiteSpace(NewProjectName) ? "MyMapMod" : NewProjectName.Trim();
         var existing = Path.Combine(folder, string.Concat(name.Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c)) + Project.FolderExtension);
         if (Directory.Exists(existing))
@@ -1895,7 +1988,7 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
     [RelayCommand]
     private async Task OpenProjectPickerAsync()
     {
-        if (await _services.Dialogs.PickFolderAsync(Localization.Loc.T("Projects.PickProject")).ConfigureAwait(true) is { } folder)
+        if (await _services.Dialogs.PickFolderAsync(Localization.Loc.T("Projects.PickProject"), _services.ProjectsFolder).ConfigureAwait(true) is { } folder)
         {
             await OpenProjectAsync(folder).ConfigureAwait(true);
         }

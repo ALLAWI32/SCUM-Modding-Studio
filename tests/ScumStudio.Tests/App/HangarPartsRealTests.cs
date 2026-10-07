@@ -113,18 +113,24 @@ public sealed class HangarPartsRealTests
         var before = LevelDocument.Load(new Cue4ParseLevelReader(ctx.Services.Workspace.Catalog!, new Cue4ParseLevelReaderOptions()), Airfield);
         var after = LevelDocument.Load(new Cue4ParseLevelReader(written, new Cue4ParseLevelReaderOptions()), Airfield);
         var (oldHangar, newHangar) = (before.FindActor(hangar.Name)!, after.FindActor(hangar.Name)!);
-        Assert.Equal(oldHangar.Components.Count, newHangar.Components.Count);
         Assert.Equal(oldHangar.Root!.WorldTransform.Translation, newHangar.Root!.WorldTransform.Translation);
         Assert.Equal(oldHangar.FindComponent("SM_Airplane_Hangar")!.WorldTransform.Translation.Z + 500f, newHangar.FindComponent("SM_Airplane_Hangar")!.WorldTransform.Translation.Z, 1f);
         Assert.Equal(oldHangar.FindComponent("StaticMesh21")!.WorldTransform.Translation, newHangar.FindComponent("StaticMesh21")!.WorldTransform.Translation);
-        Assert.Equal(before.FindActor(Door)!.Root!.WorldTransform.Translation.X + 200f, after.FindActor(Door)!.Root!.WorldTransform.Translation.X, 1f);
         Assert.Contains(after.Actors, a => a.Name == paste.NewName && a.StaticMeshPath is { } m && m.EndsWith(".SM_Storage_Shelves_03", StringComparison.Ordinal));
 
-        // The door's copy is a door, no child of the hangar's component (that one spawns the original), attached to it still.
-        var (oldDoor, copiedDoor) = (before.FindActor(Door)!, after.FindActor(doorCopy.NewName)!);
+        // Step 6 left the door with nothing drawn, so it is removed whole (its move is moot), and the hangar's component that
+        // spawned it goes too: left alone it would spawn a fresh door from its class when the level loads.
+        var oldDoor = before.FindActor(Door)!;
+        Assert.Null(after.FindActor(Door));
+        Assert.Contains(result.Warnings, w => w.Contains("removed whole", StringComparison.Ordinal));
+        var spawner = oldHangar.Components.Single(c => c.ExportIndex == oldDoor.ParentComponent);
+        Assert.DoesNotContain(newHangar.Components, c => c.Name == spawner.Name);
+        Assert.Equal(oldHangar.Components.Count - 1, newHangar.Components.Count);
+
+        // The door's copy is a door of its own: no child of the hangar's component, attached to the hangar still.
+        var copiedDoor = after.FindActor(doorCopy.NewName)!;
         Assert.Equal(oldDoor.ClassPath, copiedDoor.ClassPath);
         Assert.Null(copiedDoor.ParentComponent);
         Assert.Equal(oldDoor.Root!.AttachParent, copiedDoor.Root!.AttachParent);
-        Assert.Equal(oldDoor.ParentComponent, after.FindActor(Door)!.ParentComponent);
     }
 }

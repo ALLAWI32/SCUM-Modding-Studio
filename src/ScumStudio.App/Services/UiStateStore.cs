@@ -42,6 +42,9 @@ public sealed record UiState
     /// </summary>
     public IReadOnlyList<string> HiddenSpawnLayers { get; init; } = ["Zones", "Animals"];
 
+    /// <summary>Reopen the last project at start-up (owner: after an update he could not find his project).</summary>
+    public bool ReopenLastProject { get; init; } = true;
+
     /// <summary>Where the map camera was last (the map reopens there), or null.</summary>
     public MapView? MapView { get; init; }
 }
@@ -78,10 +81,14 @@ public sealed class UiStateStore
     /// <summary>Last loaded/saved state.</summary>
     public UiState Current { get; private set; }
 
+    /// <summary>Raised after <see cref="Update"/> changed <see cref="Current"/> (the Map follows the Settings page's choices).</summary>
+    public event Action<UiState>? Changed;
+
     /// <summary>Applies <paramref name="change"/> and saves.</summary>
     public UiState Update(Func<UiState, UiState> change)
     {
         Current = change(Current);
+        Changed?.Invoke(Current);
         try
         {
             StudioHome.EnsureDirectory(Path.GetDirectoryName(FilePath)!);

@@ -70,6 +70,12 @@ public sealed partial class ActorItemViewModel : ViewModelBase
     /// <summary>For a duplicate: selectable id of the copied actor (0 otherwise); the viewport clones its placements.</summary>
     public uint SourceId { get; init; }
 
+    /// <summary>
+    /// True for an added mesh the game never shows as a placed object (the underside of the water, see
+    /// <see cref="ScumStudio.Level.Export.FarModels.IsUndersideMesh"/>): the list marks it and the properties say why.
+    /// </summary>
+    public bool IsHiddenInGame { get; init; }
+
     /// <summary>Deleted in the open project.</summary>
     [ObservableProperty]
     private bool _isDeleted;

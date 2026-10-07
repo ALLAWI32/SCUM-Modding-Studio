@@ -33,6 +33,16 @@ public static class InstanceRenderData
         ArgumentNullException.ThrowIfNull(moves);
         if (Layout(payload, arrayEnd, count) is not { } layout)
         {
+            // Already without a render copy (a level this studio wrote, e.g. the project's own pak imported back into it):
+            // the cluster tree after the empty copy still has to reach where instances went, or the game culls them by
+            // their old place (only a grown instance array makes it rebuild the tree).
+            if (CopySizeAt(payload, arrayEnd) is { } emptyAt && BinaryPrimitives.ReadInt64LittleEndian(payload.AsSpan(emptyAt)) == 0)
+            {
+                var grown = payload.ToArray();
+                GrowClusters(grown, block, emptyAt + 8, moves);
+                return grown;
+            }
+
             return payload;
         }
 
@@ -49,6 +59,27 @@ public static class InstanceRenderData
     internal static (int SizeAt, int Bytes)? Layout(byte[] payload, int arrayEnd, int count)
     {
         var span = payload.AsSpan();
+        if (CopySizeAt(payload, arrayEnd) is not { } sizeAt)
+        {
+            return null;
+        }
+
+        var bytes = BinaryPrimitives.ReadInt64LittleEndian(span[sizeAt..]);
+        var at = sizeAt + 8;
+        // FStaticMeshInstanceData starts with bUseHalfFloat (0 or 1) and the instance count.
+        if (bytes < 8 || at + bytes > span.Length
+            || BinaryPrimitives.ReadInt32LittleEndian(span[at..]) is not (0 or 1) || BinaryPrimitives.ReadInt32LittleEndian(span[(at + 4)..]) != count)
+        {
+            return null;
+        }
+
+        return (sizeAt, (int)bytes);
+    }
+
+    /// <summary>Where the render copy's int64 size is (after the per-instance custom data), or null when the payload is too short.</summary>
+    private static int? CopySizeAt(byte[] payload, int arrayEnd)
+    {
+        var span = payload.AsSpan();
         if (arrayEnd < 0 || arrayEnd + 8 > span.Length)
         {
             return null;
@@ -57,21 +88,7 @@ public static class InstanceRenderData
         var customSize = BinaryPrimitives.ReadInt32LittleEndian(span[arrayEnd..]);
         var customCount = BinaryPrimitives.ReadInt32LittleEndian(span[(arrayEnd + 4)..]);
         var sizeAt = arrayEnd + 8 + ((long)customSize * customCount);
-        if (customSize < 0 || customCount < 0 || sizeAt + 16 > span.Length)
-        {
-            return null;
-        }
-
-        var bytes = BinaryPrimitives.ReadInt64LittleEndian(span[(int)sizeAt..]);
-        var at = (int)sizeAt + 8;
-        // FStaticMeshInstanceData starts with bUseHalfFloat (0 or 1) and the instance count.
-        if (bytes < 8 || at + bytes > span.Length
-            || BinaryPrimitives.ReadInt32LittleEndian(span[at..]) is not (0 or 1) || BinaryPrimitives.ReadInt32LittleEndian(span[(at + 4)..]) != count)
-        {
-            return null;
-        }
-
-        return ((int)sizeAt, (int)bytes);
+        return customSize < 0 || customCount < 0 || sizeAt + 16 > span.Length ? null : (int)sizeAt;
     }
 
     private static void GrowClusters(byte[] payload, PropertyBlock block, int at, IReadOnlyList<(int Index, FTransform From, FTransform To)> moves)

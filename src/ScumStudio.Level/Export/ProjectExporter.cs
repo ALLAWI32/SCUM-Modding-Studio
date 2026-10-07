@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using ScumStudio.Assets.Catalog;
 using ScumStudio.Core.Mathematics;
 using ScumStudio.Formats.Packages;
+using ScumStudio.Level.Economy;
 using ScumStudio.Level.Editing;
 using ScumStudio.Level.Model;
 using ScumStudio.Level.Projects;
@@ -52,6 +53,18 @@ public sealed record ExportOptions
 
     /// <summary>Imported mods' folders (<see cref="ProjectMods"/>): their files go into the pak, under what the export rewrote.</summary>
     public IReadOnlyList<string> Mods { get; init; } = [];
+
+    /// <summary>
+    /// The ground height at a world X/Y for the collision check of placed rocks (<see cref="CollisionCheck.Placed"/>);
+    /// null = the export catalog's landscape (<see cref="GroundHeights"/>).
+    /// </summary>
+    public Func<float, float, float?>? Ground { get; init; }
+
+    /// <summary>
+    /// The economy to write next to the pak as <c>EconomyOverride.json</c> (placed traders get their sections); null = the
+    /// project's own file when exporting a project (none: only when traders are placed).
+    /// </summary>
+    public EconomyOverride? Economy { get; init; }
 }
 
 /// <summary>One rewritten level.</summary>
@@ -108,6 +121,15 @@ public sealed record ExportResult
     /// <summary>Far models (seen from far away) that were cut or hidden because objects in them were removed or moved.</summary>
     public IReadOnlyList<string> FarModels { get; init; } = [];
 
+    /// <summary>The placed traders, one line each: who, where, which outpost and how the outpost knows it.</summary>
+    public IReadOnlyList<string> Traders { get; init; } = [];
+
+    /// <summary>The <c>EconomyOverride.json</c> written next to the pak, or null.</summary>
+    public string? EconomyPath { get; init; }
+
+    /// <summary>The game's traders whose trade posts the project deleted: their sections are left out of <see cref="EconomyPath"/>.</summary>
+    public IReadOnlyList<string> RemovedTraders { get; init; } = [];
+
     /// <summary>Total actors removed across levels.</summary>
     public int RemovedActorCount => Levels.Sum(l => l.Report.RemovedActors.Count);
 
@@ -122,7 +144,7 @@ public sealed record ExportResult
 /// <c>.sig</c> next to it. Run once per cook (client paks, then the server's) — the edits are replayed by actor name, so
 /// the same journal produces both variants.
 /// </summary>
-public sealed class ProjectExporter
+public sealed partial class ProjectExporter
 {
     /// <summary>Default <c>pakchunk</c> number (well above the stock chunks, loads after them).</summary>
     public const int DefaultPakChunkIndex = 900;
@@ -181,6 +203,12 @@ public sealed class ProjectExporter
         IProgress<string>? progress = null, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(project);
+        ArgumentNullException.ThrowIfNull(options);
+        if (options.Economy is null && EconomyOverride.LoadFrom(project.DirectoryPath) is { } economy)
+        {
+            options = options with { Economy = economy };
+        }
+
         return ExportAsync(project.State, project.Manifest.Name, catalog, options, role, progress, cancellationToken);
     }
 
@@ -221,6 +249,50 @@ public sealed class ProjectExporter
         var cuts = new List<CutBox>();
         var proxies = new List<FarModels.Candidate>();
         var spawnPlaces = new List<ExportedAsset>();
+        var traderLines = new List<string>();
+
+        // Other levels are read on demand (Blueprint actors copied from elsewhere) and cached for this export.
+        CookedPackage? SourcePackage(string path)
+        {
+            if (!packageCache.TryGetValue(path, out var cached))
+            {
+                cached = TryReadPackage(catalog, path, warnings);
+                packageCache[path] = cached;
+            }
+
+            return cached;
+        }
+
+        LevelDocument? SourceDocument(string path)
+        {
+            if (!documentCache.TryGetValue(path, out var cached))
+            {
+                try
+                {
+                    cached = LevelDocument.Load(reader, path, cancellationToken);
+                }
+                catch (Exception ex) when (ex is InvalidDataException or IOException or InvalidOperationException or NotSupportedException)
+                {
+                    cached = null;
+                }
+
+                documentCache[path] = cached;
+            }
+
+            return cached;
+        }
+
+        // A pak this project exported, imported back into it: its levels already hold the journal's edits, applied again on top.
+        foreach (var mod in options.Mods.Where(m => string.Equals(SanitizeModName(Path.GetFileName(m)), modName, StringComparison.OrdinalIgnoreCase)))
+        {
+            warnings.Add($"The imported mod '{Path.GetFileName(mod)}' is a pak of this project: its levels already hold this project's edits and the export applies them a second time "
+                + "(copied rocks and trees twice, \"already exists\" and \"not in the level's actor list\" lines). Remove it from the project's imported mods and export again.");
+        }
+
+        var traders = PlanTraders(state, catalog, SourcePackage, SourceDocument, warnings);
+        var placedMeshes = new List<PlacedMesh>();
+        // The changed levels are read side by side first; the loop takes each one (or the error reading it threw) in order.
+        var ahead = reader.ReadAhead(state.ChangedLevels.Where(l => !Spawns.SpawnPlaces.IsStaticData(l) && catalog.TryGetPackageFile(l, out _)).ToList(), cancellationToken);
         foreach (var level in state.ChangedLevels)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -245,7 +317,7 @@ public sealed class ProjectExporter
             LevelDocument? document = null;
             try
             {
-                document = LevelDocument.Load(reader, level, cancellationToken);
+                document = ahead.TryGetValue(level, out var read) ? read.Value : LevelDocument.Load(reader, level, cancellationToken);
             }
             catch (Exception ex) when (ex is InvalidDataException or IOException or InvalidOperationException or NotSupportedException)
             {
@@ -257,38 +329,7 @@ public sealed class ProjectExporter
             packageCache[level] = package;
             documentCache[level] = document;
 
-            // Other levels are read on demand (Blueprint actors copied from elsewhere) and cached for this export.
-            CookedPackage? SourcePackage(string path)
-            {
-                if (!packageCache.TryGetValue(path, out var cached))
-                {
-                    cached = TryReadPackage(catalog, path, warnings);
-                    packageCache[path] = cached;
-                }
-
-                return cached;
-            }
-
-            LevelDocument? SourceDocument(string path)
-            {
-                if (!documentCache.TryGetValue(path, out var cached))
-                {
-                    try
-                    {
-                        cached = LevelDocument.Load(reader, path, cancellationToken);
-                    }
-                    catch (Exception ex) when (ex is InvalidDataException or IOException or InvalidOperationException or NotSupportedException)
-                    {
-                        cached = null;
-                    }
-
-                    documentCache[path] = cached;
-                }
-
-                return cached;
-            }
-
-            var request = PlanLevel(state, level, document, warnings, SourcePackage, SourceDocument, bendMeshes, options.StraightPieces);
+            var request = PlanLevel(state, level, document, warnings, SourcePackage, SourceDocument, bendMeshes, options.StraightPieces, traders);
             if (request.IsEmpty)
             {
                 warnings.Add($"{level}: no exportable change; skipped.");
@@ -299,6 +340,7 @@ public sealed class ProjectExporter
             if (role == ProjectSourceRole.Client && document is not null)
             {
                 CollectFarCuts(document, request, bendMeshes, cuts, proxies);
+                placedMeshes.AddRange(PlacedMeshes(level, request, document));
             }
 
             // The collision check: every spline piece written carries its boxes and its mesh's body guid.
@@ -325,16 +367,22 @@ public sealed class ProjectExporter
             placed.Add((level, target + extension, new HashSet<string>(
                 request.StaticMeshAdds.Select(a => a.NewName).Concat(request.Copies.Select(c => c.NewName)).Concat(request.ForeignCopies.Select(c => c.NewName))
                     .Concat(request.Transforms.Select(t => t.Actor)).Concat(request.Instances.Select(i => i.Actor)).Concat(request.InstanceAdds.Select(a => a.Actor))
-                    .Concat(request.SplinePatches.Select(s => s.Actor)).Concat(request.SpawnPoints.Select(s => s.Actor)),
+                    .Concat(request.SplinePatches.Select(s => s.Actor)).Concat(request.SpawnPoints.Select(s => s.Actor)).Concat(request.Meshes.Select(m => m.Actor)),
                 StringComparer.OrdinalIgnoreCase)));
 
             warnings.AddRange(report.Warnings.Select(w => $"{level}: {w}"));
+            traderLines.AddRange(DescribeTraders(state, level, traders, report));
             levels.Add(new ExportedLevel(level, virtualPath, report));
             _logger.LogInformation("{Level}: {Before} -> {After} actors, {Removed} removed, {Transforms} transform(s) written.",
                 level, report.ActorsBefore, report.ActorsAfter, report.RemovedActors.Count, report.PatchedTransforms.Count);
         }
 
         GrowStreamingAreas(staging, placed, bendMeshes, warnings, cancellationToken);
+        if (placedMeshes.Count > 0)
+        {
+            warnings.AddRange(CollisionCheck.Placed(placedMeshes, bendMeshes, options.Ground ?? new GroundHeights(catalog).At));
+        }
+
         IReadOnlyList<string> farModels = [];
         if (cuts.Count > 0)
         {
@@ -348,7 +396,7 @@ public sealed class ProjectExporter
         var registered = new List<RegisteredAsset>();
         var assetValues = new List<(string, string, string, string)>();
         var writeRegistry = false;
-        var assetRequest = BuildAssetRequest(state);
+        var assetRequest = BuildAssetRequest(state) with { DataAssets = traders.DataAssets };
         if (!assetRequest.IsEmpty)
         {
             progress?.Report("Building vehicles and items");
@@ -420,6 +468,16 @@ public sealed class ProjectExporter
             }
         }
 
+        // The economy goes next to the pak: the server reads it from its config folder (see the report). The game's traders
+        // whose trade posts are deleted lose their sections (the outpost levels with deletions were read above).
+        string? economyPath = null;
+        var removedTraders = TraderPosts.RemovedStockTraders(state,
+            documentCache.Where(d => d.Value is not null && TraderPosts.IsOutpostLevel(d.Key)).Select(d => d.Value!)).Order(StringComparer.OrdinalIgnoreCase).ToList();
+        if (EconomyFor(state, options.Economy, removedTraders) is { } economy)
+        {
+            economyPath = economy.SaveTo(roleDirectory);
+        }
+
         var result = new ExportResult
         {
             Role = role,
@@ -434,6 +492,9 @@ public sealed class ProjectExporter
             Warnings = warnings,
             SolidPieces = solidPieces,
             FarModels = farModels,
+            Traders = traderLines,
+            EconomyPath = economyPath,
+            RemovedTraders = economyPath is null ? [] : removedTraders,
         };
         var reportPath = Path.Combine(roleDirectory, ReportFileName);
         await File.WriteAllTextAsync(reportPath, BuildReport(result, catalog), new UTF8Encoding(false), cancellationToken).ConfigureAwait(false);
@@ -446,7 +507,7 @@ public sealed class ProjectExporter
     /// </summary>
     private static void CollectFarCuts(LevelDocument document, LevelEditRequest request, Func<string, BendMesh?> meshes, List<CutBox> cuts, List<FarModels.Candidate> proxies)
     {
-        var gone = new HashSet<string>(request.DeleteActors.Concat(request.Transforms.Select(t => t.Actor)), StringComparer.OrdinalIgnoreCase);
+        var gone = new HashSet<string>(request.DeleteActors.Concat(request.Transforms.Select(t => t.Actor)).Concat(request.Meshes.Select(m => m.Actor)), StringComparer.OrdinalIgnoreCase);
         foreach (var actor in document.Actors)
         {
             if (gone.Contains(actor.Name))
@@ -469,6 +530,45 @@ public sealed class ProjectExporter
                 && FarModels.BoxOf(c, c.Instances[patch.Index], meshes) is { } box)
             {
                 cuts.Add(box);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Where the request puts static meshes, for the collision check: added mesh actors (not bent pieces, which carry their
+    /// own boxes), copies and moved mesh actors of the level, and added or moved instances.
+    /// </summary>
+    internal static IEnumerable<PlacedMesh> PlacedMeshes(string level, LevelEditRequest request, LevelDocument document)
+    {
+        foreach (var add in request.StaticMeshAdds.Where(a => a.Spline is null))
+        {
+            yield return new PlacedMesh($"{level}: {add.NewName}", add.StaticMesh, add.Transform.ToTransform(), add.CollisionProfile is not null);
+        }
+
+        foreach (var copy in request.Copies)
+        {
+            if (document.FindActor(copy.SourceActor) is { Kind: ActorKind.StaticMeshActor, StaticMeshPath: { } mesh, Root.AttachParent: null } source)
+            {
+                yield return new PlacedMesh($"{level}: {copy.NewName}", mesh, copy.RootTransform?.ToTransform() ?? source.WorldTransform, true);
+            }
+        }
+
+        foreach (var move in request.Transforms)
+        {
+            if (document.FindActor(move.Actor) is { Kind: ActorKind.StaticMeshActor, StaticMeshPath: { } mesh, Root: { AttachParent: null } root }
+                && string.Equals(move.Component ?? root.Name, root.Name, StringComparison.OrdinalIgnoreCase))
+            {
+                yield return new PlacedMesh($"{level}: {move.Actor}", mesh, move.Value.ToTransform(), true);
+            }
+        }
+
+        var instances = request.Instances.Where(i => i.Local is not null).Select(i => (i.Actor, i.Component, Local: i.Local!.Value, Name: $"[{i.Index}]"))
+            .Concat(request.InstanceAdds.Select(a => (a.Actor, a.Component, a.Local, Name: "(added)")));
+        foreach (var (actor, component, local, name) in instances)
+        {
+            if (document.FindActor(actor)?.FindComponent(component) is { StaticMeshPath: { } mesh } c)
+            {
+                yield return new PlacedMesh($"{level}: {actor}.{component}{name} at {(local * c.WorldTransform).Translation}", mesh, local * c.WorldTransform, true);
             }
         }
     }
@@ -527,6 +627,14 @@ public sealed class ProjectExporter
     public static LevelEditRequest PlanLevel(EditState state, string level, LevelDocument? document, List<string> warnings) =>
         PlanLevel(state, level, document, warnings, null, null);
 
+    /// <summary>True when every instance the actor draws is deleted in <paramref name="state"/> (and none was added back).</summary>
+    private static bool AllInstancesDeleted(EditState state, ActorRecord actor, string level) =>
+        actor.InstanceTransforms.All(i => state.IsDeleted(new InstanceRef(level, actor.Name, i.ComponentName, i.InstanceIndex)))
+        && !state.AddedInstances.Keys.Any(k => SameLevel(k.Level, level) && string.Equals(k.Actor, actor.Name, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>A scale the brush and the part delete write for "nothing left of this part".</summary>
+    private static bool IsNothing(FVector scale) => MathF.Abs(scale.X) < 1e-4f && MathF.Abs(scale.Y) < 1e-4f && MathF.Abs(scale.Z) < 1e-4f;
+
     /// <summary>The profile SCUM's standing trees collide as (its tree foliage uses it; players and cars stop at the trunk).</summary>
     public const string StandingTree = "SCUM_TreeStump";
 
@@ -558,10 +666,11 @@ public sealed class ProjectExporter
     /// are not exported.
     /// </param>
     /// <param name="straightPieces">Shaped actors to export straight (see <see cref="ExportOptions.StraightPieces"/>).</param>
+    /// <param name="traders">The placed traders' plan (<see cref="PlanTraders"/>): new outposts' managers go into their level.</param>
     public static LevelEditRequest PlanLevel(
         EditState state, string level, LevelDocument? document, List<string> warnings,
         Func<string, CookedPackage?>? sourcePackages, Func<string, LevelDocument?>? sourceDocuments, Func<string, BendMesh?>? bendMeshes = null,
-        IReadOnlyCollection<ActorRef>? straightPieces = null)
+        IReadOnlyCollection<ActorRef>? straightPieces = null, TraderExportPlan? traders = null)
     {
         ArgumentNullException.ThrowIfNull(state);
         ArgumentException.ThrowIfNullOrWhiteSpace(level);
@@ -571,6 +680,53 @@ public sealed class ProjectExporter
             state.DeletedActors.Where(a => SameLevel(a.Level, level) && !state.IsAdded(a)).Select(a => a.Actor),
             StringComparer.OrdinalIgnoreCase);
 
+        // Older projects "deleted" a building by scaling every one of its parts to nothing (the fire, sound, heat and
+        // collision stayed in game). When every drawn part of an actor is at scale 0 the actor goes whole instead.
+        if (document is not null)
+        {
+            var collapsed = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (actor, component, value) in state.TransformOverrides)
+            {
+                if (SameLevel(actor.Level, level) && !state.IsAdded(actor) && component.Length > 0 && IsNothing(value.Scale))
+                {
+                    (collapsed.TryGetValue(actor.Actor, out var parts) ? parts : collapsed[actor.Actor] = new HashSet<string>(StringComparer.OrdinalIgnoreCase)).Add(component);
+                }
+            }
+
+            var wholly = 0;
+            foreach (var (name, parts) in collapsed)
+            {
+                if (deleted.Contains(name) || document.FindActor(name) is not { } actor || actor.InstanceTransforms.Count > 0)
+                {
+                    continue;
+                }
+
+                var drawn = actor.Components.Where(c => c.StaticMeshPath is not null && !c.IsSynthesized && c.IsVisible && !c.IsInstanced).Select(c => c.Name).ToList();
+                if (drawn.Count > 0 && drawn.All(parts.Contains) && AllInstancesDeleted(state, actor, level))
+                {
+                    deleted.Add(name);
+                    wholly++;
+                }
+            }
+
+            // The same for a burning tyre stack whose tyres (instances) were brushed away one by one: nothing drawn is left.
+            foreach (var actor in document.Actors.Where(a => a.InstanceTransforms.Count > 0 && !deleted.Contains(a.Name) && !collapsed.ContainsKey(a.Name)))
+            {
+                if (!actor.Components.Any(c => c.StaticMeshPath is not null && !c.IsSynthesized && c.IsVisible && !c.IsInstanced)
+                    && AllInstancesDeleted(state, actor, level))
+                {
+                    deleted.Add(actor.Name);
+                    wholly++;
+                }
+            }
+
+            if (wholly > 0)
+            {
+                warnings.Add($"{level}: {wholly} actor(s) whose every drawn part was scaled to nothing are removed whole (their fire, sound, heat and collision go too).");
+            }
+        }
+
+        var deleteComponents = new List<(string Actor, string Component)>();
         if (document is not null && deleted.Count > 0)
         {
             var owner = new Dictionary<int, ActorRecord>();
@@ -594,6 +750,17 @@ public sealed class ProjectExporter
                         deleted.Add(actor.Name);
                         changed = true;
                     }
+                }
+            }
+
+            // A deleted child actor takes the ChildActorComponent that spawned it along: left in a kept parent, the component
+            // would spawn a fresh child from its class when the level loads, and the deleted door would be back.
+            foreach (var actor in document.Actors)
+            {
+                if (deleted.Contains(actor.Name) && actor.ParentComponent is { } parent && owner.TryGetValue(parent, out var parentActor)
+                    && !deleted.Contains(parentActor.Name) && parentActor.Components.FirstOrDefault(c => c.ExportIndex == parent) is { } spawner)
+                {
+                    deleteComponents.Add((parentActor.Name, spawner.Name));
                 }
             }
         }
@@ -636,6 +803,8 @@ public sealed class ProjectExporter
         var copies = new List<ActorCopy>();
         var meshAdds = new List<StaticMeshActorAdd>();
         var foreignCopies = new List<ForeignActorCopy>();
+        var lifts = new List<ForeignActorCopy>(); // after the trade posts they point at
+        var tradeJoins = new List<(string Post, string Outpost)>();
         foreach (var (added, op) in state.AddedActors.Where(a => SameLevel(a.Key.Level, level)))
         {
             if (state.IsDeleted(added))
@@ -650,14 +819,19 @@ public sealed class ProjectExporter
                     copies.Add(new ActorCopy(duplicate.Source.Actor, duplicate.NewName, state.GetAddedTransform(added), sourceRoot));
                     break;
                 case AddStaticMeshActorOp meshActor:
-                    if (FarModels.IsFarViewMesh(meshActor.StaticMesh))
+                    var addedMesh = state.GetMeshOverride(added) ?? meshActor.StaticMesh; // replaced since it was added
+                    if (FarModels.IsFarViewMesh(addedMesh))
                     {
-                        warnings.Add($"{added}: {meshActor.StaticMesh} is a far-view model (low detail, blurred, merged with what stood around it, no collision); delete it and copy the real building instead.");
+                        warnings.Add($"{added}: {addedMesh} is a far-view model (low detail, blurred, merged with what stood around it, no collision); delete it and copy the real building instead.");
+                    }
+                    else if (FarModels.IsUndersideMesh(addedMesh))
+                    {
+                        warnings.Add($"{added}: {addedMesh} is the underside of the water (flipped normals, underwater material): the game never shows it as a placed object; delete it and place the lake's top surface (the same name without _FN) instead.");
                     }
 
-                    meshAdds.Add(new StaticMeshActorAdd(meshActor.NewName, meshActor.StaticMesh, state.GetAddedTransform(added) ?? meshActor.Transform)
+                    meshAdds.Add(new StaticMeshActorAdd(meshActor.NewName, addedMesh, state.GetAddedTransform(added) ?? meshActor.Transform)
                     {
-                        CollisionProfile = meshActor.CollisionProfile ?? StandingTreeProfile(meshActor.StaticMesh, bendMeshes),
+                        CollisionProfile = meshActor.CollisionProfile ?? StandingTreeProfile(addedMesh, bendMeshes),
                     });
                     break;
                 case AddBlueprintActorOp blueprint when sourcePackages is not null:
@@ -669,10 +843,17 @@ public sealed class ProjectExporter
                     }
 
                     var sourceRootName = sourceDocuments?.Invoke(blueprint.Source.Level)?.FindActor(blueprint.Source.Actor)?.Root is { IsSynthesized: false } sr ? sr.Name : null;
-                    foreignCopies.Add(new ForeignActorCopy(sourcePackage, blueprint.Source.Actor, blueprint.NewName, state.GetAddedTransform(added) ?? blueprint.Transform, sourceRootName)
+                    (blueprint.Mechanic is null ? foreignCopies : lifts).Add(new ForeignActorCopy(sourcePackage, blueprint.Source.Actor, blueprint.NewName, state.GetAddedTransform(added) ?? blueprint.Transform, sourceRootName)
                     {
                         Item = blueprint.Item,
+                        Trade = blueprint.Trader is { } trader ? TradeCopyOf(trader) : null,
+                        AssignedTradePost = blueprint.Mechanic,
                     });
+                    if (blueprint.Trader is { Name.Length: > 0 } joining)
+                    {
+                        tradeJoins.Add((blueprint.NewName, joining.Outpost)); // a bank is in no list, like the game's
+                    }
+
                     break;
                 default:
                     warnings.Add($"{added}: this kind of added actor cannot be exported without the source level.");
@@ -680,21 +861,61 @@ public sealed class ProjectExporter
             }
         }
 
+        foreignCopies.AddRange(lifts);
+        if (traders is not null && sourcePackages is not null)
+        {
+            AddManagers(traders, level, sourcePackages, document, foreignCopies, warnings);
+        }
+
         PlanBends(state, level, document, warnings, bendMeshes, deleted, copies, meshAdds, straightPieces);
 
-        // Road, rail and bridge pieces pushed sideways: their SplineParams are rewritten in place.
-        var splinePatches = new List<SplinePatch>();
-        foreach (var (actor, component, shape) in state.SegmentSways.Where(s => SameLevel(s.Actor.Level, level) && !state.IsDeleted(s.Actor)))
+        // Replaced meshes of kept stored components (a bent one was re-created above and left the level; an added actor
+        // took its new mesh above; a copy's exports are the source's: not patched).
+        var meshPatches = new List<MeshPatch>();
+        foreach (var (actor, component, mesh) in state.MeshOverrides.Where(m => SameLevel(m.Actor.Level, level) && !state.IsDeleted(m.Actor) && !deleted.Contains(m.Actor.Actor)))
         {
+            if (state.IsAdded(actor))
+            {
+                if (state.AddedActors[actor] is not AddStaticMeshActorOp)
+                {
+                    warnings.Add($"{actor}: a copy's mesh cannot be replaced in the export (delete it and add the other mesh instead).");
+                }
+
+                continue;
+            }
+
+            var componentName = component.Length > 0 ? component : null;
+            if (componentName is null && document?.FindActor(actor.Actor) is { Root: { } root })
+            {
+                if (root.IsSynthesized)
+                {
+                    warnings.Add($"{actor}: its root component '{root.Name}' is not stored in the level package (inherited from the Blueprint); its mesh was not replaced.");
+                    continue;
+                }
+
+                componentName = root.Name;
+            }
+
+            meshPatches.Add(new MeshPatch(actor.Actor, componentName, mesh, bendMeshes?.Invoke(mesh)?.BodySetupGuid));
+        }
+
+        // Road, rail and bridge pieces pushed sideways or given another mesh: their SplineParams are rewritten in place
+        // (a replaced piece keeps its curve: the game fits the new mesh to it) with collision boxes following the curve.
+        var splinePatches = new List<SplinePatch>();
+        var replacedPieces = state.MeshOverrides.Where(m => m.Component.Length > 0 && SameLevel(m.Actor.Level, level) && !state.IsDeleted(m.Actor) && !deleted.Contains(m.Actor.Actor))
+            .Select(m => (m.Actor, m.Component, Shape: state.GetSegmentShape(m.Actor, m.Component)));
+        foreach (var (actor, component, shape) in state.SegmentSways.Where(s => SameLevel(s.Actor.Level, level) && !state.IsDeleted(s.Actor)).Concat(replacedPieces).DistinctBy(s => (s.Actor, s.Component)))
+        {
+            var replaced = state.GetMeshOverride(actor, component);
             if (document?.FindActor(actor.Actor)?.FindComponent(component) is { SplineMesh: { } spline, IsSynthesized: false } piece)
             {
-                var shaped = SplineEnds.Shape(spline, shape.Sway1, shape.Sway2, shape.Start, shape.End);
-                var collision = piece.StaticMeshPath is { } meshPath && bendMeshes?.Invoke(meshPath) is { Boxes.Count: > 0 } info
+                var shaped = shape.IsStraight ? spline : SplineEnds.Shape(spline, shape.Sway1, shape.Sway2, shape.Start, shape.End);
+                var collision = (replaced ?? piece.StaticMeshPath) is { } meshPath && bendMeshes?.Invoke(meshPath) is { Boxes.Count: > 0 } info
                     ? PieceCollision.Bend(info.Boxes!, shaped, info.Bounds)
                     : null;
                 splinePatches.Add(new SplinePatch(actor.Actor, component, shaped, collision));
             }
-            else
+            else if (replaced is null || !shape.IsStraight)
             {
                 warnings.Add($"{actor}.{component}: not a spline mesh piece stored in the level; its bend was not written.");
             }
@@ -740,6 +961,7 @@ public sealed class ProjectExporter
         return new LevelEditRequest
         {
             DeleteActors = deleted.ToList(),
+            DeleteComponents = deleteComponents,
             Transforms = transforms,
             Instances = instancePatches,
             InstanceAdds = instanceAdds,
@@ -749,6 +971,8 @@ public sealed class ProjectExporter
             ForeignCopies = foreignCopies,
             SplinePatches = splinePatches,
             SpawnPoints = spawnPoints,
+            Meshes = meshPatches,
+            TradeJoins = tradeJoins,
         };
 
         void AddInstancePatch(InstanceRef instance, FTransform? local)
@@ -814,7 +1038,7 @@ public sealed class ProjectExporter
             switch (added)
             {
                 case AddStaticMeshActorOp meshActor:
-                    mesh = meshActor.StaticMesh;
+                    mesh = state.GetMeshOverride(actor) ?? meshActor.StaticMesh;
                     transform = state.GetAddedTransform(actor) ?? meshActor.Transform;
                     break;
                 case DuplicateActorOp duplicate when document?.FindActor(duplicate.Source.Actor) is { Kind: ActorKind.StaticMeshActor } source:
@@ -822,13 +1046,19 @@ public sealed class ProjectExporter
                     transform = InWorld(document, source, state.GetAddedTransform(actor) ?? duplicate.Transform);
                     break;
                 case null when document?.FindActor(actor.Actor) is { Kind: ActorKind.StaticMeshActor, Root: { } root } pristine:
-                    mesh = pristine.StaticMeshPath;
+                    mesh = state.GetMeshOverride(actor) ?? pristine.StaticMeshPath; // a replaced piece bends as its new mesh
                     transform = InWorld(document, pristine, state.GetTransformOverride(actor) ?? root.Relative);
                     name = UniqueName(document, actor.Actor + "_Bent", meshAdds);
                     break;
                 default:
                     warnings.Add($"{actor}: only a single-mesh actor (StaticMeshActor) can be bent; exported straight.");
                     continue;
+            }
+
+            if (mesh is not null && BendSupport.IsRock(mesh))
+            {
+                warnings.Add($"{actor}: exported straight - a rock or cliff keeps its exact collision only straight; bent it would get rough boxes that players sink into and fall under (collision check).");
+                continue;
             }
 
             if (mesh is null || bendMeshes?.Invoke(mesh) is not { } info)
@@ -1051,6 +1281,11 @@ public sealed class ProjectExporter
                 sb.Append("- Removed: ").AppendLine(removed);
             }
 
+            if (r.NeutralizedExports > 0)
+            {
+                sb.Append("- Objects of removed actors made inert: ").AppendLine(r.NeutralizedExports.ToString(CultureInfo.InvariantCulture));
+            }
+
             foreach (var patched in r.PatchedTransforms)
             {
                 sb.Append("- Transform: ").AppendLine(patched);
@@ -1083,6 +1318,7 @@ public sealed class ProjectExporter
             }
         }
 
+        AppendTraderReport(sb, result);
         if (result.Warnings.Count > 0)
         {
             sb.AppendLine();

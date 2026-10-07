@@ -134,10 +134,23 @@ public sealed class MapInstanceTests
         Assert.Equal(world.Translation.X + 120f, map.InstanceTransforms[key].Translation.X, 0.5f);
         Assert.Empty(map.ActorTransforms); // the lamp itself did not move
 
+        // The bulb is the lamp's only part: deleting it takes the lamp whole (its light would otherwise burn on in the air).
+        map.DeleteSelectedCommand.Execute(null);
+        var lampGone = Assert.IsType<DeleteActorOp>(ctx.Services.Projects.Current!.Journal.Applied[^1].Op);
+        Assert.Equal(lamp.Reference, lampGone.Target);
+        Assert.Contains(lamp.SelectableId, map.HiddenActorIds);
+
+        // One part of several (the house's door) goes alone: scaled to nothing, the house stays.
+        var house = map.AllActors.Single(a => a.Name == "StaticMeshActor_1");
+        var door = InstanceKey.Of(house.SelectableId, "Door", InstanceKey.Part);
+        map.SelectedInstanceKey = door;
+        map.SelectedActorId = house.SelectableId;
+        Assert.True(map.HasSelectedInstance);
         map.DeleteSelectedCommand.Execute(null);
         var delete = Assert.IsType<SetTransformOp>(ctx.Services.Projects.Current!.Journal.Applied[^1].Op);
-        Assert.Equal(new FVector(0, 0, 0), delete.New.Scale); // gone: drawn and collided as nothing
-        Assert.DoesNotContain(lamp.SelectableId, map.HiddenActorIds);
+        Assert.Equal("Door", delete.Component);
+        Assert.Equal(new FVector(0, 0, 0), delete.New.Scale); // gone: drawn as nothing, exported without its mesh
+        Assert.DoesNotContain(house.SelectableId, map.HiddenActorIds);
     }
 
     /// <summary>Owner: "I select several with Ctrl and Delete removes only the last one" (the Delete button took the selected object alone).</summary>
@@ -159,10 +172,39 @@ public sealed class MapInstanceTests
         map.ToggleGroup(rocks.SelectableId, InstanceKey.Of(rocks.SelectableId, "Rocks", 1)); // Ctrl+click a second rock
         Assert.True(map.HasGroup);
 
+        // Both rocks are all the actor draws: it goes whole (one actor delete, no instance left to collapse).
         map.DeleteSelectedCommand.Execute(null);
-        Assert.Contains(InstanceKey.Of(rocks.SelectableId, "Rocks", 0), map.HiddenInstanceKeys);
-        Assert.Contains(InstanceKey.Of(rocks.SelectableId, "Rocks", 1), map.HiddenInstanceKeys);
+        Assert.Contains(rocks.SelectableId, map.HiddenActorIds);
+        Assert.Empty(ctx.Services.Projects.Current!.State.DeletedInstances);
+        Assert.Equal(rocks.Reference, Assert.IsType<DeleteActorOp>(ctx.Services.Projects.Current.Journal.Applied[^1].Op).Target);
         Assert.False(map.HasGroup);
+    }
+
+    /// <summary>
+    /// Owner (0.2.7): the brush picked a boathouse and one of its parts; deleting the part after the actor failed half
+    /// way and broke the project. The actor now goes once, with every part, in one valid step.
+    /// </summary>
+    [Fact]
+    public async Task DeletingAnActorTogetherWithOneOfItsPartsIsOneValidStep()
+    {
+        using var ctx = AppTestContext.Create();
+        var game = ctx.Combine("game");
+        SyntheticLevels.WriteContent(game, withBlueprintPackage: true);
+        using var map = new MapPageViewModel(ctx.Services);
+        await ctx.Services.Workspace.OpenLooseAsync(game, ProgressSink.Null);
+        await map.LoadCompletion;
+        await ctx.Services.Projects.CreateAsync(ctx.Combine("projects"), "Actor and part");
+        await map.LoadLevelsAsync([SyntheticLevels.LevelPath]);
+
+        var rocks = map.AllActors.Single(a => a.Name == "Rocks_Actor");
+        map.SelectedActorId = rocks.SelectableId; // the whole actor first
+        map.ToggleGroup(rocks.SelectableId, InstanceKey.Of(rocks.SelectableId, "Rocks", 1)); // then one of its parts
+        map.DeleteSelectedCommand.Execute(null);
+
+        var project = ctx.Services.Projects.Current!;
+        Assert.True(project.State.IsDeleted(rocks.Reference));
+        Assert.Empty(project.State.DeletedInstances);
+        Assert.Single(project.Journal.Applied);
     }
 
     /// <summary>Owner: hold the mouse and a circle selects everything under it; Ctrl+click keeps one; Delete removes the rest.</summary>

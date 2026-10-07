@@ -43,6 +43,33 @@ public sealed class StreamingCacheTests
         Assert.Equal(0, cache.MeshCount);
     }
 
+    [Fact]
+    public void ALevelThatStaysKeepsItsSlotAndItsActorsTheirIds()
+    {
+        using var temp = new LevelTempDirectory();
+        SyntheticLevels.WriteContent(temp.Path, withBlueprintPackage: true);
+        using var catalog = AssetCatalog.OpenLoose(temp.Path);
+        var level = LevelDocument.Load(new Cue4ParseLevelReader(catalog), SyntheticLevels.LevelPath);
+        static LevelDocument Empty(string name) => LevelDocument.FromData(new LevelData { PackagePath = "/Game/Maps/" + name, Exports = [], ActorIndices = [] });
+        var (a, b, d) = (Empty("A"), Empty("B"), Empty("D"));
+        var preparer = new LevelScenePreparer(catalog);
+
+        // A first load numbers its levels like their indices.
+        var slots = LevelScenePreparer.SlotsAfter([a, b, level], null);
+        Assert.Equal([0, 1, 2], slots);
+        var first = preparer.Prepare([a, b, level], new LevelSceneOptions { DocumentSlots = slots });
+
+        // A goes and D comes: B and the level keep 1 and 2 although they move up the list, D takes the freed 0.
+        slots = LevelScenePreparer.SlotsAfter([b, level, d], first);
+        Assert.Equal([1, 2, 0], slots);
+        var second = preparer.Prepare([b, level, d], new LevelSceneOptions { DocumentSlots = slots });
+        var actor = level.Actors[0];
+        Assert.Equal(first.IdOf(2, actor), second.IdOf(1, actor));
+        Assert.Equal(LevelScenePreparer.SelectableIdOf(2, actor), second.IdOf(1, actor));
+        Assert.All(second.Placements, p => Assert.Equal(2, p.DocumentIndex)); // only the level draws anything: its placements carry its slot
+        Assert.Throws<ArgumentException>(() => preparer.Prepare([b, level], new LevelSceneOptions { DocumentSlots = [0] }));
+    }
+
     [MapSliceFact]
     public void RealMeshesAreLoadedOncePerCache()
     {

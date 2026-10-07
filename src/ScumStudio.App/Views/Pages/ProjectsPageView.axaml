@@ -4,219 +4,271 @@
              xmlns:c="using:ScumStudio.App.Controls"
              x:Class="ScumStudio.App.Views.Pages.ProjectsPageView"
              x:DataType="vm:ProjectsPageViewModel">
+  <UserControl.Styles>
+    <!-- The open project's card. -->
+    <Style Selector="Border.card.current">
+      <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+    </Style>
+  </UserControl.Styles>
   <ScrollViewer HorizontalScrollBarVisibility="Disabled">
-    <StackPanel Margin="24,20,24,24" Spacing="16" MaxWidth="1100" HorizontalAlignment="Left">
-      <Grid ColumnDefinitions="*,Auto">
-        <StackPanel Spacing="4">
-          <TextBlock Text="{Binding Title}" Classes="h1" />
-          <TextBlock Text="{Binding Subtitle}" Classes="muted" />
-        </StackPanel>
-        <Button Grid.Column="1" Command="{Binding OpenCommand}" VerticalAlignment="Center" ToolTip.Tip="{Tr Projects.Open.Tip}">
-          <StackPanel Orientation="Horizontal" Spacing="6">
-            <c:GlyphIcon Kind="Icon.Folder" IconSize="14" />
-            <TextBlock Text="{Tr Projects.OpenEllipsis}" />
+    <!-- One column at most 1100 wide, left-aligned like Settings: every block spans it, the cards split it in two. -->
+    <Grid Margin="24,20,24,24">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="*" MaxWidth="1100" />
+      </Grid.ColumnDefinitions>
+      <StackPanel x:Name="PageContent" Spacing="16">
+        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+          <StackPanel Spacing="4">
+            <TextBlock Text="{Binding Title}" Classes="h1" />
+            <TextBlock Text="{Binding Subtitle}" Classes="muted wrap" />
           </StackPanel>
-        </Button>
-      </Grid>
-
-      <Grid ColumnDefinitions="*,*" ColumnSpacing="16">
-        <!-- Current project -->
-        <Border Grid.Column="0" Classes="card" VerticalAlignment="Top">
-          <StackPanel Spacing="12">
-            <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12">
-              <Border Grid.Column="0" Classes="iconTile"><c:GlyphIcon Kind="Icon.Projects" IconSize="20" HorizontalAlignment="Center" VerticalAlignment="Center" /></Border>
-              <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                <TextBlock Text="{Tr Projects.Current}" Classes="h2" />
-                <TextBlock Text="{Binding Session.DisplayName}" Classes="caption" />
-              </StackPanel>
-              <Button Grid.Column="2" Classes="ghost" Content="{Tr Common.Close}" Command="{Binding CloseCommand}" IsVisible="{Binding Session.HasProject}" VerticalAlignment="Center"
-                      ToolTip.Tip="{Tr Projects.Close.Tip}" />
-            </Grid>
-            <TextBlock IsVisible="{Binding !Session.HasProject}" Classes="muted wrap"
-                       Text="{Tr Projects.NoProject}" />
-            <ItemsControl ItemsSource="{Binding CurrentRows}" IsVisible="{Binding Session.HasProject}">
-              <ItemsControl.ItemTemplate>
-                <DataTemplate x:DataType="vm:PropertyRow">
-                  <Grid ColumnDefinitions="120,*" ColumnSpacing="8" Margin="0,3">
-                    <TextBlock Text="{Binding Name}" Classes="caption" />
-                    <SelectableTextBlock Grid.Column="1" Text="{Binding Value}" TextWrapping="Wrap" FontSize="12.5" />
-                  </Grid>
-                </DataTemplate>
-              </ItemsControl.ItemTemplate>
-            </ItemsControl>
-          </StackPanel>
-        </Border>
-
-        <!-- Create -->
-        <Border Grid.Column="1" Classes="card" VerticalAlignment="Top">
-          <StackPanel Spacing="12">
-            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12">
-              <Border Grid.Column="0" Classes="iconTile"><c:GlyphIcon Kind="Icon.Plus" IconSize="20" HorizontalAlignment="Center" VerticalAlignment="Center" /></Border>
-              <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                <TextBlock Text="{Tr Projects.New}" Classes="h2" />
-                <TextBlock Text="{Tr Projects.New.Caption}" Classes="caption" />
-              </StackPanel>
-            </Grid>
-            <StackPanel>
-              <TextBlock Text="{Tr Projects.Name}" Classes="label" />
-              <TextBox Text="{Binding NewProjectName}" Watermark="MyMapMod" ToolTip.Tip="{Tr Projects.Name.Tip}" />
-            </StackPanel>
-            <StackPanel>
-              <TextBlock Text="{Tr Projects.ParentFolder}" Classes="label" />
-              <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                <TextBox Text="{Binding NewProjectFolder}" ToolTip.Tip="{Tr Projects.ParentFolder.Tip}" />
-                <Button Grid.Column="1" Content="{Tr Common.Browse}" Command="{Binding BrowseFolderCommand}" ToolTip.Tip="{Tr Common.BrowseFolder.Tip}" />
-              </Grid>
-            </StackPanel>
-            <Button Classes="accent" HorizontalAlignment="Right" Command="{Binding CreateCommand}" ToolTip.Tip="{Tr Projects.Create.Tip}">
-              <StackPanel Orientation="Horizontal" Spacing="6">
-                <c:GlyphIcon Kind="Icon.Plus" IconSize="14" />
-                <TextBlock Text="{Tr Projects.Create}" />
-              </StackPanel>
-            </Button>
-          </StackPanel>
-        </Border>
-      </Grid>
-
-      <!-- Export -->
-      <TextBlock Text="{Tr Projects.ExportSection}" Classes="section" Margin="0,8,0,0" />
-      <Border Classes="card" x:Name="ExportCard">
-        <StackPanel Spacing="12">
-          <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12">
-            <Border Grid.Column="0" Classes="iconTile"><c:GlyphIcon Kind="Icon.Export" IconSize="20" HorizontalAlignment="Center" VerticalAlignment="Center" /></Border>
-            <StackPanel Grid.Column="1" VerticalAlignment="Center">
-              <TextBlock Text="{Tr Projects.Build}" Classes="h2" />
-              <TextBlock Classes="caption wrap"
-                         Text="{Tr Projects.Build.Caption}" />
-            </StackPanel>
-            <Button Grid.Column="2" Classes="accent" VerticalAlignment="Center" Command="{Binding ExportCommand}" x:Name="ExportButton" ToolTip.Tip="{Tr Projects.Export.Tip}">
-              <StackPanel Orientation="Horizontal" Spacing="6">
-                <c:GlyphIcon Kind="Icon.Export" IconSize="14" />
-                <TextBlock Text="{Tr Projects.Export}" />
-              </StackPanel>
-            </Button>
-          </Grid>
-
-          <Grid ColumnDefinitions="*,2*" ColumnSpacing="16">
-            <StackPanel Grid.Column="0">
-              <TextBlock Text="{Tr Projects.ModName}" Classes="label" />
-              <TextBox Text="{Binding ExportModName}" Watermark="{Tr Projects.ProjectName}" ToolTip.Tip="{Tr Projects.ModName.Tip}" />
-            </StackPanel>
-            <StackPanel Grid.Column="1">
-              <TextBlock Text="{Tr Projects.OutputFolder}" Classes="label" />
-              <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                <TextBox Text="{Binding ExportFolder}" ToolTip.Tip="{Tr Projects.OutputFolder.Tip}" />
-                <Button Grid.Column="1" Content="{Tr Common.Browse}" Command="{Binding BrowseExportFolderCommand}" ToolTip.Tip="{Tr Common.BrowseFolder.Tip}" />
-              </Grid>
-            </StackPanel>
-          </Grid>
-
-          <CheckBox IsChecked="{Binding ExportServer}" Content="{Tr Projects.ExportServer}" ToolTip.Tip="{Tr Projects.ExportServer.Tip}" />
-          <TextBlock Text="{Binding ExportHint}" Classes="caption wrap" x:Name="ExportHintText" />
-
-          <StackPanel Spacing="8" IsVisible="{Binding HasExportResult}">
-            <Separator />
-            <Grid ColumnDefinitions="*,Auto">
-              <TextBlock Text="{Tr Projects.LastExport}" Classes="h2" VerticalAlignment="Center" />
-              <Button Grid.Column="1" Classes="small" Content="{Tr Common.OpenFolder}" Command="{Binding OpenExportFolderCommand}" ToolTip.Tip="{Tr Projects.OpenExportFolder.Tip}" />
-            </Grid>
-            <ItemsControl ItemsSource="{Binding ExportRows}">
-              <ItemsControl.ItemTemplate>
-                <DataTemplate x:DataType="vm:PropertyRow">
-                  <Grid ColumnDefinitions="120,*" ColumnSpacing="8" Margin="0,3">
-                    <TextBlock Text="{Binding Name}" Classes="caption" />
-                    <SelectableTextBlock Grid.Column="1" Text="{Binding Value}" TextWrapping="Wrap" FontSize="12.5" />
-                  </Grid>
-                </DataTemplate>
-              </ItemsControl.ItemTemplate>
-            </ItemsControl>
-            <Border Classes="badge warn" HorizontalAlignment="Left" IsVisible="{Binding HasExportWarnings}">
-              <TextBlock Text="{Tr Projects.Warnings}" />
-            </Border>
-            <ItemsControl ItemsSource="{Binding ExportWarnings}" IsVisible="{Binding HasExportWarnings}">
-              <ItemsControl.ItemTemplate>
-                <DataTemplate x:DataType="x:String">
-                  <SelectableTextBlock Text="{Binding}" TextWrapping="Wrap" FontSize="12" Margin="0,2" />
-                </DataTemplate>
-              </ItemsControl.ItemTemplate>
-            </ItemsControl>
-          </StackPanel>
-        </StackPanel>
-      </Border>
-
-      <Border Classes="card" x:Name="ModsCard">
-        <StackPanel Spacing="8">
-          <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12">
-            <Border Grid.Column="0" Classes="iconTile"><c:GlyphIcon Kind="Icon.Download" IconSize="20" HorizontalAlignment="Center" VerticalAlignment="Center" /></Border>
-            <StackPanel Grid.Column="1" VerticalAlignment="Center">
-              <TextBlock Text="{Tr Mods.Title}" Classes="h2" />
-              <TextBlock Text="{Tr Mods.Caption}" Classes="caption wrap" />
-            </StackPanel>
-            <Button Grid.Column="2" VerticalAlignment="Center" x:Name="ImportModButton" Command="{Binding ImportModCommand}" IsEnabled="{Binding Session.HasProject}" ToolTip.Tip="{Tr Mods.Import.Tip}">
-              <StackPanel Orientation="Horizontal" Spacing="6">
-                <c:GlyphIcon Kind="Icon.Plus" IconSize="14" />
-                <TextBlock Text="{Tr Mods.Import}" />
-              </StackPanel>
-            </Button>
-          </Grid>
-          <ItemsControl ItemsSource="{Binding ImportedMods}" IsVisible="{Binding HasImportedMods}">
-            <ItemsControl.ItemTemplate>
-              <DataTemplate x:DataType="vm:ImportedModViewModel">
-                <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8" Margin="0,2">
-                  <StackPanel>
-                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
-                    <TextBlock Text="{Binding Summary}" Classes="caption" />
-                  </StackPanel>
-                  <CheckBox Grid.Column="1" Content="{Tr Mods.Carry}" IsChecked="{Binding IsCarried}" ToolTip.Tip="{Tr Mods.Carry.Tip}" VerticalAlignment="Center" />
-                  <Button Grid.Column="2" Classes="ghost small" Content="{Tr Mods.Remove}" Command="{Binding RemoveCommand}" ToolTip.Tip="{Tr Mods.Remove.Tip}" VerticalAlignment="Center" />
-                </Grid>
-              </DataTemplate>
-            </ItemsControl.ItemTemplate>
-          </ItemsControl>
-        </StackPanel>
-      </Border>
-
-      <Border Classes="card" x:Name="DumpCard">
-        <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12">
-          <Border Grid.Column="0" Classes="iconTile"><c:GlyphIcon Kind="Icon.Download" IconSize="20" HorizontalAlignment="Center" VerticalAlignment="Center" /></Border>
-          <StackPanel Grid.Column="1" VerticalAlignment="Center">
-            <TextBlock Text="{Tr Dump.Title}" Classes="h2" />
-            <TextBlock Text="{Tr Projects.Dump.Caption}" Classes="caption wrap" />
-          </StackPanel>
-          <Button Grid.Column="2" VerticalAlignment="Center" Click="OnDumpClick" x:Name="DumpButton" ToolTip.Tip="{Tr Projects.Dump.Tip}">
+          <Button Grid.Column="1" Command="{Binding OpenCommand}" VerticalAlignment="Center" ToolTip.Tip="{Tr Projects.Open.Tip}">
             <StackPanel Orientation="Horizontal" Spacing="6">
-              <c:GlyphIcon Kind="Icon.Download" IconSize="14" />
-              <TextBlock Text="{Tr Projects.DumpEllipsis}" />
+              <c:GlyphIcon Kind="Icon.Folder" IconSize="14" />
+              <TextBlock Text="{Tr Projects.OpenEllipsis}" />
             </StackPanel>
           </Button>
         </Grid>
-      </Border>
 
-      <!-- Recent -->
-      <TextBlock Text="{Tr Projects.Recent}" Classes="section" Margin="0,8,0,0" />
-      <Border Classes="card" Padding="8">
-        <Panel>
-          <TextBlock Text="{Tr Projects.Recent.Empty}" Classes="caption" Margin="8" IsVisible="{Binding !HasRecent}" />
-          <ItemsControl ItemsSource="{Binding RecentProjects}" IsVisible="{Binding HasRecent}">
+        <!-- Your projects: one click to open (owner: after an update he could not find his project among the files). -->
+        <StackPanel Spacing="8">
+          <TextBlock Text="{Tr Projects.Yours}" Classes="section" />
+          <TextBlock Text="{Tr Projects.Yours.Empty}" Classes="caption wrap" IsVisible="{Binding !HasProjects}" />
+          <!-- Two equal columns, the same as Current project / New project below (the -16 margin takes back the last gap). -->
+          <ItemsControl x:Name="ProjectCards" ItemsSource="{Binding Projects}" IsVisible="{Binding HasProjects}" Margin="0,0,-16,-16">
+            <ItemsControl.ItemsPanel>
+              <ItemsPanelTemplate><UniformGrid Columns="2" /></ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
             <ItemsControl.ItemTemplate>
-              <DataTemplate x:DataType="vm:RecentProjectViewModel">
-                <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12" Margin="8,6">
-                  <c:GlyphIcon Grid.Column="0" Kind="Icon.Projects" IconSize="16" VerticalAlignment="Center" />
-                  <StackPanel Grid.Column="1">
-                    <TextBlock Text="{Binding Name}" FontWeight="Medium" />
-                    <TextBlock Text="{Binding Path}" Classes="caption" FontSize="11" />
-                  </StackPanel>
-                  <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                    <Border Classes="badge warn" IsVisible="{Binding !Exists}" ToolTip.Tip="{Tr Projects.Missing.Tip}"><TextBlock Text="{Tr Projects.Missing}" /></Border>
-                    <Button Classes="small" Content="{Tr Common.Open}" Command="{Binding OpenCommand}" CommandParameter="{Binding Path}" IsEnabled="{Binding Exists}"
-                            ToolTip.Tip="{Tr Projects.OpenRecent.Tip}" />
-                  </StackPanel>
+              <DataTemplate x:DataType="vm:ProjectCardViewModel">
+                <Border Classes="card" Classes.current="{Binding IsCurrent}" Margin="0,0,16,16">
+                  <Grid RowDefinitions="*,Auto" RowSpacing="10">
+                    <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10" VerticalAlignment="Top">
+                      <c:GlyphIcon Kind="Icon.Projects" IconSize="18" VerticalAlignment="Center" />
+                      <StackPanel Grid.Column="1">
+                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Path}" />
+                        <TextBlock Text="{Binding Details}" Classes="caption" TextTrimming="CharacterEllipsis" />
+                        <TextBlock Text="{Binding Path}" Classes="caption" TextTrimming="CharacterEllipsis" IsVisible="{Binding ShowFolder}" ToolTip.Tip="{Binding Path}" />
+                      </StackPanel>
+                    </Grid>
+                    <Grid Grid.Row="1" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
+                      <Border Classes="badge accent" IsVisible="{Binding IsCurrent}" HorizontalAlignment="Left"><TextBlock Text="{Tr Projects.Card.Current}" /></Border>
+                      <Button Grid.Column="1" Classes="ghost small" Content="{Tr Projects.ShowInFolder}" Command="{Binding ShowInFolderCommand}" CommandParameter="{Binding Path}"
+                              ToolTip.Tip="{Tr Projects.ShowInFolder.Tip}" />
+                      <Button Grid.Column="2" Classes="accent small" Content="{Tr Common.Open}" Command="{Binding OpenCommand}" CommandParameter="{Binding Path}"
+                              IsVisible="{Binding !IsCurrent}" ToolTip.Tip="{Tr Projects.OpenRecent.Tip}" />
+                    </Grid>
+                  </Grid>
+                </Border>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+          <!-- Projects opened before whose folder is gone: one muted line each, never a card among the real ones. -->
+          <ItemsControl x:Name="MissingProjects" ItemsSource="{Binding MissingProjects}" IsVisible="{Binding HasMissingProjects}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="vm:MissingProjectRow">
+                <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
+                  <c:GlyphIcon Kind="Icon.Warning" IconSize="13" VerticalAlignment="Center" />
+                  <TextBlock Grid.Column="1" Text="{Binding Text}" Classes="caption" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Path}" />
+                  <Button Grid.Column="2" Classes="ghost small" Content="{Tr Projects.RemoveMissing}" ToolTip.Tip="{Tr Projects.RemoveMissing.Tip}"
+                          Command="{Binding $parent[UserControl].((vm:ProjectsPageViewModel)DataContext).RemoveMissingCommand}" CommandParameter="{Binding Path}" />
                 </Grid>
               </DataTemplate>
             </ItemsControl.ItemTemplate>
           </ItemsControl>
-        </Panel>
-      </Border>
-    </StackPanel>
+        </StackPanel>
+
+        <Grid ColumnDefinitions="*,*" ColumnSpacing="16">
+          <!-- Current project: its manifest, or one click back to the last one. -->
+          <Border Grid.Column="0" Classes="card" x:Name="CurrentCard">
+            <StackPanel Spacing="12">
+              <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12">
+                <Border Grid.Column="0" Classes="iconTile"><c:GlyphIcon Kind="Icon.Projects" IconSize="20" HorizontalAlignment="Center" VerticalAlignment="Center" /></Border>
+                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                  <TextBlock Text="{Tr Projects.Current}" Classes="h2" />
+                  <TextBlock Text="{Binding Session.DisplayName}" Classes="caption" TextTrimming="CharacterEllipsis" />
+                </StackPanel>
+                <Button Grid.Column="2" Classes="ghost" Content="{Tr Common.Close}" Command="{Binding CloseCommand}" IsVisible="{Binding Session.HasProject}" VerticalAlignment="Center"
+                        ToolTip.Tip="{Tr Projects.Close.Tip}" />
+              </Grid>
+              <StackPanel Spacing="12" IsVisible="{Binding !Session.HasProject}">
+                <TextBlock Classes="muted wrap" Text="{Tr Projects.NoProject}" />
+                <Button x:Name="OpenRecentButton" Classes="accent" HorizontalAlignment="Left" IsVisible="{Binding HasRecentProject}"
+                        Command="{Binding OpenRecentCommand}" CommandParameter="{Binding RecentProject.Path, FallbackValue={x:Null}}" ToolTip.Tip="{Tr Projects.OpenNamed.Tip}">
+                  <StackPanel Orientation="Horizontal" Spacing="6">
+                    <c:GlyphIcon Kind="Icon.Folder" IconSize="14" />
+                    <TextBlock Text="{Binding OpenRecentText}" />
+                  </StackPanel>
+                </Button>
+              </StackPanel>
+              <ItemsControl ItemsSource="{Binding CurrentRows}" IsVisible="{Binding Session.HasProject}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="vm:PropertyRow">
+                    <Grid ColumnDefinitions="140,*" ColumnSpacing="8" Margin="0,3">
+                      <TextBlock Text="{Binding Name}" Classes="caption wrap" />
+                      <SelectableTextBlock Grid.Column="1" Text="{Binding Value}" TextWrapping="Wrap" FontSize="12.5" />
+                    </Grid>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </StackPanel>
+          </Border>
+
+          <!-- Create -->
+          <Border Grid.Column="1" Classes="card">
+            <StackPanel Spacing="12">
+              <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12">
+                <Border Grid.Column="0" Classes="iconTile"><c:GlyphIcon Kind="Icon.Plus" IconSize="20" HorizontalAlignment="Center" VerticalAlignment="Center" /></Border>
+                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                  <TextBlock Text="{Tr Projects.New}" Classes="h2" />
+                  <TextBlock Text="{Tr Projects.New.Caption}" Classes="caption wrap" />
+                </StackPanel>
+              </Grid>
+              <StackPanel>
+                <TextBlock Text="{Tr Projects.Name}" Classes="label" />
+                <TextBox Text="{Binding NewProjectName}" Watermark="MyMapMod" ToolTip.Tip="{Tr Projects.Name.Tip}" />
+              </StackPanel>
+              <StackPanel>
+                <TextBlock Text="{Tr Projects.ParentFolder}" Classes="label" />
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                  <TextBox Text="{Binding NewProjectFolder}" ToolTip.Tip="{Tr Projects.ParentFolder.Tip}" />
+                  <Button Grid.Column="1" Content="{Tr Common.Browse}" Command="{Binding BrowseFolderCommand}" ToolTip.Tip="{Tr Common.BrowseFolder.Tip}" />
+                </Grid>
+              </StackPanel>
+              <Button Classes="accent" HorizontalAlignment="Right" Command="{Binding CreateCommand}" ToolTip.Tip="{Tr Projects.Create.Tip}">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                  <c:GlyphIcon Kind="Icon.Plus" IconSize="14" />
+                  <TextBlock Text="{Tr Projects.Create}" />
+                </StackPanel>
+              </Button>
+            </StackPanel>
+          </Border>
+        </Grid>
+
+        <!-- Export: only with a project open; without one, a single line says so. -->
+        <StackPanel Spacing="8">
+          <TextBlock Text="{Tr Projects.ExportSection}" Classes="section" />
+          <TextBlock Text="{Binding ExportHint}" Classes="caption wrap" IsVisible="{Binding !Session.HasProject}" x:Name="ExportNeedsProject" />
+          <StackPanel Spacing="16" IsVisible="{Binding Session.HasProject}">
+            <Border Classes="card" x:Name="ExportCard">
+              <StackPanel Spacing="12">
+                <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12">
+                  <Border Grid.Column="0" Classes="iconTile"><c:GlyphIcon Kind="Icon.Export" IconSize="20" HorizontalAlignment="Center" VerticalAlignment="Center" /></Border>
+                  <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                    <TextBlock Text="{Tr Projects.Build}" Classes="h2" />
+                    <TextBlock Classes="caption wrap" Text="{Tr Projects.Build.Caption}" />
+                  </StackPanel>
+                  <Button Grid.Column="2" Classes="accent" VerticalAlignment="Center" Command="{Binding ExportCommand}" x:Name="ExportButton" ToolTip.Tip="{Tr Projects.Export.Tip}">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                      <c:GlyphIcon Kind="Icon.Export" IconSize="14" />
+                      <TextBlock Text="{Tr Projects.Export}" />
+                    </StackPanel>
+                  </Button>
+                </Grid>
+
+                <Grid ColumnDefinitions="*,*" ColumnSpacing="16">
+                  <StackPanel Grid.Column="0">
+                    <TextBlock Text="{Tr Projects.ModName}" Classes="label" />
+                    <TextBox Text="{Binding ExportModName}" Watermark="{Tr Projects.ProjectName}" ToolTip.Tip="{Tr Projects.ModName.Tip}" />
+                  </StackPanel>
+                  <StackPanel Grid.Column="1">
+                    <TextBlock Text="{Tr Projects.OutputFolder}" Classes="label" />
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                      <TextBox Text="{Binding ExportFolder}" ToolTip.Tip="{Tr Projects.OutputFolder.Tip}" />
+                      <Button Grid.Column="1" Content="{Tr Common.Browse}" Command="{Binding BrowseExportFolderCommand}" ToolTip.Tip="{Tr Common.BrowseFolder.Tip}" />
+                    </Grid>
+                  </StackPanel>
+                </Grid>
+
+                <CheckBox IsChecked="{Binding ExportServer}" ToolTip.Tip="{Tr Projects.ExportServer.Tip}">
+                  <TextBlock Text="{Tr Projects.ExportServer}" TextWrapping="Wrap" />
+                </CheckBox>
+                <TextBlock Text="{Binding ExportHint}" Classes="caption wrap" x:Name="ExportHintText" />
+
+                <StackPanel Spacing="8" IsVisible="{Binding HasExportResult}">
+                  <Separator />
+                  <Grid ColumnDefinitions="*,Auto">
+                    <TextBlock Text="{Tr Projects.LastExport}" Classes="h2" VerticalAlignment="Center" />
+                    <Button Grid.Column="1" Classes="small" Content="{Tr Common.OpenFolder}" Command="{Binding OpenExportFolderCommand}" ToolTip.Tip="{Tr Projects.OpenExportFolder.Tip}" />
+                  </Grid>
+                  <ItemsControl ItemsSource="{Binding ExportRows}">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="vm:PropertyRow">
+                        <Grid ColumnDefinitions="140,*" ColumnSpacing="8" Margin="0,3">
+                          <TextBlock Text="{Binding Name}" Classes="caption wrap" />
+                          <SelectableTextBlock Grid.Column="1" Text="{Binding Value}" TextWrapping="Wrap" FontSize="12.5" />
+                        </Grid>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                  <Border Classes="badge warn" HorizontalAlignment="Left" IsVisible="{Binding HasExportWarnings}">
+                    <TextBlock Text="{Tr Projects.Warnings}" />
+                  </Border>
+                  <ItemsControl ItemsSource="{Binding ExportWarnings}" IsVisible="{Binding HasExportWarnings}">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="x:String">
+                        <SelectableTextBlock Text="{Binding}" TextWrapping="Wrap" FontSize="12" Margin="0,2" />
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                </StackPanel>
+              </StackPanel>
+            </Border>
+
+            <Border Classes="card" x:Name="ModsCard">
+              <StackPanel Spacing="8">
+                <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12">
+                  <Border Grid.Column="0" Classes="iconTile"><c:GlyphIcon Kind="Icon.Download" IconSize="20" HorizontalAlignment="Center" VerticalAlignment="Center" /></Border>
+                  <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                    <TextBlock Text="{Tr Mods.Title}" Classes="h2" />
+                    <TextBlock Text="{Tr Mods.Caption}" Classes="caption wrap" />
+                  </StackPanel>
+                  <Button Grid.Column="2" VerticalAlignment="Center" x:Name="ImportModButton" Command="{Binding ImportModCommand}" ToolTip.Tip="{Tr Mods.Import.Tip}">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                      <c:GlyphIcon Kind="Icon.Plus" IconSize="14" />
+                      <TextBlock Text="{Tr Mods.Import}" />
+                    </StackPanel>
+                  </Button>
+                </Grid>
+                <ItemsControl ItemsSource="{Binding ImportedMods}" IsVisible="{Binding HasImportedMods}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:ImportedModViewModel">
+                      <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8" Margin="0,2">
+                        <StackPanel>
+                          <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                          <TextBlock Text="{Binding Summary}" Classes="caption" />
+                        </StackPanel>
+                        <CheckBox Grid.Column="1" Content="{Tr Mods.Carry}" IsChecked="{Binding IsCarried}" ToolTip.Tip="{Tr Mods.Carry.Tip}" VerticalAlignment="Center" />
+                        <Button Grid.Column="2" Classes="ghost small" Content="{Tr Mods.Remove}" Command="{Binding RemoveCommand}" ToolTip.Tip="{Tr Mods.Remove.Tip}" VerticalAlignment="Center" />
+                      </Grid>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </StackPanel>
+            </Border>
+          </StackPanel>
+        </StackPanel>
+
+        <!-- Game files: works without a project. -->
+        <StackPanel Spacing="8">
+          <TextBlock Text="{Tr Projects.GameFilesSection}" Classes="section" />
+          <Border Classes="card" x:Name="DumpCard">
+            <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12">
+              <Border Grid.Column="0" Classes="iconTile"><c:GlyphIcon Kind="Icon.Download" IconSize="20" HorizontalAlignment="Center" VerticalAlignment="Center" /></Border>
+              <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                <TextBlock Text="{Tr Dump.Title}" Classes="h2" />
+                <TextBlock Text="{Tr Projects.Dump.Caption}" Classes="caption wrap" />
+              </StackPanel>
+              <Button Grid.Column="2" VerticalAlignment="Center" Click="OnDumpClick" x:Name="DumpButton" ToolTip.Tip="{Tr Projects.Dump.Tip}">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                  <c:GlyphIcon Kind="Icon.Download" IconSize="14" />
+                  <TextBlock Text="{Tr Projects.DumpEllipsis}" />
+                </StackPanel>
+              </Button>
+            </Grid>
+          </Border>
+        </StackPanel>
+      </StackPanel>
+    </Grid>
   </ScrollViewer>
 </UserControl>

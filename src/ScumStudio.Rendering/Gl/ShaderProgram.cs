@@ -94,6 +94,16 @@ public sealed class ShaderProgram : IDisposable
         }
     }
 
+    /// <summary>Sets a vec2 uniform.</summary>
+    public void Set(string uniform, Vector2 value)
+    {
+        var location = Location(uniform);
+        if (location >= 0)
+        {
+            _gl.Uniform2(location, value.X, value.Y);
+        }
+    }
+
     /// <summary>Sets a vec3 uniform.</summary>
     public void Set(string uniform, Vector3 value)
     {

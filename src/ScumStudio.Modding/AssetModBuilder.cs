@@ -17,8 +17,26 @@ public sealed record AssetModRequest(IReadOnlyList<ClonePlan> Clones, IReadOnlyD
     /// <summary>Stock package → the stock package written in its place (ground textures, tree meshes).</summary>
     public IReadOnlyDictionary<string, string> Replacements { get; init; } = new Dictionary<string, string>();
 
+    /// <summary>Data assets copied under a new path with ids of their own (a placed trader's personality, a new outpost's description).</summary>
+    public IReadOnlyList<DataAssetCopy> DataAssets { get; init; } = [];
+
     /// <summary>True when nothing is requested.</summary>
-    public bool IsEmpty => Clones.Count == 0 && Edits.Count == 0 && Replacements.Count == 0;
+    public bool IsEmpty => Clones.Count == 0 && Edits.Count == 0 && Replacements.Count == 0 && DataAssets.Count == 0;
+}
+
+/// <summary>
+/// A data asset copied under a new package with a persistent id of its own: a placed trader's
+/// <c>TraderPersonalityDataAsset</c> (<c>TraderPersistentId</c>, <c>HumanReadableTraderName</c>) or a new outpost's
+/// <c>TradingOutpostDescriptionDataAsset</c> (<c>TradeOutpostPersistentId</c>). Primary assets (the personality) are
+/// registered in <c>AssetRegistry.bin</c> like the template, so the game's asset scan lists them.
+/// </summary>
+/// <param name="Template">Object (or package) path of the stock asset.</param>
+/// <param name="NewPackage">Package path of the copy.</param>
+/// <param name="PersistentId">The 16 bytes written over the asset's <c>Guid</c> property.</param>
+public sealed record DataAssetCopy(string Template, string NewPackage, byte[] PersistentId)
+{
+    /// <summary>Written over the asset's <c>HumanReadableTraderName</c>; null keeps it.</summary>
+    public string? TraderName { get; init; }
 }
 
 /// <summary>A finished package to stage under <c>SCUM/Content/…</c>.</summary>
@@ -106,6 +124,30 @@ public static class AssetModBuilder
         }
 
         AddTradeRows(catalog, request.Clones, built, warnings);
+
+        // New traders' personalities and new outposts' descriptions: a renamed copy with its own id (and trader name).
+        foreach (var copy in request.DataAssets)
+        {
+            var template = PackageMap.Normalize(copy.Template);
+            var path = PackageMap.Normalize(copy.NewPackage);
+            if (built.ContainsKey(path))
+            {
+                continue;
+            }
+
+            try
+            {
+                var map = new PackageMap([new KeyValuePair<string, string>(template, path)]);
+                var clone = PackageCloner.Clone(ModdableAssets.ReadPackage(catalog, template), template, map);
+                var bytes = PatchDataAsset(CookedPackage.Parse(clone.Bytes.UAsset, clone.Bytes.UExp, clone.UBulk, path), copy);
+                built[path] = (CookedPackage.Parse(bytes.UAsset, bytes.UExp, clone.UBulk, path), bytes, true);
+                maps.Add(map);
+            }
+            catch (Exception ex) when (ex is FileNotFoundException or FormatException or InvalidDataException or IOException or InvalidOperationException)
+            {
+                warnings.Add($"{path}: not created from {template} ({ex.Message}).");
+            }
+        }
 
         // Another stock asset under a stock path (owner: snow on the ground, pines where the oaks stand): a rename-copy.
         foreach (var (target, with) in request.Replacements)
@@ -246,6 +288,41 @@ public static class AssetModBuilder
         {
             warnings.Add($"{path}: the clones are not sold by the traders ({ex.Message}).");
         }
+    }
+
+    /// <summary>
+    /// A copied data asset's id (its first <c>Guid</c> property, 16 bytes in place) and trader name (an FString: the
+    /// property grows or shrinks with it).
+    /// </summary>
+    /// <exception cref="InvalidOperationException">The asset has no Guid property.</exception>
+    private static PackageBytes PatchDataAsset(CookedPackage package, DataAssetCopy copy)
+    {
+        if (copy.PersistentId.Length != 16)
+        {
+            throw new InvalidOperationException("A persistent id is 16 bytes.");
+        }
+
+        var payload = package.GetExportData(0).ToArray();
+        var block = PropertyReader.ReadPayload(package, payload, 0);
+        var id = block.Properties.FirstOrDefault(t => t.Value is GuidValue)
+            ?? throw new InvalidOperationException($"{package.BasePath} has no persistent id (Guid) property.");
+        copy.PersistentId.CopyTo(payload, id.Value.Offset);
+
+        if (copy.TraderName is { } name && block.Find("HumanReadableTraderName") is { Value: StrValue } text)
+        {
+            var value = new byte[4 + name.Length + 1];
+            System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(value, name.Length + 1);
+            System.Text.Encoding.ASCII.GetBytes(name).CopyTo(value, 4);
+            var result = new byte[payload.Length - text.Size + value.Length];
+            payload.AsSpan(0, text.ValueOffset).CopyTo(result);
+            value.CopyTo(result, text.ValueOffset);
+            payload.AsSpan(text.ValueOffset + text.Size).CopyTo(result.AsSpan(text.ValueOffset + value.Length));
+            System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(result.AsSpan(text.SizeFieldOffset), value.Length);
+            payload = result;
+        }
+
+        var data = Enumerable.Range(0, package.Exports.Count).Select(i => i == 0 ? (ReadOnlyMemory<byte>)payload : package.GetExportData(i)).ToArray();
+        return PackageWriter.Build(PackageWriter.ToBuildInput(package) with { ExportData = data });
     }
 
     /// <summary>The name a clone shows in the trade menu: <c>BPC_RagerGold</c> → <c>RagerGold</c>, underscores as spaces.</summary>

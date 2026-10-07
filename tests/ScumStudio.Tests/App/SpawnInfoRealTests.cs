@@ -33,7 +33,7 @@ public sealed class SpawnInfoRealTests
 
         // A gold pin on a hangar shelf picks as itself (the hangar's id, its own key), not as nothing.
         var hangar = map.AllActors.Single(a => a.Name == "BP_Airplane_Hangar2_2");
-        var pin = map.PreparedScene!.Placements.First(p => p.MeshPath == SpawnMarkers.MeshKey(SpawnKind.Loot) && ReferenceEquals(p.Actor, hangar.Actor));
+        var pin = map.PreparedScene!.Placements.First(p => SpawnMarkers.KindOfMesh(p.MeshPath) == SpawnKind.Loot && ReferenceEquals(p.Actor, hangar.Actor));
         Assert.Equal(hangar.SelectableId, pin.SelectableId);
         var key = pin.InstanceKey!.Value;
         Assert.True(key.IsLootPoint);
@@ -93,7 +93,7 @@ public sealed class SpawnInfoRealTests
             await map.LoadCompletion;
             await map.LoadLevelsAsync(["/Game/ConZ_Files/Maps/The_Island/A_4_Airfield"]);
             var hangar = map.AllActors.Single(a => a.Name == "BP_Airplane_Hangar2_2");
-            var pin = map.PreparedScene!.Placements.First(p => p.MeshPath == SpawnMarkers.MeshKey(SpawnKind.Loot) && ReferenceEquals(p.Actor, hangar.Actor));
+            var pin = map.PreparedScene!.Placements.First(p => SpawnMarkers.KindOfMesh(p.MeshPath) == SpawnKind.Loot && ReferenceEquals(p.Actor, hangar.Actor));
             map.SelectedInstanceKey = pin.InstanceKey;
             map.SelectedActorId = hangar.SelectableId;
             Assert.True(HeadlessUi.PumpUntil(() => map.SpawnInfo.Count > 0, TimeSpan.FromSeconds(60)));

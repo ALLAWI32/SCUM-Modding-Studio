@@ -49,17 +49,22 @@ public sealed class AvaloniaDialogService : IDialogService
     }
 
     /// <inheritdoc />
-    public async Task<string?> OpenFileAsync(string title, string extension, string filterName)
+    public async Task<string?> OpenFileAsync(string title, string extension, string filterName, string? startFolder = null)
     {
         if (_topLevel()?.StorageProvider is not { CanOpen: true } storage)
         {
             return null;
         }
 
+        // Start where the file most likely is (the owner hunted through Documents for his exported pak).
+        var start = startFolder is { Length: > 0 } && System.IO.Directory.Exists(startFolder)
+            ? await storage.TryGetFolderFromPathAsync(startFolder).ConfigureAwait(true)
+            : null;
         var files = await storage.OpenFilePickerAsync(new FilePickerOpenOptions
         {
             Title = title,
             AllowMultiple = false,
+            SuggestedStartLocation = start,
             FileTypeFilter = [new FilePickerFileType(filterName) { Patterns = ["*." + extension] }],
         }).ConfigureAwait(true);
         return files.Count > 0 ? files[0].TryGetLocalPath() : null;

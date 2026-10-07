@@ -22,6 +22,24 @@ public sealed partial class EditState
     /// <summary>Clones that exist, keyed by their new primary package.</summary>
     public IReadOnlyCollection<CloneAssetOp> AssetClones => _clones.Values;
 
+    private void CopyAssets(EditState copy)
+    {
+        foreach (var (key, value) in _clones)
+        {
+            copy._clones[key] = value;
+        }
+
+        foreach (var (key, value) in _values)
+        {
+            copy._values[key] = value;
+        }
+
+        foreach (var (key, value) in _replacements)
+        {
+            copy._replacements[key] = value;
+        }
+    }
+
     /// <summary>Every net value override.</summary>
     public IReadOnlyCollection<AssetValueOverride> AssetValueOverrides => _values.Values;
 

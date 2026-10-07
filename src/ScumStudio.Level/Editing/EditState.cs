@@ -22,11 +22,21 @@ public sealed partial class EditState
     private readonly Dictionary<ActorRef, BendValue> _bends = new(ActorRef.Comparer);
     private readonly Dictionary<(ActorRef Actor, string Component), BendValue> _segmentSways = new(TransformKeyComparer.Instance);
     private readonly Dictionary<(ActorRef Actor, string Component, string Array), PointsOverride> _spawnPoints = new(PointsKeyComparer.Instance);
+    private readonly Dictionary<(ActorRef Actor, string Component), MeshOverride> _meshes = new(TransformKeyComparer.Instance);
 
     /// <summary>True when no operation has a net effect.</summary>
     public bool IsEmpty =>
         _deletedActors.Count == 0 && _deletedInstances.Count == 0 && _transforms.Count == 0 && _instanceTransforms.Count == 0 && _added.Count == 0
-        && _addedInstances.Count == 0 && _clones.Count == 0 && _values.Count == 0 && _replacements.Count == 0 && _bends.Count == 0 && _segmentSways.Count == 0 && _spawnPoints.Count == 0;
+        && _addedInstances.Count == 0 && _clones.Count == 0 && _values.Count == 0 && _replacements.Count == 0 && _bends.Count == 0 && _segmentSways.Count == 0 && _spawnPoints.Count == 0
+        && _meshes.Count == 0;
+
+    /// <summary>Every mesh component drawing another mesh (see <see cref="ReplaceMeshOp"/>): the actor, the component (empty = the root) and the mesh now.</summary>
+    public IEnumerable<(ActorRef Actor, string Component, string Mesh)> MeshOverrides =>
+        _meshes.Select(m => (m.Key.Actor, m.Key.Component, m.Value.Current));
+
+    /// <summary>The mesh an actor's root (or named component) draws instead of its own, or null when it draws its own.</summary>
+    public string? GetMeshOverride(ActorRef actor, string? component = null) =>
+        _meshes.TryGetValue((actor, component ?? string.Empty), out var o) ? o.Current : null;
 
     /// <summary>Deleted actors (pristine or added).</summary>
     public IReadOnlyCollection<ActorRef> DeletedActors => _deletedActors;
@@ -89,6 +99,7 @@ public sealed partial class EditState
             .Concat(_bends.Keys.Select(a => a.Level))
             .Concat(_segmentSways.Keys.Select(k => k.Actor.Level))
             .Concat(_spawnPoints.Keys.Select(k => k.Actor.Level))
+            .Concat(_meshes.Keys.Select(k => k.Actor.Level))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(l => l, StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -251,6 +262,20 @@ public sealed partial class EditState
                 return GetSpawnPoints(points.Target, points.Component, points.Array) is { } currentPoints && !currentPoints.SequenceEqual(points.Old)
                     ? $"{points.Target} does not have the expected spawn points (edit is out of date)."
                     : null;
+            case ReplaceMeshOp mesh:
+                if (_deletedActors.Contains(mesh.Target))
+                {
+                    return $"{mesh.Target} is deleted.";
+                }
+
+                if (string.IsNullOrWhiteSpace(mesh.New))
+                {
+                    return "No static mesh given.";
+                }
+
+                return GetMeshOverride(mesh.Target, mesh.Component) is { } currentMesh && !EditOpFactory.SameObject(currentMesh, mesh.Old)
+                    ? $"{mesh.Target} does not draw the expected mesh (edit is out of date)."
+                    : null;
             case CloneAssetOp or RemoveAssetCloneOp or SetAssetValueOp or ReplaceAssetOp:
                 return ValidateAsset(op);
             case BatchOp batch:
@@ -259,7 +284,8 @@ public sealed partial class EditState
                     return "Nothing to do.";
                 }
 
-                // Independent edits: each must be valid now, and no two may create (or remove) the same actor.
+                // Each edit must be valid once the ones before it are applied (a dry run on a copy: a batch that stops halfway
+                // must never be journaled), and no two may create (or remove) the same actor.
                 var created = batch.Ops.Select(o => o switch
                 {
                     AddStaticMeshActorOp a => a.Created,
@@ -268,8 +294,23 @@ public sealed partial class EditState
                     RemoveAddedActorOp r => r.Target,
                     _ => null,
                 }).OfType<ActorRef>();
-                return batch.Ops.Select(Validate).FirstOrDefault(e => e is not null)
-                       ?? Duplicates(created, ActorRef.Comparer).FirstOrDefault()
+                var dry = Clone();
+                foreach (var child in batch.Ops)
+                {
+                    if (dry.IsCoveredInBatch(child))
+                    {
+                        continue;
+                    }
+
+                    if (dry.Validate(child) is { } childError)
+                    {
+                        return childError;
+                    }
+
+                    dry.Apply(child);
+                }
+
+                return Duplicates(created, ActorRef.Comparer).FirstOrDefault()
                        ?? Duplicates(batch.Ops.OfType<AddInstanceOp>().Select(a => a.Target), InstanceRef.Comparer).FirstOrDefault();
             default:
                 return $"Unsupported operation {op.GetType().Name}.";
@@ -332,6 +373,30 @@ public sealed partial class EditState
                 foreach (var key in _spawnPoints.Keys.Where(k => ActorRef.Comparer.Equals(k.Actor, remove.Target)).ToList())
                 {
                     _spawnPoints.Remove(key);
+                }
+
+                foreach (var key in _meshes.Keys.Where(k => ActorRef.Comparer.Equals(k.Actor, remove.Target)).ToList())
+                {
+                    _meshes.Remove(key);
+                }
+
+                break;
+            case ReplaceMeshOp mesh:
+                var meshKey = (mesh.Target, mesh.Component ?? string.Empty);
+                if (!_meshes.TryGetValue(meshKey, out var drawn))
+                {
+                    if (!EditOpFactory.SameObject(mesh.Old, mesh.New))
+                    {
+                        _meshes[meshKey] = new MeshOverride(mesh.Old, mesh.New);
+                    }
+                }
+                else if (EditOpFactory.SameObject(drawn.Base, mesh.New))
+                {
+                    _meshes.Remove(meshKey);
+                }
+                else
+                {
+                    _meshes[meshKey] = drawn with { Current = mesh.New };
                 }
 
                 break;
@@ -402,10 +467,56 @@ public sealed partial class EditState
             case BatchOp batch:
                 foreach (var child in batch.Ops)
                 {
-                    Apply(child);
+                    if (!IsCoveredInBatch(child))
+                    {
+                        Apply(child);
+                    }
                 }
 
                 break;
+        }
+    }
+
+    /// <summary>
+    /// True for a child of a batch that an actor delete in the same batch already covers: an instance delete of an actor
+    /// that is deleted (the brush adds a tree and then its whole actor; the owner's first bulk delete stopped at such a
+    /// child and left 2000 edits unapplied), and the matching instance restore on the way back (an instance deleted before
+    /// the batch stays deleted: its actor's restore comes after it in the inverse, so nothing of the batch's own is lost).
+    /// </summary>
+    private bool IsCoveredInBatch(EditOp op) => op switch
+    {
+        DeleteInstanceOp d => _deletedActors.Contains(d.Target.ActorRef),
+        RestoreInstanceOp r => _deletedActors.Contains(r.Target.ActorRef),
+        // A part scaled to nothing, a bend or a sway of an actor the batch already deleted: nothing left to edit.
+        SetTransformOp { Component: not null } t => _deletedActors.Contains(t.Target),
+        SetInstanceTransformOp it => _deletedActors.Contains(it.Target.ActorRef),
+        BendActorOp bend => _deletedActors.Contains(bend.Target),
+        _ => false,
+    };
+
+    /// <summary>A copy of this state (the entries are immutable records).</summary>
+    public EditState Clone()
+    {
+        var copy = new EditState();
+        copy._deletedActors.UnionWith(_deletedActors);
+        copy._deletedInstances.UnionWith(_deletedInstances);
+        Copy(_transforms, copy._transforms);
+        Copy(_instanceTransforms, copy._instanceTransforms);
+        Copy(_added, copy._added);
+        Copy(_addedInstances, copy._addedInstances);
+        Copy(_bends, copy._bends);
+        Copy(_segmentSways, copy._segmentSways);
+        Copy(_spawnPoints, copy._spawnPoints);
+        CopyAssets(copy);
+        return copy;
+
+        static void Copy<TKey, TValue>(Dictionary<TKey, TValue> from, Dictionary<TKey, TValue> to)
+            where TKey : notnull
+        {
+            foreach (var (key, value) in from)
+            {
+                to[key] = value;
+            }
         }
     }
 
@@ -437,6 +548,7 @@ public sealed partial class EditState
         lines.AddRange(_segmentSways.Select(s => FormattableString.Invariant($"sway {Key(s.Key.Actor)}.{s.Key.Component.ToLowerInvariant()} {s.Value.Sway1:0.##} {s.Value.Sway2:0.##}{s.Value.DescribeEnds()}")));
         lines.AddRange(_spawnPoints.Select(p => FormattableString.Invariant(
             $"spawn-points {Key(p.Key.Actor)}.{p.Key.Component.ToLowerInvariant()}.{p.Key.Array.ToLowerInvariant()} {p.Value.Base.Count} -> {p.Value.Current.Count}: {string.Join(" ", p.Value.Current.Select(x => $"{x.Source}@{x.Local}"))}")));
+        lines.AddRange(_meshes.Select(m => $"mesh {Key(m.Key.Actor)}.{m.Key.Component.ToLowerInvariant()} {m.Value.Base} -> {m.Value.Current}"));
         lines.AddRange(DescribeAssets());
         lines.Sort(StringComparer.Ordinal);
         var sb = new StringBuilder();
@@ -495,6 +607,8 @@ public sealed partial class EditState
     private sealed record Override(TransformValue Base, TransformValue Current);
 
     private sealed record PointsOverride(IReadOnlyList<SpawnPoint> Base, IReadOnlyList<SpawnPoint> Current);
+
+    private sealed record MeshOverride(string Base, string Current);
 
     private sealed class PointsKeyComparer : IEqualityComparer<(ActorRef Actor, string Component, string Array)>
     {

@@ -16,6 +16,55 @@ public sealed class LevelPackageEditorTests
     private const string Engine = "/Script/Engine";
     private const string TilePath = "/Game/ConZ_Files/Maps/The_Island/A_0_Tile";
 
+    [Fact]
+    public void AnInstanceMovedInALevelAlreadyWithoutItsRenderCopyStillGrowsItsCluster()
+    {
+        // A HISM this studio wrote before (the owner imported his own pak back into the project): no render copy left, so
+        // nothing was dropped, but the clusters must still reach the moved rock or the game culls it by its old place.
+        var w = new ByteWriter();
+        w.I32(64);
+        w.I32(1);
+        foreach (var f in new[] { 1f, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 })
+        {
+            w.F32(f);
+        }
+
+        var arrayEnd = w.Length;
+        w.I32(4); // PerInstanceSMCustomData: element size, count
+        w.I32(0);
+        w.I64(0); // render copy: gone
+        w.I32(64); // one cluster node around the instance's old place
+        w.I32(1);
+        foreach (var f in new[] { -10f, -10, -10 })
+        {
+            w.F32(f);
+        }
+
+        w.I32(-1);
+        foreach (var f in new[] { 10f, 10, 10 })
+        {
+            w.F32(f);
+        }
+
+        w.I32(-1);
+        w.I32(0);
+        w.I32(0);
+        foreach (var f in new[] { 1f, 1, 1, 1, 1, 1 })
+        {
+            w.F32(f);
+        }
+
+        var payload = w.ToArray();
+        var moved = new FTransform(new FVector(5000, 0, 0));
+        var grown = InstanceRenderData.Refresh(payload, new PropertyBlock { Properties = [] }, arrayEnd, 1, [(0, FTransform.Identity, moved)]);
+
+        Assert.Equal(payload.Length, grown.Length);
+        var node = arrayEnd + 8 + 8 + 8;
+        Assert.Equal(-10f, System.Buffers.Binary.BinaryPrimitives.ReadSingleLittleEndian(grown.AsSpan(node)));
+        Assert.Equal(5010f, System.Buffers.Binary.BinaryPrimitives.ReadSingleLittleEndian(grown.AsSpan(node + 16)));
+        Assert.Equal(10f, System.Buffers.Binary.BinaryPrimitives.ReadSingleLittleEndian(payload.AsSpan(node + 16))); // the input is left as it was
+    }
+
     private static CookedPackage Synthetic()
     {
         var bytes = SyntheticLevels.BuildLevel();
@@ -103,29 +152,42 @@ public sealed class LevelPackageEditorTests
     }
 
     [Fact]
-    public void RemovesActorsFromTheLevelActorListOnly()
+    public void RemovesActorsFromTheListAndMakesTheirObjectsInert()
     {
+        // B_4 (owner): the deleted trade posts kept spawning their traders - the game creates every export of the package
+        // and runs the Blueprint's code on it, listed or not. A deleted actor's objects become plain Objects in place.
         var package = Synthetic();
         var levelIndex = LevelPackageEditor.FindLevelExport(package);
-        var (bytes, report) = LevelPackageEditor.Apply(package, new LevelEditRequest { DeleteActors = ["staticmeshactor_1"] });
+        var (bytes, report) = LevelPackageEditor.Apply(package, new LevelEditRequest { DeleteActors = ["staticmeshactor_1", "BP_Lamp_C_1"] });
 
         Assert.Equal("PersistentLevel", report.LevelExport);
         Assert.Equal(4, report.ActorsBefore);
-        Assert.Equal(3, report.ActorsAfter);
-        Assert.Equal(new[] { "StaticMeshActor_1" }, report.RemovedActors);
+        Assert.Equal(2, report.ActorsAfter);
+        Assert.Equal(new[] { "StaticMeshActor_1", "BP_Lamp_C_1" }, report.RemovedActors);
+        Assert.Equal(6, report.NeutralizedExports); // house + mesh + door, lamp + root + bulb
         Assert.Empty(report.Warnings);
-        Assert.Empty(report.AddedNames);
         Assert.Empty(report.PatchedTransforms);
 
         var edited = CookedPackage.Parse(bytes.UAsset, bytes.UExp);
-        Assert.Equal(new[] { null, "Rocks_Actor", "BP_Lamp_C_1" }, LevelPackageEditor.ReadActorList(edited).Select(a => a.Name));
-        Assert.Equal(package.Names, edited.Names);
-        Assert.Equal(package.Exports.Count, edited.Exports.Count);
-        Assert.Equal(package.UAsset.Length, edited.UAsset.Length);
-        Assert.Equal(package.UExp.Length - 4, edited.UExp.Length);
+        Assert.Equal(new[] { null, "Rocks_Actor" }, LevelPackageEditor.ReadActorList(edited).Select(a => a.Name));
+        Assert.Equal(package.Exports.Count, edited.Exports.Count); // same indices: nothing to remap anywhere
+        var inert = new[] { ("StaticMeshActor_1", "PersistentLevel"), ("StaticMeshComponent0", "StaticMeshActor_1"), ("Door", "StaticMeshActor_1"), ("BP_Lamp_C_1", "PersistentLevel"), ("DefaultSceneRoot", "BP_Lamp_C_1"), ("Bulb", "BP_Lamp_C_1") }
+            .Select(x => ExportNamed(edited, x.Item1, x.Item2)).ToHashSet();
+        foreach (var i in inert)
+        {
+            Assert.Equal("Object", edited.GetExportClassName(i));
+            Assert.Equal("/Script/CoreUObject.Default__Object", edited.GetFullPath(edited.Exports[i].TemplateIndex));
+            Assert.Equal(package.Exports[i].OuterIndex, edited.Exports[i].OuterIndex);
+            Assert.Equal(12, edited.GetExportBytes(i).Length); // "None" and no guid: no class code, nothing to run
+            Assert.Empty(edited.ReadProperties(i).Properties);
+            var entry = edited.Exports[i];
+            var deps = edited.ReadPreloadDependencies().Skip(entry.FirstExportDependency).Take(entry.PreloadDependencyTotal).ToList();
+            Assert.Equal(entry.OuterIndex > 0 ? 3 : 2, deps.Count); // class + template before serialize, the outer before create
+        }
+
         for (var i = 0; i < package.Exports.Count; i++)
         {
-            if (i != levelIndex)
+            if (i != levelIndex && !inert.Contains(i))
             {
                 Assert.Equal(package.GetExportBytes(i), edited.GetExportBytes(i));
             }
@@ -137,7 +199,26 @@ public sealed class LevelPackageEditorTests
         Assert.Equal(before[^40..], after[^40..]);
 
         var document = LoadThroughCue4Parse(bytes, "A_0_TestLevel", SyntheticLevels.LevelPath);
-        Assert.Equal(new[] { "Rocks_Actor", "BP_Lamp_C_1" }, document.Actors.Select(a => a.Name));
+        Assert.Equal(new[] { "Rocks_Actor" }, document.Actors.Select(a => a.Name));
+    }
+
+    [Fact]
+    public void TheLevelScriptActorIsNeverMadeInert()
+    {
+        // The level's own native pointers (LevelScriptActor, Model) are typed: a plain Object there would be read wrong.
+        var p = MinimalLevel();
+        p.SetPayload(2, p.Properties(native: w => LevelTail(w, [3], levelScriptActor: 3)));
+        var built = p.Build();
+        var package = CookedPackage.Parse(built.UAsset, built.UExp);
+
+        var (bytes, report) = LevelPackageEditor.Apply(package, new LevelEditRequest { DeleteActors = ["Actor_1"] });
+
+        Assert.Equal(["Actor_1"], report.RemovedActors);
+        Assert.Equal(0, report.NeutralizedExports);
+        Assert.Single(report.Warnings, w => w.Contains("part of the level itself", StringComparison.Ordinal));
+        var edited = CookedPackage.Parse(bytes.UAsset, bytes.UExp);
+        Assert.Equal("Actor", edited.GetExportClassName(2));
+        Assert.All(LevelPackageEditor.ReadActorList(edited), a => Assert.Null(a.Name));
     }
 
     [Fact]
@@ -213,6 +294,41 @@ public sealed class LevelPackageEditorTests
 
         var document = LoadThroughCue4Parse(bytes, "A_0_TestLevel", SyntheticLevels.LevelPath);
         Assert.True(document.FindActor("Rocks_Actor")!.Root!.Relative.IsNearlyEqual(value));
+    }
+
+    [Fact]
+    public void APartScaledToNothingLosesItsMesh()
+    {
+        // A zero-scaled mesh still gets a body in the game (invisible walls where the owner's buildings were); without a
+        // mesh the component has none. The stored mesh is nulled, a template-provided one overridden with null.
+        var package = Synthetic();
+        var gone = new TransformValue(new FVector(1, 2, 3), new FRotator(0, 0, 0), FVector.Zero);
+        var (bytes, report) = LevelPackageEditor.Apply(package, new LevelEditRequest
+        {
+            Transforms =
+            [
+                new TransformPatch("StaticMeshActor_1", "Door", gone),
+                new TransformPatch("BP_Lamp_C_1", "Bulb", gone),
+                new TransformPatch("StaticMeshActor_1", null, new TransformValue(new FVector(5, 6, 7), new FRotator(0, 0, 0), FVector.One)),
+            ],
+        });
+
+        Assert.Equal(3, report.PatchedTransforms.Count);
+        Assert.Empty(report.Warnings);
+
+        var edited = CookedPackage.Parse(bytes.UAsset, bytes.UExp);
+        var door = edited.ReadProperties(ExportNamed(edited, "Door", "StaticMeshActor_1"));
+        Assert.Equal(0, Assert.IsType<ObjectValue>(door.Find("StaticMesh")!.Value).Index);
+        AssertXyz(door.Find("RelativeScale3D"), 0, 0, 0);
+        var bulb = edited.ReadProperties(ExportNamed(edited, "Bulb", "BP_Lamp_C_1"));
+        Assert.Equal(0, Assert.IsType<ObjectValue>(bulb.Find("StaticMesh")!.Value).Index); // inserted
+        AssertXyz(bulb.Find("RelativeScale3D"), 0, 0, 0);
+        var root = edited.ReadProperties(ExportNamed(edited, "StaticMeshComponent0", "StaticMeshActor_1"));
+        Assert.NotEqual(0, Assert.IsType<ObjectValue>(root.Find("StaticMesh")!.Value).Index); // scaled, not gone: keeps its mesh
+
+        var document = LoadThroughCue4Parse(bytes, "A_0_TestLevel", SyntheticLevels.LevelPath);
+        Assert.Null(document.FindActor("StaticMeshActor_1")!.FindComponent("Door")!.StaticMeshPath);
+        Assert.NotNull(document.FindActor("StaticMeshActor_1")!.Root!.StaticMeshPath);
     }
 
     [Fact]
@@ -595,7 +711,7 @@ public sealed class LevelPackageEditorTests
     }
 
     /// <summary>Minimal ULevel native data: Actors, FURL, Model, ModelComponents, LevelScriptActor, NavListStart/End.</summary>
-    private static void LevelTail(ByteWriter w, IReadOnlyList<int> actors)
+    private static void LevelTail(ByteWriter w, IReadOnlyList<int> actors, int levelScriptActor = 0)
     {
         w.I32(actors.Count);
         foreach (var a in actors)
@@ -610,10 +726,53 @@ public sealed class LevelPackageEditorTests
         w.I32(0);
         w.I32(7777);
         w.I32(1);
-        w.I32(0);
-        w.I32(0);
-        w.I32(0);
-        w.I32(0);
-        w.I32(0);
+        w.I32(0); // Model
+        w.I32(0); // ModelComponents
+        w.I32(levelScriptActor);
+        w.I32(0); // NavListStart
+        w.I32(0); // NavListEnd
+    }
+    [Fact]
+    public void ReplacesTheMeshOfAStoredComponent()
+    {
+        const string boulder = "/Game/ConZ_Files/Models/Rocks/SM_Boulder.SM_Boulder";
+        var package = Synthetic();
+        var (bytes, report) = LevelPackageEditor.Apply(package, new LevelEditRequest
+        {
+            Meshes =
+            [
+                new MeshPatch("StaticMeshActor_1", null, boulder), // its root: the stored StaticMesh tag is rewritten in place
+                new MeshPatch("BP_Lamp_C_1", "Bulb", boulder), // the mesh came from the template: a tag is inserted
+                new MeshPatch("Nobody", null, boulder),
+            ],
+            Transforms = [new TransformPatch("StaticMeshActor_1", null, new TransformValue(new FVector(1000, 0, 0), new FRotator(0, 90, 0), new FVector(2, 1, 1)))],
+        });
+
+        Assert.Equal(["StaticMeshActor_1.StaticMeshComponent0", "StaticMeshActor_1.StaticMeshComponent0 (mesh)", "BP_Lamp_C_1.Bulb (mesh)"], report.PatchedTransforms);
+        Assert.Single(report.Warnings, w => w.Contains("Nobody", StringComparison.Ordinal));
+        Assert.Equal(package.Imports.Count + 2, CookedPackage.Parse(bytes.UAsset, bytes.UExp).Imports.Count); // the package and the mesh, once
+
+        var edited = CookedPackage.Parse(bytes.UAsset, bytes.UExp);
+        foreach (var (component, actor) in new[] { ("StaticMeshComponent0", "StaticMeshActor_1"), ("Bulb", "BP_Lamp_C_1") })
+        {
+            var index = ExportNamed(edited, component, actor);
+            var mesh = Assert.IsType<ObjectValue>(edited.ReadProperties(index).Find("StaticMesh")!.Value);
+            Assert.Equal("/Game/ConZ_Files/Models/Rocks/SM_Boulder.SM_Boulder", edited.GetFullPath(mesh.Index));
+            var entry = edited.Exports[index];
+            var deps = edited.ReadPreloadDependencies();
+            var createBeforeSerialize = deps.Skip(entry.FirstExportDependency + entry.SerializationBeforeSerializationDependencies).Take(entry.CreateBeforeSerializationDependencies);
+            Assert.Contains(mesh.Index, createBeforeSerialize); // the loader creates the mesh before it reads the component
+        }
+
+        // The new mesh draws its own materials: the replaced component's OverrideMaterials are gone, the door keeps its own.
+        Assert.Null(edited.ReadProperties(ExportNamed(edited, "StaticMeshComponent0", "StaticMeshActor_1")).Find("OverrideMaterials"));
+        Assert.NotNull(edited.ReadProperties(ExportNamed(edited, "Door", "StaticMeshActor_1")).Find("OverrideMaterials"));
+        AssertXyz(edited.ReadProperties(ExportNamed(edited, "StaticMeshComponent0", "StaticMeshActor_1")).Find("RelativeLocation"), 1000, 0, 0);
+
+        var document = LoadThroughCue4Parse(bytes, "A_0_TestLevel", SyntheticLevels.LevelPath);
+        Assert.Equal(boulder, document.FindActor("StaticMeshActor_1")!.StaticMeshPath);
+        Assert.Equal(boulder, document.FindActor("BP_Lamp_C_1")!.FindComponent("Bulb")!.StaticMeshPath);
+        Assert.Equal(SyntheticLevels.RockPackage + ".SM_Rock", document.FindActor("StaticMeshActor_1")!.FindComponent("Door")!.StaticMeshPath); // the door keeps its own
+        Assert.True(document.FindActor("StaticMeshActor_1")!.Root!.Relative.Scale.Equals(new FVector(2, 1, 1), 0.001f));
     }
 }

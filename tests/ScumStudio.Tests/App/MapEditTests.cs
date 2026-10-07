@@ -3,6 +3,7 @@ using ScumStudio.Core.Abstractions;
 using ScumStudio.Core.Mathematics;
 using ScumStudio.Level.Editing;
 using ScumStudio.Tests.Level;
+using ScumStudio.Viewport;
 
 namespace ScumStudio.Tests.App;
 
@@ -365,5 +366,158 @@ public sealed class MapEditTests
         Assert.True(FVector.Distance(at, new FVector(1000, 200, 0)) < 0.5f, at.ToString());
         map.Extend(backwards: true);
         Assert.Equal(2, map.AllActors.Count(a => a.IsAdded));
+    }
+
+    /// <summary>
+    /// Owner: the brush took nothing while the cursor was over empty ground, so he had to drag the circle's edge onto each
+    /// object. Everything the circle covers is taken wherever its centre is, and a fast sweep takes what lies between two
+    /// dabs. Moving off everything keeps the selection. (Drawn boxes, not pivots: BrushRealTests, the synthetic meshes are not loaded.)
+    /// </summary>
+    [Fact]
+    public async Task TheBrushTakesWhatTheCircleCoversOnEmptyGroundAndAlongASweep()
+    {
+        using var ctx = AppTestContext.Create();
+        var game = ctx.Combine("game");
+        SyntheticLevels.WriteContent(game, withBlueprintPackage: true);
+        using var map = new MapPageViewModel(ctx.Services);
+        await ctx.Services.Workspace.OpenLooseAsync(game, ProgressSink.Null);
+        await map.LoadCompletion;
+        await ctx.Services.Projects.CreateAsync(ctx.Combine("projects"), "Sweep");
+        await map.LoadLevelsAsync([SyntheticLevels.LevelPath]);
+        var house = map.AllActors.Single(a => a.Name == "StaticMeshActor_1"); // at (1000, 0), its door at (1000, 200)
+        var rocks = map.AllActors.Single(a => a.Name == "Rocks_Actor"); // two rocks near (10, 0) and (80, 70)
+        var lamp = map.AllActors.Single(a => a.Name == "BP_Lamp_C_1"); // at (-500, 250)
+        map.BrushSelect = true;
+        map.PickParts = false; // whole objects (in part mode the door and the bulb would go on their own)
+
+        // Empty ground between the rocks and the lamp, 4 m: those two, not the house 12 m away.
+        map.BrushRadius = 4;
+        map.BrushAt(new FVector(-200f, 100f, 0f));
+        Assert.Equal([lamp.SelectableId], map.KindSelectionIds);
+        Assert.Equal([0, 1], map.KindSelectionInstances.Where(k => k.SelectableId == rocks.SelectableId).Select(k => k.InstanceIndex).Order());
+        Assert.Equal(2, map.KindSelectionInstances.Count);
+
+        // A dab 4.2 m past the house misses it; the fast sweep from the last dab to there runs over it.
+        map.BrushAt(new FVector(1420f, 100f, 0f));
+        Assert.DoesNotContain(house.SelectableId, map.KindSelectionIds);
+        map.BrushAt(new FVector(1420f, 100f, 0f), from: new FVector(-200f, 100f, 0f));
+        Assert.Equal(new[] { house.SelectableId, lamp.SelectableId }.Order(), map.KindSelectionIds.Order());
+
+        // Off everything: nothing is taken out.
+        map.BrushAt(new FVector(3000f, 3000f, 0f), from: new FVector(1420f, 100f, 0f));
+        Assert.Equal(2, map.KindSelectionIds.Count);
+        Assert.Equal(2, map.KindSelectionInstances.Count);
+        Assert.Equal(4, map.GroupWorlds.Count);
+    }
+
+    /// <summary>
+    /// Owner: "choose the tree types, sweep the brush over the ground and it plants them the way the game's forest looks".
+    /// Paint mode with a two-object palette: a mesh the landscape tile has as instanced foliage becomes new instances of
+    /// it, another mesh new mesh actors; no two closer than the spacing and none on the rocks, house or lamp already
+    /// there. The stroke is drawn while it goes, journaled as one row when the button is let go, and undone together.
+    /// The palette and spacing come back with the project.
+    /// </summary>
+    [Fact]
+    public async Task PaintModePlantsThePaletteSpacedApartAsOneUndoStep()
+    {
+        using var ctx = AppTestContext.Create();
+        var game = ctx.Combine("game");
+        SyntheticLevels.WriteContent(game, withBlueprintPackage: true);
+        const string Tile = "/Game/ConZ_Files/Maps/The_Island/Landscape_A_0_Test"; // the same actors, as a landscape tile
+        await SyntheticLevels.BuildLevel().WriteAsync(Path.Combine([game, .. (SyntheticLevels.MapsFolder + "/Landscape_A_0_Test").Split('/')]), ".umap");
+        using var map = new MapPageViewModel(ctx.Services);
+        await ctx.Services.Workspace.OpenLooseAsync(game, ProgressSink.Null);
+        await map.LoadCompletion;
+        var project = await ctx.Services.Projects.CreateAsync(ctx.Combine("projects"), "Forest");
+        await map.LoadLevelsAsync([SyntheticLevels.LevelPath, Tile]);
+        var pristine = map.AllActors.Count;
+        const string Oak = "/Game/ConZ_Files/Foliage/Continental/Trees/Oak/SM_Oak";
+        map.AddToPalette(new ReplaceCandidate(new ReplaceChoice("SM_Rock", SyntheticLevels.RockPackage, false, false), null));
+        map.AddToPalette(new ReplaceCandidate(new ReplaceChoice("SM_Oak", Oak, false, false), null));
+        map.AddToPalette(new ReplaceCandidate(new ReplaceChoice("SM_Oak", Oak, false, false), null)); // once only
+        Assert.Equal(2, map.PaintPalette.Count);
+        map.BrushSelect = true;
+        map.BrushPaint = true;
+        map.BrushRadius = 5;
+        map.PaintSpacing = 2;
+
+        // A sweep along y = 100 over the lamp (-500, 250), the rocks (near 10, 0 and 80, 70) and the house (1000, 0), 1 m a dab.
+        var rows = ctx.Services.Projects.History.Count;
+        FVector? previous = null;
+        for (var x = -1500f; x <= 3000f; x += 100f)
+        {
+            var at = new FVector(x, 100f, 0f);
+            map.PaintAt(at, previous);
+            previous = at;
+        }
+
+        Assert.Equal(rows, ctx.Services.Projects.History.Count); // drawn while painting, journaled when let go
+        var preview = map.InstanceTransforms.Count + map.Clones.Count;
+        Assert.True(preview > 40, $"{preview} shown while painting");
+        map.EndPaintStroke();
+
+        Assert.Equal(rows + 1, ctx.Services.Projects.History.Count);
+        var batch = Assert.IsType<BatchOp>(project.Journal.Applied[^1].Op);
+        Assert.StartsWith($"Planted {batch.Ops.Count} objects", ctx.Services.Projects.History[0].Summary, StringComparison.Ordinal);
+        Assert.Equal(preview, batch.Ops.Count);
+        var holder = map.AllActors.Single(a => a.Level.PackagePath == Tile && a.Name == "Rocks_Actor");
+        var planted = new List<FVector>();
+        foreach (var op in batch.Ops)
+        {
+            switch (op)
+            {
+                case AddInstanceOp instance:
+                    Assert.Equal(Tile, instance.Target.Level);
+                    Assert.Equal("Rocks", instance.Target.Component);
+                    Assert.True(instance.Target.Index >= 2);
+                    planted.Add(map.InstanceTransforms[InstanceKey.Of(holder.SelectableId, "Rocks", instance.Target.Index)].Translation);
+                    break;
+                case AddStaticMeshActorOp actor:
+                    Assert.Equal(SyntheticLevels.LevelPath, actor.Level); // not a landscape tile
+                    Assert.Equal(Oak + ".SM_Oak", actor.StaticMesh);
+                    planted.Add(actor.Transform.Location);
+                    break;
+                default:
+                    Assert.Fail($"unexpected {op.GetType().Name}");
+                    break;
+            }
+        }
+
+        Assert.Contains(batch.Ops, o => o is AddInstanceOp);
+        Assert.Contains(batch.Ops, o => o is AddStaticMeshActorOp);
+        Assert.Equal(pristine + batch.Ops.OfType<AddStaticMeshActorOp>().Count(), map.AllActors.Count);
+        for (var i = 0; i < planted.Count; i++)
+        {
+            Assert.InRange(MathF.Abs(planted[i].Y - 100f), 0f, 500f); // inside the swept circle
+            for (var j = i + 1; j < planted.Count; j++)
+            {
+                Assert.True(FVector.Distance(planted[i], planted[j]) >= 199.9f, $"{planted[i]} and {planted[j]}");
+            }
+        }
+
+        // Nothing on what already stood there (both levels hold the same rocks and house).
+        var rocks = map.AllActors.First(a => a.Name == "Rocks_Actor").Actor.InstanceTransforms.Select(i => i.WorldTransform.Translation);
+        var house = map.AllActors.First(a => a.Name == "StaticMeshActor_1").Actor.WorldTransform.Translation;
+        foreach (var obstacle in rocks.Append(house))
+        {
+            Assert.All(planted, p => Assert.True(Flat(p, obstacle) >= 199.9f, $"{p} on {obstacle}"));
+        }
+
+        // One undo takes the whole stroke away.
+        ctx.Services.Projects.Undo();
+        Assert.Empty(project.State.AddedInstances);
+        Assert.Empty(project.State.AddedActors);
+        Assert.Equal(pristine, map.AllActors.Count);
+        Assert.DoesNotContain(map.InstanceTransforms.Keys, k => k.SelectableId == holder.SelectableId);
+
+        // The palette is the project's: it comes back when the project is opened again.
+        var folder = project.DirectoryPath;
+        ctx.Services.Projects.Close();
+        Assert.Empty(map.PaintPalette);
+        await ctx.Services.Projects.OpenAsync(folder);
+        Assert.Equal([SyntheticLevels.RockPackage, Oak], map.PaintPalette.Select(p => p.Choice.PackagePath));
+        Assert.Equal(2, map.PaintSpacing);
+
+        static float Flat(FVector a, FVector b) => MathF.Sqrt(((a.X - b.X) * (a.X - b.X)) + ((a.Y - b.Y) * (a.Y - b.Y)));
     }
 }

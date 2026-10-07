@@ -47,7 +47,7 @@ public sealed class PatrolPointsRealTests
         Assert.Equal(2, stored.Count);
         var array = Assert.Single(SpawnPointArrays.Of(sentry.Actor));
         Assert.Equal((null, SpawnPointArrays.PatrolPoints), (array.Component, array.Array));
-        var pins = map.PreparedScene!.Placements.Where(p => p.SelectableId == sentry.SelectableId && p.MeshPath == SpawnMarkers.MeshKey(SpawnKind.Patrol)).ToList();
+        var pins = map.PreparedScene!.Placements.Where(p => p.SelectableId == sentry.SelectableId && SpawnMarkers.KindOfMesh(p.MeshPath) == SpawnKind.Patrol).ToList();
         Assert.Equal(2, pins.Count);
         Assert.All(pins, p => Assert.True(p.InstanceKey!.Value.IsSpawnPoint));
         Assert.Equal(SpawnShape.Capsule, SpawnMarkers.ShapeOf(SpawnKind.Patrol));
@@ -140,7 +140,7 @@ public sealed class PatrolPointsRealTests
         Assert.Equal((component.Name, SpawnPointArrays.SpawnerMarkers), (array.Component, array.Array));
         var pins = map.PreparedScene!.Placements.Where(p => p.SelectableId == group.SelectableId && p.SpawnPoint is not null).ToList();
         Assert.Equal(markers.Count, pins.Count);
-        Assert.All(pins, p => Assert.Equal(SpawnMarkers.MeshKey(SpawnKind.Loot), p.MeshPath));
+        Assert.All(pins, p => Assert.Equal(SpawnKind.Loot, SpawnMarkers.KindOfMesh(p.MeshPath)));
 
         // The third point goes up 2 m; the first is deleted.
         map.SelectedInstanceKey = pins.Single(p => p.SpawnPoint!.Value.Index == 2).PickKey(map.PickParts);

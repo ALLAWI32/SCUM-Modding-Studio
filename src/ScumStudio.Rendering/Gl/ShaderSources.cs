@@ -21,6 +21,9 @@ internal static class ShaderSources
         layout(location = 9) in vec2 iSurface;
 
         uniform mat4 uViewProj;
+        uniform int uBillboard;
+        uniform vec3 uCameraRight;
+        uniform vec3 uCameraUp;
 
         out vec3 vNormal;
         out vec2 vUv;
@@ -37,6 +40,15 @@ internal static class ShaderSources
             float det = determinant(m);
             mat3 normalMatrix = abs(det) > 1e-12 ? transpose(inverse(m)) : m;
             vNormal = normalMatrix * aNormal;
+            if (uBillboard != 0)
+            {
+                // A camera-facing card (an item's inventory icon): the mesh's x/y span the camera's right and up at the
+                // instance's origin, scaled like the instance; it faces the camera, so it is lit as if seen head-on.
+                vec3 origin = (iModel * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+                world = vec4(origin + uCameraRight * (aPosition.x * length(iModel[0].xyz)) + uCameraUp * (aPosition.y * length(iModel[1].xyz)), 1.0);
+                vNormal = cross(uCameraRight, uCameraUp);
+            }
+
             vUv = aUv;
             vWorld = world.xyz;
             vTint = iTint;
@@ -76,6 +88,8 @@ internal static class ShaderSources
         uniform vec3 uFogColor;
         uniform float uFogDensity;
         uniform int uOpaque;
+        uniform int uShimmer;
+        uniform float uTime;
         uniform int uTerrainDetail;
         uniform sampler2D uWeights;
         uniform sampler2D uLayer0;
@@ -183,8 +197,10 @@ internal static class ShaderSources
             }
 
             // Opaque and masked surfaces cover the pixel: a texture's alpha (a far leaf mip, a spec mask) must not let the
-            // window behind the view show through (distant trees came out white).
-            oColor = vec4(uEncodeSrgb != 0 ? linearToSrgb(lit) : lit, uOpaque != 0 ? 1.0 : albedo.a);
+            // window behind the view show through (distant trees came out white). Stand-ins (spawn models) glint: their
+            // opacity breathes a fifth either way over 1.5 s.
+            float alpha = uOpaque != 0 ? 1.0 : albedo.a * (uShimmer != 0 ? 1.0 + 0.2 * sin(uTime * 4.1887902) : 1.0);
+            oColor = vec4(uEncodeSrgb != 0 ? linearToSrgb(lit) : lit, alpha);
         }
         """;
 
@@ -335,6 +351,99 @@ internal static class ShaderSources
         {
             vec3 rgb = uEncodeSrgb == 1 ? linearToSrgb(vColor.rgb) : vColor.rgb;
             oColor = vec4(rgb, vColor.a);
+        }
+        """;
+
+    /// <summary>
+    /// Overlay stroke vertex shader: each line is a screen-space quad (6 vertices) of <c>aCorner.z</c> pixels, with
+    /// square caps so polylines join without gaps; <c>vEdge</c> is the signed distance from the centre line in pixels.
+    /// </summary>
+    public const string StrokeVertex = """
+        #version 430 core
+        layout(location = 0) in vec3 aStart;
+        layout(location = 1) in vec3 aEnd;
+        layout(location = 2) in vec4 aColor;
+        layout(location = 3) in vec3 aCorner; // x: 0 = start, 1 = end; y: side -1 / +1; z: width in pixels
+        layout(location = 4) in vec3 aPrev; // the polyline point before the start (the start itself: a square cap)
+        layout(location = 5) in vec3 aNext; // the polyline point after the end (the end itself: a square cap)
+        uniform mat4 uViewProj;
+        uniform vec2 uViewport;
+        out vec4 vColor;
+        noperspective out float vEdge;
+        flat out float vHalf;
+
+        void main()
+        {
+            vColor = aColor;
+            vec4 a = uViewProj * vec4(aStart, 1.0);
+            vec4 b = uViewProj * vec4(aEnd, 1.0);
+            if (a.w <= 1e-4 || b.w <= 1e-4)
+            {
+                gl_Position = vec4(2.0, 2.0, 2.0, 1.0); // an end behind the camera: the line is not drawn
+                vEdge = 0.0;
+                vHalf = 0.0;
+                return;
+            }
+
+            vec2 halfView = 0.5 * uViewport;
+            vec2 sa = a.xy / a.w * halfView;
+            vec2 sb = b.xy / b.w * halfView;
+            vec2 d = sb - sa;
+            float len = length(d);
+            vec2 dir = len > 1e-3 ? d / len : vec2(1.0, 0.0);
+            vec2 nrm = vec2(-dir.y, dir.x);
+            float reach = aCorner.z * 0.5 + 1.0; // one pixel more for the anti-aliased edge
+            bool atEnd = aCorner.x > 0.5;
+            vec4 p = atEnd ? b : a;
+            vec2 sp = atEnd ? sb : sa;
+            vec3 point = atEnd ? aEnd : aStart;
+            vec3 neighbour = atEnd ? aNext : aPrev;
+            vec4 o = uViewProj * vec4(neighbour, 1.0);
+            if (any(notEqual(neighbour, point)) && o.w > 1e-4)
+            {
+                // A polyline joint: the corner sits on the bisector of the two segments (a miter), so consecutive
+                // segments tile without overlap and a translucent polyline stays even. Sharper than 120 degrees: no miter.
+                vec2 so = o.xy / o.w * halfView;
+                vec2 d2 = atEnd ? so - sb : sa - so;
+                float len2 = length(d2);
+                vec2 dir2 = len2 > 1e-3 ? d2 / len2 : dir;
+                vec2 nrm2 = vec2(-dir2.y, dir2.x);
+                float c = 1.0 + dot(nrm, nrm2);
+                sp += aCorner.y * (c > 0.5 ? (nrm + nrm2) * (reach / c) : nrm * reach);
+            }
+            else
+            {
+                sp += nrm * (aCorner.y * reach) + dir * (atEnd ? reach : -reach);
+            }
+
+            gl_Position = vec4(sp / halfView * p.w, p.z, p.w);
+            vEdge = aCorner.y * reach;
+            vHalf = aCorner.z * 0.5;
+        }
+        """;
+
+    /// <summary>Overlay stroke fragment shader: the colour, faded over the last pixel of each edge.</summary>
+    public const string StrokeFragment = """
+        #version 430 core
+        in vec4 vColor;
+        noperspective in float vEdge;
+        flat in float vHalf;
+        uniform int uEncodeSrgb;
+        layout(location = 0) out vec4 oColor;
+
+        vec3 linearToSrgb(vec3 c)
+        {
+            c = clamp(c, 0.0, 1.0);
+            vec3 lo = c * 12.92;
+            vec3 hi = 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055;
+            return mix(hi, lo, vec3(lessThanEqual(c, vec3(0.0031308))));
+        }
+
+        void main()
+        {
+            float coverage = clamp(vHalf + 0.5 - abs(vEdge), 0.0, 1.0);
+            vec3 rgb = uEncodeSrgb == 1 ? linearToSrgb(vColor.rgb) : vColor.rgb;
+            oColor = vec4(rgb, vColor.a * coverage);
         }
         """;
 }

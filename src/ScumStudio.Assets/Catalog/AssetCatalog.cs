@@ -153,6 +153,7 @@ public sealed class AssetCatalog : IDisposable
 
             provider.AliasDoubledProjectPaths(options.ProjectName);
             AddOverlays(provider, options);
+            provider.RegisterPluginRoots();
             var logger = options.Logger ?? NullLogger.Instance;
             var locked = provider.UnloadedVfs.Count(v => v.IsEncrypted);
             if (locked > 0)
@@ -200,6 +201,7 @@ public sealed class AssetCatalog : IDisposable
         {
             var count = provider.AddLooseProject(project, options.ProjectName, 0);
             AddOverlays(provider, options);
+            provider.RegisterPluginRoots();
             (options.Logger ?? NullLogger.Instance).LogDebug("Mounted {Count} loose files from {Dir}.", count, project);
             return new AssetCatalog(provider, true, AssetSourceKind.Loose, project, options.ProjectName, options.Logger, project);
         }
@@ -272,14 +274,19 @@ public sealed class AssetCatalog : IDisposable
     /// <summary>True when a package exists for <paramref name="path"/>.</summary>
     public bool PackageExists(string path) => TryGetPackageFile(path, out _);
 
-    /// <summary>Resolves the provider <see cref="GameFile"/> of a package (object, package or file path).</summary>
+    /// <summary>
+    /// Resolves the provider <see cref="GameFile"/> of a package (object, package or file path). A plugin's mount point
+    /// (<c>/WoodlandHunterPack/X</c>: how the DLC packs' levels reference their Blueprint classes and meshes) finds the
+    /// plugin's content folder (<c>SCUM/Plugins/GameFeatures/WoodlandHunterPack/Content/X</c>) through the provider's
+    /// virtual paths (<see cref="ScumFileProvider.RegisterPluginRoots"/>).
+    /// </summary>
     public bool TryGetPackageFile(string path, [NotNullWhen(true)] out GameFile? file)
     {
         ThrowIfDisposed();
         var stem = AssetPaths.ToFilePathWithoutExtension(path, ProjectName);
         foreach (var ext in AssetPaths.PackageExtensions)
         {
-            if (Provider.Files.TryGetValue(stem + ext, out file))
+            if (Provider.Files.TryGetValue(stem + ext, out file) || Provider.Files.TryGetValue(Provider.FixPath("/" + stem + ext), out file))
             {
                 return true;
             }

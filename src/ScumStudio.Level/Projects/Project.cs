@@ -58,6 +58,12 @@ public sealed class Project : IDisposable
     /// <summary>Free-form notes (Markdown), saved to <c>notes.md</c> by <see cref="Save"/>.</summary>
     public string Notes { get; set; }
 
+    /// <summary>
+    /// Journal entries (or edits inside a bulk entry) that did not replay when the project was opened and were left out,
+    /// one line each; empty when every edit applied. Undoing back past such an entry fails.
+    /// </summary>
+    public IReadOnlyList<string> ReplayProblems { get; init; } = [];
+
     /// <summary>Full path of <c>project.json</c>.</summary>
     public string ManifestPath => Path.Combine(DirectoryPath, ManifestFileName);
 
@@ -115,7 +121,7 @@ public sealed class Project : IDisposable
         return new Project(full, manifest, journal, new EditState(), notes, time);
     }
 
-    /// <summary>Opens the project in <paramref name="path"/> (the folder or its <c>project.json</c>).</summary>
+    /// <summary>Opens the project in <paramref name="path"/> (anything <see cref="Find"/> accepts).</summary>
     /// <exception cref="FileNotFoundException">No <c>project.json</c>.</exception>
     /// <exception cref="InvalidDataException">The manifest or journal is invalid, or the journal does not replay.</exception>
     public static Project Open(string path, TimeProvider? clock = null)
@@ -147,6 +153,32 @@ public sealed class Project : IDisposable
     /// <summary>True when <paramref name="directory"/> contains a <c>project.json</c>.</summary>
     public static bool Exists(string directory) =>
         !string.IsNullOrWhiteSpace(directory) && File.Exists(Path.Combine(Path.GetFullPath(directory), ManifestFileName));
+
+    /// <summary>
+    /// The project folder <paramref name="path"/> points at, or null: the folder itself, the folder of a file inside it
+    /// (<c>project.json</c>, <c>journal.jsonl</c>, ...) or the only project directly inside it (a parent such as
+    /// <c>Documents\ScumStudio Projects</c> picked in a folder dialog).
+    /// </summary>
+    public static string? Find(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return null;
+        }
+
+        var full = Path.GetFullPath(path);
+        if (File.Exists(full))
+        {
+            full = Path.GetDirectoryName(full)!;
+        }
+
+        if (Exists(full))
+        {
+            return full;
+        }
+
+        return Directory.Exists(full) && Directory.GetDirectories(full, "*" + FolderExtension).Where(Exists).ToArray() is [var only] ? only : null;
+    }
 
     /// <summary>Changes manifest fields (name, game build, sources); call <see cref="Save"/> to persist.</summary>
     public void UpdateManifest(Func<ProjectManifest, ProjectManifest> update)
@@ -275,17 +307,41 @@ public sealed class Project : IDisposable
         try
         {
             var state = new EditState();
+            var problems = new List<string>();
             foreach (var entry in journal.Applied)
             {
-                if (state.Validate(entry.Op) is { } error)
+                if (state.Validate(entry.Op) is not { } error)
                 {
-                    throw new InvalidDataException($"{journal.FilePath}: edit #{entry.Seq} ('{entry.Op.Describe()}') does not replay: {error}");
+                    state.Apply(entry.Op);
+                    continue;
                 }
 
-                state.Apply(entry.Op);
+                // An edit that no longer applies (an older version journaled a bulk delete that stopped halfway, and the
+                // edits after it were made against that half) is left out, not the whole project: what still applies does.
+                var label = $"edit #{entry.Seq} ('{entry.Op.Describe()}')";
+                if (entry.Op is not BatchOp batch)
+                {
+                    problems.Add($"{label} does not replay: {error}");
+                    continue;
+                }
+
+                var skipped = 0;
+                foreach (var child in batch.Ops)
+                {
+                    if (state.Validate(child) is null)
+                    {
+                        state.Apply(child);
+                    }
+                    else
+                    {
+                        skipped++;
+                    }
+                }
+
+                problems.Add($"{label}: {skipped} of {batch.Ops.Count} edits do not replay ({error})");
             }
 
-            return new Project(directory, manifest, journal, state, notes, clock);
+            return new Project(directory, manifest, journal, state, notes, clock) { ReplayProblems = problems };
         }
         catch
         {
@@ -298,17 +354,7 @@ public sealed class Project : IDisposable
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         var full = Path.GetFullPath(path);
-        if (File.Exists(full) && Path.GetFileName(full).Equals(ManifestFileName, StringComparison.OrdinalIgnoreCase))
-        {
-            full = Path.GetDirectoryName(full)!;
-        }
-
-        if (!File.Exists(Path.Combine(full, ManifestFileName)))
-        {
-            throw new FileNotFoundException($"No {ManifestFileName} in {full}.", Path.Combine(full, ManifestFileName));
-        }
-
-        return full;
+        return Find(full) ?? throw new FileNotFoundException($"No {ManifestFileName} in {full}.", Path.Combine(full, ManifestFileName));
     }
 
     private static ProjectManifest DeserializeManifest(byte[] bytes, string directory)

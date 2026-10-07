@@ -1,4 +1,5 @@
 using ScumStudio.Assets.Textures;
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Numerics;
 using ScumStudio.Core.Geometry;
@@ -13,46 +14,49 @@ namespace ScumStudio.Viewport;
 /// <summary>A level scene living on the GPU: the scene graph, its bounds and the id → placement lookup for picking.</summary>
 public sealed class LevelScene : IDisposable
 {
-    /// <summary>Where the upload that built this scene spent its time.</summary>
+    /// <summary>Where the upload (or the last <see cref="Update"/>) of this scene spent its time.</summary>
     public UploadTimings? UploadTimings { get; internal set; }
 
     /// <summary>The cache that owns this scene's meshes and terrain (null: the scene owns them).</summary>
-    internal GpuMeshCache? Cache { get; set; }
+    internal GpuMeshCache? Cache { get; }
 
     private readonly SceneRenderer _renderer;
-    private readonly List<MeshHandle> _handles;
-    private readonly List<GpuTexture> _textures;
-    private readonly Dictionary<string, MeshHandle> _meshHandles;
-    private readonly Dictionary<uint, List<ScenePlacement>> _byId;
+    private readonly LevelUploadOptions _options;
+    private readonly List<MeshHandle> _handles = []; // owned by the scene (not the cache's)
+    private readonly List<GpuTexture> _textures = []; // owned by the scene (not the cache's)
+    private readonly HashSet<string> _ownedMeshPaths = new(StringComparer.OrdinalIgnoreCase);
+    private Dictionary<string, MeshHandle> _meshHandles = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<uint, List<ScenePlacement>> _byId = [];
     private readonly Dictionary<uint, List<(SceneNode Node, ScenePlacement? Source)>> _clones = [];
     private readonly Dictionary<uint, (uint SourceId, string? MeshPath, IReadOnlyList<ScenePlacement>? Placements)> _cloneSources = [];
     private Dictionary<uint, List<SceneNode>>? _nodesById;
     private readonly HashSet<uint> _movedActors = [];
-    private readonly Dictionary<string, GpuTexture> _gpuTextures;
+    private Dictionary<string, GpuTexture> _gpuTextures = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, PreparedMeshAsset> _extraAssets = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<uint, (MeshHandle Bent, SceneNode Node, MeshHandle Straight, IReadOnlyList<SplineMeshParams> Spline)> _bent = [];
     private readonly HashSet<InstanceKey> _movedInstances = [];
     private readonly HashSet<InstanceKey> _addedInstances = [];
     private Dictionary<InstanceKey, List<SceneNode>>? _instanceNodes;
-    private readonly List<TerrainPart> _terrainParts = [];
+    private List<TerrainPart> _terrainParts = [];
     private SceneNode? _seaNode;
 
-    internal LevelScene(SceneRenderer renderer, PreparedLevelScene prepared, Scene scene, BoundingBox bounds, BoundingBox terrainBounds,
-        Dictionary<uint, List<ScenePlacement>> byId, Dictionary<string, MeshHandle> meshHandles, List<MeshHandle> handles, List<GpuTexture> textures, int placed,
-        Dictionary<string, GpuTexture> gpuTextures)
+    // The nodes of each level (by its slot, see PreparedLevelScene.Slots) under a group node of their own: a level that stays
+    // loaded keeps its nodes, one that goes takes them along.
+    private readonly Dictionary<int, LevelGroup> _groups = [];
+
+    internal LevelScene(SceneRenderer renderer, PreparedLevelScene prepared, LevelUploadOptions options, GpuMeshCache? cache)
     {
-        _gpuTextures = gpuTextures;
         _renderer = renderer;
+        _options = options;
+        Cache = cache;
         Prepared = prepared;
-        Scene = scene;
-        Bounds = bounds;
-        TerrainBounds = terrainBounds;
-        _byId = byId;
-        _meshHandles = meshHandles;
-        _handles = handles;
-        _textures = textures;
-        PlacedCount = placed;
     }
+
+    /// <summary>One level's nodes: the group under the root, the document and placements it was built from, its terrain.</summary>
+    private sealed record LevelGroup(SceneNode Node, LevelDocument Document, List<ScenePlacement> Placements, BoundingBox Bounds, int Placed, List<TerrainPart> Terrain);
+
+    /// <summary>True when the scene holds shimmering stand-ins (<see cref="PreparedMeshAsset.Shimmer"/>): frames must keep coming for the pulse.</summary>
+    public bool HasShimmer { get; private set; }
 
     /// <summary>Selectable ids of actors currently drawn at an overridden transform (see <see cref="SetActorTransform"/>).</summary>
     public IReadOnlyCollection<uint> MovedActors => _movedActors;
@@ -86,6 +90,8 @@ public sealed class LevelScene : IDisposable
         _handles.Add(handle);
         _meshHandles[mesh.Asset.MeshPath] = handle;
         _extraAssets[mesh.Asset.MeshPath] = mesh.Asset;
+        _ownedMeshPaths.Add(mesh.Asset.MeshPath);
+        HasShimmer |= mesh.Asset.Shimmer; // a copied spawner's stand-in in a scene that had none keeps the pulse going
     }
 
     /// <summary>
@@ -139,20 +145,21 @@ public sealed class LevelScene : IDisposable
     /// <summary>Ids drawn bent (see <see cref="SetBend"/>).</summary>
     public IReadOnlyCollection<uint> BentIds => _bent.Keys;
 
-    private readonly Dictionary<InstanceKey, (MeshHandle Bent, SceneNode Node, MeshHandle Straight, SplineMeshParams Spline)> _bentSegments = [];
+    private readonly Dictionary<InstanceKey, (MeshHandle Bent, SceneNode Node, MeshHandle Straight, SplineMeshParams Spline, string? Mesh)> _bentSegments = [];
 
     /// <summary>Road, rail and bridge pieces drawn with a new curve (see <see cref="SetSegmentBend"/>).</summary>
     public IReadOnlyCollection<InstanceKey> BentSegments => _bentSegments.Keys;
 
     /// <summary>
     /// Draws the spline piece <paramref name="key"/> along <paramref name="spline"/> instead of the curve the level gives
-    /// it (null: as the level has it again). The straight mesh comes from <see cref="PreparedLevelScene.SplineSources"/>.
+    /// it (null: as the level has it again). The straight mesh comes from <see cref="PreparedLevelScene.SplineSources"/>,
+    /// or is <paramref name="meshPath"/> (a replaced piece: a mesh added with <see cref="AddMesh"/> or prepared with the scene).
     /// </summary>
-    public void SetSegmentBend(InstanceKey key, SplineMeshParams? spline)
+    public void SetSegmentBend(InstanceKey key, SplineMeshParams? spline, string? meshPath = null)
     {
         if (_bentSegments.TryGetValue(key, out var current))
         {
-            if (spline is not null && current.Spline == spline && ReferenceEquals(current.Node.Mesh, current.Bent))
+            if (spline is not null && current.Spline == spline && string.Equals(current.Mesh, meshPath, StringComparison.OrdinalIgnoreCase) && ReferenceEquals(current.Node.Mesh, current.Bent))
             {
                 return;
             }
@@ -172,16 +179,86 @@ public sealed class LevelScene : IDisposable
             return;
         }
 
-        var marker = placement.MeshPath.IndexOf(SplineMeshPlacements.KeyMarker, StringComparison.Ordinal);
-        if (marker <= 0 || !Prepared.SplineSources.TryGetValue(placement.MeshPath[..marker], out var straight))
+        PreparedMeshAsset? straight;
+        if (meshPath is not null)
         {
-            return;
+            if (!(_extraAssets.TryGetValue(meshPath, out straight) || Prepared.Meshes.TryGetValue(meshPath, out straight) || Prepared.SplineSources.TryGetValue(meshPath, out straight)))
+            {
+                return; // not loaded yet: again when it arrives
+            }
+        }
+        else
+        {
+            var marker = placement.MeshPath.IndexOf(SplineMeshPlacements.KeyMarker, StringComparison.Ordinal);
+            if (marker <= 0 || !Prepared.SplineSources.TryGetValue(placement.MeshPath[..marker], out straight))
+            {
+                return;
+            }
         }
 
         var lods = straight.Lods.Select(l => SplineMeshDeformer.Deform(l, spline, straight.Mesh.Bounds)).ToList();
         var bent = LevelSceneUploader.AddMesh(_renderer, straight with { MeshPath = placement.MeshPath + "#reshaped", Mesh = lods[0], Lods = lods }, _gpuTextures);
-        _bentSegments[key] = (bent, node, shown, spline);
+        _bentSegments[key] = (bent, node, shown, spline, meshPath);
         node.Mesh = bent;
+    }
+
+    private readonly Dictionary<uint, (List<(SceneNode Node, MeshHandle Own)> Nodes, string Mesh)> _swappedActors = [];
+    private readonly Dictionary<InstanceKey, (List<(SceneNode Node, MeshHandle Own)> Nodes, string Mesh)> _swappedParts = [];
+
+    /// <summary>Actors drawn with another mesh (see <see cref="SetActorMesh"/>).</summary>
+    public IReadOnlyCollection<uint> SwappedActors => _swappedActors.Keys;
+
+    /// <summary>Parts drawn with another mesh (see <see cref="SetPartMesh"/>).</summary>
+    public IReadOnlyCollection<InstanceKey> SwappedParts => _swappedParts.Keys;
+
+    /// <summary>
+    /// Draws the root mesh of the actor <paramref name="selectableId"/> as <paramref name="meshPath"/> (the Replace tool;
+    /// a mesh added with <see cref="AddMesh"/> or prepared with the scene), null as its own again. The node keeps its id
+    /// and transform; a bend over it is dropped (the caller sets it again over the new mesh).
+    /// </summary>
+    public void SetActorMesh(uint selectableId, string? meshPath) =>
+        Swap(_swappedActors, selectableId, meshPath, () => NodesOf(selectableId).Where(n => n.Mesh is not null && n.Tag is ScenePlacement { InstanceKey: null }).ToList(), () => SetBend(selectableId, null));
+
+    /// <summary>Draws the part (a stored component of a Blueprint building) <paramref name="key"/> as <paramref name="meshPath"/>, null as its own again.</summary>
+    public void SetPartMesh(InstanceKey key, string? meshPath) =>
+        Swap(_swappedParts, key, meshPath, () => InstanceNodes().GetValueOrDefault(key)?.Where(n => n.Mesh is not null).ToList() ?? [], null);
+
+    private void Swap<TKey>(Dictionary<TKey, (List<(SceneNode Node, MeshHandle Own)> Nodes, string Mesh)> swaps, TKey key, string? meshPath, Func<List<SceneNode>> nodesOf, Action? unbend)
+        where TKey : notnull
+    {
+        if (swaps.TryGetValue(key, out var current))
+        {
+            if (string.Equals(current.Mesh, meshPath, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            unbend?.Invoke();
+            foreach (var (node, own) in current.Nodes)
+            {
+                node.Mesh = own;
+            }
+
+            swaps.Remove(key);
+        }
+
+        if (meshPath is null || !_meshHandles.TryGetValue(meshPath, out var handle))
+        {
+            return; // its own mesh, or not loaded yet: again when it arrives
+        }
+
+        var nodes = nodesOf();
+        if (nodes.Count == 0)
+        {
+            return;
+        }
+
+        unbend?.Invoke();
+        swaps[key] = (nodes.Select(n => (n, n.Mesh!)).ToList(), meshPath);
+        foreach (var node in nodes)
+        {
+            node.Mesh = handle;
+        }
     }
 
     /// <summary>Approximate GPU memory of the scene's textures (meshes and terrain) in bytes.</summary>
@@ -367,7 +444,7 @@ public sealed class LevelScene : IDisposable
         {
             foreach (var (node, _) in nodes)
             {
-                Scene.Root.Remove(node);
+                node.Parent?.Remove(node);
             }
 
             _byId.Remove(cloneId);
@@ -377,22 +454,22 @@ public sealed class LevelScene : IDisposable
     }
 
     /// <summary>The CPU-side data this scene was built from.</summary>
-    public PreparedLevelScene Prepared { get; }
+    public PreparedLevelScene Prepared { get; private set; }
 
     /// <summary>The renderable scene graph.</summary>
-    public Scene Scene { get; }
+    public Scene Scene { get; } = new();
 
     /// <summary>GL-space bounds of everything drawn (meshes and terrain).</summary>
-    public BoundingBox Bounds { get; }
+    public BoundingBox Bounds { get; private set; }
 
     /// <summary>GL-space bounds of the terrain only (empty without terrain).</summary>
-    public BoundingBox TerrainBounds { get; }
+    public BoundingBox TerrainBounds { get; private set; }
 
     /// <summary>Placements per selectable id (an actor with several components/instances has several placements).</summary>
     public IReadOnlyDictionary<uint, List<ScenePlacement>> PlacementsById => _byId;
 
     /// <summary>Mesh placements drawn.</summary>
-    public int PlacedCount { get; }
+    public int PlacedCount { get; private set; }
 
     /// <summary>Ground queries over the scene's terrain (null without terrain): height, normal, layers, raycast.</summary>
     public TerrainHeightField? HeightField => Prepared.HeightField;
@@ -460,12 +537,455 @@ public sealed class LevelScene : IDisposable
         Ground = mode;
     }
 
-    internal void AttachTerrain(List<TerrainPart> parts, SceneNode? sea, GroundMode ground)
+
+    /// <summary>
+    /// Shows <paramref name="next"/> instead of <see cref="Prepared"/> without starting over (render thread, GL context
+    /// current; only for a scene uploaded with a <see cref="GpuMeshCache"/>): a level both scenes have (the same document in
+    /// the same slot, see <see cref="PreparedLevelScene.Slots"/>, drawn the same) keeps its nodes and whatever was done to
+    /// them (moves, selection, visibility, bends, pins); a level that is gone takes its nodes along; only a new level gets
+    /// nodes. Meshes and textures come from the cache (<see cref="GpuMeshCache.Stage"/> sends new ones over several frames
+    /// beforehand) and the new levels' nodes from <see cref="Prebuild"/> when it ran. Clones stay; the caller applies its
+    /// edit state again as after an upload.
+    /// </summary>
+    public void Update(PreparedLevelScene next)
     {
-        _terrainParts.AddRange(parts);
-        _seaNode = sea;
-        Ground = ground;
+        ArgumentNullException.ThrowIfNull(next);
+        ObjectDisposedException.ThrowIf(IsDisposed, this);
+        if (Cache is null)
+        {
+            throw new InvalidOperationException("Only a scene uploaded with a GpuMeshCache can be updated.");
+        }
+
+        Apply(next);
     }
+
+    /// <summary>
+    /// Builds, on a worker thread, the nodes of the levels <paramref name="next"/> brings that this scene does not show yet;
+    /// true once they are ready, so that <see cref="Update"/> only hangs them in. Call it once a frame after
+    /// <see cref="GpuMeshCache.Stage"/> returned true for <paramref name="next"/> (its meshes must be on the GPU).
+    /// </summary>
+    public bool Prebuild(PreparedLevelScene next)
+    {
+        ArgumentNullException.ThrowIfNull(next);
+        if (Cache is not { } cache)
+        {
+            return true;
+        }
+
+        if (!ReferenceEquals(_plan?.Next, next))
+        {
+            var handles = new Dictionary<string, MeshHandle>(StringComparer.OrdinalIgnoreCase);
+            foreach (var path in next.Meshes.Keys)
+            {
+                if (cache.TryGetMesh(path, out var handle))
+                {
+                    handles[path] = handle;
+                }
+            }
+
+            var groups = new Dictionary<int, LevelGroup>(_groups);
+            _plan = (next, Task.Run(() => Plan(next, groups, handles)));
+        }
+
+        return _plan.Value.Task.IsCompleted;
+    }
+
+    private (PreparedLevelScene Next, Task<UpdatePlan> Task)? _plan;
+
+    /// <summary>Builds (first call) or updates the scene to draw <paramref name="next"/>; see <see cref="Update"/>.</summary>
+    internal void Apply(PreparedLevelScene next)
+    {
+        var clock = Stopwatch.StartNew();
+        Cache?.Begin();
+
+        // The new scene's textures and meshes (from the cache: a hit sends nothing), and those the scene owns (added meshes, pins).
+        var gpuTextures = new Dictionary<string, GpuTexture>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (path, image) in next.Textures)
+        {
+            gpuTextures[path] = Cache?.Texture(_renderer, path, image) ?? Own(_renderer.CreateTexture(image.Width, image.Height, image.Rgba, image.IsSrgb));
+        }
+
+        foreach (var (path, texture) in _gpuTextures)
+        {
+            if (_textures.Contains(texture))
+            {
+                gpuTextures.TryAdd(path, texture);
+            }
+        }
+
+        _gpuTextures = gpuTextures;
+        var texturesMs = clock.Elapsed.TotalMilliseconds;
+        var meshHandles = new Dictionary<string, MeshHandle>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (path, asset) in next.Meshes)
+        {
+            meshHandles[path] = Cache?.Mesh(_renderer, asset, gpuTextures) ?? Own(LevelSceneUploader.AddMesh(_renderer, asset, gpuTextures));
+        }
+
+        var meshesMs = clock.Elapsed.TotalMilliseconds - texturesMs;
+
+        // Which levels stay and the nodes of the new ones: worked out by Prebuild on a worker when it ran for this scene.
+        var plan = _plan is { } prebuilt && ReferenceEquals(prebuilt.Next, next) && prebuilt.Task.IsCompletedSuccessfully
+            ? prebuilt.Task.Result
+            : Plan(next, _groups, meshHandles);
+        _plan = null;
+        foreach (var path in _ownedMeshPaths)
+        {
+            if (_meshHandles.TryGetValue(path, out var owned))
+            {
+                meshHandles.TryAdd(path, owned);
+            }
+        }
+
+        _meshHandles = meshHandles;
+        foreach (var slot in _groups.Keys.Where(s => !plan.Keep.Contains(s)).ToList())
+        {
+            RemoveGroup(slot);
+        }
+
+        var terrainMs = 0.0;
+        var layerTextures = new Dictionary<string, GpuTexture>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (slot, document) in plan.Wanted)
+        {
+            if (!_groups.ContainsKey(slot))
+            {
+                var placements = plan.Placements.GetValueOrDefault(slot) ?? [];
+                var built = plan.Built.GetValueOrDefault(slot) is { } ready && ready.Matches(meshHandles) ? ready : Build(document, placements, meshHandles);
+                terrainMs += AddGroup(slot, document, placements, built, plan.Terrain.GetValueOrDefault(slot) ?? [], next, layerTextures);
+            }
+        }
+
+        // Terrain parts in the new scene's order (a part SetTerrainAlbedo changed is the current one).
+        var parts = new Dictionary<PreparedTerrain, TerrainPart>(ReferenceEqualityComparer.Instance);
+        foreach (var part in _groups.Values.SelectMany(g => g.Terrain))
+        {
+            parts[part.Source] = part;
+        }
+
+        foreach (var part in _terrainParts.Where(p => parts.ContainsKey(p.Source)))
+        {
+            parts[part.Source] = part;
+        }
+
+        _terrainParts = next.Terrain.Where(parts.ContainsKey).Select(t => parts[t]).ToList();
+        var terrainBounds = BoundingBox.Empty;
+        foreach (var part in _terrainParts)
+        {
+            terrainBounds = terrainBounds.Union(part.Handle.Bounds);
+        }
+
+        UpdateSea(terrainBounds, next.SeaLevelCm);
+        TerrainBounds = terrainBounds;
+        Scene.Environment = !terrainBounds.IsEmpty && _options.OutdoorEnvironment ? SceneEnvironment.Outdoor(_options.TerrainGrid, terrainBounds.Min.Y - 100f) : null;
+        var bounds = terrainBounds;
+        foreach (var group in _groups.Values)
+        {
+            bounds = bounds.Union(group.Bounds);
+        }
+
+        Bounds = bounds;
+        PlacedCount = _groups.Values.Sum(g => g.Placed);
+        HasShimmer = next.Meshes.Values.Any(m => m.Shimmer) || _extraAssets.Values.Any(m => m.Shimmer);
+        Ground = next.Ground;
+        Prepared = next;
+        Cache?.KeepDrawn(Scene.Nodes); // what clones, pins and swapped meshes draw stays on the GPU too
+        var nodesMs = clock.Elapsed.TotalMilliseconds - texturesMs - meshesMs - terrainMs;
+        UploadTimings = new UploadTimings(texturesMs, meshesMs, nodesMs, terrainMs, Cache?.LastUploaded ?? meshHandles.Count);
+    }
+
+    // The group of terrain components whose level is not among the documents.
+    private const int OtherTerrain = int.MinValue;
+
+    /// <summary>What an update to a prepared scene changes: each level's placements and terrain by slot, the slots whose groups stay, the new groups' nodes.</summary>
+    private sealed record UpdatePlan(PreparedLevelScene Next, Dictionary<int, List<ScenePlacement>> Placements, Dictionary<int, List<PreparedTerrain>> Terrain,
+        Dictionary<int, LevelDocument?> Wanted, HashSet<int> Keep, Dictionary<int, BuiltGroup> Built);
+
+    /// <summary>A new level's group with its placement nodes (not yet in the scene; terrain comes when it is hung in).</summary>
+    private sealed record BuiltGroup(SceneNode Node, BoundingBox Bounds, int Placed, bool Complete)
+    {
+        /// <summary>True when every placement got a node and each draws the mesh <paramref name="handles"/> has for it.</summary>
+        public bool Matches(IReadOnlyDictionary<string, MeshHandle> handles) =>
+            Complete && Node.Children.All(n => n.Tag is ScenePlacement p && handles.TryGetValue(p.MeshPath, out var h) && Equals(h, n.Mesh));
+    }
+
+    /// <summary>
+    /// The plan to go from <paramref name="groups"/> to <paramref name="next"/>: no GL, no scene state but what is passed in,
+    /// so it runs on a worker (<see cref="Prebuild"/>) as well as on the render thread.
+    /// </summary>
+    private static UpdatePlan Plan(PreparedLevelScene next, IReadOnlyDictionary<int, LevelGroup> groups, IReadOnlyDictionary<string, MeshHandle> handles)
+    {
+        // Each level's placements and terrain components, by slot (a component's level is the document of that name).
+        var placements = new Dictionary<int, List<ScenePlacement>>();
+        foreach (var placement in next.Placements)
+        {
+            if (!placements.TryGetValue(placement.DocumentIndex, out var list))
+            {
+                placements[placement.DocumentIndex] = list = [];
+            }
+
+            list.Add(placement);
+        }
+
+        var slotOfLevel = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        for (var i = 0; i < next.Documents.Count; i++)
+        {
+            slotOfLevel.TryAdd(next.Documents[i].Name, next.SlotOf(i));
+        }
+
+        var terrain = new Dictionary<int, List<PreparedTerrain>>();
+        foreach (var component in next.Terrain)
+        {
+            var slot = slotOfLevel.GetValueOrDefault(component.LevelName, OtherTerrain);
+            if (!terrain.TryGetValue(slot, out var list))
+            {
+                terrain[slot] = list = [];
+            }
+
+            list.Add(component);
+        }
+
+        var wanted = new Dictionary<int, LevelDocument?>();
+        for (var i = 0; i < next.Documents.Count; i++)
+        {
+            wanted.TryAdd(next.SlotOf(i), next.Documents[i]);
+        }
+
+        if (terrain.ContainsKey(OtherTerrain))
+        {
+            wanted[OtherTerrain] = null;
+        }
+
+        // A level stays when its slot holds the same document drawn the same; one that went or changed loses its nodes.
+        var keep = new HashSet<int>();
+        foreach (var (slot, group) in groups)
+        {
+            if (wanted.TryGetValue(slot, out var document) && ReferenceEquals(document, group.Document)
+                && SamePlacements(group.Placements, placements.GetValueOrDefault(slot)) && SameTerrain(group.Terrain, terrain.GetValueOrDefault(slot)))
+            {
+                keep.Add(slot);
+            }
+        }
+
+        var built = new Dictionary<int, BuiltGroup>();
+        foreach (var (slot, document) in wanted)
+        {
+            if (!keep.Contains(slot))
+            {
+                built[slot] = Build(document, placements.GetValueOrDefault(slot) ?? [], handles);
+            }
+        }
+
+        return new UpdatePlan(next, placements, terrain, wanted, keep, built);
+    }
+
+    /// <summary>A group with a node per placement (those whose mesh <paramref name="handles"/> has), not in any scene yet.</summary>
+    private static BuiltGroup Build(LevelDocument? document, List<ScenePlacement> placements, IReadOnlyDictionary<string, MeshHandle> handles)
+    {
+        // Filled before it hangs in the scene: the scene then logs one change (the group), not one per node.
+        var group = new SceneNode(document?.Name ?? "terrain");
+        var bounds = BoundingBox.Empty;
+        var placed = 0;
+        foreach (var placement in placements)
+        {
+            if (!handles.TryGetValue(placement.MeshPath, out var handle))
+            {
+                continue;
+            }
+
+            group.Add(new SceneNode(placement.Name, handle, placement.GlModel, placement.SelectableId) { Tag = placement, MaxDrawDistance = LevelSceneUploader.DrawDistanceOf(placement) });
+            bounds = bounds.Union(LevelSceneUploader.TransformBounds(handle.Bounds, placement.GlModel));
+            placed++;
+        }
+
+        return new BuiltGroup(group, bounds, placed, placed == placements.Count);
+    }
+
+    private GpuTexture Own(GpuTexture texture)
+    {
+        _textures.Add(texture);
+        return texture;
+    }
+
+    private MeshHandle Own(MeshHandle mesh)
+    {
+        _handles.Add(mesh);
+        return mesh;
+    }
+
+    private static bool SamePlacements(List<ScenePlacement> drawn, List<ScenePlacement>? next)
+    {
+        if (next is null || drawn.Count != next.Count)
+        {
+            return drawn.Count == (next?.Count ?? 0);
+        }
+
+        for (var i = 0; i < drawn.Count; i++)
+        {
+            if (drawn[i].SelectableId != next[i].SelectableId || !string.Equals(drawn[i].MeshPath, next[i].MeshPath, StringComparison.Ordinal) || drawn[i].GlModel != next[i].GlModel)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool SameTerrain(List<TerrainPart> drawn, List<PreparedTerrain>? next) =>
+        drawn.Count == (next?.Count ?? 0) && (next is null || drawn.Select(p => p.Source).SequenceEqual(next, ReferenceEqualityComparer.Instance));
+
+    /// <summary>Hangs a built level group in the scene with its terrain and indexes its nodes; returns the milliseconds spent on its terrain.</summary>
+    private double AddGroup(int slot, LevelDocument? document, List<ScenePlacement> placements, BuiltGroup built, List<PreparedTerrain> components, PreparedLevelScene next,
+        Dictionary<string, GpuTexture> layerTextures)
+    {
+        var group = built.Node;
+        foreach (var node in group.Children)
+        {
+            var placement = (ScenePlacement)node.Tag!;
+            if (!_byId.TryGetValue(placement.SelectableId, out var list))
+            {
+                _byId[placement.SelectableId] = list = [];
+            }
+
+            list.Add(placement);
+            Indexed(node);
+        }
+
+        var clock = Stopwatch.StartNew();
+        var parts = new List<TerrainPart>(components.Count);
+        foreach (var component in components)
+        {
+            MeshHandle handle;
+            GpuTexture? texture;
+            if (Cache is { } cache)
+            {
+                // Kept on the GPU while the tile stays around: only components the camera brings in are sent.
+                (handle, texture) = cache.Terrain(component, () => LevelSceneUploader.CreateTerrain(_renderer, component, next, cache));
+            }
+            else
+            {
+                (handle, texture) = LevelSceneUploader.CreateTerrain(_renderer, component, next, null, layerTextures, _textures);
+                Own(handle);
+                if (texture is not null)
+                {
+                    Own(texture);
+                }
+            }
+
+            var node = group.Add(new SceneNode($"{component.LevelName}/{component.Name}", handle, Matrix4x4.Identity) { Tint = texture is null ? LevelSceneUploader.TerrainTint : Vector4.One });
+            parts.Add(new TerrainPart(node, handle, texture, component));
+        }
+
+        Scene.Root.Add(group);
+        _groups[slot] = new LevelGroup(group, document, placements, built.Bounds, built.Placed, parts);
+        return clock.Elapsed.TotalMilliseconds;
+    }
+
+    /// <summary>Takes a level's nodes out, with everything kept per actor of it (moves, bends, swaps, added instances, owned terrain).</summary>
+    private void RemoveGroup(int slot)
+    {
+        var group = _groups[slot];
+        _groups.Remove(slot);
+        Scene.Root.Remove(group.Node);
+        var ids = new HashSet<uint>();
+        foreach (var node in group.Node.DescendantsAndSelf())
+        {
+            if (node.SelectableId != 0)
+            {
+                ids.Add(node.SelectableId);
+            }
+        }
+
+        foreach (var id in ids)
+        {
+            _byId.Remove(id);
+            _nodesById?.Remove(id);
+            _movedActors.Remove(id);
+            _swappedActors.Remove(id);
+            if (_bent.Remove(id, out var bent))
+            {
+                _renderer.RemoveMesh(bent.Bent);
+            }
+        }
+
+        _movedInstances.RemoveWhere(k => ids.Contains(k.SelectableId));
+        _addedInstances.RemoveWhere(k => ids.Contains(k.SelectableId));
+        foreach (var key in _bentSegments.Keys.Where(k => ids.Contains(k.SelectableId)).ToList())
+        {
+            _renderer.RemoveMesh(_bentSegments[key].Bent);
+            _bentSegments.Remove(key);
+        }
+
+        foreach (var key in _swappedParts.Keys.Where(k => ids.Contains(k.SelectableId)).ToList())
+        {
+            _swappedParts.Remove(key);
+        }
+
+        if (_instanceNodes is not null)
+        {
+            foreach (var key in _instanceNodes.Keys.Where(k => ids.Contains(k.SelectableId)).ToList())
+            {
+                _instanceNodes.Remove(key);
+            }
+        }
+
+        foreach (var part in group.Terrain)
+        {
+            // A component SetTerrainAlbedo took over from the cache belongs to the scene now.
+            var current = _terrainParts.FirstOrDefault(p => ReferenceEquals(p.Node, part.Node)) ?? part;
+            if (_handles.Remove(current.Handle))
+            {
+                _renderer.RemoveMesh(current.Handle);
+            }
+
+            if (current.Texture is { } texture && _textures.Remove(texture))
+            {
+                texture.Dispose();
+            }
+        }
+    }
+
+    /// <summary>A sea plane over <paramref name="terrainBounds"/> at <paramref name="seaLevelCm"/> (none without either); kept while both stay.</summary>
+    private void UpdateSea(BoundingBox terrainBounds, float? seaLevelCm)
+    {
+        if (_seaNode is { } sea && (terrainBounds.IsEmpty || seaLevelCm is null || terrainBounds != TerrainBounds || seaLevelCm != Prepared.SeaLevelCm || sea.Parent is null))
+        {
+            sea.Parent?.Remove(sea);
+            if (sea.Mesh is { } mesh && _handles.Remove(mesh))
+            {
+                _renderer.RemoveMesh(mesh);
+            }
+
+            _seaNode = null;
+        }
+
+        if (_seaNode is null && !terrainBounds.IsEmpty && seaLevelCm is { } seaLevel)
+        {
+            var handle = Own(_renderer.AddMesh(LevelSceneUploader.CreateSeaMesh(terrainBounds, seaLevel, _options.SeaMarginCm), MeshSpace.Unreal));
+            _seaNode = Scene.Add(handle, Matrix4x4.Identity, 0, "Sea");
+            _seaNode.Tint = _options.SeaColor;
+        }
+    }
+
+    /// <summary>Adds a new node to the id and instance lookups when they are built.</summary>
+    private void Indexed(SceneNode node)
+    {
+        if (node.SelectableId != 0)
+        {
+            Index(node);
+        }
+
+        if (_instanceNodes is not null && node.Tag is ScenePlacement { InstanceKey: { } key })
+        {
+            if (!_instanceNodes.TryGetValue(key, out var list))
+            {
+                _instanceNodes[key] = list = [];
+            }
+
+            list.Add(node);
+        }
+    }
+
+    /// <summary>The group a node of <paramref name="placement"/>'s level hangs in (the root when the level has none).</summary>
+    private SceneNode ParentOf(ScenePlacement placement) => _groups.TryGetValue(placement.DocumentIndex, out var group) ? group.Node : Scene.Root;
 
     /// <summary>Distinct mesh handles created (meshes + terrain).</summary>
     public int MeshCount => _handles.Count;
@@ -519,8 +1039,9 @@ public sealed class LevelScene : IDisposable
 
     /// <summary>
     /// Draws one instance (or part) at <paramref name="world"/> (UE world space), e.g. while it is dragged. A spawn part
-    /// moves its pin and the item it spawns along: the item keeps its offset from the spawner, the pin stays upright at its
-    /// own size (a car shop's box is scaled 11 x 5 x 3.5: a pin scaled with it would stand 4 m tall).
+    /// moves its pin and the item it spawns along: the item, and a model standing in for the pin (the vehicle on the floor
+    /// of a car shop's box), keep their offset from the spawner; a plain pin stays upright at its own size (a car shop's box
+    /// is scaled 11 x 5 x 3.5: a pin scaled with it would stand 4 m tall).
     /// </summary>
     public void SetInstanceTransform(InstanceKey key, FTransform world)
     {
@@ -532,7 +1053,8 @@ public sealed class LevelScene : IDisposable
         foreach (var node in nodes)
         {
             var placement = node.Tag as ScenePlacement;
-            var moved = placement is { Spawner: { } spawner, Component: not null } && placement.Actor.FindComponent(spawner) is { } part
+            var moved = placement is { Spawner: { } spawner } && (placement.Component is not null || SpawnMarkers.ModelOf(placement.MeshPath) is not null)
+                && placement.Actor.FindComponent(spawner) is { } part
                 ? placement.World.GetRelativeTransform(part.WorldTransform) * world
                 : world;
             // A marker keeps its own size (a vehicle box its real one, a capsule a person's) and follows the move and turn.
@@ -555,7 +1077,7 @@ public sealed class LevelScene : IDisposable
         var nodes = NodesOf(selectableId);
         foreach (var node in nodes.Where(n => n.Tag is ScenePlacement { SpawnPoint: not null }).ToList())
         {
-            Scene.Root.Remove(node);
+            node.Parent?.Remove(node);
             nodes.Remove(node);
         }
 
@@ -577,9 +1099,10 @@ public sealed class LevelScene : IDisposable
                 handle = LevelSceneUploader.AddMesh(_renderer, asset, _gpuTextures); // a sentry without a point before: no capsule uploaded yet
                 _handles.Add(handle);
                 _meshHandles[pin.MeshPath] = handle;
+                _ownedMeshPaths.Add(pin.MeshPath);
             }
 
-            var node = Scene.Add(handle, pin.GlModel, pin.SelectableId, pin.Name);
+            var node = ParentOf(pin).Add(new SceneNode(pin.Name, handle, pin.GlModel, pin.SelectableId));
             node.Tag = pin;
             node.MaxDrawDistance = LevelSceneUploader.DrawDistanceOf(pin);
             placements.Add(pin);
@@ -599,7 +1122,7 @@ public sealed class LevelScene : IDisposable
             {
                 if (_addedInstances.Contains(key))
                 {
-                    Scene.Root.Remove(node); // an added instance the project no longer has (deleted, undone)
+                    node.Parent?.Remove(node); // an added instance the project no longer has (deleted, undone)
                     _nodesById?.GetValueOrDefault(key.SelectableId)?.Remove(node);
                     _byId.GetValueOrDefault(key.SelectableId)?.RemoveAll(p => ReferenceEquals(p, node.Tag));
                 }
@@ -638,7 +1161,7 @@ public sealed class LevelScene : IDisposable
         }
 
         var placement = sibling with { Instance = source with { InstanceIndex = key.InstanceIndex }, Name = $"{sibling.Actor.Name}/{source.ComponentName}[{key.InstanceIndex}]" };
-        var node = Scene.Add(handle, placement.GlModel, key.SelectableId, placement.Name);
+        var node = ParentOf(sibling).Add(new SceneNode(placement.Name, handle, placement.GlModel, key.SelectableId));
         node.Tag = placement;
         node.MaxDrawDistance = LevelSceneUploader.DrawDistanceOf(placement);
         Index(node);
@@ -712,8 +1235,9 @@ public sealed class LevelScene : IDisposable
 /// <summary>One uploaded terrain component.</summary>
 /// <param name="Node">Its scene node.</param>
 /// <param name="Handle">Its mesh.</param>
-/// <param name="Texture">Its baked ground texture (owned by the scene), or null.</param>
-internal sealed record TerrainPart(SceneNode Node, MeshHandle Handle, GpuTexture? Texture);
+/// <param name="Texture">Its baked ground texture (owned by the scene, or by the cache), or null.</param>
+/// <param name="Source">The prepared component it draws.</param>
+internal sealed record TerrainPart(SceneNode Node, MeshHandle Handle, GpuTexture? Texture, PreparedTerrain Source);
 
 /// <summary>Options of <see cref="LevelSceneUploader.Upload"/>.</summary>
 public sealed record LevelUploadOptions
@@ -764,142 +1288,46 @@ public static class LevelSceneUploader
     {
         ArgumentNullException.ThrowIfNull(renderer);
         ArgumentNullException.ThrowIfNull(prepared);
-        options ??= new LevelUploadOptions();
-        cache?.Begin();
-        var clock = System.Diagnostics.Stopwatch.StartNew();
-        double texturesMs, meshesMs, nodesMs;
-
-        var handles = new List<MeshHandle>();
-        var textures = new List<GpuTexture>();
-        var gpuTextures = new Dictionary<string, GpuTexture>(StringComparer.OrdinalIgnoreCase);
-        foreach (var (path, image) in prepared.Textures)
-        {
-            if (cache is not null)
-            {
-                gpuTextures[path] = cache.Texture(renderer, path, image);
-                continue;
-            }
-
-            var texture = renderer.CreateTexture(image.Width, image.Height, image.Rgba, image.IsSrgb);
-            gpuTextures[path] = texture;
-            textures.Add(texture);
-        }
-
-        texturesMs = clock.Elapsed.TotalMilliseconds;
-        var meshHandles = new Dictionary<string, MeshHandle>(StringComparer.OrdinalIgnoreCase);
-        foreach (var (path, asset) in prepared.Meshes)
-        {
-            if (cache is not null)
-            {
-                meshHandles[path] = cache.Mesh(renderer, asset, gpuTextures);
-                continue;
-            }
-
-            var handle = AddMesh(renderer, asset, gpuTextures);
-            meshHandles[path] = handle;
-            handles.Add(handle);
-        }
-
-        meshesMs = clock.Elapsed.TotalMilliseconds - texturesMs;
-        var scene = new Scene();
-        var bounds = BoundingBox.Empty;
-        var byId = new Dictionary<uint, List<ScenePlacement>>();
-        var placed = 0;
-        foreach (var placement in prepared.Placements)
-        {
-            if (!meshHandles.TryGetValue(placement.MeshPath, out var handle))
-            {
-                continue;
-            }
-
-            var node = scene.Add(handle, placement.GlModel, placement.SelectableId, placement.Name);
-            node.Tag = placement;
-            node.MaxDrawDistance = DrawDistanceOf(placement);
-            bounds = bounds.Union(TransformBounds(handle.Bounds, placement.GlModel));
-            if (!byId.TryGetValue(placement.SelectableId, out var list))
-            {
-                byId[placement.SelectableId] = list = [];
-            }
-
-            list.Add(placement);
-            placed++;
-        }
-
-        nodesMs = clock.Elapsed.TotalMilliseconds - texturesMs - meshesMs;
-        var terrainBounds = BoundingBox.Empty;
-        var parts = new List<TerrainPart>();
-        var layerTextures = new Dictionary<string, GpuTexture>(StringComparer.OrdinalIgnoreCase);
-        foreach (var terrain in prepared.Terrain)
-        {
-            MeshHandle handle;
-            GpuTexture? texture;
-            if (cache is not null)
-            {
-                // Kept on the GPU while the tile stays around: only components the camera brings in are sent.
-                (handle, texture) = cache.Terrain(terrain, () =>
-                {
-                    var made = terrain.Albedo is { } albedo ? CreateTerrainTexture(renderer, albedo) : null;
-                    var mesh = renderer.AddMesh(terrain.Mesh, MeshSpace.Unreal, 1f, made);
-                    var weights = new List<GpuTexture>(1);
-                    if (made is not null && TerrainDetailFor(renderer, terrain, prepared, cache, layerTextures, weights) is { } cachedDetail)
-                    {
-                        renderer.SetMeshTerrainDetail(mesh, cachedDetail);
-                    }
-
-                    return (mesh, made, weights.FirstOrDefault());
-                });
-            }
-            else
-            {
-                texture = terrain.Albedo is { } albedo ? CreateTerrainTexture(renderer, albedo) : null;
-                if (texture is not null)
-                {
-                    textures.Add(texture);
-                }
-
-                handle = renderer.AddMesh(terrain.Mesh, MeshSpace.Unreal, 1f, texture);
-                handles.Add(handle);
-                if (texture is not null && TerrainDetailFor(renderer, terrain, prepared, cache, layerTextures, textures) is { } detail)
-                {
-                    renderer.SetMeshTerrainDetail(handle, detail);
-                }
-            }
-
-            var node = scene.Add(handle, Matrix4x4.Identity, 0, $"{terrain.LevelName}/{terrain.Name}");
-            node.Tint = texture is null ? TerrainTint : Vector4.One;
-            terrainBounds = terrainBounds.Union(handle.Bounds);
-            parts.Add(new TerrainPart(node, handle, texture));
-        }
-
-        SceneNode? sea = null;
-        if (!terrainBounds.IsEmpty && prepared.SeaLevelCm is { } seaLevel)
-        {
-            var seaMesh = CreateSeaMesh(terrainBounds, seaLevel, options.SeaMarginCm);
-            var seaHandle = renderer.AddMesh(seaMesh, MeshSpace.Unreal);
-            handles.Add(seaHandle);
-            sea = scene.Add(seaHandle, Matrix4x4.Identity, 0, "Sea");
-            sea.Tint = options.SeaColor;
-        }
-
-        if (!terrainBounds.IsEmpty && options.OutdoorEnvironment)
-        {
-            scene.Environment = SceneEnvironment.Outdoor(options.TerrainGrid, terrainBounds.Min.Y - 100f);
-        }
-
-        bounds = bounds.Union(terrainBounds);
-        var level = new LevelScene(renderer, prepared, scene, bounds, terrainBounds, byId, meshHandles, handles, textures, placed, gpuTextures);
-        level.AttachTerrain(parts, sea, prepared.Ground);
-        level.Cache = cache;
-        level.UploadTimings =new UploadTimings(texturesMs, meshesMs, nodesMs, clock.Elapsed.TotalMilliseconds - texturesMs - meshesMs - nodesMs, cache?.LastUploaded ?? meshHandles.Count);
+        var level = new LevelScene(renderer, prepared, options ?? new LevelUploadOptions(), cache);
+        level.Apply(prepared);
         return level;
     }
+
+    /// <summary>
+    /// The GPU side of one terrain component for a <paramref name="cache"/>: its mesh, baked ground texture and layer
+    /// weights (the layer textures come from the cache).
+    /// </summary>
+    internal static (MeshHandle Handle, GpuTexture? Texture, GpuTexture? Weights) CreateTerrain(SceneRenderer renderer, PreparedTerrain terrain, PreparedLevelScene prepared, GpuMeshCache cache)
+    {
+        var weights = new List<GpuTexture>(1);
+        var (handle, texture) = CreateTerrain(renderer, terrain, prepared, cache, new Dictionary<string, GpuTexture>(StringComparer.OrdinalIgnoreCase), weights);
+        return (handle, texture, weights.FirstOrDefault());
+    }
+
+    /// <summary>
+    /// The mesh and baked ground texture of one terrain component; its layer weights (and, without a <paramref name="cache"/>,
+    /// the layer textures it is the first to use, shared through <paramref name="layerTextures"/>) go into <paramref name="owned"/>.
+    /// </summary>
+    internal static (MeshHandle Handle, GpuTexture? Texture) CreateTerrain(SceneRenderer renderer, PreparedTerrain terrain, PreparedLevelScene prepared, GpuMeshCache? cache,
+        Dictionary<string, GpuTexture> layerTextures, List<GpuTexture> owned)
+    {
+        var texture = terrain.Albedo is { } albedo ? CreateTerrainTexture(renderer, albedo) : null;
+        var mesh = renderer.AddMesh(terrain.Mesh, MeshSpace.Unreal, 1f, texture);
+        if (texture is not null && TerrainDetailFor(renderer, terrain, prepared, cache, layerTextures, owned) is { } detail)
+        {
+            renderer.SetMeshTerrainDetail(mesh, detail);
+        }
+
+        return (mesh, texture);
+    }
+
 
     /// <summary>
     /// Uploads every LOD of <paramref name="asset"/>; each material section draws with its material's texture from
     /// <paramref name="gpuTextures"/> (by the paths in <see cref="PreparedMeshAsset.MaterialTextures"/>), sections
     /// without one with the asset's <see cref="PreparedMeshAsset.TexturePath"/>.
     /// </summary>
-    public static MeshHandle AddMesh(SceneRenderer renderer, PreparedMeshAsset asset, IReadOnlyDictionary<string, GpuTexture> gpuTextures)
+    public static MeshHandle AddMesh(SceneRenderer renderer, PreparedMeshAsset asset, IReadOnlyDictionary<string, GpuTexture> gpuTextures, PreparedMesh? packed = null)
     {
         ArgumentNullException.ThrowIfNull(renderer);
         ArgumentNullException.ThrowIfNull(asset);
@@ -914,8 +1342,15 @@ public static class LevelSceneUploader
             }
         }
 
-        var prepared = PreparedMesh.FromLods(asset.Lods, asset.LodScreenSizes.ToArray(), MeshSpace.Unreal, 1f);
-        return renderer.AddMesh(prepared, texture, materialTextures, asset.MaterialAlphaCutoffs, asset.MaterialTints);
+        var prepared = packed ?? Pack(asset);
+        return renderer.AddMesh(prepared, texture, materialTextures, asset.MaterialAlphaCutoffs, asset.MaterialTints, asset.Shimmer, asset.Billboard);
+    }
+
+    /// <summary>The vertex and index data of every LOD of <paramref name="asset"/> as <see cref="AddMesh"/> sends it (CPU only: safe on a worker thread).</summary>
+    public static PreparedMesh Pack(PreparedMeshAsset asset)
+    {
+        ArgumentNullException.ThrowIfNull(asset);
+        return PreparedMesh.FromLods(asset.Lods, asset.LodScreenSizes.ToArray(), MeshSpace.Unreal, 1f);
     }
 
     // Average linear colour of each layer texture (computed once per decoded image).

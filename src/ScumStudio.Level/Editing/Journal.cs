@@ -186,6 +186,9 @@ public sealed class Journal : IDisposable
     /// <summary>Problems repaired while opening (e.g. a torn last line).</summary>
     public IReadOnlyList<string> Warnings => _warnings;
 
+    /// <summary>Adds a problem found while replaying the edits (see <see cref="Warnings"/>).</summary>
+    internal void AddWarning(string warning) => _warnings.Add(warning);
+
     /// <summary>Opens (or creates, with a header line) the journal at <paramref name="filePath"/>.</summary>
     /// <exception cref="InvalidDataException">A line is unreadable or the undo/redo records are inconsistent.</exception>
     public static Journal Open(string filePath, TimeProvider? clock = null)

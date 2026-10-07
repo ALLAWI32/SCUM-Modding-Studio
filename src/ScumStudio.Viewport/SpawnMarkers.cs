@@ -85,8 +85,10 @@ public enum SpawnKind
 /// pick and move as parts of it (<see cref="IsSpawnPart"/>); the points of a stored point array (a sentry's patrol path, a
 /// spawner group's loot points, <see cref="SpawnPointArrays"/>) pick, move, copy and delete on their own. The markers are
 /// generated meshes (<see cref="MeshKey"/>), so the scene pipeline draws, culls and picks them like the game's meshes.
+/// Where the object that spawns is known (<see cref="SpawnModels"/>: a vehicle, a zombie, a sentry, a trader's NPC, a loot
+/// preset's item) the pin is that object's mesh, half transparent (<see cref="StandIn"/>); it picks and moves like the pin.
 /// </summary>
-public static class SpawnMarkers
+public static partial class SpawnMarkers
 {
     /// <summary>Prefix of the marker mesh keys.</summary>
     public const string Prefix = "#spawn/";
@@ -137,8 +139,26 @@ public static class SpawnMarkers
         _ => new(0.2f, 1f, 0.35f, 1f),
     };
 
-    /// <summary>The marker mesh key of <paramref name="kind"/>.</summary>
-    public static string MeshKey(SpawnKind kind) => Prefix + kind;
+    /// <summary>Separates the kind from the model in a stand-in key (<c>#spawn/Zombie@/Game/.../SK_Zombie.SK_Zombie</c>, <c>#spawn/VehiclePlace@/Game/.../BPC_Rager</c>).</summary>
+    public const char ModelSeparator = '@';
+
+    /// <summary>Share of the kind's colour tinted into a model stand-in (a vehicle still looks like a vehicle, with a blue cast).</summary>
+    public const float ModelTintShare = 0.25f;
+
+    /// <summary>
+    /// The marker mesh key of <paramref name="kind"/>: the generated pin or shape, or with <paramref name="model"/> (a mesh
+    /// object path or a vehicle Blueprint package, see <see cref="SpawnModels"/>) that model drawn as a translucent stand-in
+    /// (<see cref="StandIn"/>).
+    /// </summary>
+    public static string MeshKey(SpawnKind kind, string? model = null) => model is null ? Prefix + kind : Prefix + kind + ModelSeparator + model;
+
+    /// <summary>The model of a stand-in key (<see cref="MeshKey"/>), or null for a plain marker or any other mesh.</summary>
+    public static string? ModelOf(string meshPath)
+    {
+        ArgumentNullException.ThrowIfNull(meshPath);
+        var at = IsMarker(meshPath) ? meshPath.IndexOf(ModelSeparator, Prefix.Length) : -1;
+        return at > 0 && at + 1 < meshPath.Length ? meshPath[(at + 1)..] : null;
+    }
 
     /// <summary>True for a marker mesh key.</summary>
     public static bool IsMarker(string meshPath) => meshPath.StartsWith(Prefix, StringComparison.Ordinal);
@@ -225,12 +245,14 @@ public static class SpawnMarkers
     /// <summary>
     /// Every pin of <paramref name="actor"/>: (kind, where, whether it picks as the actor, label, for a building's loot
     /// point its spawner component and marker index, for a spawn part (<see cref="IsSpawnPart"/>) its component, and for a
-    /// point of a stored point array (<see cref="SpawnPointArrays"/>) the array's key and the point's index). Loot points
-    /// come from the item spawners' markers (a building's pick as themselves; a stored array's pick as points of their own), a
-    /// sentry spawner adds its patrol points (points of their own when stored), a car shop its vehicle boxes (the box's real
-    /// size), the other spawners stand at the actor.
+    /// point of a stored point array (<see cref="SpawnPointArrays"/>) the array's key and the point's index, and the model
+    /// that stands there, <see cref="SpawnModels"/>, or null for the plain shape). Loot points come from the item spawners'
+    /// markers (a building's pick as themselves; a stored array's pick as points of their own), a sentry spawner adds its
+    /// patrol points (points of their own when stored), a car shop its vehicle boxes (the box's real size, or the vehicle on
+    /// its floor), the other spawners stand at the actor. With <paramref name="models"/> a pin whose object is known is that
+    /// object, unscaled and turned like the place (<see cref="ModelAt"/>); without, every pin is its generated shape.
     /// </summary>
-    public static IEnumerable<(SpawnKind Kind, FTransform Pin, bool PicksActor, string Label, (string Component, int Index)? Marker, ComponentRecord? Part, (string Key, int Index)? Point)> PinsOf(ActorRecord actor)
+    public static IEnumerable<(SpawnKind Kind, FTransform Pin, bool PicksActor, string Label, (string Component, int Index)? Marker, ComponentRecord? Part, (string Key, int Index)? Point, string? Model)> PinsOf(ActorRecord actor, SpawnModels? models = null)
     {
         ArgumentNullException.ThrowIfNull(actor);
         var lootSpawner = IsLootSpawner(actor);
@@ -244,9 +266,10 @@ public static class SpawnMarkers
             {
                 var m = component.SpawnMarkers[i];
                 points++;
-                yield return (SpawnKind.Loot, PinAt(m.Local * component.WorldTransform, SpawnKind.Loot, inside: !lootSpawner), lootSpawner && !editable,
+                var (lootPin, lootModel) = At(SpawnKind.Loot, m.Local * component.WorldTransform, inside: !lootSpawner, marker: m);
+                yield return (SpawnKind.Loot, lootPin, lootSpawner && !editable,
                     $"{actor.Name}/{component.Name} [{i}] {m.Preset} {m.Probability:0.#}% x{m.MinQuantity}-{m.MaxQuantity}",
-                    lootSpawner || part is not null || editable ? null : (component.Name, i), part, editable ? (component.Name, i) : null);
+                    lootSpawner || part is not null || editable ? null : (component.Name, i), part, editable ? (component.Name, i) : null, lootModel);
             }
 
             if (component.ClassName == "VehicleSpawnBoxComponent")
@@ -254,49 +277,71 @@ public static class SpawnMarkers
                 // The box at its real size (the extent is a half size, the box mesh a metre): what the shop puts a car into.
                 var w = component.WorldTransform;
                 var extent = component.BoxExtent ?? new FVector(32f, 32f, 32f);
-                yield return (SpawnKind.Vehicle, new FTransform(w.Rotation, w.Translation, w.Scale3D * extent * (2f / BoxSize)), false, $"{actor.Name}/{component.Name}", null, part, null);
+                var box = new FTransform(w.Rotation, w.Translation, w.Scale3D * extent * (2f / BoxSize));
+                var vehicle = models?.ModelOf(SpawnKind.Vehicle, actor);
+                yield return (SpawnKind.Vehicle, vehicle is null ? box : ModelAt(SpawnKind.Vehicle, box), false, $"{actor.Name}/{component.Name}", null, part, null, vehicle);
             }
         }
 
         // A trade post's traders stand where its NPCs do; the pins pick the trade post (move, copy, delete it whole).
         foreach (var trader in actor.TraderMarkers)
         {
-            yield return (SpawnKind.Trader, PinAt(trader.Local * actor.WorldTransform, SpawnKind.Trader), true, $"{trader.Name} ({trader.Type})", null, null, null);
+            var (traderPin, npc) = At(SpawnKind.Trader, trader.Local * actor.WorldTransform, trader: trader);
+            yield return (SpawnKind.Trader, traderPin, true, TraderLabel(trader), null, null, null, npc);
         }
 
         if (lootSpawner && points == 0)
         {
-            yield return (SpawnKind.Loot, PinAt(actor.WorldTransform, SpawnKind.Loot), true, actor.Name, null, null, null);
+            yield return (SpawnKind.Loot, PinAt(actor.WorldTransform, SpawnKind.Loot), true, actor.Name, null, null, null, null);
         }
 
         if (IsPinOnly(actor, out var effect))
         {
-            yield return (effect ? SpawnKind.Effect : SpawnKind.Marker, PinAt(actor.WorldTransform, effect ? SpawnKind.Effect : SpawnKind.Marker), true, actor.Name, null, null, null);
+            yield return (effect ? SpawnKind.Effect : SpawnKind.Marker, PinAt(actor.WorldTransform, effect ? SpawnKind.Effect : SpawnKind.Marker), true, actor.Name, null, null, null, null);
         }
 
         if (KindOf(actor) is { } kind)
         {
-            yield return (kind, PinAt(actor.WorldTransform, kind), true, actor.Name, null, null, null);
+            var (pin, model) = At(kind, actor.WorldTransform);
+            yield return (kind, pin, true, actor.Name, null, null, null, model);
             if (kind is SpawnKind.Zone or SpawnKind.Animal)
             {
                 // The zone's ellipse (the root's scale is its size in metres) or the area's circle, flat around the centre.
                 var t = actor.WorldTransform;
                 var yaw = FQuat.MakeFromEuler(new FVector(0f, 0f, t.Rotation.Rotator().Yaw));
-                yield return (kind == SpawnKind.Zone ? SpawnKind.ZoneRing : SpawnKind.AnimalRing, new FTransform(yaw, t.Translation, new FVector(t.Scale3D.X, t.Scale3D.Y, 1f)), true, actor.Name, null, null, null);
+                yield return (kind == SpawnKind.Zone ? SpawnKind.ZoneRing : SpawnKind.AnimalRing, new FTransform(yaw, t.Translation, new FVector(t.Scale3D.X, t.Scale3D.Y, 1f)), true, actor.Name, null, null, null, null);
             }
 
             var patrol = stored.Contains(null);
             for (var i = 0; i < actor.PatrolPoints.Count; i++)
             {
                 var at = new FTransform(actor.WorldTransform.TransformPosition(actor.PatrolPoints[i]));
-                yield return (SpawnKind.Patrol, PinAt(at, SpawnKind.Patrol, inside: true), !patrol, $"{actor.Name} patrol {i + 1}", null, null, patrol ? (SpawnPointArrays.PatrolPoints, i) : null);
+                var (patrolPin, sentry) = At(SpawnKind.Patrol, at, inside: true);
+                yield return (SpawnKind.Patrol, patrolPin, !patrol, $"{actor.Name} patrol {i + 1}", null, null, patrol ? (SpawnPointArrays.PatrolPoints, i) : null, sentry);
             }
+        }
+
+        // The pin's shape at the place, or the model that stands there (unscaled, its foot on the place).
+        (FTransform Pin, string? Model) At(SpawnKind kind, FTransform world, bool inside = false, SpawnMarker? marker = null, TraderMarker? trader = null)
+        {
+            var pin = PinAt(world, kind, inside);
+            var model = models?.ModelOf(kind, actor, marker, trader);
+            return (model is null ? pin : ModelAt(kind, pin), model);
         }
     }
 
-    /// <summary>The kind a marker mesh key draws (<see cref="MeshKey"/>), or null for any other mesh.</summary>
-    public static SpawnKind? KindOfMesh(string meshPath) =>
-        IsMarker(meshPath) && Enum.TryParse<SpawnKind>(meshPath[Prefix.Length..], out var kind) ? kind : null;
+    /// <summary>The kind a marker mesh key draws (<see cref="MeshKey"/>, plain or with a model), or null for any other mesh.</summary>
+    public static SpawnKind? KindOfMesh(string meshPath)
+    {
+        ArgumentNullException.ThrowIfNull(meshPath);
+        if (!IsMarker(meshPath))
+        {
+            return null;
+        }
+
+        var at = meshPath.IndexOf(ModelSeparator, Prefix.Length);
+        return Enum.TryParse<SpawnKind>(at < 0 ? meshPath[Prefix.Length..] : meshPath[Prefix.Length..at], out var kind) ? kind : null;
+    }
 
     /// <summary>
     /// What a spawn actor is, for the properties panel: a text key and its arguments (<c>Spawn.Loot</c>: loot points and
@@ -346,27 +391,76 @@ public static class SpawnMarkers
     }
 
     /// <summary>
-    /// Where a marker stands for a spawn at <paramref name="world"/>: a capsule or crate upright and unscaled (the loot
-    /// crates inside buildings, <paramref name="inside"/>, smaller so a house full of them stays readable), a car-sized box
-    /// standing on the place and turned like it, a pin upright and unscaled (drop zones larger).
+    /// Where a marker stands for a spawn at <paramref name="world"/>: a capsule or crate upright and unscaled, turned the
+    /// place's way (its yaw; the loot crates inside buildings, <paramref name="inside"/>, smaller so a house full of them
+    /// stays readable), a car-sized box standing on the place and turned like it, a pin upright and unscaled (drop zones larger).
     /// </summary>
     public static FTransform PinAt(FTransform world, SpawnKind kind, bool inside = false)
     {
         switch (ShapeOf(kind))
         {
             case SpawnShape.Capsule:
-                return new(FQuat.Identity, world.Translation, FVector.One);
+                return new(Yaw(world), world.Translation, FVector.One);
             case SpawnShape.Crate:
-                return new(FQuat.Identity, world.Translation, new FVector(inside ? 0.7f : 1f));
+                return new(Yaw(world), world.Translation, new FVector(inside ? 0.7f : 1f));
             case SpawnShape.Box:
                 return new(world.Rotation, world.Translation + world.Rotation.RotateVector(new FVector(0f, 0f, CarSize.Z / 2f)), CarSize / BoxSize);
             default:
                 var size = kind == SpawnKind.PlayerDrop ? 4f : kind is SpawnKind.Zone or SpawnKind.Animal ? 3f : inside ? 0.7f : 1f;
                 return new(FQuat.Identity, world.Translation, new FVector(size, size, size));
         }
+
+        static FQuat Yaw(FTransform t) => FQuat.MakeFromEuler(new FVector(0f, 0f, t.Rotation.Rotator().Yaw));
     }
 
+    /// <summary>
+    /// Where a model stands for the pin <paramref name="pin"/> (<see cref="PinAt"/>): unscaled and turned like it, its foot
+    /// on the place; for a box (a car shop's vehicle box, a world vehicle spawn) on the box's floor.
+    /// </summary>
+    public static FTransform ModelAt(SpawnKind kind, FTransform pin) => ShapeOf(kind) == SpawnShape.Box
+        ? new(pin.Rotation, pin.Translation - pin.Rotation.RotateVector(new FVector(0f, 0f, pin.Scale3D.Z * BoxSize / 2f)), FVector.One)
+        : kind == SpawnKind.Trader
+            // The game turns a trader to face away from its marker's forward (the owner: the banker stood with his back to
+            // the counter in the studio and the right way in game), so the stand-in turns half round.
+            ? new(pin.Rotation * new FRotator(0f, 180f, 0f).Quaternion(), pin.Translation, FVector.One)
+            : new(pin.Rotation, pin.Translation, FVector.One);
+
     /// <summary>The NPC's Blueprint name from its class path (<c>BP_ArmsDealer_01</c>).</summary>
+    /// <summary>
+    /// The label a trader's card shows: "Trader", the type in words and the sector its game name starts with
+    /// (<c>B_4_Armory</c>/Armorer → "Trader Armorer B_4"; the bank, whose marker has no personality, "Trader Bank").
+    /// The game name itself stays in the details (the server's EconomyOverride.json lists traders by it).
+    /// </summary>
+    public static string TraderLabel(TraderMarker trader)
+    {
+        ArgumentNullException.ThrowIfNull(trader);
+        var type = trader.Type.Length > 0 ? TypeWords(trader.Type) : "Bank";
+        var sector = SectorPrefix().Match(trader.Name);
+        return sector.Success ? $"Trader {type} {sector.Groups[1].Value}" : $"Trader {type}";
+    }
+
+    /// <summary>"GeneralGoods" → "General goods", "MasterHunter" → "Master hunter".</summary>
+    private static string TypeWords(string type)
+    {
+        var words = new System.Text.StringBuilder(type.Length + 4);
+        for (var i = 0; i < type.Length; i++)
+        {
+            if (i > 0 && char.IsUpper(type[i]) && !char.IsUpper(type[i - 1]))
+            {
+                words.Append(' ').Append(char.ToLowerInvariant(type[i]));
+            }
+            else
+            {
+                words.Append(type[i]);
+            }
+        }
+
+        return words.ToString();
+    }
+
+    [System.Text.RegularExpressions.GeneratedRegex(@"^([A-Z]_\d+)_")]
+    private static partial System.Text.RegularExpressions.Regex SectorPrefix();
+
     public static string NpcName(string npcClass)
     {
         var name = npcClass[(npcClass.LastIndexOf('.') + 1)..];
@@ -395,12 +489,91 @@ public static class SpawnMarkers
         {
             MaterialSlots = [key],
             MaterialTints = new Dictionary<string, Vector4>(StringComparer.OrdinalIgnoreCase) { [key] = tint },
+            Shimmer = true,
         };
     }
 
-    /// <summary>The asset for a marker mesh key, or null when it is none.</summary>
-    public static PreparedMeshAsset? AssetFor(string meshPath) =>
-        IsMarker(meshPath) && Enum.TryParse<SpawnKind>(meshPath[Prefix.Length..], out var kind) ? Asset(kind) : null;
+    /// <summary>Prefix of a stand-in model that is an icon texture, not a mesh (<c>icon:/Game/.../ICO_X.ICO_X</c>): a loot point whose item has no mesh.</summary>
+    public const string IconPrefix = "icon:";
+
+    /// <summary>Height of an icon card (cm): the loot crate's size.</summary>
+    public const float IconSize = CrateSize;
+
+    /// <summary>
+    /// The inventory icon of a loot point's item as a stand-in under <paramref name="key"/>: a card <see cref="IconSize"/>
+    /// tall (wide by the icon's aspect) standing on the place, drawn facing the camera (<see cref="PreparedMeshAsset.Billboard"/>)
+    /// with the icon texture's transparent background cut out; <see cref="StandIn"/> tints it like any stand-in.
+    /// </summary>
+    public static PreparedMeshAsset IconAsset(string key, string texturePath, int width, int height)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(key);
+        ArgumentException.ThrowIfNullOrEmpty(texturePath);
+        var w = IconSize * (width > 0 && height > 0 ? (float)width / height : 1f);
+        var h = IconSize;
+        // Mesh x spans the camera's right, mesh z (GL up) the camera's up; texture origin top-left, V down.
+        float[] positions = [-w / 2f, 0f, h, w / 2f, 0f, h, w / 2f, 0f, 0f, -w / 2f, 0f, 0f];
+        float[] normals = [0f, -1f, 0f, 0f, -1f, 0f, 0f, -1f, 0f, 0f, -1f, 0f];
+        float[] uvs = [0f, 0f, 1f, 0f, 1f, 1f, 0f, 1f];
+        var mesh = MeshData.Create("SpawnIcon", positions, [0u, 1u, 2u, 0u, 2u, 3u], normals, uvs, [new MeshSection(key, 0, 6)]);
+        return new PreparedMeshAsset(key, mesh, texturePath)
+        {
+            MaterialSlots = [key],
+            MaterialTextures = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { [key] = texturePath },
+            MaterialAlphaCutoffs = new Dictionary<string, float>(StringComparer.OrdinalIgnoreCase) { [key] = 0.5f },
+            Shimmer = true,
+            Billboard = true,
+        };
+    }
+
+    /// <summary>
+    /// The generated asset for a marker mesh key, or null when it is none. For a stand-in key with a model this is the
+    /// kind's plain shape under that key: what is drawn when the model cannot be loaded (<see cref="LevelScenePreparer"/>
+    /// loads the model); it keeps the requested key so the viewport finds it by the placement's path.
+    /// </summary>
+    public static PreparedMeshAsset? AssetFor(string meshPath) => KindOfMesh(meshPath) is { } kind ? Asset(kind) with { MeshPath = meshPath } : null;
+
+    /// <summary>
+    /// <paramref name="model"/> as the stand-in <paramref name="key"/> for a spawn of <paramref name="kind"/>: every LOD
+    /// lifted so its lowest point is at the place (foot on the ground), every material half transparent
+    /// (<see cref="StandInAlpha"/>) with a quarter of the kind's colour tinted in (<see cref="ModelTintShare"/>; textured
+    /// materials keep their texture under the tint), shimmering (<see cref="PreparedMeshAsset.Shimmer"/>).
+    /// </summary>
+    public static PreparedMeshAsset StandIn(PreparedMeshAsset model, SpawnKind kind, string key)
+    {
+        ArgumentNullException.ThrowIfNull(model);
+        ArgumentException.ThrowIfNullOrEmpty(key);
+        var lift = model.Mesh.Bounds.IsEmpty ? 0f : -model.Mesh.Bounds.Min.Z;
+        var lods = model.Lods.Select(lod => Lift(lod, lift)).ToList();
+        var colour = Color(kind);
+        var tints = new Dictionary<string, Vector4>(StringComparer.OrdinalIgnoreCase);
+        foreach (var material in lods.SelectMany(l => l.Sections).Select(s => s.MaterialName).Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            var own = model.MaterialTints.TryGetValue(material, out var t) ? t : Vector4.One;
+            // Hair, beard and eyelash cards draw a white coverage mask coloured only by their tint: the kind's colour would
+            // turn them teal, so they keep their own dark tint (the rest of the figure carries the kind's hint).
+            var groom = model.MaterialTextures.TryGetValue(material, out var texture) && texture.EndsWith("#mask", StringComparison.Ordinal);
+            tints[material] = (groom ? own : Vector4.Lerp(own, colour, ModelTintShare)) with { W = StandInAlpha };
+        }
+
+        return model with { MeshPath = key, Mesh = lods[0], Lods = lods, MaterialTints = tints, IsEditorOnly = false, Shimmer = true };
+    }
+
+    private static MeshData Lift(MeshData mesh, float lift)
+    {
+        if (lift == 0f)
+        {
+            return mesh;
+        }
+
+        var positions = (float[])mesh.Positions.Clone();
+        for (var i = 2; i < positions.Length; i += 3)
+        {
+            positions[i] += lift;
+        }
+
+        var up = new Vector3(0f, 0f, lift);
+        return mesh with { Positions = positions, Bounds = new BoundingBox(mesh.Bounds.Min + up, mesh.Bounds.Max + up) };
+    }
 
     // An upright band around the centre, radius 1 m (scaled to the zone's size), from 1 m below to 3 m above it so it
     // shows over hills and hollows; both sides drawn.

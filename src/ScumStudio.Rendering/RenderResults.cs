@@ -17,3 +17,11 @@ public sealed record RenderStats(int Batches, int Instances, int Culled, long Tr
 /// <param name="Depth">Window-space depth of the hit pixel ([0, 1]).</param>
 /// <param name="WorldPosition">Reconstructed world position of the hit surface point.</param>
 public sealed record PickResult(int MeshId, uint InstanceId, SceneNode Node, float Depth, Vector3 WorldPosition);
+
+/// <summary>A rebuild of a scene's batches (see <see cref="SceneRenderer.LastRebuild"/>).</summary>
+/// <param name="Partial">True when only the batches of the meshes a change touched were rebuilt.</param>
+/// <param name="Batches">Batches whose instances were sent to the GPU.</param>
+/// <param name="Instances">Instance records sent.</param>
+/// <param name="BuildMs">Milliseconds spent building the batches.</param>
+/// <param name="UploadMs">Milliseconds spent sending them.</param>
+public sealed record BatchRebuild(bool Partial, int Batches, int Instances, double BuildMs, double UploadMs);

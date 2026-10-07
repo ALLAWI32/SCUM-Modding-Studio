@@ -6,7 +6,7 @@ namespace ScumStudio.Level.World;
 
 /// <summary>
 /// Classifies the packages of <c>SCUM/Content/ConZ_Files/Maps/The_Island/**</c> from their names and folders alone
-/// (no package is opened). Naming rules from the pak index survey:
+/// (no package is opened). Naming rules from the pak index survey (see <c>docs/PLAN.md</c>, key facts):
 /// <list type="bullet">
 /// <item><description><c>&lt;Cell&gt;_&lt;Row&gt;_&lt;Name&gt;...</c> POI/grid sublevels, cells <c>A-D, Z</c> x rows <c>0-4</c>;</description></item>
 /// <item><description><c>Landscape_&lt;Cell&gt;_&lt;Row&gt;_&lt;Quadrant 1-4&gt;[b|c|d]</c> landscape tiles;</description></item>

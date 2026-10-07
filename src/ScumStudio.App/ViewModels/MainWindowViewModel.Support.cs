@@ -43,7 +43,6 @@ public sealed partial class MainWindowViewModel
     [
         (ReportCategory.Bug, "Support.Report.Bug"),
         (ReportCategory.Idea, "Support.Report.Idea"),
-        (ReportCategory.Question, "Support.Report.Question"),
     ];
 
     /// <summary>The Support card is open.</summary>

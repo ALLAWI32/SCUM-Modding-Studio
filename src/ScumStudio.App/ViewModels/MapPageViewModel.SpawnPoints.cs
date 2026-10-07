@@ -155,8 +155,8 @@ public sealed partial class MapPageViewModel
                 continue;
             }
 
-            var document = scene.Documents.ToList().IndexOf(item.Level);
-            if (document < 0)
+            var index = scene.Documents.ToList().IndexOf(item.Level);
+            if (index < 0)
             {
                 continue;
             }
@@ -167,7 +167,7 @@ public sealed partial class MapPageViewModel
                 actor = SpawnPointArrays.WithPoints(actor, component, points);
             }
 
-            pins[item.SelectableId] = LevelScenePreparer.PinPlacements(actor, item.SelectableId, document).Where(p => p.SpawnPoint is not null).ToList();
+            pins[item.SelectableId] = LevelScenePreparer.PinPlacements(actor, item.SelectableId, scene.SlotOf(index), models: _prepareCache.SpawnModels).Where(p => p.SpawnPoint is not null).ToList();
         }
 
         return pins;

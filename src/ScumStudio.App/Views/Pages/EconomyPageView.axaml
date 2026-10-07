@@ -1,0 +1,309 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:ScumStudio.App.ViewModels"
+             xmlns:c="using:ScumStudio.App.Controls"
+             x:Class="ScumStudio.App.Views.Pages.EconomyPageView"
+             x:DataType="vm:EconomyPageViewModel">
+  <UserControl.Styles>
+    <!-- Stock rows: a picture tile, a coloured mark on the left edge (blaze = changed, olive = added), dimmed when off sale. -->
+    <Style Selector="Border.itemRow">
+      <Setter Property="Padding" Value="6,4,10,4" />
+      <Setter Property="CornerRadius" Value="{DynamicResource SmallCornerRadius}" />
+    </Style>
+    <Style Selector="Border.itemRow:pointerover">
+      <Setter Property="Background" Value="{DynamicResource Surface2Brush}" />
+    </Style>
+    <Style Selector="Border.itemRow.changed">
+      <Setter Property="Background" Value="{DynamicResource AccentSoftBrush}" />
+    </Style>
+    <Style Selector="Border.itemRow.off">
+      <Setter Property="Opacity" Value="0.55" />
+    </Style>
+    <Style Selector="Border.itemRow.off TextBlock.itemName">
+      <Setter Property="TextDecorations" Value="Strikethrough" />
+    </Style>
+    <Style Selector="Border.mark">
+      <Setter Property="Width" Value="3" />
+      <Setter Property="CornerRadius" Value="{DynamicResource SmallCornerRadius}" />
+      <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector="Border.itemRow.changed Border.mark">
+      <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
+    </Style>
+    <Style Selector="Border.itemRow.added Border.mark">
+      <Setter Property="Background" Value="{DynamicResource SuccessBrush}" />
+    </Style>
+    <Style Selector="Border.thumb">
+      <Setter Property="Width" Value="42" />
+      <Setter Property="Height" Value="42" />
+      <Setter Property="CornerRadius" Value="{DynamicResource SmallCornerRadius}" />
+      <Setter Property="Background" Value="{DynamicResource Surface2Brush}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource StrokeSubtleBrush}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="ClipToBounds" Value="True" />
+    </Style>
+    <Style Selector="Border.thumb c|GlyphIcon">
+      <Setter Property="Foreground" Value="{DynamicResource TextMutedBrush}" />
+    </Style>
+    <!-- Trader cards: the type glyph in a tile (blaze for the project's own traders) and the map cell. -->
+    <Style Selector="Border.typeTile">
+      <Setter Property="Width" Value="36" />
+      <Setter Property="Height" Value="36" />
+      <Setter Property="CornerRadius" Value="{DynamicResource SmallCornerRadius}" />
+      <Setter Property="Background" Value="{DynamicResource Surface2Brush}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource StrokeBrush}" />
+      <Setter Property="BorderThickness" Value="1" />
+    </Style>
+    <Style Selector="Border.typeTile.placed">
+      <Setter Property="Background" Value="{DynamicResource AccentSoftBrush}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+    </Style>
+    <Style Selector="Border.typeTile.hero">
+      <Setter Property="Width" Value="54" />
+      <Setter Property="Height" Value="54" />
+    </Style>
+    <Style Selector="Border.typeTile c|GlyphIcon">
+      <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+    </Style>
+    <Style Selector="Border.typeTile.placed c|GlyphIcon">
+      <Setter Property="Foreground" Value="{DynamicResource AccentStrongBrush}" />
+    </Style>
+    <Style Selector="TextBox.price">
+      <Setter Property="FontFamily" Value="{DynamicResource MonoFontFamily}" />
+      <Setter Property="FontSize" Value="12" />
+      <Setter Property="Padding" Value="6,3" />
+      <Setter Property="MinHeight" Value="0" />
+      <Setter Property="HorizontalContentAlignment" Value="Right" />
+    </Style>
+  </UserControl.Styles>
+
+  <DockPanel>
+
+    <!-- ===== Header ===== -->
+    <Border DockPanel.Dock="Top" Classes="pageHeader">
+      <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="14">
+        <Border Grid.Column="0" Classes="pageGlyph"><c:GlyphIcon Kind="{Binding IconKey}" IconSize="22" /></Border>
+        <StackPanel Grid.Column="1" Spacing="2" VerticalAlignment="Center">
+          <TextBlock Text="{Binding Title}" Classes="pageTitle" />
+          <TextBlock Text="{Binding Subtitle}" Classes="muted" TextTrimming="CharacterEllipsis" />
+        </StackPanel>
+        <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+          <TextBlock Text="{Tr Economy.NoProject}" Classes="caption" VerticalAlignment="Center" IsVisible="{Binding !HasProject}" />
+          <Button x:Name="EconomyExportButton" Classes="accent" Command="{Binding ExportCommand}" ToolTip.Tip="{Tr Economy.Export.Tip}">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <c:GlyphIcon Kind="Icon.Export" IconSize="14" />
+              <TextBlock Text="{Tr Economy.Export}" />
+            </StackPanel>
+          </Button>
+        </StackPanel>
+      </Grid>
+    </Border>
+
+    <!-- ===== Body ===== -->
+    <Panel Margin="24,0,24,20">
+
+      <!-- No game files yet (the traders and their stock come from them). -->
+      <Border Classes="emptyState" IsVisible="{Binding !HasCatalog}">
+        <StackPanel Spacing="12">
+          <Border Classes="iconTile" HorizontalAlignment="Center">
+            <c:GlyphIcon Kind="Icon.Coins" IconSize="20" HorizontalAlignment="Center" VerticalAlignment="Center" />
+          </Border>
+          <TextBlock Text="{Tr Module.Empty}" Classes="h2" HorizontalAlignment="Center" />
+          <TextBlock Classes="muted wrap" TextAlignment="Center" MaxWidth="520" Text="{Tr Economy.Empty.Body}" />
+          <Button Classes="accent" HorizontalAlignment="Center" Content="{Tr Common.OpenSetup}" Command="{Binding OpenSetupCommand}" ToolTip.Tip="{Tr Common.OpenSetup.Tip}" />
+        </StackPanel>
+      </Border>
+
+      <Grid ColumnDefinitions="300,*" ColumnSpacing="12" IsVisible="{Binding HasCatalog}">
+        <!-- Traders: one card each, by map cell -->
+        <Border Grid.Column="0" Classes="panel">
+          <DockPanel>
+            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="8" Margin="12,10,12,4">
+              <TextBlock Text="{Tr Economy.Traders}" Classes="h3" VerticalAlignment="Center" />
+              <Border Classes="badge"><TextBlock Text="{Binding Traders.Count}" /></Border>
+            </StackPanel>
+            <ProgressBar DockPanel.Dock="Top" IsIndeterminate="True" IsVisible="{Binding IsLoading}" Margin="12,4" />
+            <ListBox x:Name="TraderList" Classes="plain" ItemsSource="{Binding Traders}" SelectedItem="{Binding SelectedTrader}" Margin="4">
+              <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="vm:EconomyTraderRow">
+                  <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10" Margin="2,3">
+                    <Border Grid.Column="0" Classes="typeTile" Classes.placed="{Binding IsPlaced}" VerticalAlignment="Center">
+                      <c:GlyphIcon Kind="{Binding IconKey}" IconSize="17" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <StackPanel Grid.Column="1" Spacing="1" VerticalAlignment="Center">
+                      <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                      <TextBlock Text="{Binding Caption}" Classes="caption" TextTrimming="CharacterEllipsis" />
+                      <TextBlock Text="{Binding ChangesText}" Classes="caption accent" TextTrimming="CharacterEllipsis" IsVisible="{Binding HasChanges}" />
+                    </StackPanel>
+                    <Border Grid.Column="2" Classes="chip" VerticalAlignment="Center">
+                      <TextBlock Text="{Binding Cell}" Classes="mono" />
+                    </Border>
+                  </Grid>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+          </DockPanel>
+        </Border>
+
+        <!-- The selected trader's stock -->
+        <Border Grid.Column="1" Classes="panel">
+          <DockPanel IsVisible="{Binding HasTrader}" Margin="14,12,14,8">
+            <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,*" ColumnSpacing="14" Margin="0,0,0,10">
+              <Border Grid.Column="0" Classes="typeTile hero" Classes.placed="{Binding IsPlacedTrader}">
+                <c:GlyphIcon Kind="{Binding TraderIconKey}" IconSize="26" HorizontalAlignment="Center" VerticalAlignment="Center" />
+              </Border>
+              <StackPanel Grid.Column="1" Spacing="4" VerticalAlignment="Center">
+                <WrapPanel Orientation="Horizontal" ItemSpacing="8" LineSpacing="4">
+                  <TextBlock x:Name="TraderTitleText" Text="{Binding TraderTitle}" Classes="h1" FontSize="20" VerticalAlignment="Center" />
+                  <Border Classes="chip" VerticalAlignment="Center"><TextBlock Text="{Binding TraderCell}" Classes="mono" /></Border>
+                  <Border Classes="chip" VerticalAlignment="Center"><TextBlock Text="{Binding TraderType}" /></Border>
+                  <Border Classes="badge accent" IsVisible="{Binding IsPlacedTrader}"><TextBlock Text="{Tr Economy.Badge.Ready}" /></Border>
+                </WrapPanel>
+                <TextBlock Text="{Binding TraderCaption}" Classes="muted" />
+              </StackPanel>
+            </Grid>
+
+            <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto" ColumnSpacing="8" Margin="0,0,0,8">
+              <WrapPanel Grid.Column="0" Orientation="Horizontal" ItemSpacing="6" LineSpacing="6">
+                <Panel Width="240">
+                  <TextBox x:Name="EconomySearch" Classes="search" Text="{Binding FilterText}" Watermark="{Tr Economy.Search}" ToolTip.Tip="{Tr Economy.Search.Tip}" />
+                  <c:GlyphIcon Kind="Icon.Search" IconSize="15" Margin="11,0,0,0" IsHitTestVisible="False"
+                               HorizontalAlignment="Left" VerticalAlignment="Center" Foreground="{DynamicResource TextMutedBrush}" />
+                </Panel>
+                <ComboBox x:Name="CategoryBox" ItemsSource="{Binding Categories}" SelectedItem="{Binding SelectedCategory}" MinWidth="170" ToolTip.Tip="{Tr Economy.Category.Tip}" />
+                <Button Classes="ghost" Content="{Tr Economy.PricesUp}" Command="{Binding ScalePricesCommand}" CommandParameter="1.1" ToolTip.Tip="{Tr Economy.PricesUp.Tip}" />
+                <Button Classes="ghost" Content="{Tr Economy.PricesDown}" Command="{Binding ScalePricesCommand}" CommandParameter="0.9" ToolTip.Tip="{Tr Economy.PricesDown.Tip}" />
+                <Button Classes="ghost" Content="{Tr Economy.OffSale}" Command="{Binding SetOnSaleCommand}" CommandParameter="false" ToolTip.Tip="{Tr Economy.OffSale.Tip}" />
+                <Button Classes="ghost" Content="{Tr Economy.OnSale}" Command="{Binding SetOnSaleCommand}" CommandParameter="true" ToolTip.Tip="{Tr Economy.OnSale.Tip}" />
+                <Button Classes="ghost" Content="{Tr Economy.ResetTrader}" Command="{Binding ResetTraderCommand}" ToolTip.Tip="{Tr Economy.ResetTrader.Tip}" />
+              </WrapPanel>
+              <Button Grid.Column="1" x:Name="AddItemsButton" Classes="accent" VerticalAlignment="Top" Command="{Binding ToggleAddCommand}" ToolTip.Tip="{Tr Economy.AddItems.Tip}">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                  <c:GlyphIcon Kind="Icon.Plus" IconSize="14" />
+                  <TextBlock Text="{Tr Economy.AddItems}" />
+                </StackPanel>
+              </Button>
+            </Grid>
+
+            <Panel>
+              <DockPanel>
+                <Grid DockPanel.Dock="Top" ColumnDefinitions="3,42,*,120,92,92,72,62,72,64" ColumnSpacing="8" Margin="6,0,10,4">
+                  <TextBlock Grid.Column="2" Text="{Tr Economy.Col.Item}" Classes="caption" />
+                  <TextBlock Grid.Column="3" Text="{Tr Economy.Col.Category}" Classes="caption" />
+                  <TextBlock Grid.Column="4" Text="{Tr Economy.Col.Price}" Classes="caption" HorizontalAlignment="Right" />
+                  <TextBlock Grid.Column="5" Text="{Tr Economy.Col.Sell}" Classes="caption" HorizontalAlignment="Right" />
+                  <TextBlock Grid.Column="6" Text="{Tr Economy.Col.Fame}" Classes="caption" HorizontalAlignment="Right" />
+                  <TextBlock Grid.Column="7" Text="{Tr Economy.Col.OnSale}" Classes="caption" HorizontalAlignment="Center" />
+                  <TextBlock Grid.Column="8" Text="{Tr Economy.Col.AfterSale}" Classes="caption" HorizontalAlignment="Center" />
+                </Grid>
+
+                <TextBlock DockPanel.Dock="Bottom" Classes="caption wrap" Text="{Tr Economy.Note}" Margin="2,6,0,0" />
+
+                <ListBox x:Name="EconomyItems" Classes="plain" ItemsSource="{Binding Items}">
+                  <ListBox.ItemTemplate>
+                    <DataTemplate x:DataType="vm:EconomyItemViewModel">
+                      <Border Classes="itemRow" Classes.changed="{Binding IsChanged}" Classes.added="{Binding IsAdded}" Classes.off="{Binding IsOffSale}">
+                        <Grid ColumnDefinitions="3,42,*,120,92,92,72,62,72,64" ColumnSpacing="8">
+                          <Border Grid.Column="0" Classes="mark" />
+                          <Border Grid.Column="1" Classes="thumb">
+                            <Panel>
+                              <c:GlyphIcon Kind="{Binding IconKey}" IconSize="16" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                           IsVisible="{Binding Thumbnail, Converter={x:Static ObjectConverters.IsNull}}" />
+                              <c:ThumbnailImage Source="{Binding Thumbnail}" Stretch="Uniform" Margin="2" />
+                            </Panel>
+                          </Border>
+                          <StackPanel Grid.Column="2" Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Classes="itemName" Text="{Binding Caption}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                            <DockPanel>
+                              <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" Spacing="4">
+                                <Border Classes="badge ok" Margin="0,0,2,0" IsVisible="{Binding IsAdded}"><TextBlock Text="{Tr Economy.Badge.Added}" /></Border>
+                                <Border Classes="badge" Margin="0,0,2,0" IsVisible="{Binding IsOffSale}"><TextBlock Text="{Tr Economy.Badge.OffSale}" /></Border>
+                                <Border Classes="badge warn" Margin="0,0,2,0" IsVisible="{Binding IsLocked}"><TextBlock Text="{Tr Economy.Badge.Locked}" /></Border>
+                              </StackPanel>
+                              <TextBlock Classes="caption" TextTrimming="CharacterEllipsis" VerticalAlignment="Center">
+                                <Run Text="{Binding Code}" />
+                                <Run Text=" · " />
+                                <Run Text="{Binding DefaultText}" />
+                              </TextBlock>
+                            </DockPanel>
+                          </StackPanel>
+                          <TextBlock Grid.Column="3" Text="{Binding Category}" Classes="caption" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                          <TextBox Grid.Column="4" x:Name="BuyBox" Classes="price" VerticalAlignment="Center" Text="{Binding PurchasePrice}" IsEnabled="{Binding !IsLocked}" ToolTip.Tip="{Tr Economy.Price.Tip}" />
+                          <TextBox Grid.Column="5" x:Name="SellBox" Classes="price" VerticalAlignment="Center" Text="{Binding SellPrice}" IsEnabled="{Binding !IsLocked}" ToolTip.Tip="{Tr Economy.Sell.Tip}" />
+                          <TextBox Grid.Column="6" x:Name="FameBox" Classes="price" VerticalAlignment="Center" Text="{Binding RequiredFame}" IsEnabled="{Binding !IsLocked}" ToolTip.Tip="{Tr Economy.Fame.Tip}" />
+                          <CheckBox Grid.Column="7" IsChecked="{Binding CanBePurchased}" IsEnabled="{Binding !IsLocked}" HorizontalAlignment="Center" VerticalAlignment="Center" ToolTip.Tip="{Tr Economy.OnSaleBox.Tip}" />
+                          <CheckBox Grid.Column="8" IsChecked="{Binding AfterSaleOnly}" IsEnabled="{Binding !IsLocked}" HorizontalAlignment="Center" VerticalAlignment="Center" ToolTip.Tip="{Tr Economy.AfterSaleBox.Tip}" />
+                          <StackPanel Grid.Column="9" Orientation="Horizontal" Spacing="2" HorizontalAlignment="Right" VerticalAlignment="Center">
+                            <Button Classes="ghost square" Command="{Binding ResetCommand}" IsVisible="{Binding IsChanged}" ToolTip.Tip="{Tr Economy.ResetItem.Tip}">
+                              <c:GlyphIcon Kind="Icon.Undo" IconSize="13" />
+                            </Button>
+                            <Button x:Name="RemoveItemButton" Classes="ghost square" Command="{Binding RemoveCommand}" IsVisible="{Binding CanRemove}" ToolTip.Tip="{Tr Economy.Remove.Tip}">
+                              <c:GlyphIcon Kind="Icon.Trash" IconSize="13" />
+                            </Button>
+                            <Button x:Name="PutBackButton" Classes="ghost square" Command="{Binding PutBackCommand}" IsVisible="{Binding CanPutBack}" ToolTip.Tip="{Tr Economy.PutBack.Tip}">
+                              <c:GlyphIcon Kind="Icon.Plus" IconSize="13" />
+                            </Button>
+                          </StackPanel>
+                        </Grid>
+                      </Border>
+                    </DataTemplate>
+                  </ListBox.ItemTemplate>
+                </ListBox>
+              </DockPanel>
+
+              <!-- Add items: a drawer over the list with any tradeable of the game, with its picture, ticked and added in one go -->
+              <Border x:Name="AddPanel" Classes="dialog" Width="390" Padding="14,12" HorizontalAlignment="Right" IsVisible="{Binding IsAddOpen}">
+                <DockPanel>
+                  <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                    <StackPanel Grid.Column="0" Spacing="2">
+                      <TextBlock Text="{Tr Economy.AddTitle}" Classes="h3" />
+                      <TextBlock Text="{Binding TraderTitle}" Classes="mono accent" />
+                    </StackPanel>
+                    <Button Grid.Column="1" Classes="ghost square" VerticalAlignment="Top" Command="{Binding ToggleAddCommand}" ToolTip.Tip="{Tr Economy.AddClose.Tip}">
+                      <c:GlyphIcon Kind="Icon.Close" IconSize="13" />
+                    </Button>
+                  </Grid>
+                  <Panel DockPanel.Dock="Top" Margin="0,10,0,8">
+                    <TextBox x:Name="AddSearch" Classes="search" Text="{Binding AddFilterText}" Watermark="{Tr Economy.AddSearch}" ToolTip.Tip="{Tr Economy.AddSearch.Tip}" />
+                    <c:GlyphIcon Kind="Icon.Search" IconSize="15" Margin="11,0,0,0" IsHitTestVisible="False"
+                                 HorizontalAlignment="Left" VerticalAlignment="Center" Foreground="{DynamicResource TextMutedBrush}" />
+                  </Panel>
+                  <TextBlock DockPanel.Dock="Bottom" Classes="caption wrap" Text="{Tr Economy.AddNote}" Margin="0,8,0,0" />
+                  <Button DockPanel.Dock="Bottom" x:Name="AddCheckedButton" Classes="accent" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Margin="0,8,0,0"
+                          Command="{Binding AddCheckedCommand}" ToolTip.Tip="{Tr Economy.AddChecked.Tip}">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                      <c:GlyphIcon Kind="Icon.Plus" IconSize="14" />
+                      <TextBlock Text="{Tr Economy.AddChecked}" />
+                      <TextBlock Text="{Binding AddCheckedCount}" Classes="mono" VerticalAlignment="Center" />
+                    </StackPanel>
+                  </Button>
+                  <ListBox x:Name="AddList" Classes="plain" ItemsSource="{Binding AddItems}">
+                    <ListBox.ItemTemplate>
+                      <DataTemplate x:DataType="vm:EconomyPickItem">
+                        <Grid ColumnDefinitions="Auto,42,*,Auto" ColumnSpacing="8" Margin="0,2">
+                          <CheckBox Grid.Column="0" IsChecked="{Binding IsChecked}" VerticalAlignment="Center" ToolTip.Tip="{Tr Economy.AddPick.Tip}" />
+                          <Border Grid.Column="1" Classes="thumb">
+                            <Panel>
+                              <c:GlyphIcon Kind="{Binding IconKey}" IconSize="16" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                           IsVisible="{Binding Thumbnail, Converter={x:Static ObjectConverters.IsNull}}" />
+                              <c:ThumbnailImage Source="{Binding Thumbnail}" Stretch="Uniform" Margin="2" />
+                            </Panel>
+                          </Border>
+                          <StackPanel Grid.Column="2" Spacing="1" VerticalAlignment="Center">
+                            <TextBlock Text="{Binding Caption}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                            <TextBlock Text="{Binding Details}" Classes="caption" TextTrimming="CharacterEllipsis" />
+                          </StackPanel>
+                          <TextBlock Grid.Column="3" Text="{Binding PriceText}" Classes="mono" VerticalAlignment="Center" />
+                        </Grid>
+                      </DataTemplate>
+                    </ListBox.ItemTemplate>
+                  </ListBox>
+                </DockPanel>
+              </Border>
+            </Panel>
+          </DockPanel>
+        </Border>
+      </Grid>
+    </Panel>
+  </DockPanel>
+</UserControl>

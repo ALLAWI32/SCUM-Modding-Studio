@@ -3,6 +3,161 @@
 All notable changes are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [semantic versioning](https://semver.org/).
 
+## [0.2.8] - 2026-10-07
+
+### New in this release
+- **The economy follows the map**: a trader placed on the Map gets its section in the project's `EconomyOverride.json`
+  at once, listing its type's whole stock with the game's values (`-1` / `default`, as the game writes them), and a toast
+  says it is ready; deleting or undoing the trader removes the section again (undoing the delete in the same session
+  brings its edits back). The game's traders whose trade posts the project deleted (a whole outpost) leave the Economy
+  page and their sections are left out of the exported file (the export report lists them); undo brings them back.
+- **Stock editing with pictures** (Economy page): every row shows the trade menu's picture of the item (a drawing of its
+  mesh where the game has none), a mark when changed (blaze) or added (olive) and off-sale / locked badges. **Add items**
+  opens a drawer with every tradeable of the game (search by name, code or category, with pictures): tick several and
+  add them in one go with the game's price, sale price and fame, written in full with `can-be-purchased` `true`. The
+  remove button takes an added item away and puts one of the trader's own stock off sale. Trader cards show the type's
+  glyph and the map cell. The project's file is written atomically; the file found before the session's first write is
+  kept as `EconomyOverride.json.bak`.
+- **Trader names numbered per sector and type**: a new trader is `<cell>_<type>_<n>`, counting the game's traders of that
+  cell too and skipping taken names (B_4 has the game's hospital, so a placed doctor is `B_4_Hospital_2`; a farm's first
+  armory is `A_3_Armory_1`). A copy of a placed trader is numbered the same way in the cell it is pasted into.
+- **Brush paint mode** (Map › Brush › *Paint*): pick a palette of trees, bushes, rocks or any object (the selection's
+  family first, each with its picture; saved with the project), set the spacing (1–20 m, 3.5 m by default), random
+  size and random turn, then hold the left button and sweep: the objects are scattered at random inside the circle
+  along the stroke, never closer than the spacing to each other or to a tree, rock or building already there, each
+  standing on the ground or surface under it. A tree, bush or rock the landscape tile under the brush already has as
+  foliage becomes a new tree of that foliage (chopped and collided like the game's own), anything else a new object or
+  a copy of a placed Blueprint. The stroke shows as it goes; letting go is one History row ("Planted N objects").
+- **Place a trader anywhere** (Map › Add object › Trader): pick the type (armory, general goods, mechanic, doctor,
+  bartender, barber, harbourmaster, hunter, master hunter or bank), a name (default from the cell, e.g. `A_3_Armory_1`)
+  and an outpost (`Outpost_A_0`/`B_4`/`C_2`/`Z_3` joins that outpost, any other name makes a new one); it is a copy of
+  the game's own trade post of that type with its NPC, drawn where the camera aims, one undo step. The export gives the
+  trader a personality of its own (its name and a stable persistent id, registered in AssetRegistry.bin), sets its
+  outpost, lists it in the outpost manager's `_assignedTradePosts` (a new outpost gets a manager and a description of
+  its own in that level), gives its quest giver an id of its own and adds its section to EconomyOverride.json; the
+  export report says what the server needs. A copy of a placed trader gets a new name; delete removes it.
+- **Economy page**: every trader of the game and of the project with what it sells (the game's `Table_TradeableDesc`
+  and DLC tables): price, sale price, fame needed, on sale, after sale only; search, a category filter, +10 % / −10 %,
+  take a category off sale or put it back, reset a trader or a row. Changes are kept in the project as the server's
+  `EconomyOverride.json` (the schema the game writes itself) and written next to the paks by Export and Export mod
+  (Server and Client folders). "Edit stock" on a trader in the Map opens its section.
+- **Place a mechanic's lift** (Map › Add object › Lift): the game's car lift or bike lift, copied where the camera aims and
+  tied to a mechanic of a loaded level (a stock one or a Mechanic trader you placed); the export points its
+  `_assignedTradePost` at that mechanic's trade post, so the vehicle on it is repaired and upgraded through that mechanic.
+- Paste never fails silently: "Nothing to paste" when nothing was copied, and a warning when a copy from a level the
+  island streamed out could not be read or has nothing to draw (the copy is still in the project and exports).
+- The "Local axes" switch moved from the Map toolbar to Settings (the map follows it live).
+- Trader stand-ins now face the way the NPC faces in game (they stood turned half round), and their cards read
+  "Trader <type> <sector>" ("Trader Armorer B_4", "Trader Bank"); the game's own name stays in the details.
+- Deleting a child actor (a hangar door, a lamp a building spawns) also removes the component that spawned it; left alone
+  the game would spawn a fresh one from its class when the level loads.
+- Export removes an actor whole when every one of its instances was deleted (burning tyre stacks: fire, heat, smoke and sound go with the tyres).
+- **Spawn stand-ins show whole people and glint**: a trader's or NPC's Blueprint is composed from every mesh component it and its parent classes carry (body, head, hair and beard cards cut out by their coverage atlas, gear on their sockets) into one half-transparent figure standing on the ground, posed from frame 0 of its idle animation (CPU skinning); a loot point whose item has no mesh shows the item's inventory icon on a small camera-facing card instead of the crate; stand-ins pulse slowly in opacity (0.4..0.6 over 1.5 s).
+- **A real transform gizmo on the Map** (like the FiveM map editors, Unity and Unreal): three arrows with heads move
+  along an axis, the squares between them move in a plane, three rings drawn as a globe turn about X, Y or Z and the
+  yellow outer ring about the view, cubes at the arrow tips scale one axis and the centre cube all three; lines are
+  thick with a dark edge, the handle under the cursor turns yellow (hand cursor), the dragged one stays yellow while the
+  rest fade, and the live value ("+2.50 m", "35°", "x1.20") follows the cursor; Ctrl snaps moves, turns and scale steps.
+- **Spawn places show the object itself**: a world vehicle spawn and a car shop's box draw the first vehicle of their
+  group with its stock parts (doors, hood, wheels), a zombie point a zombie, a sentry and its patrol points the
+  sentry robot, a trader its NPC, a razor point the razor, a loot point the first item of its preset that has a mesh
+  (else the crate), each as a half-transparent 3D model standing on the place and turned its way; it picks, moves
+  and deletes exactly like the pin did. Pins stay for zones, loot zones, hunting areas, drop zones, effects and markers.
+- **Prefabs** (Map toolbar): save the selection (a whole building, any multi-selection) under a name in your own
+  library, place it again where the camera aims as copies laid out as saved (one undo step), export it as a plain
+  JSON `.ssprefab` file that lists the objects, meshes and positions, and import files others share (Map menu or
+  Settings › Prefabs). **History** rows get a right-click menu: *Go to* flies the camera to the object an edit touched
+  and selects it, *Select* only selects it.
+- **Replace** (Map toolbar), the Replacer: two cards side by side, the selection's 3D picture and name on the left and the replacement on the right; the right card drops down a searchable list of the same family only (roads, bridges, walls, fences, a building's family, the foliage's trees, bushes and rocks) with a 3D picture on every row, the current one marked. The pictures of the first rows are made in the background as the menu opens and kept in the thumbnail cache. The selected object or multi-selection is fitted to its place, length, height and curve; one Ctrl+Z undoes the whole selection. The Landscape menu's tree swap uses the same two cards instead of two drop-down boxes.
+
+### Fixes
+- **Rocks you place are solid in the game** (owner, B_4 outpost filled with rocks: "half my body is inside the rock",
+  "knocked out he falls under the rocks, shoots others and nobody can hit him"). Rocks and cliffs no longer bend: the
+  game's rock collision is the rock's own triangles, which a bent piece cannot have, and a bent cliff got 15 cm slabs of
+  boxes with no walls (players walked into it and fell through it). A rock bent with an older version is drawn and
+  exported straight, with a "collision check" line in the export. The export's collision check also names every
+  placed rock whose hollow underside stands above the ground (SCUM's rocks and cliffs are shells open underneath that
+  the game always sinks into the ground; lifted, players get inside, see and shoot out, and cannot be hit), and every
+  added object that lets players or knocked-out bodies through. Moved foliage instances of a level that already had no
+  draw copy (a level this studio wrote) now also grow their culling clusters, and an imported mod that is the
+  project's own earlier pak is reported (its edits were applied twice).
+- **Flying over the island no longer stutters at each streaming step.** When levels stream in and out around the camera
+  the 3D view keeps the levels that stay (their meshes on the graphics card, their objects, moves and selection) and
+  only adds the new ones: their meshes and textures go to the graphics card a few milliseconds a frame while the view
+  keeps drawing, their objects are built on a worker thread, and only the draw lists of the meshes that changed are
+  rebuilt. Each step used to send and rebuild the whole scene in one frame: 35-320 ms frames while flying and 1.5-1.9 s
+  for the first load; now mostly 7-30 ms. Short pauses remain while a new level's meshes are read (the .NET collector
+  cleaning up after the reader).
+- **The brush takes everything inside its circle**, wherever the cursor is. Over empty ground (or towards the sky) the
+  circle stays on the ground under the cursor; it used to do nothing unless the cursor was on an object, so each one
+  had to be touched with the circle's edge. A building, fence or part counts when what it draws reaches into the circle,
+  not only its pivot; a fast sweep takes everything along the way between two mouse moves; moving off everything keeps
+  the selection. A sweep through a whole cell stays under a millisecond per move.
+- **Fit to ground stands things on whatever is under them**, not only the landscape: a crate over a house lands on its
+  roof, a barrel over a road on the road, a box on a floor, a rock or another copy, the highest surface no more than
+  30 cm above its bottom (a roof below counts, the ceiling above does not); buildings still tilt to the four corners,
+  now each corner on its roof, floor or ground. Leaves, grass, water, glass and spawn pins hold nothing up.
+- **Your projects are listed** at the top of the Projects page: every project in Documents\ScumStudio Projects and
+  every one you opened before, as a card with its name, number of edits and last edit, **Open** (one click) and
+  **Show in folder**; the open one comes first with an accent border and *open now*, and two projects with the same
+  name show their folder. A project whose folder is gone is no card but a muted *Not found: …* line with **Remove**.
+  The page is one aligned flow at 1280 and 1600 px in every language: the cards in two columns over *Current project*
+  (its details, or **Open MyMapMod** when none is open) and *New project*, then the export (a one-line hint until a
+  project is open) and the game-file dump. The PROJECT label in the top bar leads there, and *Open project…* starts in
+  the projects folder and also accepts a file inside the project or its parent folder.
+- **The last project reopens at start again** (Settings › *Reopen my last project*, on by default; a toast says
+  *Reopened MyMapMod*). It had stopped opening at all: a brush delete that took an actor and then one of its parts was
+  checked against the state before it, written to the journal, and failed half way, so the journal no longer replayed
+  ("Opening last project failed … is already deleted"). Such a journal now replays exactly the part that was applied
+  then; a batch is checked edit by edit before anything is written; and deleting an actor together with its parts
+  takes the actor once.
+- **A purple spin ring** on the gizmo: the ring about the object's up axis is purple, a little thicker and drawn whole
+  (grab it anywhere), so turning a building, car or trader round is the first thing you see; the Z arrow stays blue and
+  the label keeps counting the whole way round ("270°").
+
+- **The gizmo stands on the object**, not at its root: on the middle of what is drawn of the selection (a building whose
+  root is a corner, a spawn model, one tree or road piece, the middle of a multi-selection); a trader's on the trader
+  instead of 10-15 m away among the car shop's vehicles; a long road, bridge, fence or wall piece's on the piece where
+  the camera looks (it follows when the camera flies on). Moves, turns and size changes act about it; the saved
+  positions are the same as before. A multi-selection's gizmo has no scale cubes (only one object grew).
+
+- **Deleting an outpost leaves nothing behind in the game.** The Wild Hunter stall (its class lives at the DLC plugin's
+  own root, `/WoodlandHunterPack/…`, which the studio could not find, so none of its 531 parts had a mesh and nothing
+  could select it) now resolves like any Blueprint and goes with the brush; the mechanic's car and bike lifts (skeletal
+  meshes, nothing to draw) get a pin and the brush takes pin-only actors too; and when a delete takes out the last
+  drawn part or instance of an actor, the whole actor is deleted instead of leaving its fire, light, heat, sound,
+  collision boxes, decals and child actors standing (fire barrels and burning tyre stacks burned on in the air).
+- **No invisible walls where parts were deleted**: a part scaled to nothing also loses its mesh in the export, so the
+  game builds no collision body for it (545 "Scale3D is (nearly) zero" warnings a session before).
+- **A bulk delete can no longer stop halfway**: every edit of a batch is checked against the edits before it before
+  anything is journaled, and a tree picked together with its whole actor is covered by the actor's delete instead of
+  stopping the batch ("already deleted"), which had left 2000 of 2650 edits unapplied while the journal said otherwise.
+- **A project whose journal no longer replays still opens**: edits that no longer apply are left out and listed in a
+  warning instead of refusing the whole project.
+- **Deleted objects are really gone in the game**: a deleted actor left the level's list but its objects stayed in the
+  package, and the game still created them and ran their code (B_4: the deleted trade posts kept spawning their traders
+  in the empty field, the deleted quest books kept logging). The export now turns a deleted actor and everything under
+  it into inert plain objects in place (no code, nothing to spawn; same indices, so nothing else in the level moves),
+  for the client and the server pak alike. The export report counts them ("Objects of removed actors made inert").
+- **A big delete no longer breaks the project**: a brush/multi-selection delete that listed a tree's instance or a
+  building's part after the building's own deletion stopped half-way (69 objects stayed in the pak) and the project would
+  not open again. A batch is now checked as a whole and applied as a whole (its undo too), a selection delete leaves out
+  what the deleted actors take with them anyway, and the owner's existing project opens and exports every deletion.
+- **The underside of a lake cannot be placed**: the `*_FN` twins of the lake surfaces (flipped normals, underwater
+  material) are drawn by the game only from under the water, so placed as objects they never showed. The Map and the
+  Assets objects list refuse them (the toast names the lake's top surface to place instead), Replace never offers them,
+  one already in a project is marked in the entity list and its properties, and the export report says why. Placed
+  rocks and other meshes were verified to land in the game exactly where the studio shows them (a real-file test reads
+  the written level back the way the game does: < 1 cm, < 0.01°).
+
+### Changed
+- **Levels load 2-4 times faster** (16-core PC, real game files): the levels the island view streams in around the
+  outpost 20-24 s → 4.5-5.5 s, the whole A_0 cell 9-12 s → 4 s, the island's terrain the first time 16 s → 9 s, the
+  map's level list 1.1 s → 0.3-0.8 s, a 20-edit export 7.5-10 s → 5-6 s. Meshes, materials and textures are read on
+  every core, levels side by side, new ground tiles coloured in one go, and the app uses .NET's server garbage
+  collector (with dynamic heap sizing), which had been stopping the loading threads for half the time. What is drawn
+  and every exported byte stay the same. Peak memory is about 0.5-1 GB higher while loading.
+
 ## [0.2.7] - 2026-10-06
 
 ### New in this release

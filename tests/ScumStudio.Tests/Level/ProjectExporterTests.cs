@@ -59,6 +59,56 @@ public sealed class ProjectExporterTests
     }
 
     [Fact]
+    public async Task TheCollisionCheckNamesWhatPlayersGetThroughOrIntoAndRocksAreNotBent()
+    {
+        // Owner (B_4, rocks): "half my body is inside the rock"; "knocked out, he falls under the rocks: from there he shoots
+        // others and nobody can hit him". SCUM's rocks are shells open underneath, solid from outside only.
+        using var temp = new LevelTempDirectory();
+        var content = temp.Combine("game");
+        SyntheticLevels.WriteContent(content, withBlueprintPackage: true);
+        using var catalog = AssetCatalog.OpenLoose(content);
+        const string shell = "/Game/ConZ_Files/Landscape/Rocks/Coastal/SM_Shell.SM_Shell";
+        const string water = "/Game/ConZ_Files/Landscape/Lake/SM_Water.SM_Water";
+        var bounds = new ScumStudio.Core.Geometry.BoundingBox(new System.Numerics.Vector3(-100, -100, -50), new System.Numerics.Vector3(100, 100, 80));
+        FVector[] rim = [new(-100, -100, -50), new(100, -100, -50), new(100, 100, -50), new(-100, 100, -50)]; // the open lower edge
+        BendMesh Describe(string mesh) => mesh == water
+            ? new BendMesh(bounds) { LetsThrough = ["Pawn", "PhysicsBody"] }
+            : new BendMesh(bounds, null, [new ScumStudio.Assets.Meshes.CollisionBox(FVector.Zero, FRotator.Zero, new FVector(200, 200, 130))], new ScumStudio.Formats.FGuid(1, 2, 3, 4))
+            {
+                LetsThrough = [],
+                Rim = rim, // the shell, and the synthetic level's SM_Rock instances
+            };
+
+        using var project = Project.Create(temp.Combine("Rocks.ssproj"), "Rocks");
+        var lifted = new AddStaticMeshActorOp(LevelPath, "Shell_Lifted", shell, TransformValue.At(0, 0, 200));
+        project.Apply(lifted);
+        project.Apply(new BendActorOp(lifted.Created, 0f, 30f)); // bent by an older version
+        project.Apply(new AddStaticMeshActorOp(LevelPath, "Shell_Buried", shell, TransformValue.At(500, 0, 0)));
+        project.Apply(new AddStaticMeshActorOp(LevelPath, "Water_Added", water, TransformValue.At(0, 500, 0)));
+        project.Apply(new AddStaticMeshActorOp(LevelPath, "Water_Copied", water, TransformValue.At(0, 900, 0)) { CollisionProfile = "BlockAll" });
+        var instance = new InstanceRef(LevelPath, "Rocks_Actor", "Rocks", 0);
+        project.Apply(new SetInstanceTransformOp(instance, TransformValue.FromTransform(SyntheticLevels.Instance0), TransformValue.At(1, 2, 300)));
+        var result = await new ProjectExporter().ExportAsync(project, catalog,
+            new ExportOptions { OutputDirectory = temp.Combine("out"), WritePak = false, BendMeshes = Describe, Ground = (_, _) => 0f });
+
+        // The bent rock is written straight: the game's own triangle collision, not rough boxes.
+        Assert.Contains(result.Warnings, w => w.Contains("Shell_Lifted: exported straight", StringComparison.Ordinal) && w.Contains("collision check", StringComparison.Ordinal));
+        using (var written = AssetCatalog.OpenLoose(result.StagingDirectory))
+        {
+            Assert.Equal("StaticMeshActor", LevelDocument.Load(new Cue4ParseLevelReader(written), LevelPath).FindActor("Shell_Lifted")!.ClassName);
+        }
+
+        // Lifted 2 m, its open lower edge stands 1.5 m over the ground; sunk in, it says nothing.
+        Assert.Single(result.Warnings, w => w.Contains("Shell_Lifted: SM_Shell is hollow and open underneath, and 100% of that open edge stands above the ground (up to 1.5 m)", StringComparison.Ordinal));
+        Assert.DoesNotContain(result.Warnings, w => w.Contains("Shell_Buried", StringComparison.Ordinal));
+        Assert.Single(result.Warnings, w => w.Contains("Rocks_Actor.Rocks[0]", StringComparison.Ordinal) && w.Contains("is hollow", StringComparison.Ordinal));
+
+        // A mesh without collision is named; one that collides as its source (a profile copied along) is not.
+        Assert.Single(result.Warnings, w => w.Contains("Water_Added: SM_Water has no collision for players", StringComparison.Ordinal));
+        Assert.DoesNotContain(result.Warnings, w => w.Contains("Water_Copied", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task ExportsDeletionsAndMovesToAStagedPak()
     {
         using var temp = new LevelTempDirectory();
@@ -145,6 +195,65 @@ public sealed class ProjectExporterTests
         project.Apply(new DeleteActorOp(new ActorRef(MapSlice.MapsPath + "B_9_Nowhere", "Actor_1")));
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => exporter.ExportAsync(project, catalog, options));
         Assert.Contains("B_9_Nowhere", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AnActorWhoseEveryDrawnPartIsScaledToNothingIsDeletedWhole()
+    {
+        // The owner's older projects: fire barrels "deleted" part by part kept burning (particles, sound, heat stayed).
+        using var temp = new LevelTempDirectory();
+        SyntheticLevels.WriteContent(temp.Path, withBlueprintPackage: true);
+        using var catalog = AssetCatalog.OpenLoose(temp.Path);
+        var document = LevelDocument.Load(new Cue4ParseLevelReader(catalog), LevelPath);
+        var actor = document.FindActor("StaticMeshActor_1")!;
+        var drawn = actor.Components.Where(c => c.StaticMeshPath is not null && !c.IsSynthesized && c.IsVisible).ToList();
+        Assert.NotEmpty(drawn);
+
+        var state = new EditState();
+        foreach (var part in drawn)
+        {
+            state.Apply(new SetTransformOp(new ActorRef(LevelPath, actor.Name), TransformValue.Identity, TransformValue.Identity with { Scale = FVector.Zero }, part.Name));
+        }
+
+        var warnings = new List<string>();
+        var request = ProjectExporter.PlanLevel(state, LevelPath, document, warnings);
+        Assert.Contains("StaticMeshActor_1", request.DeleteActors);
+        Assert.DoesNotContain(request.Transforms, t => t.Actor == "StaticMeshActor_1");
+        Assert.Contains(warnings, w => w.Contains("removed whole", StringComparison.Ordinal));
+
+        // One part still standing: the actor stays, the collapsed part is a transform as before.
+        var partial = new EditState();
+        partial.Apply(new SetTransformOp(new ActorRef(LevelPath, actor.Name), TransformValue.Identity, TransformValue.Identity with { Scale = FVector.Zero }, drawn[0].Name));
+        var kept = ProjectExporter.PlanLevel(partial, LevelPath, document, []);
+        Assert.Equal(drawn.Count > 1, !kept.DeleteActors.Contains("StaticMeshActor_1"));
+    }
+
+    [Fact]
+    public void AnActorWhoseEveryInstanceIsDeletedIsDeletedWhole()
+    {
+        // The owner's burning tyre stacks: the tyres (instances) were brushed away, the fire particle, heat and sound stayed.
+        using var temp = new LevelTempDirectory();
+        SyntheticLevels.WriteContent(temp.Path, withBlueprintPackage: true);
+        using var catalog = AssetCatalog.OpenLoose(temp.Path);
+        var document = LevelDocument.Load(new Cue4ParseLevelReader(catalog), LevelPath);
+        var rocks = document.FindActor("Rocks_Actor")!;
+        Assert.Equal(2, rocks.InstanceTransforms.Count);
+
+        var one = new EditState();
+        one.Apply(new DeleteInstanceOp(new InstanceRef(LevelPath, rocks.Name, "Rocks", 0)));
+        Assert.DoesNotContain(rocks.Name, ProjectExporter.PlanLevel(one, LevelPath, document, []).DeleteActors);
+
+        var all = new EditState();
+        all.Apply(new DeleteInstanceOp(new InstanceRef(LevelPath, rocks.Name, "Rocks", 0)));
+        all.Apply(new DeleteInstanceOp(new InstanceRef(LevelPath, rocks.Name, "Rocks", 1)));
+        var warnings = new List<string>();
+        var request = ProjectExporter.PlanLevel(all, LevelPath, document, warnings);
+        Assert.Contains(rocks.Name, request.DeleteActors);
+        Assert.Contains(warnings, w => w.Contains("removed whole", StringComparison.Ordinal));
+
+        // One put back by the brush: the actor stays.
+        all.Apply(new AddInstanceOp(new InstanceRef(LevelPath, rocks.Name, "Rocks", 2), TransformValue.Identity));
+        Assert.DoesNotContain(rocks.Name, ProjectExporter.PlanLevel(all, LevelPath, document, []).DeleteActors);
     }
 
     [Fact]

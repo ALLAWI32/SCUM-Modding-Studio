@@ -131,6 +131,19 @@ internal sealed class SyntheticLevelPackage
             writer.I32(packageIndex);
         }
 
+        /// <summary>An array of object references (e.g. <c>OverrideMaterials</c>).</summary>
+        public void ObjectArray(string name, params int[] packageIndices)
+        {
+            Header(name, "ArrayProperty", 4 + 4 * packageIndices.Length);
+            writer.FName(package.Name("ObjectProperty"));
+            writer.U8(0);
+            writer.I32(packageIndices.Length);
+            foreach (var index in packageIndices)
+            {
+                writer.I32(index);
+            }
+        }
+
         public void Bool(string name, bool value)
         {
             Header(name, "BoolProperty", 0);

@@ -2,6 +2,7 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
+using Avalonia.VisualTree;
 using ScumStudio.App.ViewModels;
 using ScumStudio.Core.Mathematics;
 
@@ -23,7 +24,46 @@ public partial class MapPageView : UserControl
         InitializeComponent();
         DataContextChanged += (_, _) => Attach(DataContext as MapPageViewModel);
         Viewport3d.PickToggled += (_, pick) => _viewModel?.ToggleGroup(pick.Id, pick.Instance);
-        Viewport3d.BrushPainted += (_, at) => _viewModel?.BrushAt(at);
+        Viewport3d.BrushPainted += (_, stroke) =>
+        {
+            if (_viewModel is { BrushPaint: true } painting)
+            {
+                painting.PaintAt(stroke.To, stroke.From);
+            }
+            else
+            {
+                _viewModel?.BrushAt(stroke.To, stroke.From);
+            }
+        };
+        Viewport3d.BrushStrokeEnded += (_, _) => _viewModel?.EndPaintStroke();
+        // The Replacer's cards are filled when the menu opens (the selection changes far more often); while a menu is open
+        // the first pictures of its lists are made on workers, closing it lets them go (the disk cache keeps them).
+        var replace = (Flyout)ReplaceButton.Flyout!;
+        replace.Opening += (_, _) =>
+        {
+            _viewModel?.RefreshReplaceCandidates();
+            _viewModel?.ReplacePicker.Prefetch();
+        };
+        replace.Closed += (_, _) => _viewModel?.ReplacePicker.Close();
+        var paint = (Flyout)PaintPaletteButton.Flyout!;
+        paint.Opening += (_, _) =>
+        {
+            _viewModel?.RefreshPaintCandidates();
+            _viewModel?.PaintPicker.Prefetch();
+        };
+        paint.Closed += (_, _) => _viewModel?.PaintPicker.Close();
+        var landscape = (Flyout)LandscapeButton.Flyout!;
+        _landscapeFlyout = landscape;
+        landscape.Opening += (_, _) =>
+        {
+            _viewModel?.TreeToSwap.Prefetch();
+            _viewModel?.TreeSwapWith.Prefetch();
+        };
+        landscape.Closed += (_, _) =>
+        {
+            _viewModel?.TreeToSwap.Close();
+            _viewModel?.TreeSwapWith.Close();
+        };
         // Shape handles dragged in the view: live preview, journaled when let go.
         Viewport3d.ShapeHandleDragged += (_, drag) =>
         {
@@ -73,7 +113,9 @@ public partial class MapPageView : UserControl
                 Viewport3d.Focus();
             }
         };
-        Viewport3d.TransformDragged += (_, e) => _viewModel?.ApplyDraggedTransform(e.Id, e.RootWorld);
+        Viewport3d.TransformDragged += (_, e) => _viewModel?.ApplyDraggedTransform(e.Id, e.RootWorld, e.Scaled);
+        // Right-click selects the history row under the pointer first, so its menu (Go to, Select) acts on it.
+        HistoryList.AddHandler(PointerPressedEvent, OnHistoryPointerPressed, RoutingStrategies.Tunnel);
         // Shape sliders: the edit is journaled when the thumb is let go (one undo step per drag).
         ShapePanel.AddHandler(Avalonia.Controls.Primitives.Thumb.DragStartedEvent, (_, _) =>
         {
@@ -131,7 +173,23 @@ public partial class MapPageView : UserControl
         }
     }
 
-    private void OnFrameSelectionRequested(object? sender, EventArgs e) => Viewport3d.FrameSelection();
+    private void OnFrameSelectionRequested(object? sender, EventArgs e)
+    {
+        // Before the GL scene is up the camera still goes there: 15 m away, looking at the object.
+        if (!Viewport3d.FrameSelection() && _viewModel?.SelectedRootWorld is { } root)
+        {
+            Viewport3d.SetView(root.Translation + new FVector(-1200f, -600f, 700f), root.Translation, null, null);
+        }
+    }
+
+    private void OnHistoryPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (e.GetCurrentPoint(HistoryList).Properties.IsRightButtonPressed
+            && (e.Source as Avalonia.Visual)?.FindAncestorOfType<ListBoxItem>(includeSelf: true) is { DataContext: HistoryItemViewModel row })
+        {
+            HistoryList.SelectedItem = row;
+        }
+    }
 
     // Where the camera was before "Last object" jumped; pressing it again goes back there (owner: "as if nothing happened").
     private (System.Numerics.Vector3 Position, float Yaw, float Pitch)? _viewBeforeJump;
@@ -139,6 +197,8 @@ public partial class MapPageView : UserControl
     private void OnLastObjectClick(object? sender, RoutedEventArgs e) => JumpToLastObject();
 
     private void OnExtendClick(object? sender, RoutedEventArgs e) => _viewModel?.Extend();
+
+    private void OnAddObjectOpened(object? sender, EventArgs e) => _viewModel?.PrepareTraders();
 
     /// <summary>First press: to the object picked before, camera on it. Second press: back to the object and view before.</summary>
     private void JumpToLastObject()
@@ -320,6 +380,18 @@ public partial class MapPageView : UserControl
         if (viewModel.PasteCommand.CanExecute(null))
         {
             viewModel.PasteCommand.Execute(null);
+        }
+    }
+
+    private Flyout? _landscapeFlyout;
+
+    /// <summary>Trees in the Landscape menu swap a tree type on the whole island; with an object selected the owner wanted the Replacer.</summary>
+    private void OnTreesToReplace(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        _landscapeFlyout?.Hide();
+        if (ReplaceButton.IsEnabled)
+        {
+            ReplaceButton.Flyout?.ShowAt(ReplaceButton);
         }
     }
 }

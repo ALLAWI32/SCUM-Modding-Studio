@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.RegularExpressions;
+using ScumStudio.Core.Mathematics;
 using ScumStudio.Formats.Packages;
 using ScumStudio.Level.Editing;
 
@@ -10,6 +11,16 @@ namespace ScumStudio.Level.Export;
 /// <param name="Actor">The actor as the game named it (a piece the exporter split carries its <c>_Bent</c> / <c>_2</c> suffix).</param>
 /// <param name="WhenUtc">When the game wrote the line.</param>
 public sealed record CollisionFailure(string Level, string Actor, DateTime WhenUtc);
+
+/// <summary>A mesh the export put somewhere (added, copied, moved, an instance added or moved), as the game will place it.</summary>
+/// <param name="Label">How the report names it, e.g. <c>/Game/.../A_4_Farm_04: Cliff_02b_Added</c>.</param>
+/// <param name="Mesh">Mesh object path.</param>
+/// <param name="World">World transform.</param>
+/// <param name="OwnCollision">
+/// True when it collides as something the game placed (a copy, a moved original, an instance of the game's own foliage
+/// component, an added actor given its source's profile); false when it collides as its mesh does by default.
+/// </param>
+public sealed record PlacedMesh(string Label, string Mesh, FTransform World, bool OwnCollision);
 
 /// <summary>
 /// The collision check (owner: "if something has no collision, the program should find it and replace it itself, for
@@ -119,5 +130,75 @@ public static partial class CollisionCheck
         }
 
         return problems;
+    }
+
+    /// <summary>A rock's open underside counts as open when it stands this far (cm) above the ground: a body fits under it.</summary>
+    public const float OpenGap = 30f;
+
+    /// <summary>
+    /// The placed meshes players could get through or into (owner, B_4: "half my body is inside the rock", "when he is
+    /// knocked out he falls under the rocks; from there he shoots others and nobody can hit him"): an added mesh whose
+    /// own collision lets players (<c>Pawn</c>) or a knocked-out body (<c>PhysicsBody</c>) through, and a hollow rock
+    /// whose open underside stands above the ground. SCUM's rocks and cliffs are shells open underneath that collide with
+    /// their triangles, solid from outside only; the game sinks that edge into the ground (Landscape_B_4_2b: 155 of its 158
+    /// coastal rocks all of it; the other 3, on the shore below zero height, up to 1.2 m). Lifted, a player walks or falls
+    /// inside, sees and shoots out through the rock, and nobody outside can see or hit him. One report line each.
+    /// </summary>
+    /// <param name="placed">What the export placed.</param>
+    /// <param name="meshes">What each mesh collides with (<see cref="BendSupport.Describe"/>).</param>
+    /// <param name="ground">The ground height at a world X/Y, or null where unknown.</param>
+    public static IReadOnlyList<string> Placed(IEnumerable<PlacedMesh> placed, Func<string, BendMesh?> meshes, Func<float, float, float?> ground)
+    {
+        ArgumentNullException.ThrowIfNull(placed);
+        ArgumentNullException.ThrowIfNull(meshes);
+        ArgumentNullException.ThrowIfNull(ground);
+        var lines = new List<string>();
+        foreach (var p in placed)
+        {
+            if (meshes(p.Mesh) is not { } info || MathF.Abs(p.World.Scale3D.X) < 0.001f)
+            {
+                continue; // unknown, or a deleted (collapsed) instance
+            }
+
+            var name = p.Mesh[(p.Mesh.LastIndexOf('.') + 1)..];
+            if (!p.OwnCollision && info.LetsThrough is { Count: > 0 } through)
+            {
+                lines.Add(through.Count > 1
+                    ? $"{p.Label}: {name} has no collision for players: they walk through it and a knocked-out player falls through it (collision check)."
+                    : through[0] == "Pawn"
+                        ? $"{p.Label}: {name} does not stop players: its collision lets them walk through it (collision check)."
+                        : $"{p.Label}: {name} does not hold a knocked-out player: its collision lets bodies fall through it (collision check).");
+            }
+
+            if (info.Rim is not { Count: > 0 } rim)
+            {
+                continue;
+            }
+
+            var (open, known, highest) = (0, 0, float.MinValue);
+            foreach (var local in rim)
+            {
+                var at = p.World.TransformPosition(local);
+                if (ground(at.X, at.Y) is not { } floor)
+                {
+                    continue;
+                }
+
+                known++;
+                highest = MathF.Max(highest, at.Z - floor);
+                if (at.Z - floor > OpenGap)
+                {
+                    open++;
+                }
+            }
+
+            if (open > 0)
+            {
+                lines.Add(string.Create(CultureInfo.InvariantCulture,
+                    $"{p.Label}: {name} is hollow and open underneath, and {open * 100 / known}% of that open edge stands above the ground (up to {highest / 100f:0.0} m): players can walk or fall inside the rock and shoot out of it unseen. Lower it into the ground until its lower edge is buried (collision check)."));
+            }
+        }
+
+        return lines;
     }
 }

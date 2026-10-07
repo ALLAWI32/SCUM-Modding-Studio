@@ -5,6 +5,79 @@
              xmlns:conv="using:ScumStudio.App.Converters"
              x:Class="ScumStudio.App.Views.Pages.MapPageView"
              x:DataType="vm:MapPageViewModel">
+  <UserControl.DataTemplates>
+    <!-- The Replacer's card (Replace menu, tree swap): an object's picture (made like the Assets page's) and its name. -->
+    <DataTemplate x:DataType="vm:ReplaceCandidate">
+      <StackPanel Spacing="6">
+        <Border Height="132" CornerRadius="{DynamicResource SmallCornerRadius}" Background="{DynamicResource ViewportBrush}" ClipToBounds="True">
+          <Panel>
+            <c:GlyphIcon Kind="{Binding IconKey}" IconSize="30" HorizontalAlignment="Center" VerticalAlignment="Center"
+                         IsVisible="{Binding Thumbnail, Converter={x:Static ObjectConverters.IsNull}}" />
+            <c:ThumbnailImage Source="{Binding Thumbnail}" Stretch="Uniform" Margin="4" />
+          </Panel>
+        </Border>
+        <TextBlock Text="{Binding Name}" FontSize="13" FontWeight="Medium" Foreground="{DynamicResource TextBrush}" TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis" />
+      </StackPanel>
+    </DataTemplate>
+    <!-- A card that picks: pressing it drops the family list down (pictures, search); the pick fills the card. -->
+    <DataTemplate x:DataType="vm:ObjectPicker">
+      <Panel>
+        <ToggleButton x:Name="PickerCard" Classes="ghost" Padding="0" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch"
+                      VerticalAlignment="Stretch" VerticalContentAlignment="Stretch" IsChecked="{Binding IsOpen}" ToolTip.Tip="{Tr Map.Picker.Tip}">
+          <Border Classes="card" Padding="8">
+            <Panel>
+              <ContentControl Content="{Binding Selected}"
+                              IsVisible="{Binding Selected, Converter={x:Static ObjectConverters.IsNotNull}}" />
+              <StackPanel Spacing="6" IsVisible="{Binding Selected, Converter={x:Static ObjectConverters.IsNull}}">
+                <Border Height="132" CornerRadius="{DynamicResource SmallCornerRadius}" BorderBrush="{DynamicResource StrokeBrush}" BorderThickness="1">
+                  <c:GlyphIcon Kind="Icon.Search" IconSize="26" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                </Border>
+                <TextBlock Text="{Tr Map.Picker.Choose}" Classes="muted" />
+              </StackPanel>
+              <c:GlyphIcon Kind="Icon.ChevronDown" IconSize="16" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,6,6,0" />
+            </Panel>
+          </Border>
+        </ToggleButton>
+        <Popup IsOpen="{Binding IsOpen, Mode=TwoWay}" Placement="BottomEdgeAlignedLeft" IsLightDismissEnabled="True">
+          <Border x:Name="PickerListPanel" Width="340" Padding="8" Background="{DynamicResource SurfaceBrush}" BorderBrush="{DynamicResource StrokeBrush}"
+                  BorderThickness="1" CornerRadius="{DynamicResource ControlCornerRadius}">
+            <DockPanel>
+              <TextBox DockPanel.Dock="Top" x:Name="PickerSearchBox" Text="{Binding Search}" Watermark="{Tr Map.Replace.Search}" Margin="0,0,0,6"
+                       ToolTip.Tip="{Tr Map.Replace.Search.Tip}" />
+              <ScrollViewer MaxHeight="380" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Visible" AllowAutoHide="False">
+                <ItemsControl x:Name="PickerList" ItemsSource="{Binding Items}">
+                  <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate><VirtualizingStackPanel /></ItemsPanelTemplate>
+                  </ItemsControl.ItemsPanel>
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:ReplaceCandidate">
+                      <Button Classes="ghost" Padding="4,3" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch"
+                              Command="{Binding $parent[ItemsControl].((vm:ObjectPicker)DataContext).PickCommand}" CommandParameter="{Binding}"
+                              ToolTip.Tip="{Binding Choice.PackagePath}">
+                        <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
+                          <Border Width="48" Height="48" CornerRadius="{DynamicResource SmallCornerRadius}" Background="{DynamicResource ViewportBrush}" ClipToBounds="True">
+                            <Panel>
+                              <c:GlyphIcon Kind="{Binding IconKey}" IconSize="18" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                           IsVisible="{Binding Thumbnail, Converter={x:Static ObjectConverters.IsNull}}" />
+                              <c:ThumbnailImage Source="{Binding Thumbnail}" Stretch="Uniform" Margin="2" />
+                            </Panel>
+                          </Border>
+                          <TextBlock Grid.Column="1" Text="{Binding Name}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                          <Border Grid.Column="2" Classes="badge ok" IsVisible="{Binding IsCurrent}" VerticalAlignment="Center">
+                            <TextBlock Text="{Tr Map.Replace.Current}" />
+                          </Border>
+                        </Grid>
+                      </Button>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </ScrollViewer>
+            </DockPanel>
+          </Border>
+        </Popup>
+      </Panel>
+    </DataTemplate>
+  </UserControl.DataTemplates>
   <DockPanel>
 
     <!-- ===== Header ===== -->
@@ -59,11 +132,75 @@
             <ToggleButton Classes="ghost" Padding="8,4" x:Name="PartsButton" Content="{Tr Map.Parts}" IsChecked="{Binding PickParts}" ToolTip.Tip="{Tr Map.Parts.Tip}" IsVisible="{Binding HasView}" />
             <ToggleButton Classes="ghost" Padding="8,4" x:Name="BrushButton" Content="{Tr Map.Brush}" IsChecked="{Binding BrushSelect}" ToolTip.Tip="{Tr Map.Brush.Tip}" IsVisible="{Binding HasView}" />
             <StackPanel Orientation="Horizontal" Spacing="4" IsVisible="{Binding BrushSelect}">
+              <!-- Select | Paint: the circle selects what it covers, or plants the palette's objects -->
+              <Border Classes="segmented" VerticalAlignment="Center">
+                <StackPanel Orientation="Horizontal">
+                  <ToggleButton x:Name="BrushSelectModeButton" IsChecked="{Binding !BrushPaint}" Content="{Tr Map.Brush.Select}" ToolTip.Tip="{Tr Map.Brush.Select.Tip}" />
+                  <ToggleButton x:Name="BrushPaintModeButton" IsChecked="{Binding BrushPaint}" Content="{Tr Map.Brush.Paint}" ToolTip.Tip="{Tr Map.Brush.Paint.Tip}" />
+                </StackPanel>
+              </Border>
               <Slider x:Name="BrushRadiusSlider" Width="90" Minimum="1" Maximum="100" SmallChange="1" LargeChange="10" Value="{Binding BrushRadius}" VerticalAlignment="Center" ToolTip.Tip="{Tr Map.Brush.Size.Tip}" />
               <TextBlock Text="{Binding BrushRadiusText}" Classes="caption mono" VerticalAlignment="Center" MinWidth="38" />
+              <Button Classes="ghost" Padding="8,4" x:Name="PaintPaletteButton" IsVisible="{Binding BrushPaint}" ToolTip.Tip="{Tr Map.Paint.Palette.Tip}">
+                <StackPanel Orientation="Horizontal" Spacing="5">
+                  <c:GlyphIcon Kind="Icon.Tree" IconSize="13" />
+                  <TextBlock Text="{Binding PaintPaletteText}" />
+                </StackPanel>
+                <Button.Flyout>
+                  <Flyout Placement="BottomEdgeAlignedLeft">
+                    <StackPanel x:Name="PaintPanel" Spacing="10" Width="420">
+                      <TextBlock Text="{Tr Map.Paint.Title}" Classes="h3" />
+                      <TextBlock Text="{Tr Map.Paint.Caption}" Classes="caption wrap" />
+                      <Grid ColumnDefinitions="150,*" ColumnSpacing="12">
+                        <StackPanel Spacing="4">
+                          <TextBlock Text="{Tr Map.Paint.Add}" Classes="caption" />
+                          <ContentControl x:Name="PaintPickerCard" Content="{Binding PaintPicker}" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Spacing="4">
+                          <TextBlock Text="{Tr Map.Paint.Objects}" Classes="caption" />
+                          <TextBlock Text="{Tr Map.Paint.Empty}" Classes="caption wrap" IsVisible="{Binding !HasPaintPalette}" />
+                          <ScrollViewer MaxHeight="220" HorizontalScrollBarVisibility="Disabled">
+                            <ItemsControl x:Name="PaintPaletteList" ItemsSource="{Binding PaintPalette}">
+                              <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:ReplaceCandidate">
+                                  <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8" Margin="0,2">
+                                    <Border Width="40" Height="40" CornerRadius="{DynamicResource SmallCornerRadius}" Background="{DynamicResource ViewportBrush}" ClipToBounds="True">
+                                      <Panel>
+                                        <c:GlyphIcon Kind="{Binding IconKey}" IconSize="16" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                     IsVisible="{Binding Thumbnail, Converter={x:Static ObjectConverters.IsNull}}" />
+                                        <c:ThumbnailImage Source="{Binding Thumbnail}" Stretch="Uniform" Margin="2" />
+                                      </Panel>
+                                    </Border>
+                                    <TextBlock Grid.Column="1" Text="{Binding Name}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                                    <Button Grid.Column="2" Classes="ghost small" Padding="5" VerticalAlignment="Center"
+                                            Command="{Binding $parent[ItemsControl].((vm:MapPageViewModel)DataContext).RemovePaintItemCommand}" CommandParameter="{Binding}"
+                                            ToolTip.Tip="{Tr Map.Paint.Remove.Tip}">
+                                      <c:GlyphIcon Kind="Icon.Close" IconSize="12" />
+                                    </Button>
+                                  </Grid>
+                                </DataTemplate>
+                              </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                          </ScrollViewer>
+                        </StackPanel>
+                      </Grid>
+                      <Grid ColumnDefinitions="70,*,58" ColumnSpacing="8">
+                        <TextBlock Text="{Tr Map.Paint.Spacing}" Classes="caption" VerticalAlignment="Center" />
+                        <Slider Grid.Column="1" x:Name="PaintSpacingSlider" Minimum="1" Maximum="20" SmallChange="0.5" LargeChange="1"
+                                Value="{Binding PaintSpacing}" ToolTip.Tip="{Tr Map.Paint.Spacing.Tip}" />
+                        <TextBlock Grid.Column="2" Text="{Binding PaintSpacingText}" Classes="caption mono" VerticalAlignment="Center" HorizontalAlignment="Right" />
+                      </Grid>
+                      <WrapPanel ItemSpacing="16" LineSpacing="4">
+                        <CheckBox x:Name="PaintRandomSizeBox" Content="{Tr Map.Paint.RandomSize}" IsChecked="{Binding PaintRandomSize}" ToolTip.Tip="{Tr Map.Paint.RandomSize.Tip}" />
+                        <CheckBox x:Name="PaintRandomTurnBox" Content="{Tr Map.Paint.RandomTurn}" IsChecked="{Binding PaintRandomTurn}" ToolTip.Tip="{Tr Map.Paint.RandomTurn.Tip}" />
+                      </WrapPanel>
+                      <TextBlock Text="{Tr Map.Paint.Note}" Classes="caption wrap" />
+                    </StackPanel>
+                  </Flyout>
+                </Button.Flyout>
+              </Button>
             </StackPanel>
             <ToggleButton Classes="ghost" Padding="8,4" x:Name="SnapButton" Content="{Tr Map.Snap}" IsChecked="{Binding #Viewport3d.AutoSnap}" ToolTip.Tip="{Tr Map.Snap.Tip}" IsVisible="{Binding HasView}" />
-            <ToggleButton Classes="ghost" Padding="8,4" x:Name="LocalAxesButton" Content="{Tr Map.LocalAxes}" IsChecked="{Binding LocalAxes}" ToolTip.Tip="{Tr Map.LocalAxes.Tip}" IsVisible="{Binding HasView}" />
             <Button Classes="ghost" Padding="8,4" x:Name="DroneButton" Content="{Tr Map.Drone}" Click="OnDroneClick" ToolTip.Tip="{Tr Map.Drone.Tip}" IsVisible="{Binding HasView}" />
             <Button Classes="ghost" Padding="8,4" Content="{Tr Map.FrameAll}" Click="OnFrameAllClick" ToolTip.Tip="{Tr Map.FrameAll.Tip}" IsVisible="{Binding HasScene}" />
             <Button Classes="ghost" Padding="8,4" Content="{Tr Map.FrameSelection}" Command="{Binding FrameSelectionCommand}" ToolTip.Tip="{Tr Map.FrameSelection.Tip}" IsVisible="{Binding HasSelectedActor}" />
@@ -151,7 +288,8 @@
                 </Flyout>
               </Button.Flyout>
             </Button>
-            <!-- The Landscape menu: the whole island's ground look, tree swaps, objects laid on the ground -->
+            <!-- The Landscape menu: tree swaps and objects laid on the ground. The ground-look block (snow/desert/autumn texture swaps)
+                 is hidden since 0.2.8: the owner found it confusing because the 3D view cannot preview it; the ops and the view model stay. -->
             <Button Classes="ghost" Padding="8,4" x:Name="LandscapeButton" IsVisible="{Binding HasView}" ToolTip.Tip="{Tr Map.Landscape.Tip}">
               <StackPanel Orientation="Horizontal" Spacing="5">
                 <c:GlyphIcon Kind="Icon.World" IconSize="13" />
@@ -159,8 +297,8 @@
               </StackPanel>
               <Button.Flyout>
                 <Flyout Placement="BottomEdgeAlignedLeft">
-                  <StackPanel x:Name="LandscapePanel" Spacing="10" Width="380">
-                    <StackPanel Spacing="4">
+                  <StackPanel x:Name="LandscapePanel" Spacing="10" Width="420">
+                    <StackPanel Spacing="4" IsVisible="False">
                       <TextBlock Text="{Tr Map.Looks.Title}" Classes="h3" />
                       <TextBlock Text="{Tr Map.Looks.Caption}" Classes="caption wrap" />
                       <ItemsControl ItemsSource="{Binding GroundLookOptions}">
@@ -174,14 +312,22 @@
                         </ItemsControl.ItemTemplate>
                       </ItemsControl>
                     </StackPanel>
-                    <Border Classes="hsep" />
                     <StackPanel Spacing="6">
                       <TextBlock Text="{Tr Map.Trees.Title}" Classes="h3" />
                       <TextBlock Text="{Tr Map.Trees.Caption}" Classes="caption wrap" />
-                      <Grid ColumnDefinitions="*,Auto,*" ColumnSpacing="6">
-                        <ComboBox x:Name="TreeToSwapBox" ItemsSource="{Binding Trees}" SelectedItem="{Binding TreeToSwap}" PlaceholderText="{Tr Map.Trees.Pick}" HorizontalAlignment="Stretch" ToolTip.Tip="{Tr Map.Trees.Pick.Tip}" />
-                        <TextBlock Grid.Column="1" Text="→" VerticalAlignment="Center" />
-                        <ComboBox Grid.Column="2" x:Name="TreeSwapWithBox" ItemsSource="{Binding Trees}" SelectedItem="{Binding TreeSwapWith}" PlaceholderText="{Tr Map.Trees.PickWith}" HorizontalAlignment="Stretch" ToolTip.Tip="{Tr Map.Trees.PickWith.Tip}" />
+                      <!-- The owner opened this with a rock selected and expected rocks: the per-object Replacer is one click away. -->
+                      <Border Classes="chip" IsVisible="{Binding HasSelectedActor}" HorizontalAlignment="Left" Padding="8,4">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                          <TextBlock Text="{Tr Map.Trees.ReplaceHint}" Classes="caption" VerticalAlignment="Center" />
+                          <Button x:Name="TreesToReplaceButton" Classes="ghost small" Content="{Tr Map.Trees.ReplaceHint.Button}" Click="OnTreesToReplace" ToolTip.Tip="{Tr Map.Replace.Tip}" />
+                        </StackPanel>
+                      </Border>
+                      <Grid ColumnDefinitions="*,Auto,*" RowDefinitions="Auto,Auto" ColumnSpacing="8" RowSpacing="4">
+                        <TextBlock Text="{Tr Map.Trees.Pick}" Classes="caption" />
+                        <TextBlock Grid.Column="2" Text="{Tr Map.Trees.PickWith}" Classes="caption" />
+                        <ContentControl Grid.Row="1" x:Name="TreeToSwapCard" Content="{Binding TreeToSwap}" />
+                        <c:GlyphIcon Grid.Row="1" Grid.Column="1" Kind="Icon.ChevronRight" IconSize="18" VerticalAlignment="Center" />
+                        <ContentControl Grid.Row="1" Grid.Column="2" x:Name="TreeSwapWithCard" Content="{Binding TreeSwapWith}" />
                       </Grid>
                       <Button Classes="accent small" HorizontalAlignment="Right" Content="{Tr Map.Trees.Swap}" Command="{Binding SwapTreeCommand}" ToolTip.Tip="{Tr Map.Trees.Swap.Tip}" />
                       <ItemsControl ItemsSource="{Binding TreeSwaps}" IsVisible="{Binding HasTreeSwaps}">
@@ -204,14 +350,87 @@
                 </Flyout>
               </Button.Flyout>
             </Button>
+            <!-- Replace: the selection becomes another object of the same family, fitted to what it replaces -->
+            <Button Classes="ghost" Padding="8,4" x:Name="ReplaceButton" IsVisible="{Binding HasView}" IsEnabled="{Binding HasSelectedActor}" ToolTip.Tip="{Tr Map.Replace.Tip}">
+              <StackPanel Orientation="Horizontal" Spacing="5">
+                <c:GlyphIcon Kind="Icon.Refresh" IconSize="13" />
+                <TextBlock Text="{Tr Map.Replace}" />
+              </StackPanel>
+              <Button.Flyout>
+                <Flyout Placement="BottomEdgeAlignedLeft">
+                  <StackPanel x:Name="ReplacePanel" Spacing="8" Width="420">
+                    <TextBlock Text="{Tr Map.Replace}" Classes="h3" />
+                    <TextBlock Text="{Binding ReplaceCaption}" Classes="caption wrap" />
+                    <Grid ColumnDefinitions="*,Auto,*" RowDefinitions="Auto,Auto" ColumnSpacing="8" RowSpacing="4">
+                      <TextBlock Text="{Binding ReplaceSelectionText}" Classes="caption" />
+                      <TextBlock Grid.Column="2" Text="{Tr Map.Replace.Title}" Classes="caption" />
+                      <Border Grid.Row="1" x:Name="ReplaceFromCard" Classes="card" Padding="8">
+                        <ContentControl Content="{Binding ReplaceCurrent}" />
+                      </Border>
+                      <c:GlyphIcon Grid.Row="1" Grid.Column="1" Kind="Icon.ChevronRight" IconSize="18" VerticalAlignment="Center" />
+                      <ContentControl Grid.Row="1" Grid.Column="2" x:Name="ReplaceToCard" Content="{Binding ReplacePicker}" />
+                    </Grid>
+                    <Button Classes="accent" HorizontalAlignment="Right" x:Name="ReplaceApplyButton" Content="{Tr Map.Replace.Apply}" Command="{Binding ReplaceCommand}" ToolTip.Tip="{Tr Map.Replace.Apply.Tip}" />
+                  </StackPanel>
+                </Flyout>
+              </Button.Flyout>
+            </Button>
             <Button Classes="ghost" Padding="8,4" x:Name="ExtendButton" Content="{Tr Map.Extend}" Click="OnExtendClick" ToolTip.Tip="{Tr Map.Extend.Tip}" IsVisible="{Binding HasSelectedActor}" />
             <Button Classes="ghost" Padding="8,4" x:Name="LastObjectButton" Content="{Tr Map.LastObject}" Click="OnLastObjectClick" ToolTip.Tip="{Tr Map.LastObject.Tip}" IsVisible="{Binding HasScene}" />
+            <!-- Prefabs: the selection saved under a name, placed again where the camera aims, shared as plain JSON files -->
+            <Button Classes="ghost" Padding="8,4" x:Name="PrefabsButton" IsVisible="{Binding HasScene}" ToolTip.Tip="{Tr Map.Prefabs.Tip}">
+              <StackPanel Orientation="Horizontal" Spacing="5">
+                <c:GlyphIcon Kind="Icon.Layers" IconSize="13" />
+                <TextBlock Text="{Tr Map.Prefabs}" />
+              </StackPanel>
+              <Button.Flyout>
+                <Flyout Placement="BottomEdgeAlignedLeft">
+                  <StackPanel x:Name="PrefabsPanel" Spacing="10" Width="400">
+                    <StackPanel Spacing="6">
+                      <TextBlock Text="{Tr Map.Prefabs.SaveTitle}" Classes="h3" />
+                      <TextBlock Text="{Tr Map.Prefabs.SaveCaption}" Classes="caption wrap" />
+                      <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
+                        <TextBox x:Name="PrefabNameBox" Text="{Binding PrefabName}" Watermark="{Tr Map.Prefabs.Name.Watermark}" ToolTip.Tip="{Tr Map.Prefabs.Name.Tip}">
+                          <TextBox.KeyBindings>
+                            <KeyBinding Gesture="Enter" Command="{Binding SavePrefabCommand}" />
+                          </TextBox.KeyBindings>
+                        </TextBox>
+                        <Button Grid.Column="1" Classes="accent" x:Name="SavePrefabButton" Content="{Tr Map.Prefabs.Save}" Command="{Binding SavePrefabCommand}" ToolTip.Tip="{Tr Map.Prefabs.Save.Tip}" />
+                      </Grid>
+                    </StackPanel>
+                    <Border Classes="hsep" />
+                    <StackPanel Spacing="6">
+                      <TextBlock Text="{Tr Map.Prefabs.ListTitle}" Classes="h3" />
+                      <TextBlock Text="{Tr Map.Prefabs.None}" Classes="caption wrap" IsVisible="{Binding !HasPrefabs}" />
+                      <ScrollViewer MaxHeight="300" IsVisible="{Binding HasPrefabs}">
+                        <ItemsControl x:Name="PrefabList" ItemsSource="{Binding Prefabs}">
+                          <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:PrefabRow">
+                              <Grid ColumnDefinitions="*,Auto,Auto,Auto" ColumnSpacing="6" Margin="0,3">
+                                <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                  <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                  <TextBlock Text="{Binding Caption}" Classes="caption" />
+                                </StackPanel>
+                                <Button Grid.Column="1" Classes="small accent" Content="{Tr Map.Prefabs.Place}" Command="{Binding Place}" ToolTip.Tip="{Tr Map.Prefabs.Place.Tip}" />
+                                <Button Grid.Column="2" Classes="small" Content="{Tr Map.Prefabs.Export}" Command="{Binding Export}" ToolTip.Tip="{Tr Map.Prefabs.Export.Tip}" />
+                                <Button Grid.Column="3" Classes="small danger" Content="{Tr Map.Delete}" Command="{Binding Delete}" ToolTip.Tip="{Tr Map.Prefabs.Delete.Tip}" />
+                              </Grid>
+                            </DataTemplate>
+                          </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                      </ScrollViewer>
+                      <Button Classes="small" HorizontalAlignment="Right" x:Name="ImportPrefabButton" Content="{Tr Map.Prefabs.Import}" Command="{Binding ImportPrefabCommand}" ToolTip.Tip="{Tr Map.Prefabs.Import.Tip}" />
+                    </StackPanel>
+                  </StackPanel>
+                </Flyout>
+              </Button.Flyout>
+            </Button>
             <Border Classes="vsep" IsVisible="{Binding HasScene}" />
             <Button Classes="ghost" Padding="8,4" x:Name="PasteButton" Content="{Tr Map.Paste}" Command="{Binding PasteCommand}" ToolTip.Tip="{Binding PasteTip}" IsVisible="{Binding HasCopiedActor}" />
                     <Button Classes="ghost" Padding="8,4" x:Name="AddObjectButton" Content="{Tr Map.AddObject}" IsVisible="{Binding HasScene}"
                             ToolTip.Tip="{Tr Map.AddObject.Tip}">
                       <Button.Flyout>
-                        <Flyout Placement="BottomEdgeAlignedRight">
+                        <Flyout Placement="BottomEdgeAlignedRight" Opened="OnAddObjectOpened">
                           <StackPanel Spacing="8" Width="360">
                             <TextBlock Text="{Tr Map.ObjectPathOrName}" Classes="caption" />
                             <TextBox x:Name="AddObjectBox" Text="{Binding AddObjectText}" Watermark="{Tr Map.AddObject.Watermark}" ToolTip.Tip="{Tr Map.AddObjectBox.Tip}">
@@ -220,6 +439,30 @@
                               </TextBox.KeyBindings>
                             </TextBox>
                             <Button Classes="accent" Content="{Tr Map.AddInFront}" HorizontalAlignment="Right" Command="{Binding AddObjectFromTextCommand}" ToolTip.Tip="{Tr Map.AddInFront.Tip}" />
+                            <!-- A trader anywhere: a stock trade post of the type, its own name (its economy section) and outpost -->
+                            <Separator Margin="0,2" />
+                            <TextBlock Text="{Tr Map.Trader.Title}" Classes="h3" />
+                            <TextBlock Text="{Tr Map.Trader.Hint}" Classes="caption wrap" />
+                            <Grid ColumnDefinitions="92,*" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="8" RowSpacing="6">
+                              <TextBlock Grid.Row="0" Text="{Tr Map.Trader.Type}" Classes="caption" VerticalAlignment="Center" />
+                              <ComboBox Grid.Row="0" Grid.Column="1" x:Name="TraderTypeBox" ItemsSource="{Binding TraderTypes}" SelectedItem="{Binding SelectedTraderType}" HorizontalAlignment="Stretch" ToolTip.Tip="{Tr Map.Trader.Type.Tip}" />
+                              <TextBlock Grid.Row="1" Text="{Tr Map.Trader.Name}" Classes="caption" VerticalAlignment="Center" />
+                              <TextBox Grid.Row="1" Grid.Column="1" x:Name="TraderNameBox" Text="{Binding TraderName}" Classes="mono" ToolTip.Tip="{Tr Map.Trader.Name.Tip}" />
+                              <TextBlock Grid.Row="2" Text="{Tr Map.Trader.Outpost}" Classes="caption" VerticalAlignment="Center" />
+                              <TextBox Grid.Row="2" Grid.Column="1" x:Name="TraderOutpostBox" Text="{Binding TraderOutpost}" Classes="mono" ToolTip.Tip="{Tr Map.Trader.Outpost.Tip}" />
+                            </Grid>
+                            <Button x:Name="PlaceTraderButton" Classes="accent" Content="{Tr Map.Trader.Place}" HorizontalAlignment="Right" Command="{Binding PlaceTraderCommand}" ToolTip.Tip="{Tr Map.Trader.Place.Tip}" />
+                            <!-- A mechanic's lift: the game's car or bike lift, tied to a mechanic of a loaded level -->
+                            <Separator Margin="0,2" />
+                            <TextBlock Text="{Tr Map.Lift.Title}" Classes="h3" />
+                            <TextBlock Text="{Tr Map.Lift.Hint}" Classes="caption wrap" />
+                            <Grid ColumnDefinitions="92,*" RowDefinitions="Auto,Auto" ColumnSpacing="8" RowSpacing="6">
+                              <TextBlock Grid.Row="0" Text="{Tr Map.Lift.Kind}" Classes="caption" VerticalAlignment="Center" />
+                              <ComboBox Grid.Row="0" Grid.Column="1" x:Name="LiftKindBox" ItemsSource="{Binding LiftKinds}" SelectedItem="{Binding SelectedLiftKind}" HorizontalAlignment="Stretch" ToolTip.Tip="{Tr Map.Lift.Kind.Tip}" />
+                              <TextBlock Grid.Row="1" Text="{Tr Map.Lift.Mechanic}" Classes="caption" VerticalAlignment="Center" />
+                              <ComboBox Grid.Row="1" Grid.Column="1" x:Name="LiftMechanicBox" ItemsSource="{Binding Mechanics}" SelectedItem="{Binding SelectedMechanic}" HorizontalAlignment="Stretch" PlaceholderText="{Tr Map.Lift.NoMechanic}" ToolTip.Tip="{Tr Map.Lift.Mechanic.Tip}" />
+                            </Grid>
+                            <Button x:Name="PlaceLiftButton" Classes="accent" Content="{Tr Map.Lift.Place}" HorizontalAlignment="Right" Command="{Binding PlaceLiftCommand}" ToolTip.Tip="{Tr Map.Lift.Place.Tip}" />
                           </StackPanel>
                         </Flyout>
                       </Button.Flyout>
@@ -379,9 +622,14 @@
             <c:ViewportGrid Background="{DynamicResource ViewportBrush}" AxisXBrush="{DynamicResource AxisXBrush}" AxisYBrush="{DynamicResource AxisYBrush}" IsVisible="{Binding !HasView}" />
             <c:LevelViewport x:Name="Viewport3d" Scene="{Binding PreparedScene}" PickParts="{Binding PickParts}" BrushMode="{Binding BrushSelect}" BrushRadius="{Binding BrushRadius}" SelectedId="{Binding SelectedActorId, Mode=TwoWay}" SelectedInstance="{Binding SelectedInstanceKey, Mode=TwoWay}" Backdrop="{Binding WorldBackdrop}" KeepCamera="{Binding IsWorldMode}" Quality="{Binding RenderQuality}" KindIds="{Binding KindSelectionIds}" KindInstances="{Binding KindSelectionInstances}" InstanceTransforms="{Binding InstanceTransforms}"
                              HiddenIds="{Binding HiddenActorIds}" HiddenInstances="{Binding HiddenInstanceKeys}" HiddenPinKinds="{Binding HiddenPinKinds}" PinOverrides="{Binding PinOverrides}"
-                             ActorTransforms="{Binding ActorTransforms}" Clones="{Binding Clones}" LocalAxes="{Binding LocalAxes}"
+                             ActorTransforms="{Binding ActorTransforms}" Clones="{Binding Clones}" LocalAxes="{Binding LocalAxes}" CanScale="{Binding GizmoCanScale}"
                              SelectedRootWorld="{Binding SelectedRootWorld}" TranslationSnap="{Binding TranslationSnap}" RotationSnap="{Binding RotationSnap}"
                              ExtraMeshes="{Binding ExtraMeshes}" Bends="{Binding Bends}" SegmentBends="{Binding SegmentBends}" ShapeHandles="{Binding ShapeHandles}" ScaleHandles="{Binding ScaleHandles}" LegHandle="{Binding LegHandle}" GroupWorlds="{Binding GroupWorlds}" IsVisible="{Binding HasView}" />
+            <!-- gizmo drag: the live value next to the cursor -->
+            <Border Classes="hud" IsHitTestVisible="False" HorizontalAlignment="Left" VerticalAlignment="Top"
+                    Margin="{Binding #Viewport3d.DragLabelMargin}" IsVisible="{Binding #Viewport3d.IsDragLabelVisible}">
+              <TextBlock Text="{Binding #Viewport3d.DragLabel}" />
+            </Border>
             <!-- drone mode: crosshair + what the keys do -->
             <Panel IsHitTestVisible="False" IsVisible="{Binding #Viewport3d.IsDroneMode}">
               <TextBlock Text="+" Classes="hud" FontSize="22" Foreground="{DynamicResource AccentBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
@@ -448,12 +696,13 @@
               <ListBox x:Name="EntityList" Classes="plain" ItemsSource="{Binding Actors}" SelectedItem="{Binding SelectedActor}" IsVisible="{Binding HasScene}">
                 <ListBox.ItemTemplate>
                   <DataTemplate x:DataType="vm:ActorItemViewModel">
-                    <Grid ColumnDefinitions="Auto,2*,2*,2*,Auto" ColumnSpacing="10" Opacity="{Binding IsDeleted, Converter={x:Static vm:MapPageViewModel.DeletedOpacity}}">
+                    <Grid ColumnDefinitions="Auto,2*,2*,2*,Auto,Auto" ColumnSpacing="10" Opacity="{Binding IsDeleted, Converter={x:Static vm:MapPageViewModel.DeletedOpacity}}">
                       <c:GlyphIcon Grid.Column="0" Kind="{Binding IconKey}" IconSize="14" VerticalAlignment="Center" />
                       <TextBlock Grid.Column="1" Text="{Binding Name}" FontSize="12.5" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
                       <TextBlock Grid.Column="2" Text="{Binding ClassName}" Classes="caption" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
                       <TextBlock Grid.Column="3" Text="{Binding MeshName}" Classes="caption" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
                       <TextBlock Grid.Column="4" Text="{Binding LocationText}" Classes="caption mono" VerticalAlignment="Center" />
+                      <c:GlyphIcon Grid.Column="5" Kind="Icon.EyeOff" IconSize="14" VerticalAlignment="Center" IsVisible="{Binding IsHiddenInGame}" ToolTip.Tip="{Tr Map.HiddenInGame.Tip}" />
                     </Grid>
                   </DataTemplate>
                 </ListBox.ItemTemplate>
@@ -517,6 +766,13 @@
                       </StackPanel>
                     </Button>
                   </StackPanel>
+                  <!-- A trader: its stock and prices on the Economy page -->
+                  <Button Classes="small" x:Name="EditStockButton" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Command="{Binding EditStockCommand}" IsVisible="{Binding HasSelectedTrader}" ToolTip.Tip="{Tr Map.EditStock.Tip}">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                      <c:GlyphIcon Kind="Icon.Coins" IconSize="12" />
+                      <TextBlock Text="{Tr Map.EditStock}" />
+                    </StackPanel>
+                  </Button>
                   <Separator />
                   <ItemsControl ItemsSource="{Binding ActorProperties}">
                     <ItemsControl.ItemTemplate>
@@ -606,7 +862,18 @@
                 <TextBlock Classes="caption wrap" TextAlignment="Center"
                            Text="{Tr Map.NoProject.Body}" />
               </StackPanel>
-              <ListBox x:Name="HistoryList" Classes="plain" ItemsSource="{Binding Session.History}" IsVisible="{Binding Session.HasProject}">
+              <ListBox x:Name="HistoryList" Classes="plain" ItemsSource="{Binding Session.History}" SelectedItem="{Binding SelectedHistoryItem}" IsVisible="{Binding Session.HasProject}">
+                <!-- Right-click a row: fly to what the edit touched, or just select it -->
+                <ListBox.ContextMenu>
+                  <ContextMenu>
+                    <MenuItem Header="{Tr History.GoTo}" Command="{Binding GoToEditCommand}" ToolTip.Tip="{Tr History.GoTo.Tip}">
+                      <MenuItem.Icon><c:GlyphIcon Kind="Icon.Camera" IconSize="14" /></MenuItem.Icon>
+                    </MenuItem>
+                    <MenuItem Header="{Tr History.Select}" Command="{Binding SelectEditCommand}" ToolTip.Tip="{Tr History.Select.Tip}">
+                      <MenuItem.Icon><c:GlyphIcon Kind="Icon.Cursor" IconSize="14" /></MenuItem.Icon>
+                    </MenuItem>
+                  </ContextMenu>
+                </ListBox.ContextMenu>
                 <ListBox.ItemTemplate>
                   <DataTemplate x:DataType="vm:HistoryItemViewModel">
                     <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8" Opacity="{Binding Opacity}">

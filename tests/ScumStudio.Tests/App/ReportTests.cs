@@ -60,14 +60,14 @@ public sealed class ReportTests
         var service = new ReportService(NullLogger.Instance, () => network, clock, Webhook);
         Assert.True(service.IsAvailable);
 
-        var result = await service.SendAsync(ReportCategory.Question, "Wie kopiere ich ein Haus?", [("Version", "0.2.7")]);
+        var result = await service.SendAsync(ReportCategory.Idea, "Wie kopiere ich ein Haus?", [("Version", "0.2.7")]);
         Assert.True(result.Sent);
         Assert.True(result.Translated);
         Assert.Equal(2, network.Requests.Count);
         Assert.StartsWith("https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=en", network.Requests[0].Url, StringComparison.Ordinal);
         Assert.Equal(Webhook, network.Requests[1].Url);
         var posted = JsonNode.Parse(network.Requests[1].Body!)!;
-        Assert.Equal("Question: How do I copy a house?", posted["embeds"]![0]!["title"]!.GetValue<string>());
+        Assert.Equal("Idea: How do I copy a house?", posted["embeds"]![0]!["title"]!.GetValue<string>());
         Assert.Contains(posted["embeds"]![0]!["fields"]!.AsArray(), f => f!["name"]!.GetValue<string>() == "Original (de)");
 
         // A second one right away waits (the address is in every copy of the app).
@@ -104,7 +104,7 @@ public sealed class ReportTests
             HeadlessUi.Pump();
             Assert.True(vm.IsSupportOpen);
             Assert.NotNull(vm.SelectedReportCategory);
-            Assert.Equal(3, vm.ReportCategories.Count);
+            Assert.Equal(2, vm.ReportCategories.Count); // broken or an idea: a question has no way back to the asker
             Assert.False(vm.SendReportCommand.CanExecute(null));
             vm.ReportText = "A tree I deleted is still in the game.";
             Assert.Equal(vm.ReportText.Length + " / 1500", vm.ReportLengthText);

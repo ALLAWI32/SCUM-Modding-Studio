@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Numerics;
 using CUE4Parse.UE4.Assets.Exports.Texture;
@@ -44,6 +45,13 @@ public sealed record LevelSceneOptions
     /// <summary>Selectable-id offset per document index (ids are <c>documentIndex &lt;&lt; shift | exportIndex + 1</c>).</summary>
     public int DocumentIdShift { get; init; } = 20;
 
+    /// <summary>
+    /// The number each document's ids are made from (its slot; ids are <c>slot &lt;&lt; shift | exportIndex + 1</c>), index-aligned
+    /// with the documents; null = the document index. A level that stays loaded from one scene to the next keeps its slot
+    /// (see <see cref="LevelScenePreparer.SlotsAfter"/>), so its actors keep their ids and a viewport keeps its nodes.
+    /// </summary>
+    public IReadOnlyList<int>? DocumentSlots { get; init; }
+
     /// <summary>How terrain is coloured (default <see cref="GroundMode.Realistic"/>: baked colours from the paint layers).</summary>
     public GroundMode Ground { get; init; } = GroundMode.Realistic;
 
@@ -84,7 +92,7 @@ public sealed record LevelSceneOptions
 /// <param name="World">UE world transform (centimetres).</param>
 /// <param name="SelectableId">Id reported by picking (0 = not pickable).</param>
 /// <param name="Name">Display name (<c>Actor/Component[instance]</c>).</param>
-/// <param name="DocumentIndex">Index of the owning document in the prepared scene.</param>
+/// <param name="DocumentIndex">Slot of the owning document in the prepared scene (see <see cref="PreparedLevelScene.Slots"/>; its index unless slots were given).</param>
 /// <param name="Actor">Owning actor.</param>
 /// <param name="Component">Component, when the placement is a component mesh.</param>
 /// <param name="Instance">ISM/HISM instance, when the placement is an instance.</param>
@@ -280,6 +288,12 @@ public sealed record PreparedMeshAsset(string MeshPath, MeshData Mesh, string? T
     /// descriptions) unless a placement gives it real materials through <c>OverrideMaterials</c>.
     /// </summary>
     public bool IsEditorOnly { get; init; }
+
+    /// <summary>A spawn stand-in: its translucent materials pulse in opacity ("keep glinting") with the renderer's time (<c>SceneRenderer.Time</c>).</summary>
+    public bool Shimmer { get; init; }
+
+    /// <summary>A camera-facing card (an item's inventory icon at a loot point): drawn spanning the camera's right and up.</summary>
+    public bool Billboard { get; init; }
 }
 
 /// <summary>What a material contributes to the viewport: its base-colour texture (or colour without one) and, when masked, the alpha clip value.</summary>
@@ -324,8 +338,20 @@ public sealed class PreparedLevelScene
         Elapsed = elapsed;
     }
 
-    /// <summary>The level documents, in placement <see cref="ScenePlacement.DocumentIndex"/> order.</summary>
+    /// <summary>The level documents (a placement's <see cref="ScenePlacement.DocumentIndex"/> is the slot of its document, see <see cref="Slots"/>).</summary>
     public IReadOnlyList<LevelDocument> Documents { get; }
+
+    /// <summary>The slot of each document (index-aligned with <see cref="Documents"/>; see <see cref="LevelSceneOptions.DocumentSlots"/>), or null when every slot is the index.</summary>
+    public IReadOnlyList<int>? Slots { get; init; }
+
+    /// <summary>The slot of the document at <paramref name="documentIndex"/>: the number its actors' ids are made from.</summary>
+    public int SlotOf(int documentIndex) => Slots is { } slots ? slots[documentIndex] : documentIndex;
+
+    /// <summary>The selectable id of <paramref name="actor"/> of the document at <paramref name="documentIndex"/>.</summary>
+    public uint IdOf(int documentIndex, ActorRecord actor) => LevelScenePreparer.SelectableIdOf(SlotOf(documentIndex), actor, IdShift);
+
+    /// <summary>The id shift the scene was prepared with (<see cref="LevelSceneOptions.DocumentIdShift"/>).</summary>
+    public int IdShift { get; init; } = 20;
 
     /// <summary>The straight meshes of the spline pieces (roads, rails, bridges), by path: CPU only, for bending a piece anew.</summary>
     public IReadOnlyDictionary<string, PreparedMeshAsset> SplineSources { get; init; } = new Dictionary<string, PreparedMeshAsset>();
@@ -393,6 +419,8 @@ public sealed class LevelScenePreparer
 {
     private readonly AssetCatalog _catalog;
     private readonly ILogger _logger;
+    private SpawnModels? _models;
+    private MeshPreviewLoader? _previews;
 
     /// <summary>Creates a preparer over <paramref name="catalog"/>.</summary>
     public LevelScenePreparer(AssetCatalog catalog, ILogger? logger = null)
@@ -401,12 +429,55 @@ public sealed class LevelScenePreparer
         _logger = logger ?? NullLogger.Instance;
     }
 
-    /// <summary>Selectable id of an actor: <c>documentIndex &lt;&lt; shift | exportIndex + 1</c>.</summary>
+    /// <summary>
+    /// Slots for <paramref name="documents"/> (see <see cref="LevelSceneOptions.DocumentSlots"/>) when they replace
+    /// <paramref name="shown"/>: a level shown there keeps its slot, a new one takes the lowest slot no level of the new
+    /// set holds (so a first load numbers its levels 0, 1, 2, … like their indices).
+    /// </summary>
+    public static int[] SlotsAfter(IReadOnlyList<LevelDocument> documents, PreparedLevelScene? shown, int shift = 20)
+    {
+        ArgumentNullException.ThrowIfNull(documents);
+        var previous = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        for (var i = 0; shown is not null && i < shown.Documents.Count; i++)
+        {
+            previous.TryAdd(shown.Documents[i].PackagePath, shown.SlotOf(i));
+        }
+
+        var slots = new int[documents.Count];
+        var used = new HashSet<int>();
+        for (var i = 0; i < documents.Count; i++)
+        {
+            slots[i] = previous.TryGetValue(documents[i].PackagePath, out var kept) && used.Add(kept) ? kept : -1;
+        }
+
+        var free = 0;
+        for (var i = 0; i < documents.Count; i++)
+        {
+            if (slots[i] < 0)
+            {
+                while (used.Contains(free))
+                {
+                    free++;
+                }
+
+                used.Add(free);
+                slots[i] = free;
+            }
+        }
+
+        // Ids must stay below 2^31 (added actors and previews number from there): numbered anew in the unlikely case they would not.
+        return slots.Any(s => s >= 1 << (31 - shift)) ? Enumerable.Range(0, documents.Count).ToArray() : slots;
+    }
+
+    /// <summary>Selectable id of an actor: <c>documentIndex &lt;&lt; shift | exportIndex + 1</c> (the document's slot, see <see cref="LevelSceneOptions.DocumentSlots"/>).</summary>
     public static uint SelectableIdOf(int documentIndex, ActorRecord actor, int shift = 20) =>
         ((uint)documentIndex << shift) | (uint)(actor.ExportIndex + 1);
 
-    /// <summary>Every mesh placement of <paramref name="document"/> (component meshes and ISM/HISM instances).</summary>
-    public static List<ScenePlacement> CollectPlacements(LevelDocument document, int documentIndex, LevelSceneOptions? options = null)
+    /// <summary>
+    /// Every mesh placement of <paramref name="document"/> (component meshes, ISM/HISM instances and spawn pins; with
+    /// <paramref name="models"/> the pins of known objects are those objects, see <see cref="SpawnMarkers.PinsOf"/>).
+    /// </summary>
+    public static List<ScenePlacement> CollectPlacements(LevelDocument document, int documentIndex, LevelSceneOptions? options = null, SpawnModels? models = null)
     {
         ArgumentNullException.ThrowIfNull(document);
         options ??= new LevelSceneOptions();
@@ -434,7 +505,7 @@ public sealed class LevelScenePreparer
                     $"{actor.Name}/{component.Name}", documentIndex, actor, component, null) { Spawner = spawner });
             }
 
-            placements.AddRange(PinPlacements(actor, id, documentIndex, options.DocumentIdShift));
+            placements.AddRange(PinPlacements(actor, id, documentIndex, options.DocumentIdShift, models));
             if (!options.IncludeInstances)
             {
                 continue;
@@ -471,15 +542,16 @@ public sealed class LevelScenePreparer
     /// id; a building's loot point picks as itself (the building's id with its own key: what spawns there, owner: "the pin
     /// tells me nothing"); a spawn part (a fixed-item spawner, a car shop's vehicle box) picks as that part of the building; a
     /// point of a stored point array picks as that point; a vehicle box the level does not store gets an id of its own (bit
-    /// 19), which picks nothing. A viewport calls this again with the actor's points as the project has them.
+    /// 19), which picks nothing. A viewport calls this again with the actor's points as the project has them (with the
+    /// same <paramref name="models"/>, so the pins keep the meshes the scene has).
     /// </summary>
-    public static IEnumerable<ScenePlacement> PinPlacements(ActorRecord actor, uint id, int documentIndex, int idShift = 20)
+    public static IEnumerable<ScenePlacement> PinPlacements(ActorRecord actor, uint id, int documentIndex, int idShift = 20, SpawnModels? models = null)
     {
         ArgumentNullException.ThrowIfNull(actor);
-        foreach (var (kind, pin, picksActor, label, marker, part, point) in SpawnMarkers.PinsOf(actor))
+        foreach (var (kind, pin, picksActor, label, marker, part, point, model) in SpawnMarkers.PinsOf(actor, models))
         {
             var pinId = picksActor || marker is not null || part is not null || point is not null ? id : id | (1u << (idShift - 1));
-            yield return new ScenePlacement(SpawnMarkers.MeshKey(kind), UeToGl.ModelMatrix(pin), pin, pinId, label, documentIndex, actor, null, null)
+            yield return new ScenePlacement(SpawnMarkers.MeshKey(kind, model), UeToGl.ModelMatrix(pin), pin, pinId, label, documentIndex, actor, null, null)
             {
                 LootMarker = marker,
                 Spawner = part?.Name,
@@ -582,10 +654,16 @@ public sealed class LevelScenePreparer
         var clock = Stopwatch.StartNew();
         var warnings = new List<string>();
 
+        if (options.DocumentSlots is { } slots && slots.Count != documents.Count)
+        {
+            throw new ArgumentException($"{slots.Count} slots for {documents.Count} documents.", nameof(options));
+        }
+
+        var models = cache is null ? _models ??= new SpawnModels(_catalog, _logger) : cache.ModelsFor(_catalog, _logger);
         var requested = new List<ScenePlacement>();
         for (var i = 0; i < documents.Count; i++)
         {
-            requested.AddRange(CollectPlacements(documents[i], i, options));
+            requested.AddRange(CollectPlacements(documents[i], options.DocumentSlots?[i] ?? i, options, models));
         }
 
         var meshPaths = requested.Select(p => p.MeshPath).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
@@ -595,10 +673,20 @@ public sealed class LevelScenePreparer
         var missing = new List<string>();
         var total = meshPaths.Count + (options.IncludeLandscape ? documents.Count : 0);
         var done = 0;
+        var prefetch = PrefetchMeshes(meshPaths.Where(p => !(cache?.Meshes.ContainsKey(p) ?? false) && SpawnMarkers.KindOfMesh(p) is null).ToList(),
+            options, textures, materials, progress, total, cancellationToken);
         foreach (var meshPath in meshPaths)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            progress?.Report((done++, total, meshPath));
+            if (prefetch.Meshes.ContainsKey(meshPath))
+            {
+                done++; // reported while it was read
+            }
+            else
+            {
+                progress?.Report((done++, total, meshPath));
+            }
+
             PreparedMeshAsset? asset;
             string reason;
             if (cache is not null && cache.Meshes.TryGetValue(meshPath, out var hit))
@@ -606,13 +694,25 @@ public sealed class LevelScenePreparer
                 (asset, reason) = (hit.Asset, hit.Reason);
                 cache.Meshes[meshPath] = hit with { Used = cache.Generation };
             }
+            else if (SpawnMarkers.ModelOf(meshPath) is { } model && SpawnMarkers.KindOfMesh(meshPath) is { } kind)
+            {
+                // The object that spawns there, half transparent; its plain shape when the model cannot be loaded.
+                asset = TryLoadModel(model, options, textures, materials, out var standIn, out reason)
+                    ? SpawnMarkers.StandIn(standIn, kind, meshPath)
+                    : SpawnMarkers.AssetFor(meshPath);
+                reason = string.Empty;
+                if (cache is not null)
+                {
+                    cache.Meshes[meshPath] = (asset, reason, cache.Generation);
+                }
+            }
             else if (SpawnMarkers.AssetFor(meshPath) is { } marker)
             {
                 (asset, reason) = (marker, string.Empty);
             }
             else
             {
-                asset = TryLoadMesh(meshPath, options, textures, materials, out var loaded, out reason) ? loaded : null;
+                asset = TryLoadMesh(meshPath, options, textures, materials, out var loaded, out reason, prefetch: prefetch) ? loaded : null;
                 if (cache is not null)
                 {
                     cache.Meshes[meshPath] = (asset, reason, cache.Generation);
@@ -671,6 +771,8 @@ public sealed class LevelScenePreparer
 
         var terrain = new List<PreparedTerrain>();
         var bakedFromCache = cache is not null;
+        var tiles = new List<string>(); // landscape documents in order (cache path)
+        var unbaked = new List<(string Path, List<PreparedTerrain> Terrain)>();
         if (options.IncludeLandscape)
         {
             foreach (var document in documents)
@@ -684,17 +786,14 @@ public sealed class LevelScenePreparer
 
                 if (cache is not null)
                 {
-                    // Baked once per tile; every tile shares one set of bake settings (island-wide height range).
-                    if (!cache.Terrain.TryGetValue(document.PackagePath, out var tile))
+                    // Baked once per tile (below, all new tiles in one go); every tile shares one set of bake settings
+                    // (island-wide height range).
+                    tiles.Add(document.PackagePath);
+                    if (!cache.Terrain.ContainsKey(document.PackagePath) && !unbaked.Any(u => string.Equals(u.Path, document.PackagePath, StringComparison.OrdinalIgnoreCase)))
                     {
-                        var extracted = ExtractTerrain(document, options, warnings);
-                        cache.BakeSettings ??= CreateBakeSettings(options, [], out cache.MissingLayerTextures);
-                        var albedo = extracted.Count == 0 ? [] : BakeTerrain(extracted, cache.BakeSettings, out _, cancellationToken);
-                        tile = (extracted.Select((t, i) => t with { Albedo = albedo[i] }).ToList(), 0);
+                        unbaked.Add((document.PackagePath, ExtractTerrain(document, options, warnings)));
                     }
 
-                    cache.Terrain[document.PackagePath] = tile with { Used = cache.Generation };
-                    terrain.AddRange(tile.Terrain);
                     continue;
                 }
 
@@ -715,6 +814,31 @@ public sealed class LevelScenePreparer
                 {
                     warnings.Add($"{document.Name}: landscape could not be built ({ex.Message}).");
                 }
+            }
+        }
+
+        if (cache is not null)
+        {
+            // One bake over the components of every new tile keeps all cores busy (a tile has only four); each component
+            // bakes on its own, so the colours are the same as tile by tile.
+            if (unbaked.Count > 0)
+            {
+                cache.BakeSettings ??= CreateBakeSettings(options, [], out cache.MissingLayerTextures);
+                var all = unbaked.SelectMany(u => u.Terrain).ToList();
+                var albedo = all.Count == 0 ? [] : BakeTerrain(all, cache.BakeSettings, out _, cancellationToken);
+                var first = 0;
+                foreach (var (path, extracted) in unbaked)
+                {
+                    cache.Terrain[path] = (extracted.Select((t, i) => t with { Albedo = albedo[first + i] }).ToList(), 0);
+                    first += extracted.Count;
+                }
+            }
+
+            foreach (var path in tiles)
+            {
+                var tile = cache.Terrain[path];
+                cache.Terrain[path] = tile with { Used = cache.Generation };
+                terrain.AddRange(tile.Terrain);
             }
         }
 
@@ -746,6 +870,8 @@ public sealed class LevelScenePreparer
         return new PreparedLevelScene(documents, placements, meshes, textures, missing, ground.Terrain, warnings, clock.Elapsed)
         {
             RequestedPlacements = requested.Count,
+            Slots = options.DocumentSlots,
+            IdShift = options.DocumentIdShift,
             Ground = options.Ground,
             SeaLevelCm = ground.SeaLevelCm,
             HeightField = ground.HeightField,
@@ -895,53 +1021,116 @@ public sealed class LevelScenePreparer
     public ExtraMesh? PrepareMesh(string meshPath, LevelSceneOptions? options = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(meshPath);
+        var textures = new Dictionary<string, TextureImage>(StringComparer.OrdinalIgnoreCase);
+        var materials = new Dictionary<string, MaterialLook>(StringComparer.OrdinalIgnoreCase);
+        if (SpawnMarkers.ModelOf(meshPath) is { } model && SpawnMarkers.KindOfMesh(meshPath) is { } kind
+            && TryLoadModel(model, options ?? new LevelSceneOptions(), textures, materials, out var standIn, out _))
+        {
+            return new ExtraMesh(SpawnMarkers.StandIn(standIn, kind, meshPath), textures); // the object of a copied spawner's pin
+        }
+
         if (SpawnMarkers.AssetFor(meshPath) is { } marker)
         {
             return new ExtraMesh(marker, new Dictionary<string, TextureImage>()); // a spawn pin of a copied spawner
         }
 
-        var textures = new Dictionary<string, TextureImage>(StringComparer.OrdinalIgnoreCase);
-        var materials = new Dictionary<string, MaterialLook>(StringComparer.OrdinalIgnoreCase);
         return TryLoadMesh(meshPath, options ?? new LevelSceneOptions(), textures, materials, out var asset, out _) ? new ExtraMesh(asset, textures) : null;
     }
 
     private const string EditorOnlyReason = "editor-only grid material";
 
-    private bool TryLoadMesh(string meshPath, LevelSceneOptions options, Dictionary<string, TextureImage> textures, Dictionary<string, MaterialLook> materials,
+    /// <summary>
+    /// Loads the model of a spawn stand-in (<see cref="SpawnModels"/>): a mesh by its object path, or a vehicle Blueprint by
+    /// its package path (no object name): the body with the stock parts on it, as the 3D preview shows it, merged into one
+    /// mesh (<see cref="MeshPreviewLoader.Merge"/>); every part at its coarsest LOD that still has a thousand triangles.
+    /// </summary>
+    private bool TryLoadModel(string model, LevelSceneOptions options, Dictionary<string, TextureImage> textures, Dictionary<string, MaterialLook> materials,
         out PreparedMeshAsset asset, out string reason)
+    {
+        asset = null!;
+        if (model.StartsWith(SpawnMarkers.IconPrefix, StringComparison.Ordinal))
+        {
+            // An item without a mesh: its inventory icon on a small camera-facing card.
+            var path = model[SpawnMarkers.IconPrefix.Length..];
+            try
+            {
+                if (!textures.TryGetValue(path, out var image))
+                {
+                    image = TextureDecoder.Decode(_catalog.LoadObject<UTexture2D>(path), maxSize: 128);
+                    textures[path] = image;
+                }
+
+                asset = SpawnMarkers.IconAsset(model, path, image.Width, image.Height);
+                reason = string.Empty;
+                return true;
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                _logger.LogDebug("Icon {Icon} could not be decoded: {Message}", path, ex.Message);
+                reason = ex.GetType().Name;
+                return false;
+            }
+        }
+
+        if (model.IndexOf('.', model.LastIndexOf('/') + 1) >= 0)
+        {
+            return TryLoadMesh(model, options, textures, materials, out asset, out reason, standIn: true);
+        }
+
+        try
+        {
+            if (_previews is null || _previews.TextureSize != options.TextureSize)
+            {
+                _previews = new MeshPreviewLoader(_catalog, _logger) { TextureSize = options.TextureSize, LodOf = StandInLod };
+            }
+
+            if (_previews.LoadBlueprint(model) is not { Parts.Count: > 0 } blueprint)
+            {
+                reason = "no mesh";
+                return false;
+            }
+
+            foreach (var (path, image) in blueprint.Textures)
+            {
+                textures.TryAdd(path, image);
+            }
+
+            asset = MeshPreviewLoader.Merge(blueprint, model);
+            reason = string.Empty;
+            return true;
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogDebug("Blueprint {Blueprint} could not be loaded as a stand-in: {Message}", model, ex.Message);
+            reason = ex.GetType().Name;
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Loads a mesh with its LOD chain and material looks. A <paramref name="standIn"/> (the model of a spawn pin, drawn in
+    /// many copies over the map) takes a skeletal mesh at its coarsest LOD that still has a thousand triangles.
+    /// </summary>
+    private bool TryLoadMesh(string meshPath, LevelSceneOptions options, Dictionary<string, TextureImage> textures, Dictionary<string, MaterialLook> materials,
+        out PreparedMeshAsset asset, out string reason, bool standIn = false, Prefetch? prefetch = null)
     {
         asset = null!;
         try
         {
-            var obj = _catalog.LoadObject(meshPath);
-            if (!MeshExtractor.IsMesh(obj))
+            var loaded = !standIn && prefetch is not null && prefetch.Meshes.TryGetValue(meshPath, out var early) ? early.Value : LoadMesh(meshPath, options, standIn);
+            if (loaded.NotMeshType is { } type)
             {
-                reason = obj.ExportType;
+                reason = type;
                 return false;
             }
 
-            // Meshes left on the engine's default grid material are volumes the game never draws (weather masks,
-            // environment descriptions round the bunkers): drawn here they wrapped whole bases in grey shells.
-            var info = MeshExtractor.Describe(obj);
-            var editorOnly = info.Materials.Count > 0
-                             && info.Materials.All(m => m.MaterialPath.StartsWith("/Engine/EngineMaterials/WorldGridMaterial", StringComparison.OrdinalIgnoreCase));
-
-            MeshLodChain chain;
-            try
-            {
-                chain = MeshExtractor.ExtractLods(obj, options.Lod, options.MaxLods);
-            }
-            catch (Exception) when (options.Lod > 0)
-            {
-                chain = MeshExtractor.ExtractLods(obj, 0, options.MaxLods);
-            }
-
+            var (info, chain, editorOnly) = (loaded.Info!, loaded.Chain!, loaded.EditorOnly);
             var materialTextures = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             var alphaCutoffs = new Dictionary<string, float>(StringComparer.OrdinalIgnoreCase);
             var tints = new Dictionary<string, Vector4>(StringComparer.OrdinalIgnoreCase);
             if (options.TextureSize > 0)
             {
-                FindMaterialTextures(info.Materials.Select(m => m.MaterialPath), options.TextureSize, textures, materials, materialTextures, alphaCutoffs, tints);
+                FindMaterialTextures(info.Materials.Select(m => m.MaterialPath), options.TextureSize, textures, materials, materialTextures, alphaCutoffs, tints, prefetch);
             }
 
             asset = new PreparedMeshAsset(meshPath, chain.Lods[0], materialTextures.Values.FirstOrDefault())
@@ -963,6 +1152,145 @@ public sealed class LevelScenePreparer
             reason = ex.GetType().Name;
             return false;
         }
+    }
+
+    /// <summary>
+    /// The reading part of <see cref="TryLoadMesh"/>: the mesh object, its description and LOD chain (throws what they throw).
+    /// Touches no shared state, so <see cref="PrefetchMeshes"/> runs it on many threads.
+    /// </summary>
+    private LoadedMesh LoadMesh(string meshPath, LevelSceneOptions options, bool standIn)
+    {
+        var obj = _catalog.LoadObject(meshPath);
+        if (!MeshExtractor.IsMesh(obj))
+        {
+            return new LoadedMesh(obj.ExportType, null, null, false);
+        }
+
+        // Meshes left on the engine's default grid material are volumes the game never draws (weather masks,
+        // environment descriptions round the bunkers): drawn here they wrapped whole bases in grey shells.
+        var info = MeshExtractor.Describe(obj);
+        var editorOnly = info.Materials.Count > 0
+                         && info.Materials.All(m => m.MaterialPath.StartsWith("/Engine/EngineMaterials/WorldGridMaterial", StringComparison.OrdinalIgnoreCase));
+
+        var lod = standIn && info.Kind == MeshAssetKind.Skeletal ? StandInLod(info.Lods) : options.Lod;
+        MeshLodChain chain;
+        try
+        {
+            chain = MeshExtractor.ExtractLods(obj, lod, options.MaxLods);
+        }
+        catch (Exception) when (lod > 0)
+        {
+            chain = MeshExtractor.ExtractLods(obj, 0, options.MaxLods);
+        }
+
+        return new LoadedMesh(null, info, chain, editorOnly);
+    }
+
+    /// <summary>A mesh as <see cref="LoadMesh"/> read it: <see cref="NotMeshType"/> when the object is no mesh, else its parts.</summary>
+    private sealed record LoadedMesh(string? NotMeshType, MeshAssetInfo? Info, MeshLodChain? Chain, bool EditorOnly);
+
+    /// <summary>
+    /// What <see cref="PrefetchMeshes"/> read ahead: meshes, material inspections and texture decodes (at <see cref="TextureSize"/>),
+    /// each with its result or the exception it threw (a <see cref="Lazy{T}"/> keeps either).
+    /// </summary>
+    private sealed class Prefetch(int textureSize)
+    {
+        public int TextureSize { get; } = textureSize;
+
+        public ConcurrentDictionary<string, Lazy<LoadedMesh>> Meshes { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+        public ConcurrentDictionary<string, Lazy<MaterialInfo>> Materials { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+        public ConcurrentDictionary<string, Lazy<TextureImage>> Textures { get; } = new(StringComparer.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Reads <paramref name="meshPaths"/> on all cores but one: each mesh with its LOD chain, the materials it uses that
+    /// <paramref name="materials"/> does not know yet and their base colour textures that <paramref name="textures"/> lacks.
+    /// Those are pure reads of the game files: the loop of <see cref="PrepareCore"/> then runs as it always did, in the same
+    /// order, and takes each answer (or exception) from here instead of reading it itself, so the scene is the same.
+    /// The two dictionaries are only read here (nothing writes them until this returns).
+    /// </summary>
+    private Prefetch PrefetchMeshes(IReadOnlyList<string> meshPaths, LevelSceneOptions options, Dictionary<string, TextureImage> textures,
+        Dictionary<string, MaterialLook> materials, IProgress<(int Done, int Total, string Item)>? progress, int total, CancellationToken cancellationToken)
+    {
+        var prefetch = new Prefetch(options.TextureSize);
+        foreach (var path in meshPaths)
+        {
+            prefetch.Meshes.TryAdd(path, new Lazy<LoadedMesh>(() => LoadMesh(path, options, standIn: false)));
+        }
+
+        var done = 0;
+        var parallel = new ParallelOptions { CancellationToken = cancellationToken, MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount - 1) };
+        Parallel.ForEach(prefetch.Meshes, parallel, entry =>
+        {
+            progress?.Report((Interlocked.Increment(ref done) - 1, total, entry.Key));
+            if (!Warm(entry.Value) || options.TextureSize <= 0 || entry.Value.Value.Info is not { } info)
+            {
+                return;
+            }
+
+            foreach (var material in info.Materials.Select(m => m.MaterialPath).Where(p => !string.IsNullOrEmpty(p)))
+            {
+                if (materials.TryGetValue(material, out var look))
+                {
+                    if (look.Texture is { } kept && !textures.ContainsKey(kept))
+                    {
+                        Warm(TextureAhead(kept));
+                    }
+
+                    continue;
+                }
+
+                var inspected = prefetch.Materials.GetOrAdd(material, m => new Lazy<MaterialInfo>(() => new MaterialInspector(_catalog).Inspect(m)));
+                if (Warm(inspected) && inspected.Value.BaseColorTexture is { } texture && !textures.ContainsKey(texture))
+                {
+                    Warm(TextureAhead(texture));
+                }
+            }
+        });
+        return prefetch;
+
+        Lazy<TextureImage> TextureAhead(string path) => prefetch.Textures.GetOrAdd(path, p =>
+            new Lazy<TextureImage>(() => TextureDecoder.Decode(_catalog.LoadObject<UTexture2D>(p), maxSize: options.TextureSize)));
+
+        // The exception stays in the Lazy and is thrown again where the sequential loop asks for the value.
+        static bool Warm<T>(Lazy<T> lazy)
+        {
+            try
+            {
+                _ = lazy.Value;
+                return true;
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+        }
+    }
+
+    /// <summary>A material's inspection, read ahead by <paramref name="prefetch"/> or now.</summary>
+    private MaterialInfo Inspect(string materialPath, Prefetch? prefetch) =>
+        prefetch is not null && prefetch.Materials.TryGetValue(materialPath, out var early) ? early.Value : new MaterialInspector(_catalog).Inspect(materialPath);
+
+    /// <summary>A texture decoded at <paramref name="maxSize"/>, read ahead by <paramref name="prefetch"/> or now.</summary>
+    private TextureImage Decode(string texturePath, int maxSize, Prefetch? prefetch) =>
+        prefetch is not null && prefetch.TextureSize == maxSize && prefetch.Textures.TryGetValue(texturePath, out var early)
+            ? early.Value
+            : TextureDecoder.Decode(_catalog.LoadObject<UTexture2D>(texturePath), maxSize: maxSize);
+
+    /// <summary>The coarsest LOD that still has a thousand triangles (a stand-in's skeletal mesh or vehicle part), else the finest.</summary>
+    private static int StandInLod(IReadOnlyList<MeshLodInfo> lods)
+    {
+        for (var i = lods.Count - 1; i > 0; i--)
+        {
+            if (!lods[i].IsStripped && lods[i].TriangleCount >= 1000)
+            {
+                return i;
+            }
+        }
+
+        return 0;
     }
 
     /// <summary>Colour of a material that has neither a texture nor a colour parameter (mid grey, as the mesh preview).</summary>
@@ -1030,7 +1358,7 @@ public sealed class LevelScenePreparer
     /// <paramref name="tints"/>.
     /// </summary>
     private void FindMaterialTextures(IEnumerable<string> materialPaths, int maxSize, Dictionary<string, TextureImage> textures, Dictionary<string, MaterialLook> materials,
-        Dictionary<string, string> result, Dictionary<string, float> alphaCutoffs, Dictionary<string, Vector4> tints)
+        Dictionary<string, string> result, Dictionary<string, float> alphaCutoffs, Dictionary<string, Vector4> tints, Prefetch? prefetch = null)
     {
         foreach (var slot in materialPaths.Select(p => new { MaterialPath = p }))
         {
@@ -1046,7 +1374,7 @@ public sealed class LevelScenePreparer
                 var tint = Untextured;
                 try
                 {
-                    var material = new MaterialInspector(_catalog).Inspect(slot.MaterialPath);
+                    var material = Inspect(slot.MaterialPath, prefetch);
                     clip = material.OpacityMaskClip ?? 0f;
                     if (material.TintColor is { W: > 0f } colour)
                     {
@@ -1064,7 +1392,7 @@ public sealed class LevelScenePreparer
                     {
                         if (!textures.ContainsKey(path))
                         {
-                            textures[path] = TextureDecoder.Decode(_catalog.LoadObject<UTexture2D>(path), maxSize: maxSize);
+                            textures[path] = Decode(path, maxSize, prefetch);
                         }
 
                         texturePath = path;
@@ -1084,7 +1412,7 @@ public sealed class LevelScenePreparer
                 // streamed in again drew white (owner: "no textures, like San Andreas"). Decode it again.
                 try
                 {
-                    textures[kept] = TextureDecoder.Decode(_catalog.LoadObject<UTexture2D>(kept), maxSize: maxSize);
+                    textures[kept] = Decode(kept, maxSize, prefetch);
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {

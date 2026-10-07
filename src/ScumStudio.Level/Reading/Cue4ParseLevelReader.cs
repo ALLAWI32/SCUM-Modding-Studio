@@ -129,6 +129,43 @@ public sealed partial class Cue4ParseLevelReader : ILevelReader
     public bool LevelExists(string packagePath) =>
         _catalog.TryGetPackageFile(packagePath, out var file) && file.Path.EndsWith(".umap", StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// Reads <paramref name="packagePaths"/> side by side (all cores but one) into documents. Each entry holds its document
+    /// or the exception reading it threw, so a caller that takes them in order meets what reading them one by one gave.
+    /// The classes each level needs are registered first, one level at a time: CUE4Parse's class registry is a plain
+    /// dictionary that the parallel reads only look up.
+    /// </summary>
+    public IReadOnlyDictionary<string, Lazy<LevelDocument>> ReadAhead(IReadOnlyList<string> packagePaths, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(packagePaths);
+        var read = new Dictionary<string, Lazy<LevelDocument>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var path in packagePaths)
+        {
+            if (!read.ContainsKey(path))
+            {
+                read[path] = new Lazy<LevelDocument>(() => LevelDocument.Load(this, path, cancellationToken));
+                if (_catalog.TryLoadPackage(path, out var package))
+                {
+                    RegisterFoliageClasses(package);
+                }
+            }
+        }
+
+        var parallel = new ParallelOptions { CancellationToken = cancellationToken, MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount - 1) };
+        Parallel.ForEach(read.Values, parallel, document =>
+        {
+            try
+            {
+                _ = document.Value;
+            }
+            catch (Exception)
+            {
+                // kept in the Lazy: thrown again where the caller takes this level
+            }
+        });
+        return read;
+    }
+
     /// <inheritdoc />
     public LevelData ReadLevel(string packagePath, CancellationToken cancellationToken = default)
     {
@@ -449,6 +486,13 @@ public sealed partial class Cue4ParseLevelReader : ILevelReader
         {
             mesh = ObjectPathOf(meshIndex);
         }
+        else if (classChain.Any(c => c.EndsWith("SkeletalMeshComponent", StringComparison.Ordinal))
+                 && TryGetProperty(templates, "SkeletalMesh", out FPackageIndex skeletalIndex, ref ignored) && !skeletalIndex.IsNull)
+        {
+            // A car lift, a windsock, a hanging hide: skeletal meshes drawn in their bind pose (MeshExtractor reads both kinds), so
+            // the actor shows as itself instead of a pin and can be picked and deleted (the owner could not find the lift).
+            mesh = ObjectPathOf(skeletalIndex);
+        }
 
         // Per-slot material replacements (a house in another colour, a painted car); empty slots keep the mesh's own.
         IReadOnlyList<string?>? overrides = null;
@@ -525,23 +569,45 @@ public sealed partial class Cue4ParseLevelReader : ILevelReader
     /// </summary>
     private IReadOnlyList<TraderMarker>? ReadTraderMarkers(UObject actor)
     {
+        // Traders (_traderMarkers) and the people who only talk, like the banker (_sedentaryNPCMarkers: the owner could not
+        // find the bank's NPC in the studio because only the first array was read).
         var ignored = false;
-        if (!TryGetProperty(actor, "_traderMarkers", out FStructFallback[] markers, ref ignored) || markers.Length == 0)
+        var result = new List<TraderMarker>();
+        foreach (var property in new[] { "_traderMarkers", "_sedentaryNPCMarkers" })
         {
-            return null;
+            if (!TryGetProperty(actor, property, out FStructFallback[] markers, ref ignored))
+            {
+                continue;
+            }
+
+            foreach (var marker in markers)
+            {
+                var local = marker.TryGetValue(out FStructFallback transform, "SpawnTransform") ? ReadTransformStruct(transform) : FTransform.Identity;
+                var npc = marker.TryGetValue(out FSoftObjectPath npcPath, "SedentaryNPCClass") ? SoftPathText(npcPath) : string.Empty;
+                var personality = marker.TryGetValue(out FPackageIndex index, "TraderPersonality") && !index.IsNull ? ObjectPathOf(index) : string.Empty;
+                var (name, type) = Personality(personality);
+                if (name.Length == 0 && npc.Length > 0)
+                {
+                    name = NpcDisplayName(npc); // "Banker01" for BP_Banker01_C
+                }
+
+                result.Add(new TraderMarker(local, name, type, npc, personality));
+            }
         }
 
-        var result = new List<TraderMarker>(markers.Length);
-        foreach (var marker in markers)
+        return result.Count > 0 ? result : null;
+    }
+
+    /// <summary>"BP_Banker01_C" → "Banker01": the class name without the Blueprint prefix and suffix.</summary>
+    private static string NpcDisplayName(string classPath)
+    {
+        var name = classPath[(classPath.LastIndexOf('.') + 1)..];
+        if (name.EndsWith("_C", StringComparison.Ordinal))
         {
-            var local = marker.TryGetValue(out FStructFallback transform, "SpawnTransform") ? ReadTransformStruct(transform) : FTransform.Identity;
-            var npc = marker.TryGetValue(out FSoftObjectPath npcPath, "SedentaryNPCClass") ? SoftPathText(npcPath) : string.Empty;
-            var personality = marker.TryGetValue(out FPackageIndex index, "TraderPersonality") && !index.IsNull ? ObjectPathOf(index) : string.Empty;
-            var (name, type) = Personality(personality);
-            result.Add(new TraderMarker(local, name, type, npc, personality));
+            name = name[..^2];
         }
 
-        return result;
+        return name.StartsWith("BP_", StringComparison.Ordinal) ? name[3..] : name;
     }
 
     /// <summary>The trader name and type a personality asset holds (read once per asset).</summary>

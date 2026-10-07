@@ -19,6 +19,36 @@ public sealed record ForeignActorCopy(CookedPackage Source, string SourceActor, 
 {
     /// <summary>For a copied world item spawner: the item class written into its <c>_item</c>, or null to keep the source's.</summary>
     public string? Item { get; init; }
+
+    /// <summary>
+    /// For a trade post placed as a trader, or the outpost manager made for it: what the copy becomes (see
+    /// <see cref="TradeCopy"/>); null for any other copy. A trade copy takes only the actor's own objects, never the
+    /// other actors it points at (the source outpost's quest book, its other trade posts).
+    /// </summary>
+    public TradeCopy? Trade { get; init; }
+
+    /// <summary>
+    /// For a mechanic's lift (<c>BP_CarLift</c>, <c>BP_BikeLift</c>): the actor name, in the edited level, of the mechanic's
+    /// trade post its <c>_assignedTradePost</c> points at (a placed trader is created before the lift). The copy takes only
+    /// its own objects, never the source's trade post.
+    /// </summary>
+    public string? AssignedTradePost { get; init; }
+}
+
+/// <summary>
+/// What a copied trade post or outpost manager is set to (facts in <c>Economy.TraderPosts</c>).
+/// </summary>
+/// <param name="Outpost">The outpost name, written into a post's <c>_outpost.OutpostName</c> and a manager's <c>_outpostName</c>.</param>
+public sealed record TradeCopy(string Outpost)
+{
+    /// <summary>
+    /// Imports pointed elsewhere in the copy, as (old object path, new object path): the trader's personality and the
+    /// outpost's description, so every reference to them (properties and load dependencies alike) names the new asset.
+    /// </summary>
+    public IReadOnlyList<(string Old, string New)> Renames { get; init; } = [];
+
+    /// <summary>For an outpost manager: the trade posts (actor names in the level, created before it) its <c>_assignedTradePosts</c> lists.</summary>
+    public IReadOnlyList<string>? Posts { get; init; }
 }
 
 /// <summary>
@@ -87,11 +117,13 @@ public static partial class LevelPackageEditor
         private readonly Dictionary<int, int> _exportMap = [];
         private readonly bool _sameNames = ReferenceEquals(target, source);
         private readonly HashSet<string> _dropped = new(StringComparer.Ordinal);
+        private IReadOnlyList<(string Old, string New)> _renames = [];
 
         /// <summary>Appends the actor, its components and its stored child actors; returns the new actors' package indices (the actor first).</summary>
         public List<int> Copy(int sourceIndex, ForeignActorCopy copy)
         {
-            var members = CollectMembersWithChildActors(sourceIndex);
+            _renames = copy.Trade?.Renames ?? [];
+            var members = copy.Trade is null && copy.AssignedTradePost is null ? CollectMembersWithChildActors(sourceIndex) : CollectMembers(source, sourceIndex);
             var payloads = new byte[members.Count][];
             var blocks = new PropertyBlock[members.Count];
             for (var k = 0; k < members.Count; k++)
@@ -140,9 +172,38 @@ public static partial class LevelPackageEditor
                     BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(soft.Offset + 4), itemName.Number);
                     itemWritten = true;
                 }
-                if (k == 0 || rootOld >= 0 && member == rootOld)
+
+                if (blocks[k].Find("_gameUniqueId")?.Value is UInt64Value { Offset: >= 0 } unique && unique.Offset + 8 <= payload.Length)
                 {
-                    // nothing extra: the transform is patched below once the names are in the target table
+                    // A trade post's quest giver has an id of its own in the game: a copy must not share its source's.
+                    var id = System.Security.Cryptography.MD5.HashData(System.Text.Encoding.UTF8.GetBytes($"{target.BasePath}|{copy.NewName}|{k}"));
+                    id.AsSpan(0, 8).CopyTo(payload.AsSpan(unique.Offset));
+                }
+
+                if (k == 0 && copy.Trade is { } trade)
+                {
+                    payload = ApplyTrade(payload, blocks[k], trade, copy.NewName);
+                }
+
+                if (k == 0 && copy.AssignedTradePost is { } post)
+                {
+                    // The lift's mechanic: an object reference (4 bytes) to a trade post of the edited level, in place of the source's.
+                    if (blocks[k].Find("_assignedTradePost")?.Value is ObjectValue { Offset: >= 0 } link && link.Offset + 4 <= payload.Length)
+                    {
+                        var postIndex = FindLevelActor(exports, names, targetLevelPackageIndex, post);
+                        if (postIndex > 0)
+                        {
+                            BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(link.Offset), postIndex);
+                        }
+                        else
+                        {
+                            warnings.Add($"'{copy.NewName}': the mechanic's trade post '{post}' is not in the level; the lift serves no mechanic.");
+                        }
+                    }
+                    else
+                    {
+                        warnings.Add($"'{copy.NewName}': {copy.SourceActor} has no _assignedTradePost; the mechanic was not set.");
+                    }
                 }
 
                 var isActor = entry.OuterIndex == sourceLevelPackageIndex;
@@ -207,12 +268,64 @@ public static partial class LevelPackageEditor
                 warnings.Add($"'{copy.NewName}': {copy.SourceActor} spawns no item, so {copy.Item} was not set.");
             }
 
-            if (_dropped.Count > 0)
+            if (_dropped.Count > 0 && copy.Trade is null && copy.AssignedTradePost is null)
             {
                 warnings.Add($"'{copy.NewName}': references to {string.Join(", ", _dropped)} were cleared (those objects are not part of the copy).");
             }
 
             return newActors;
+        }
+
+        /// <summary>
+        /// A trade copy's own values: its outpost name (a post's <c>_outpost.OutpostName</c>, a manager's <c>_outpostName</c>,
+        /// same size: an FName) and, for a manager, its <c>_assignedTradePosts</c> rewritten to the given posts. Offsets come from
+        /// the source block (the remaps before were all in place); the array goes last, as it changes the payload's length.
+        /// </summary>
+        private byte[] ApplyTrade(byte[] payload, PropertyBlock block, TradeCopy trade, string label)
+        {
+            var outpost = MakeName(trade.Outpost, names, wide, addedNames);
+            var named = false;
+            foreach (var value in new[] { (block.Find("_outpost")?.Value as StructValue)?.Find("OutpostName")?.Value, block.Find("_outpostName")?.Value })
+            {
+                if (value is NameValue && value.Offset >= 0 && value.Offset + 8 <= payload.Length)
+                {
+                    BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(value.Offset), outpost.Index);
+                    BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(value.Offset + 4), outpost.Number);
+                    named = true;
+                }
+            }
+
+            if (!named)
+            {
+                warnings.Add($"'{label}': no outpost name in the copy; it was left as its source's.");
+            }
+
+            if (trade.Posts is { } posts)
+            {
+                if (block.Find("_assignedTradePosts") is not { Value: ArrayValue } list)
+                {
+                    warnings.Add($"'{label}': the manager has no _assignedTradePosts; its traders are linked by outpost name only.");
+                    return payload;
+                }
+
+                var indices = new List<int>();
+                foreach (var post in posts)
+                {
+                    var index = FindLevelActor(exports, names, targetLevelPackageIndex, post);
+                    if (index > 0)
+                    {
+                        indices.Add(index);
+                    }
+                    else
+                    {
+                        warnings.Add($"'{label}': trade post '{post}' is not in the level; not listed.");
+                    }
+                }
+
+                payload = WriteObjectArray(payload, list, indices);
+            }
+
+            return payload;
         }
 
         /// <summary>The actor's exports plus, recursively, every other level actor its payloads reference (stored child actors).</summary>
@@ -281,9 +394,47 @@ public static partial class LevelPackageEditor
                 < 0 => MapImport(import.OuterIndex),
                 _ => MapIndex(import.OuterIndex, "import outer"),
             };
-            var result = GetOrAddImport(imports, names, RemapName(import.ClassPackage), RemapName(import.ClassName), outer, RemapName(import.ObjectName));
+            var objectName = RemapName(import.ObjectName);
+            if (_renames.Count > 0 && Renamed(import) is { } renamed)
+            {
+                objectName = MakeName(renamed, names, wide, addedNames);
+            }
+
+            var result = GetOrAddImport(imports, names, RemapName(import.ClassPackage), RemapName(import.ClassName), outer, objectName);
             _importMap[sourceImportIndex] = result;
             return result;
+        }
+
+        /// <summary>
+        /// The new name of a renamed import (<see cref="TradeCopy.Renames"/>): the new package path for the old asset's package,
+        /// the new asset name for the old asset (whose outer, the package, is renamed the same way); null otherwise.
+        /// </summary>
+        private string? Renamed(ImportEntry import)
+        {
+            var name = source.ResolveName(import.ObjectName);
+            foreach (var (oldPath, newPath) in _renames)
+            {
+                var (oldPackage, oldAsset) = SplitObject(oldPath);
+                var (newPackage, newAsset) = SplitObject(newPath);
+                if (import.OuterIndex == 0 && string.Equals(name, oldPackage, StringComparison.OrdinalIgnoreCase))
+                {
+                    return newPackage;
+                }
+
+                if (import.OuterIndex < 0 && string.Equals(name, oldAsset, StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(source.ResolveName(source.Imports[-import.OuterIndex - 1].ObjectName), oldPackage, StringComparison.OrdinalIgnoreCase))
+                {
+                    return newAsset;
+                }
+            }
+
+            return null;
+
+            static (string Package, string Asset) SplitObject(string path)
+            {
+                var dot = path.LastIndexOf('.');
+                return dot > path.LastIndexOf('/') ? (path[..dot], path[(dot + 1)..]) : (path, path[(path.LastIndexOf('/') + 1)..]);
+            }
         }
 
         /// <summary>The same FName (entry text and number) in the target name table.</summary>
@@ -511,6 +662,41 @@ public static partial class LevelPackageEditor
             BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(offset), mapped.Index);
             BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(offset + 4), mapped.Number);
         }
+    }
+
+    /// <summary>The package index (1-based) of the actor named <paramref name="name"/> directly under the level, or 0.</summary>
+    private static int FindLevelActor(List<ExportEntry> exports, List<string> names, int levelPackageIndex, string name)
+    {
+        for (var i = 0; i < exports.Count; i++)
+        {
+            if (exports[i].OuterIndex == levelPackageIndex && string.Equals(exports[i].ObjectName.Format(names), name, StringComparison.OrdinalIgnoreCase))
+            {
+                return i + 1;
+            }
+        }
+
+        return 0;
+    }
+
+    /// <summary>
+    /// <paramref name="payload"/> with an object array property (<c>int32 count</c> + one <c>int32</c> package index per
+    /// element) holding <paramref name="items"/> instead; the tag's size follows.
+    /// </summary>
+    private static byte[] WriteObjectArray(byte[] payload, PropertyTag tag, IReadOnlyList<int> items)
+    {
+        var value = new byte[4 + 4 * items.Count];
+        BinaryPrimitives.WriteInt32LittleEndian(value, items.Count);
+        for (var i = 0; i < items.Count; i++)
+        {
+            BinaryPrimitives.WriteInt32LittleEndian(value.AsSpan(4 + 4 * i), items[i]);
+        }
+
+        var result = new byte[payload.Length - tag.Size + value.Length];
+        payload.AsSpan(0, tag.ValueOffset).CopyTo(result);
+        value.CopyTo(result, tag.ValueOffset);
+        payload.AsSpan(tag.ValueOffset + tag.Size).CopyTo(result.AsSpan(tag.ValueOffset + value.Length));
+        BinaryPrimitives.WriteInt32LittleEndian(result.AsSpan(tag.SizeFieldOffset), value.Length);
+        return result;
     }
 
     /// <summary>Index (negative) of the import with these FNames and outer in the target, adding it when missing.</summary>

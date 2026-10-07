@@ -168,7 +168,7 @@ public static class EditOpFactory
     /// ISM/HISM/foliage component <paramref name="component"/>, under the first index after its stored and already added ones.
     /// </summary>
     /// <exception cref="ArgumentException">The component is not an instanced mesh component stored in the level.</exception>
-    public static AddInstanceOp AddInstance(LevelDocument level, ActorRecord actor, string component, TransformValue local, EditState? state = null)
+    public static AddInstanceOp AddInstance(LevelDocument level, ActorRecord actor, string component, TransformValue local, EditState? state = null, ISet<InstanceRef>? reserved = null)
     {
         ArgumentNullException.ThrowIfNull(level);
         ArgumentNullException.ThrowIfNull(actor);
@@ -177,13 +177,16 @@ public static class EditOpFactory
             throw new ArgumentException($"{actor.Name}.{component} is not an instanced mesh component stored in the level; no instance can be added to it.", nameof(component));
         }
 
+        // With reserved (the instances other ops of one batch add) those indices count as taken too.
         var index = c.Instances.Count;
-        while (state?.IsAdded(new InstanceRef(level.PackagePath, actor.Name, c.Name, index)) == true)
+        var target = new InstanceRef(level.PackagePath, actor.Name, c.Name, index);
+        while (state?.IsAdded(target) == true || reserved?.Contains(target) == true)
         {
-            index++;
+            target = target with { Index = ++index };
         }
 
-        return new AddInstanceOp(new InstanceRef(level.PackagePath, actor.Name, c.Name, index), local);
+        reserved?.Add(target);
+        return new AddInstanceOp(target, local);
     }
 
     /// <summary>

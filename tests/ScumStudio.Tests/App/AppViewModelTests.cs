@@ -11,6 +11,7 @@ using ScumStudio.Tests.Level;
 namespace ScumStudio.Tests.App;
 
 /// <summary>View-model tests of the desktop shell (no UI; inline dispatcher).</summary>
+[Collection(LanguageCollection.Name)] // switches or reads the UI language: never in parallel with another language test
 public sealed class AppViewModelTests
 {
     [Fact]
@@ -202,7 +203,7 @@ public sealed class AppViewModelTests
         using var ctx = AppTestContext.Create();
         using var vm = new MainWindowViewModel(ctx.Services);
 
-        Assert.Equal(["Map", "Vehicles", "Weapons", "Spawns", "Assets", "Projects", "Settings"], vm.NavItems.Select(n => n.Title));
+        Assert.Equal(["Map", "Vehicles", "Weapons", "Spawns", "Economy", "Assets", "Projects", "Settings"], vm.NavItems.Select(n => n.Title));
         Assert.Equal(MainWindowViewModel.PageKeys, vm.NavItems.Select(n => n.Key));
         Assert.Equal("map", vm.CurrentPage?.Key);
         Assert.Equal(PillState.Off, vm.GamePill.State);

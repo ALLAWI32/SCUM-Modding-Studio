@@ -55,7 +55,7 @@ public sealed class SpawnPlacesRealTests
         }
 
         var doc = LevelDocument.Load(new Cue4ParseLevelReader(catalog), Maps + "A_4_Military_Base");
-        var pins = doc.Actors.SelectMany(SpawnMarkers.PinsOf).ToList();
+        var pins = doc.Actors.SelectMany(a => SpawnMarkers.PinsOf(a)).ToList();
 
         Assert.Equal(4, pins.Count(p => p.Kind == SpawnKind.Sentry));
         Assert.Equal(doc.Actors.Where(a => a.ClassName == "SentrySpawner2").Sum(a => a.PatrolPoints.Count), pins.Count(p => p.Kind == SpawnKind.Patrol));

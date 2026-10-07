@@ -22,6 +22,7 @@ public sealed partial class MapPageViewModel
 {
     /// <summary>Bend, degrees end to end (negative left, positive right).</summary>
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(GizmoCanScale))]
     private double _shapeBend;
 
     /// <summary>Scale along the object's length (its longer horizontal axis).</summary>
@@ -42,6 +43,7 @@ public sealed partial class MapPageViewModel
 
     /// <summary>True when the selection has a shape to edit (not terrain, foliage containers or a road segment).</summary>
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(GizmoCanScale))]
     private bool _hasShape;
 
     /// <summary>True when the selected object can be drawn bent in the game.</summary>
@@ -80,7 +82,11 @@ public sealed partial class MapPageViewModel
 
     /// <summary>True when length, width, height and size apply (not to a road piece, whose ends are tied to its neighbours).</summary>
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(GizmoCanScale))]
     private bool _canScale = true;
+
+    /// <summary>True when the gizmo's scale cubes apply: a single object with a shape, not a road piece, not drawn bent.</summary>
+    public bool GizmoCanScale => HasShape && CanScale && ShapeBend == 0;
 
     /// <summary>The curve and its handles for the viewport to draw and drag, or null.</summary>
     [ObservableProperty]
@@ -424,7 +430,7 @@ public sealed partial class MapPageViewModel
 
             CanScale = true;
             var t = sel is not null ? CurrentInstanceTransform(sel) : CurrentRootTransform(item!);
-            _shapeAlongY = MeshBounds(sel is not null ? MeshOf(sel) : item!.Actor.StaticMeshPath) is { } b
+            _shapeAlongY = MeshBounds(sel is not null ? MeshOf(sel) : CurrentMesh(item!, null)) is { } b
                 && b.Size.Y * MathF.Abs(t.Scale.Y) > b.Size.X * MathF.Abs(t.Scale.X);
             ShapeLength = _shapeAlongY ? t.Scale.Y : t.Scale.X;
             ShapeWidth = _shapeAlongY ? t.Scale.X : t.Scale.Y;
@@ -438,7 +444,7 @@ public sealed partial class MapPageViewModel
             ShapeSway2 = shape.Sway2 / 100.0;
             ShapeLegs = shape.Legs / 100.0;
             (_shapeStart, _shapeEnd) = (shape.Start, shape.End);
-            if (MeshBounds(item!.Actor.StaticMeshPath) is { } bounds && sel is null)
+            if (MeshBounds(CurrentMesh(item!, null)) is { } bounds && sel is null)
             {
                 ShapeSwayMax = Math.Max(1, Math.Round((_shapeAlongY ? bounds.Size.Y * MathF.Abs(t.Scale.Y) : bounds.Size.X * MathF.Abs(t.Scale.X)) / 100.0, 1));
             }
@@ -466,7 +472,7 @@ public sealed partial class MapPageViewModel
     /// <summary>The foot of the selected object (the middle of its bottom, legs included), for the legs arrow; null unless it can bend.</summary>
     private FVector? LegHandleOf()
     {
-        if (_shapeItem is not { } item || !CanBend || _shapeInstance is not null || MeshBounds(item.Actor.StaticMeshPath) is not { } bounds)
+        if (_shapeItem is not { } item || !CanBend || _shapeInstance is not null || MeshBounds(CurrentMesh(item, null)) is not { } bounds)
         {
             return null;
         }
@@ -491,7 +497,7 @@ public sealed partial class MapPageViewModel
             return new ShapeHandleInfo(component.WorldTransform, spline, sway1, sway2, straight, _shapeStart, _shapeEnd);
         }
 
-        if (_shapeInstance is null && MeshBounds(item.Actor.StaticMeshPath) is { } bounds)
+        if (_shapeInstance is null && MeshBounds(CurrentMesh(item, null)) is { } bounds)
         {
             var root = RootWorldOf(item, CurrentRootTransform(item) with { Scale = FVector.One });
             return new ShapeHandleInfo(root, BendShape.For(bounds, ShapeScale(), (float)ShapeBend), sway1, sway2, bounds, _shapeStart, _shapeEnd);
@@ -516,7 +522,7 @@ public sealed partial class MapPageViewModel
         }
 
         // A mesh actor attached to another (a bridge's fence) scales too: its place stays relative to its parent.
-        if (_shapeInstance is null && item.Actor.Kind == ActorKind.StaticMeshActor && MeshBounds(item.Actor.StaticMeshPath) is { } bounds)
+        if (_shapeInstance is null && item.Actor.Kind == ActorKind.StaticMeshActor && MeshBounds(CurrentMesh(item, null)) is { } bounds)
         {
             var current = CurrentRootTransform(item);
             return new ScaleHandleInfo(RootWorldOf(item, current with { Scale = ShapeScale(), Location = _shapePlace ?? current.Location, Rotation = ShapeRotation() }), bounds);
@@ -536,9 +542,16 @@ public sealed partial class MapPageViewModel
             return;
         }
 
-        if (!IsSingleMesh(item) || item.Actor.StaticMeshPath is not { } mesh)
+        if (!IsSingleMesh(item) || CurrentMesh(item, null) is not { } mesh)
         {
             BendNote = Loc.T("Map.Shape.NoBendKind");
+            return;
+        }
+
+        if (BendSupport.IsRock(mesh))
+        {
+            // Owner, a bent cliff at B_4: "half my body is inside the rock". A rock keeps its exact collision only straight.
+            BendNote = Loc.T("Map.Shape.NoBendRock");
             return;
         }
 
@@ -588,12 +601,8 @@ public sealed partial class MapPageViewModel
     private static bool IsSingleMesh(ActorItemViewModel item) =>
         item.Actor.Kind == ActorKind.StaticMeshActor && item.Actor.StaticMeshPath is not null;
 
-    // ponytail: proportions only. Owner: a house outside the game's building folder bent like a bridge; what bends is long
-    // and narrow (a wall, fence, pipe or bridge), and in the building folder only a long wall piece.
-    /// <summary>True for a mesh at least 2.5 times as long as it is wide (6 times in the game's building folder).</summary>
-    private bool IsLong(string mesh) =>
-        MeshBounds(mesh) is { } b
-        && MathF.Max(b.Size.X, b.Size.Y) >= (mesh.Contains("/Models/Buildings/", StringComparison.OrdinalIgnoreCase) ? 6f : 2.5f) * MathF.Min(b.Size.X, b.Size.Y);
+    /// <summary>True for a mesh at least 2.5 times as long as it is wide (6 times in the game's building folder), see <see cref="GizmoMath.IsLong"/>.</summary>
+    private bool IsLong(string mesh) => MeshBounds(mesh) is { } b && GizmoMath.IsLong(b.Size.X, b.Size.Y, mesh);
 
     /// <summary>Bounds of a mesh the scene has (prepared with it or loaded later).</summary>
     private BoundingBox? MeshBounds(string? meshPath)
@@ -703,7 +712,7 @@ public sealed partial class MapPageViewModel
         }
 
         var bends = new Dictionary<uint, IReadOnlyList<SplineMeshParams>>(Bends);
-        if (curved && MeshBounds(item.Actor.StaticMeshPath) is { } bounds)
+        if (curved && MeshBounds(CurrentMesh(item, null)) is { } bounds)
         {
             bends[item.SelectableId] = BendShape.Pieces(bounds, scale, new BendValue(bend, (float)ShapeSway1 * 100f, (float)ShapeSway2 * 100f, _shapeStart, _shapeEnd, (float)ShapeLegs * 100f));
         }
@@ -791,7 +800,7 @@ public sealed partial class MapPageViewModel
         {
             foreach (var (actor, shape) in state.Bends)
             {
-                if (ActorOf(actor) is { } item && MeshBounds(item.Actor.StaticMeshPath) is { } bounds)
+                if (ActorOf(actor) is { } item && IsBendable(item) && MeshBounds(CurrentMesh(item, null)) is { } bounds)
                 {
                     bends[item.SelectableId] = BendShape.Pieces(bounds, CurrentRootTransform(item).Scale, shape);
                 }
@@ -813,11 +822,23 @@ public sealed partial class MapPageViewModel
             }
         }
 
+        // A replaced piece without a push keeps its curve: the viewport bends the new mesh along it.
+        foreach (var (key, _) in PartMeshes)
+        {
+            if (key.InstanceIndex == InstanceKey.Segment && !pieces.ContainsKey(key) && ActorOf(key.SelectableId)?.Actor.FindComponent(key.Component)?.SplineMesh is { } spline)
+            {
+                pieces[key] = spline;
+            }
+        }
+
         SegmentBends = pieces;
     }
 
     /// <summary>True when the project bends the actor (its root is then drawn at scale 1: the scale is in the curve).</summary>
-    private bool IsBent(ActorItemViewModel item) => _services.Projects.Current?.State.GetBendValue(item.Reference) is { IsStraight: false };
+    private bool IsBent(ActorItemViewModel item) => _services.Projects.Current?.State.GetBendValue(item.Reference) is { IsStraight: false } && IsBendable(item);
+
+    /// <summary>False for a rock: one bent in an older version is drawn (and exported) straight, see <see cref="BendSupport.IsRock"/>.</summary>
+    private bool IsBendable(ActorItemViewModel item) => CurrentMesh(item, null) is not { } mesh || !BendSupport.IsRock(mesh);
 
     /// <summary>The root transform the viewport draws an actor with.</summary>
     private TransformValue Drawn(ActorItemViewModel item, TransformValue relative) => IsBent(item) ? relative with { Scale = FVector.One } : relative;

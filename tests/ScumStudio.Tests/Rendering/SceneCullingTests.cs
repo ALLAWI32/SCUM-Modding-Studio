@@ -155,6 +155,86 @@ public sealed class SceneCullingTests
     }
 
     [Fact]
+    public void LevelsStreamingInAndOutRebuildOnlyTheBatchesOfTheirMeshes()
+    {
+        // Three "levels" (group nodes): two draw cubes, one draws the other mesh; a fourth mesh stays in the scene throughout.
+        var third = new MeshHandle(3, "Third", new BoundingBox(new Vector3(-5f), new Vector3(5f)));
+        var scene = new Scene();
+        SceneNode Level(MeshHandle mesh, int count, float x, uint id)
+        {
+            var group = scene.Root.Add(new SceneNode("level"));
+            for (var i = 0; i < count; i++)
+            {
+                group.Add(new SceneNode("n", mesh, Matrix4x4.CreateTranslation(x + (i * 120f), 0f, 0f), id));
+            }
+
+            return group;
+        }
+
+        var cubesA = Level(Cube, 40, 0f, 1);
+        Level(Cube, 40, 10_000f, 2);
+        var others = Level(Other, 30, 20_000f, 3);
+        Level(third, 200, 30_000f, 4);
+        var batcher = new SceneBatcher();
+        var before = batcher.Get(scene);
+        var kept = before.Batches.Single(b => b.Mesh.Id == third.Id);
+
+        // A level goes: only the cube batch is rebuilt; the third mesh's batch is the very same object with its codes.
+        scene.Root.Remove(cubesA);
+        var after = batcher.Get(scene);
+        Assert.Equal(2, batcher.Builds);
+        Assert.Equal(1, batcher.PartialBuilds);
+        Assert.Same(kept, after.Batches.Single(b => b.Mesh.Id == third.Id));
+        Assert.Equal(40, after.Batches.Single(b => b.Mesh.Id == Cube.Id).Nodes.Length);
+        AssertSameAsFullBuild(scene, after);
+
+        // One comes in with a mesh not drawn yet, another is hidden: rebuilt partially again, every code still unique and resolvable.
+        Level(new MeshHandle(4, "New", new BoundingBox(new Vector3(-1f), new Vector3(1f))), 10, 40_000f, 5);
+        others.Visible = false;
+        after = batcher.Get(scene);
+        Assert.Equal(2, batcher.PartialBuilds);
+        Assert.Same(kept, after.Batches.Single(b => b.Mesh.Id == third.Id));
+        Assert.DoesNotContain(after.Batches, b => b.Mesh.Id == Other.Id);
+        AssertSameAsFullBuild(scene, after);
+
+        // Most of the scene going is still a partial rebuild (the kept batch stays); a change of the root itself builds everything anew.
+        scene.Root.Children.Last(c => c.Children.Count == 200).Visible = false;
+        after = batcher.Get(scene);
+        Assert.Equal(3, batcher.PartialBuilds);
+        AssertSameAsFullBuild(scene, after);
+        scene.Root.LocalTransform = Matrix4x4.CreateTranslation(0f, 10f, 0f);
+        batcher.Get(scene);
+        Assert.Equal(5, batcher.Builds);
+        Assert.Equal(3, batcher.PartialBuilds);
+
+        static void AssertSameAsFullBuild(Scene scene, BatchResult result)
+        {
+            var full = SceneBatcher.Build(scene);
+            Assert.Equal(full.Batches.Select(b => b.Mesh.Id), result.Batches.Select(b => b.Mesh.Id));
+            Assert.Equal(full.InstanceCount, result.InstanceCount);
+            foreach (var (expected, actual) in full.Batches.Zip(result.Batches))
+            {
+                Assert.Equal(expected.Nodes.ToHashSet(), actual.Nodes.ToHashSet());
+            }
+
+            var codes = new HashSet<uint>();
+            for (var b = 0; b < result.Batches.Count; b++)
+            {
+                var batch = result.Batches[b];
+                for (var i = 0; i < batch.Instances.Length; i++)
+                {
+                    Assert.True(codes.Add(batch.Instances[i].PickCode));
+                    Assert.True(result.TryResolvePickCode(batch.Instances[i].PickCode, out var resolved, out var node));
+                    Assert.Same(batch, resolved);
+                    Assert.Same(batch.Nodes[i], node);
+                    Assert.Same(result, node!.SlotOwner);
+                    Assert.Equal((b, i), (node.SlotBatch, node.SlotIndex));
+                }
+            }
+        }
+    }
+
+    [Fact]
     public void PickCodesResolveToMeshAndNode()
     {
         var scene = new Scene();

@@ -1,6 +1,8 @@
 using System.Globalization;
+using System.Numerics;
 using CommunityToolkit.Mvvm.ComponentModel;
 using ScumStudio.App.Localization;
+using ScumStudio.Core.Geometry;
 using ScumStudio.Core.Mathematics;
 using ScumStudio.Level.Editing;
 using ScumStudio.Level.Model;
@@ -78,27 +80,37 @@ public sealed partial class MapPageViewModel
         var worlds = new List<GroupWorld>();
         foreach (var member in _group)
         {
-            var item = ActorOf(member.Actor)!;
-            if (member.Component is null)
-            {
-                ids.Add(item.SelectableId);
-                worlds.Add(new GroupWorld(item.SelectableId, null, Drawn(item)));
-            }
-            else
-            {
-                var key = InstanceKey.Of(item.SelectableId, member.Component, member.Index);
-                instances.Add(key);
-                if (InstanceInfo(item, key) is { } sel)
-                {
-                    worlds.Add(new GroupWorld(item.SelectableId, key, CurrentInstanceTransform(sel).ToTransform() * SpaceOf(sel)));
-                }
-            }
+            Show(member, ActorOf(member.Actor)!, null, ids, instances, worlds);
         }
 
+        ShowGroup(ids, instances, worlds);
+    }
+
+    /// <summary>Adds one member to the highlight lists (<paramref name="sel"/>: its instance or part when known, else looked up).</summary>
+    private void Show(GroupMember member, ActorItemViewModel item, SelectedInstance? sel, List<uint> ids, List<InstanceKey> instances, List<GroupWorld> worlds)
+    {
+        if (member.Component is null)
+        {
+            ids.Add(item.SelectableId);
+            worlds.Add(new GroupWorld(item.SelectableId, null, Drawn(item)));
+            return;
+        }
+
+        var key = InstanceKey.Of(item.SelectableId, member.Component, member.Index);
+        instances.Add(key);
+        if ((sel ?? InstanceInfo(item, key)) is { } found)
+        {
+            worlds.Add(new GroupWorld(item.SelectableId, key, CurrentInstanceTransform(found).ToTransform() * SpaceOf(found)));
+        }
+    }
+
+    private void ShowGroup(List<uint> ids, List<InstanceKey> instances, List<GroupWorld> worlds)
+    {
         KindSelectionIds = ids;
         KindSelectionInstances = instances;
         GroupWorlds = worlds;
         KindSelectionText = _group.Count == 0 ? null : Loc.F("Map.Group.Selected", _group.Count.ToString("N0", CultureInfo.CurrentCulture));
+        SavePrefabCommand.NotifyCanExecuteChanged();
     }
 
     /// <summary>The world transform an actor's root is drawn at (scale 1 when bent: the scale is in the curve).</summary>
@@ -141,30 +153,69 @@ public sealed partial class MapPageViewModel
             return;
         }
 
-        var ops = new List<EditOp>();
-        foreach (var (_, item, sel) in GroupItems())
+        // An actor goes whole when it is a member itself or when its selected parts and instances are the last of it drawn;
+        // its parts and instances are then not journaled on their own (the owner's first bulk delete stopped at a tree whose
+        // actor was already deleted and left 2000 edits unapplied).
+        var members = GroupItems();
+        var whole = new HashSet<ActorItemViewModel>(members.Where(m => m.Instance is null).Select(m => m.Item));
+        foreach (var byActor in members.Where(m => m.Instance is not null && !whole.Contains(m.Item)).GroupBy(m => m.Item))
         {
-            if (sel is null)
+            if (LeavesNothingDrawn(byActor.Key, byActor.Select(m => m.Instance!).Where(s => !SpawnMarkers.IsSpawnPart(byActor.Key.Actor, s.Component)).ToList()))
             {
-                ops.Add(new DeleteActorOp(item.Reference));
-            }
-            else if (sel.Instance is { } instance)
-            {
-                ops.Add(new DeleteInstanceOp(new InstanceRef(item.Level.PackagePath, item.Name, instance.ComponentName, instance.InstanceIndex)));
-            }
-            else if (SpawnMarkers.IsSpawnPart(item.Actor, sel.Component))
-            {
-                continue; // a spawner is not deleted either (see IsSpawnPartSelected)
-            }
-            else
-            {
-                // A road or bridge piece goes the way a single one does: scaled to nothing (see DeleteInstance).
-                ops.Add(EditOpFactory.SetTransform(item.Level, item.Actor, CurrentInstanceTransform(sel) with { Scale = new FVector(0f, 0f, 0f) }, project.State, sel.Component.Name));
+                whole.Add(byActor.Key);
             }
         }
 
+        var ops = new List<EditOp>(whole.Select(item => (EditOp)new DeleteActorOp(item.Reference)));
+        foreach (var (_, item, sel) in members)
+        {
+            if (sel is null || whole.Contains(item))
+            {
+                continue;
+            }
+
+            if (DeleteOpOf(item, sel, project.State) is { } op)
+            {
+                ops.Add(op); // an instance, an added instance, or a piece scaled to nothing; a spawner is not deleted (see IsSpawnPartSelected)
+            }
+        }
+
+        // A deleted actor takes its instances and parts with it: their own edits would only make the batch undo-unsafe.
+        var gone = ops.OfType<DeleteActorOp>().Select(d => d.Target).ToHashSet(ActorRef.Comparer);
+        ops.RemoveAll(o => o is not DeleteActorOp && o.GetPrimaryTarget() is { } target && gone.Contains(target));
+
         ApplyGroupOps(ops, Loc.F("Map.Group.Deleted", ops.Count));
         ClearKindSelection();
+    }
+
+    /// <summary>
+    /// True when taking out <paramref name="removed"/> (parts and instances of <paramref name="item"/>) leaves nothing of
+    /// the actor drawn: every other mesh part is already scaled to nothing and every other instance deleted. The actor is
+    /// then deleted whole, so what no part can pick goes with it: a fire barrel's flames, light and heat, a building's
+    /// collision boxes, lights, decals and child actors (Hektor: fires burning in the air where a camp was; the owner's
+    /// outpost: invisible walls where buildings were).
+    /// </summary>
+    private bool LeavesNothingDrawn(ActorItemViewModel item, IReadOnlyCollection<SelectedInstance> removed)
+    {
+        if (IsImmovable(item) || _services.Projects.Current?.State is not { } state)
+        {
+            return false;
+        }
+
+        var holders = item.Actor.InstanceTransforms.Select(i => i.ComponentName).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var c in item.Actor.Components.Where(c => c.StaticMeshPath is not null && !holders.Contains(c.Name)))
+        {
+            if (!removed.Any(r => r.Instance is null && string.Equals(r.Component.Name, c.Name, StringComparison.OrdinalIgnoreCase))
+                && state.GetTransformOverride(item.Reference, c.Name)?.Scale != FVector.Zero)
+            {
+                return false;
+            }
+        }
+
+        var instances = item.Actor.InstanceTransforms.Select(i => new InstanceRef(item.Level.PackagePath, item.Name, i.ComponentName, i.InstanceIndex))
+            .Concat(state.AddedInstances.Keys.Where(k => ActorRef.Comparer.Equals(k.ActorRef, item.Reference)));
+        return instances.All(i => state.IsDeleted(i)
+            || removed.Any(r => r.Instance is { } ri && ri.InstanceIndex == i.Index && string.Equals(ri.ComponentName, i.Component, StringComparison.OrdinalIgnoreCase)));
     }
 
     /// <summary>Remembers every member and where it is, for <see cref="TryPasteGroup"/>.</summary>
@@ -273,26 +324,32 @@ public sealed partial class MapPageViewModel
         ApplyGroupOps(ops, title);
         if (selectCopies)
         {
-            _group.Clear();
-            if (created.Count > 1)
-            {
-                _group.AddRange(created.Select(c => new GroupMember(c, null, 0)));
-            }
-
-            RefreshGroup();
-            SelectedInstanceKey = null;
-            _restoringSelection = true; // keep the new set while the first copy becomes the selection
-            try
-            {
-                SelectedActor = AllActors.FirstOrDefault(a => a.IsAdded && created.Count > 0 && ActorRef.Comparer.Equals(a.Reference, created[0])) ?? SelectedActor;
-            }
-            finally
-            {
-                _restoringSelection = false;
-            }
+            SelectCreatedGroup(created);
         }
 
         return true;
+    }
+
+    /// <summary>Makes the new actors the selection: a multi-selection when there are several, the first one at the gizmo.</summary>
+    private void SelectCreatedGroup(IReadOnlyList<ActorRef> created)
+    {
+        _group.Clear();
+        if (created.Count > 1)
+        {
+            _group.AddRange(created.Select(c => new GroupMember(c, null, 0)));
+        }
+
+        RefreshGroup();
+        SelectedInstanceKey = null;
+        _restoringSelection = true; // keep the new set while the first copy becomes the selection
+        try
+        {
+            SelectedActor = AllActors.FirstOrDefault(a => a.IsAdded && created.Count > 0 && ActorRef.Comparer.Equals(a.Reference, created[0])) ?? SelectedActor;
+        }
+        finally
+        {
+            _restoringSelection = false;
+        }
     }
 
     /// <summary>
@@ -379,86 +436,442 @@ public sealed partial class MapPageViewModel
     /// <summary><see cref="BrushRadius"/> as text ("10 m").</summary>
     public string BrushRadiusText => string.Create(CultureInfo.CurrentCulture, $"{BrushRadius:0} m");
 
-    /// <summary>Adds every object drawn within the brush circle around <paramref name="centre"/> (UE world) to the multi-selection.</summary>
-    public void BrushAt(FVector centre)
+    /// <summary>Size of the map cells the brush sorts the loaded objects into, cm.</summary>
+    private const float BrushCell = 5000f;
+
+    private BrushIndex? _brushIndex;
+
+    /// <summary>
+    /// Adds everything the brush covers to the multi-selection (owner: everything inside the circle, wherever the cursor
+    /// is): the circle at <paramref name="centre"/> (UE world) swept from <paramref name="from"/> (the stroke's previous
+    /// dab), so a fast sweep leaves no gaps. An actor or a part (part mode) counts when what it draws reaches into the
+    /// swept circle on the ground (a house whose corner is inside, not only its pivot); a tree, rock or road piece when its
+    /// place is inside; an actor with nothing to draw but a pin (a fire, a lamp, an NPC) when its pin is. Upright it is a
+    /// cylinder: a house's walls above the ground still count, a bunker far below does not. Nothing is ever taken out.
+    /// </summary>
+    public void BrushAt(FVector centre, FVector? from = null)
     {
-        var radius = (float)BrushRadius * 100f;
-        var height = MathF.Max(radius, 1000f); // a cylinder: a house's walls above the ground still count, a bunker far below does not
-        bool Inside(FVector at)
+        if (AllActors.Count == 0)
         {
-            var dx = at.X - centre.X;
-            var dy = at.Y - centre.Y;
-            return (dx * dx) + (dy * dy) <= radius * radius && MathF.Abs(at.Z - centre.Z) <= height;
+            return; // nothing loaded (the index may still hold the levels unloaded last)
         }
 
+        var start = from ?? centre;
+        var radius = (float)BrushRadius * 100f;
+        var height = MathF.Max(radius, 1000f);
+        var sweep = new BrushSweep(new Vector2(start.X, start.Y), new Vector2(centre.X, centre.Y), radius,
+            MathF.Min(start.Z, centre.Z) - height, MathF.Max(start.Z, centre.Z) + height);
+        var index = BrushIndexNow();
+        var moved = ActorTransforms;
+        var movedPieces = InstanceTransforms;
         var have = new HashSet<GroupMember>(_group);
-        var added = false;
-        void Add(ActorItemViewModel item, InstanceKey? key)
+        var added = new List<(GroupMember Member, BrushEntry Entry)>();
+
+        void Consider(BrushEntry e, BrushOutline outline)
         {
-            if (MemberOf(item, key) is { } member && have.Add(member))
+            var item = e.Item;
+            var wanted = e.Kind switch
+            {
+                BrushKind.Whole => !e.HasSegments && !(PickParts && e.HasParts),
+                BrushKind.Part => PickParts && !IsImmovable(item),
+                BrushKind.Segment => !IsImmovable(item),
+                _ => true,
+            };
+            if (wanted && sweep.Touches(outline) && !item.IsDeleted && !HiddenActorIds.Contains(item.SelectableId)
+                && (e.Key is not { } key || !HiddenInstanceKeys.Contains(key)) && MemberOf(item, e.Key) is { } member && have.Add(member))
             {
                 _group.Add(member);
-                added = true;
+                added.Add((member, e));
             }
         }
 
-        FVector Where(InstanceKey key, FVector stored) => InstanceTransforms.TryGetValue(key, out var moved) ? moved.Translation : stored;
-
-        foreach (var item in AllActors)
+        // The loaded levels as stored, by map cell; what the project moved is tested where it is now.
+        var (x0, y0) = BrushCellOf(sweep.Min.X, sweep.Min.Y);
+        var (x1, y1) = BrushCellOf(sweep.Max.X, sweep.Max.Y);
+        for (var y = y0; y <= y1; y++)
         {
-            if (item.IsDeleted || HiddenActorIds.Contains(item.SelectableId))
+            for (var x = x0; x <= x1; x++)
             {
-                continue;
-            }
-
-            // One tree, rock or plank of a foliage/ISM actor at a time.
-            foreach (var i in item.Actor.InstanceTransforms)
-            {
-                var key = InstanceKey.Of(item.SelectableId, i.ComponentName, i.InstanceIndex);
-                if (!HiddenInstanceKeys.Contains(key) && Inside(Where(key, i.WorldTransform.Translation)))
+                if (!index.Cells.TryGetValue((x, y), out var cell))
                 {
-                    Add(item, key);
+                    continue;
                 }
-            }
 
-            if (IsImmovable(item))
-            {
-                continue;
-            }
-
-            // A Blueprint's parts and a road's pieces count on their own (parts only in part mode, as a click does; a door's
-            // leaf is never a part: ScenePlacement.PickKey).
-            var holders = item.Actor.InstanceTransforms.Select(i => i.ComponentName).ToHashSet(StringComparer.OrdinalIgnoreCase);
-            var meshes = item.Actor.Components.Where(c => c.StaticMeshPath is not null && !holders.Contains(c.Name)).ToList();
-            var pieces = meshes.Where(c => c.SplineMesh is not null
-                || (PickParts && !c.IsSynthesized && !c.IsNativeSubobject && c.ExportIndex >= 0 && c.ExportIndex != item.Actor.RootComponent)).ToList();
-            if (pieces.Count > 0)
-            {
-                foreach (var c in pieces)
+                foreach (var e in cell)
                 {
-                    var key = InstanceKey.Of(item.SelectableId, c.Name, c.SplineMesh is not null ? InstanceKey.Segment : InstanceKey.Part);
-                    if (!HiddenInstanceKeys.Contains(key) && Inside(Where(key, c.WorldTransform.Translation)))
+                    if (e.Key is { } key ? !movedPieces.ContainsKey(key) : !moved.ContainsKey(e.Item.SelectableId))
                     {
-                        Add(item, key);
+                        Consider(e, e.Outline);
                     }
                 }
-
-                continue;
-            }
-
-            // Anything else joins whole when one of its meshes is in the circle (a moved actor: where it is now).
-            if (meshes.Count > 0 && (ActorTransforms.TryGetValue(item.SelectableId, out var movedActor)
-                    ? Inside(movedActor.Translation)
-                    : meshes.Any(c => Inside(c.WorldTransform.Translation))))
-            {
-                Add(item, null);
             }
         }
 
-        if (added)
+        foreach (var e in index.Large)
         {
-            _kindMesh = null; // a hand-made set replaces "all of this kind"
+            if (!moved.ContainsKey(e.Item.SelectableId))
+            {
+                Consider(e, e.Outline);
+            }
+        }
+
+        foreach (var (e, outline) in MovedBrushEntries(index))
+        {
+            Consider(e, outline);
+        }
+
+        if (added.Count == 0)
+        {
+            return;
+        }
+
+        // Highlighted at once: only the new members are looked up (a sweep through a forest adds a few trees per move).
+        var inSync = _kindMesh is null && KindSelectionIds.Count + KindSelectionInstances.Count == _group.Count - added.Count;
+        _kindMesh = null; // a hand-made set replaces "all of this kind"
+        if (!inSync)
+        {
             RefreshGroup();
+            return;
+        }
+
+        var ids = new List<uint>(KindSelectionIds);
+        var instances = new List<InstanceKey>(KindSelectionInstances);
+        var worlds = new List<GroupWorld>(GroupWorlds);
+        foreach (var (member, e) in added)
+        {
+            var sel = e.Component is { } part ? new SelectedInstance(e.Item, null, part)
+                : e.Instance is { } instance && e.Item.Actor.FindComponent(instance.ComponentName) is { } holder ? new SelectedInstance(e.Item, instance, holder)
+                : null;
+            Show(member, e.Item, sel, ids, instances, worlds);
+        }
+
+        ShowGroup(ids, instances, worlds);
+    }
+
+    /// <summary>
+    /// What the project moved or added, where it is drawn now (the index holds the stored places): moved actors, moved or
+    /// added pieces (copied and planted trees) and the actors the project added (copies, new meshes and Blueprints).
+    /// </summary>
+    private IEnumerable<(BrushEntry Entry, BrushOutline Outline)> MovedBrushEntries(BrushIndex index)
+    {
+        foreach (var (id, root) in ActorTransforms)
+        {
+            if (index.Wholes.TryGetValue(id, out var e) && OutlineOf(e.Item, root) is { } outline)
+            {
+                yield return (e, outline);
+            }
+        }
+
+        foreach (var (key, world) in InstanceTransforms)
+        {
+            if (ActorOf(key.SelectableId) is { } item && key.InstanceIndex is >= 0 or InstanceKey.Segment or InstanceKey.Part)
+            {
+                var kind = key.InstanceIndex >= 0 ? BrushKind.Instance : key.InstanceIndex == InstanceKey.Segment ? BrushKind.Segment : BrushKind.Part;
+                var outline = kind == BrushKind.Part ? BrushOutline.Of(world, MeshBounds(item.Actor.FindComponent(key.Component)?.StaticMeshPath)) : BrushOutline.Point(world.Translation);
+                yield return (new BrushEntry(item, kind, outline, key), outline);
+            }
+        }
+
+        for (var i = index.Actors.Count; i < AllActors.Count; i++)
+        {
+            // Actors the project added are few: tested where they are drawn now.
+            var item = AllActors[i];
+            if (!IsImmovable(item) && OutlineOf(item, Drawn(item)) is { } outline)
+            {
+                yield return (new BrushEntry(item, BrushKind.Whole, outline), outline);
+            }
+        }
+    }
+
+    /// <summary>The brush's map of the loaded levels' own actors, built on the first dab after they changed.</summary>
+    private BrushIndex BrushIndexNow()
+    {
+        if (_brushIndex is { } index && ReferenceEquals(index.Actors, _pristineActors))
+        {
+            return index;
+        }
+
+        index = new BrushIndex(_pristineActors);
+        var entries = new List<BrushEntry>();
+        foreach (var item in _pristineActors)
+        {
+            entries.Clear();
+            BrushEntries(item, entries);
+            foreach (var e in entries)
+            {
+                if (e.Kind == BrushKind.Whole)
+                {
+                    index.Wholes[item.SelectableId] = e;
+                }
+
+                var box = e.Outline.Box;
+                var (x0, y0) = BrushCellOf(box.Min.X, box.Min.Y);
+                var (x1, y1) = BrushCellOf(box.Max.X, box.Max.Y);
+                if ((long)(x1 - x0 + 1) * (y1 - y0 + 1) > 256)
+                {
+                    index.Large.Add(e); // wider than 800 m: tested on every dab
+                    continue;
+                }
+
+                for (var y = y0; y <= y1; y++)
+                {
+                    for (var x = x0; x <= x1; x++)
+                    {
+                        (index.Cells.TryGetValue((x, y), out var cell) ? cell : index.Cells[(x, y)] = []).Add(e);
+                    }
+                }
+            }
+        }
+
+        return _brushIndex = index;
+    }
+
+    /// <summary>
+    /// What the brush can take of <paramref name="item"/> as the level stores it: each tree, rock or plank of its
+    /// instanced meshes (by its place); a Blueprint's parts (by what they draw) and a road's pieces (by their place), parts
+    /// only in part mode as for a click and a door's leaf never (ScenePlacement.PickKey); else the whole actor by what it
+    /// draws, unless it must stay where it is (foliage, terrain).
+    /// </summary>
+    private void BrushEntries(ActorItemViewModel item, List<BrushEntry> into)
+    {
+        foreach (var i in item.Actor.InstanceTransforms)
+        {
+            into.Add(new BrushEntry(item, BrushKind.Instance, BrushOutline.Point(i.WorldTransform.Translation), InstanceKey.Of(item.SelectableId, i.ComponentName, i.InstanceIndex), Instance: i));
+        }
+
+        if (IsImmovable(item))
+        {
+            return;
+        }
+
+        var holders = item.Actor.InstanceTransforms.Select(i => i.ComponentName).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var (segments, parts) = (false, false);
+        foreach (var c in item.Actor.Components)
+        {
+            var segment = c.SplineMesh is not null;
+            if (c.StaticMeshPath is null || holders.Contains(c.Name)
+                || (!segment && (c.IsSynthesized || c.IsNativeSubobject || c.ExportIndex < 0 || c.ExportIndex == item.Actor.RootComponent)))
+            {
+                continue;
+            }
+
+            segments |= segment;
+            parts |= !segment;
+            into.Add(new BrushEntry(item, segment ? BrushKind.Segment : BrushKind.Part,
+                segment ? BrushOutline.Point(c.WorldTransform.Translation) : BrushOutline.Of(c.WorldTransform, MeshBounds(c.StaticMeshPath)),
+                InstanceKey.Of(item.SelectableId, c.Name, segment ? InstanceKey.Segment : InstanceKey.Part), Component: c));
+        }
+
+        if (OutlineOf(item, StoredRoot(item)) is { } outline)
+        {
+            into.Add(new BrushEntry(item, BrushKind.Whole, outline, HasSegments: segments, HasParts: parts));
+        }
+    }
+
+    /// <summary>The root's world transform as the level stores it.</summary>
+    private static FTransform StoredRoot(ActorItemViewModel item) => item.Actor.Root?.WorldTransform ?? item.Actor.WorldTransform;
+
+    /// <summary>
+    /// What <paramref name="item"/> draws with its root at <paramref name="root"/>: the boxes of its visible meshes (the
+    /// places of its meshes when none is visible or loaded), an added mesh actor's mesh, or the pin of an actor that has
+    /// nothing else. Null with none of these.
+    /// </summary>
+    private BrushOutline? OutlineOf(ActorItemViewModel item, FTransform root)
+    {
+        var stored = StoredRoot(item);
+        var meshes = item.Actor.Components.Where(c => c.StaticMeshPath is not null && !c.IsInstanced).ToList();
+        var drawn = meshes.Where(c => c.IsVisible).ToList();
+        var shapes = (drawn.Count > 0 ? drawn : meshes)
+            .Select(c => (World: c.WorldTransform.GetRelativeTransform(stored) * root, Bounds: c.IsVisible ? MeshBounds(c.StaticMeshPath) : null))
+            .Select(m => new BrushShape(m.Bounds is { IsEmpty: false } b ? b : default, m.World)).ToList();
+        if (shapes.Count == 0 && item.Actor.StaticMeshPath is { } mesh)
+        {
+            shapes.Add(new BrushShape(MeshBounds(mesh) is { IsEmpty: false } b ? b : default, root));
+        }
+
+        if (shapes.Count == 0 && SpawnMarkers.IsPinOnly(item.Actor, out _))
+        {
+            return BrushOutline.Point(root.TransformPosition(stored.InverseTransformPosition(item.Actor.WorldTransform.Translation)));
+        }
+
+        return shapes.Count == 0 ? null : new BrushOutline(shapes.Aggregate(BoundingBox.Empty, (box, s) => box.Union(s.WorldBox())), [.. shapes]);
+    }
+
+    private static (int X, int Y) BrushCellOf(float x, float y) => ((int)MathF.Floor(x / BrushCell), (int)MathF.Floor(y / BrushCell));
+
+    private enum BrushKind
+    {
+        Instance,
+        Segment,
+        Part,
+        Whole,
+    }
+
+    /// <summary>One thing the brush can take: a whole actor or one instance or piece of it, with what it draws.</summary>
+    private sealed record BrushEntry(ActorItemViewModel Item, BrushKind Kind, BrushOutline Outline, InstanceKey? Key = null,
+        ActorInstance? Instance = null, ComponentRecord? Component = null, bool HasSegments = false, bool HasParts = false);
+
+    /// <summary>The brush's entries by map cell (<see cref="BrushCellOf"/>), for one set of loaded levels.</summary>
+    private sealed record BrushIndex(IReadOnlyList<ActorItemViewModel> Actors)
+    {
+        public Dictionary<(int X, int Y), List<BrushEntry>> Cells { get; } = [];
+
+        public List<BrushEntry> Large { get; } = [];
+
+        public Dictionary<uint, BrushEntry> Wholes { get; } = [];
+    }
+
+    /// <summary>One drawn mesh: its box in its own space (empty size: just its place) and where it stands.</summary>
+    private readonly record struct BrushShape(BoundingBox Local, FTransform World)
+    {
+        /// <summary>The 8 corners in the world.</summary>
+        public void Corners(Span<Vector3> into)
+        {
+            for (var i = 0; i < 8; i++)
+            {
+                var c = World.TransformPosition(new FVector((i & 1) == 0 ? Local.Min.X : Local.Max.X, (i & 2) == 0 ? Local.Min.Y : Local.Max.Y, (i & 4) == 0 ? Local.Min.Z : Local.Max.Z));
+                into[i] = new Vector3(c.X, c.Y, c.Z);
+            }
+        }
+
+        public BoundingBox WorldBox()
+        {
+            Span<Vector3> corners = stackalloc Vector3[8];
+            Corners(corners);
+            var box = BoundingBox.Empty;
+            foreach (var c in corners)
+            {
+                box = box.Include(c);
+            }
+
+            return box;
+        }
+    }
+
+    /// <summary>What one entry draws: the world box around it and, for meshes, each mesh's own box (null: the box is a point).</summary>
+    private sealed record BrushOutline(BoundingBox Box, BrushShape[]? Shapes)
+    {
+        public static BrushOutline Point(FVector at) => new(new BoundingBox(new Vector3(at.X, at.Y, at.Z), new Vector3(at.X, at.Y, at.Z)), null);
+
+        public static BrushOutline Of(FTransform world, BoundingBox? bounds)
+        {
+            var shape = new BrushShape(bounds is { IsEmpty: false } b ? b : default, world);
+            return new BrushOutline(shape.WorldBox(), [shape]);
+        }
+    }
+
+    /// <summary>The brush circle swept from <paramref name="A"/> to <paramref name="B"/> on the ground (a capsule), between two heights (UE cm).</summary>
+    private readonly record struct BrushSweep(Vector2 A, Vector2 B, float Radius, float Bottom, float Top)
+    {
+        public Vector2 Min => Vector2.Min(A, B) - new Vector2(Radius);
+
+        public Vector2 Max => Vector2.Max(A, B) + new Vector2(Radius);
+
+        /// <summary>True when something of <paramref name="outline"/> is within the heights and reaches into the capsule on the ground.</summary>
+        public bool Touches(BrushOutline outline)
+        {
+            var box = outline.Box;
+            if (box.Max.Z < Bottom || box.Min.Z > Top || box.Max.X < Min.X || box.Max.Y < Min.Y || box.Min.X > Max.X || box.Min.Y > Max.Y)
+            {
+                return false;
+            }
+
+            Span<Vector2> ground = stackalloc Vector2[4];
+            if (outline.Shapes is not { } shapes)
+            {
+                return TouchesQuad(Rectangle(box, ground));
+            }
+
+            Span<Vector3> corners = stackalloc Vector3[8];
+            foreach (var shape in shapes)
+            {
+                shape.Corners(corners);
+                var (low, high) = (float.MaxValue, float.MinValue);
+                foreach (var c in corners)
+                {
+                    (low, high) = (MathF.Min(low, c.Z), MathF.Max(high, c.Z));
+                }
+
+                if (high < Bottom || low > Top)
+                {
+                    continue;
+                }
+
+                // Upright (only turned about Z, the usual) its outline on the ground is its bottom face; tilted, the box around it.
+                if (MathF.Abs(shape.World.Rotation.RotateVector(FVector.Up).Z) > 0.999f)
+                {
+                    (ground[0], ground[1], ground[2], ground[3]) = (Flat(corners[0]), Flat(corners[1]), Flat(corners[3]), Flat(corners[2]));
+                }
+                else
+                {
+                    var flat = BoundingBox.Empty;
+                    foreach (var c in corners)
+                    {
+                        flat = flat.Include(c);
+                    }
+
+                    Rectangle(flat, ground);
+                }
+
+                if (TouchesQuad(ground))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static Vector2 Flat(Vector3 v) => new(v.X, v.Y);
+
+        private static Span<Vector2> Rectangle(BoundingBox box, Span<Vector2> into)
+        {
+            (into[0], into[1], into[2], into[3]) = (new(box.Min.X, box.Min.Y), new(box.Max.X, box.Min.Y), new(box.Max.X, box.Max.Y), new(box.Min.X, box.Max.Y));
+            return into;
+        }
+
+        /// <summary>True when the convex quad (corners in order, either way round; it may be a line or a point) comes within the radius of the segment.</summary>
+        private bool TouchesQuad(ReadOnlySpan<Vector2> quad)
+        {
+            // Apart, a segment and a convex shape are nearest between an end of one and an edge of the other; else one
+            // crosses the other's edge, or the segment lies inside.
+            var r2 = Radius * Radius;
+            var (positive, negative) = (false, false);
+            for (var i = 0; i < 4; i++)
+            {
+                var (p, q) = (quad[i], quad[(i + 1) % 4]);
+                if (SegmentsDistanceSquared(A, B, p, q) <= r2)
+                {
+                    return true;
+                }
+
+                var side = Cross(q - p, A - p);
+                positive |= side > 0f;
+                negative |= side < 0f;
+            }
+
+            return positive != negative; // A strictly on one side of every (non-empty) edge: inside
+        }
+
+        private static float Cross(Vector2 a, Vector2 b) => (a.X * b.Y) - (a.Y * b.X);
+
+        private static float SegmentsDistanceSquared(Vector2 a, Vector2 b, Vector2 p, Vector2 q)
+        {
+            var (d1, d2, d3, d4) = (Cross(b - a, p - a), Cross(b - a, q - a), Cross(q - p, a - p), Cross(q - p, b - p));
+            if (((d1 > 0f && d2 < 0f) || (d1 < 0f && d2 > 0f)) && ((d3 > 0f && d4 < 0f) || (d3 < 0f && d4 > 0f)))
+            {
+                return 0f; // they cross
+            }
+
+            return MathF.Min(MathF.Min(ToSegment(p, a, b), ToSegment(q, a, b)), MathF.Min(ToSegment(a, p, q), ToSegment(b, p, q)));
+        }
+
+        private static float ToSegment(Vector2 point, Vector2 a, Vector2 b)
+        {
+            var d = b - a;
+            var length = d.LengthSquared();
+            var t = length < 1e-6f ? 0f : Math.Clamp(Vector2.Dot(point - a, d) / length, 0f, 1f);
+            return Vector2.DistanceSquared(point, a + (d * t));
         }
     }
 

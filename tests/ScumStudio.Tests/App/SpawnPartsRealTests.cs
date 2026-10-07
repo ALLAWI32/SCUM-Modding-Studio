@@ -150,12 +150,24 @@ public sealed class SpawnPartsRealTests
         var shop = map.AllActors.Single(a => a.Name == "BP_Outpost_CarShop_NPC_and_VehicleSpawner_5");
         var box = shop.Actor.FindComponent("VehicleSpawnBox")!;
         var pin = map.PreparedScene!.Placements.Single(p => p.Spawner == box.Name && ReferenceEquals(p.Actor, shop.Actor));
-        Assert.Equal(SpawnMarkers.MeshKey(SpawnKind.Vehicle), pin.MeshPath);
+        Assert.Equal(SpawnKind.Vehicle, SpawnMarkers.KindOfMesh(pin.MeshPath));
         Assert.Equal(shop.SelectableId, pin.SelectableId);
         Assert.Equal(InstanceKey.Of(shop.SelectableId, box.Name, InstanceKey.Part), pin.InstanceKey);
-        // A translucent box of the real size: the component's scale times its extent (a half size), over the metre-wide box mesh.
-        Assert.Equal(box.WorldTransform.Scale3D.X * (box.BoxExtent ?? new FVector(32f)).X * 2f / SpawnMarkers.BoxSize, pin.World.Scale3D.X, 0.001f);
         Assert.Equal(SpawnShape.Box, SpawnMarkers.ShapeOf(SpawnKind.Vehicle));
+        var halfHeight = box.WorldTransform.Scale3D.Z * (box.BoxExtent ?? new FVector(32f)).Z;
+        if (SpawnMarkers.ModelOf(pin.MeshPath) is { } vehicle)
+        {
+            // The vehicle the shop sells stands unscaled on the floor of its box, half transparent (owner: "the object itself, not a pin").
+            Assert.True(FVector.Distance(pin.World.Translation, box.WorldTransform.Translation - box.WorldTransform.Rotation.RotateVector(new FVector(0f, 0f, halfHeight))) < 1f);
+            Assert.Equal(FVector.One, pin.World.Scale3D);
+            Assert.True(map.PreparedScene.Meshes[pin.MeshPath].Mesh.TriangleCount > 500, vehicle);
+        }
+        else
+        {
+            // A translucent box of the real size: the component's scale times its extent (a half size), over the metre-wide box mesh.
+            Assert.Equal(box.WorldTransform.Scale3D.X * (box.BoxExtent ?? new FVector(32f)).X * 2f / SpawnMarkers.BoxSize, pin.World.Scale3D.X, 0.001f);
+        }
+
 
         map.SelectedInstanceKey = pin.InstanceKey;
         map.SelectedActorId = shop.SelectableId;
@@ -242,9 +254,19 @@ public sealed class SpawnPartsViewportRealTests
         var boxPin = level.Scene.Nodes.Single(n => n.Tag is ScenePlacement { InstanceKey: { } k } && k == boxKey);
         var boxTo = box.WorldTransform with { Translation = box.WorldTransform.Translation + new FVector(0f, 300f, 0f) };
         level.SetInstanceTransform(boxKey, boxTo);
-        var boxSize = ((ScenePlacement)boxPin.Tag!).World.Scale3D;
-        RenderAssert.Near(UeToGl.ModelMatrix(boxTo with { Scale3D = boxSize }), boxPin.LocalTransform, 1e-3f);
-        Assert.Equal(box.WorldTransform.Scale3D.X * (box.BoxExtent ?? new FVector(32f)).X * 2f / SpawnMarkers.BoxSize, boxSize.X, 0.001f);
+        var boxPlacement = (ScenePlacement)boxPin.Tag!;
+        var boxSize = boxPlacement.World.Scale3D;
+        if (SpawnMarkers.ModelOf(boxPlacement.MeshPath) is null)
+        {
+            RenderAssert.Near(UeToGl.ModelMatrix(boxTo with { Scale3D = boxSize }), boxPin.LocalTransform, 1e-3f);
+            Assert.Equal(box.WorldTransform.Scale3D.X * (box.BoxExtent ?? new FVector(32f)).X * 2f / SpawnMarkers.BoxSize, boxSize.X, 0.001f);
+        }
+        else
+        {
+            // The vehicle standing in for the box keeps its place on the box's floor and its own size.
+            RenderAssert.Near(UeToGl.ModelMatrix((boxPlacement.World.GetRelativeTransform(box.WorldTransform) * boxTo) with { Scale3D = boxSize }), boxPin.LocalTransform, 1e-3f);
+            Assert.Equal(FVector.One, boxSize);
+        }
 
         async Task SaveAsync(string name, FTransform at)
         {

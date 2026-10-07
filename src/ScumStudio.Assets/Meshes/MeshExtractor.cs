@@ -137,6 +137,63 @@ public static class MeshExtractor
         return Build(mesh.Name, src.Verts, src.NumVerts, src.Indices.Value, src.Sections.Value, slots);
     }
 
+    /// <summary>
+    /// The bone influences of LOD <paramref name="lod"/> of a skeletal mesh, in the vertex order of
+    /// <see cref="ExtractSkeletalMesh"/>, with the mesh's reference skeleton (bind pose), for <see cref="Skinning"/>.
+    /// </summary>
+    /// <exception cref="InvalidDataException">The LOD does not exist or neither it nor a later LOD has render data.</exception>
+    public static SkinWeights ExtractSkinWeights(USkeletalMesh mesh, int lod = 0)
+    {
+        ArgumentNullException.ThrowIfNull(mesh);
+        var lods = mesh.LODModels ?? throw new InvalidDataException($"{mesh.Name} has no LOD models.");
+        lod = WithRenderData(lod, lods.Length, i => lods[i].SkipLod);
+        CheckLod(mesh.Name, lod, lods.Length, lods.Length > lod && lod >= 0 && lods[lod].SkipLod);
+        if (!mesh.TryConvert(out CSkeletalMesh converted))
+        {
+            throw new InvalidDataException($"{mesh.Name} could not be converted.");
+        }
+
+        var src = converted.LODs[lods.Take(lod).Count(l => !l.SkipLod)];
+        var offsets = new int[src.NumVerts + 1];
+        var bones = new List<int>(src.NumVerts * 4);
+        var weights = new List<float>(src.NumVerts * 4);
+        for (var i = 0; i < src.NumVerts; i++)
+        {
+            foreach (var influence in src.Verts[i].Influences)
+            {
+                if (influence.Weight > 0f)
+                {
+                    bones.Add(influence.Bone);
+                    weights.Add(influence.Weight);
+                }
+            }
+
+            offsets[i + 1] = bones.Count;
+        }
+
+        return new SkinWeights(ReferenceBones(mesh), offsets, bones.ToArray(), weights.ToArray());
+    }
+
+    /// <summary>The reference skeleton of a skeletal mesh (bind pose, bone-relative), in bone order.</summary>
+    public static IReadOnlyList<SkinBone> ReferenceBones(USkeletalMesh mesh)
+    {
+        ArgumentNullException.ThrowIfNull(mesh);
+        var skeleton = mesh.ReferenceSkeleton;
+        var info = skeleton?.FinalRefBoneInfo ?? [];
+        var poses = skeleton?.FinalRefBonePose ?? [];
+        var bones = new List<SkinBone>(info.Length);
+        for (var i = 0; i < info.Length && i < poses.Length; i++)
+        {
+            var p = poses[i];
+            bones.Add(new SkinBone(info[i].Name.Text, info[i].ParentIndex, new Core.Mathematics.FTransform(
+                new Core.Mathematics.FQuat(p.Rotation.X, p.Rotation.Y, p.Rotation.Z, p.Rotation.W),
+                new Core.Mathematics.FVector(p.Translation.X, p.Translation.Y, p.Translation.Z),
+                new Core.Mathematics.FVector(p.Scale3D.X, p.Scale3D.Y, p.Scale3D.Z))));
+        }
+
+        return bones;
+    }
+
     /// <summary>Describes a static mesh.</summary>
     public static MeshAssetInfo DescribeStaticMesh(UStaticMesh mesh)
     {

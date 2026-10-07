@@ -118,6 +118,26 @@ public sealed class ThumbnailService : IDisposable
         }, cancellationToken);
     }
 
+    /// <summary>
+    /// A 3D picture of the Blueprint in <paramref name="packagePath"/> (an item's class: its mesh drawn with its textures), or
+    /// null when it draws nothing (a trader's service) or meshes cannot be drawn on this PC.
+    /// </summary>
+    public Task<string?> GetBlueprintAsync(AssetCatalog catalog, string packagePath, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(catalog);
+        ArgumentException.ThrowIfNullOrEmpty(packagePath);
+        if (_glFailure is not null || !catalog.TryGetPackageFile(packagePath, out var file))
+        {
+            return Task.FromResult<string?>(null);
+        }
+
+        return MakeAsync(CacheFile(packagePath, file.Size), packagePath, async ct =>
+        {
+            var model = await DecodeAsync(() => new MeshPreviewLoader(catalog, _logger) { TextureSize = 512 }.LoadBlueprint(packagePath), ct).ConfigureAwait(false);
+            return model is null || model.Parts.Count == 0 ? null : (await RenderAsync(model, ct).ConfigureAwait(false), RenderSize, RenderSize);
+        }, cancellationToken);
+    }
+
     /// <summary>Halves the image until its largest edge is at most <paramref name="max"/> (2×2 box filter).</summary>
     internal static (byte[] Rgba, int Width, int Height) Shrink(byte[] rgba, int width, int height, int max)
     {

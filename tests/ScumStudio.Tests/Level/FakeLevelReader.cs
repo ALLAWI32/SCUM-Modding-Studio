@@ -141,6 +141,13 @@ internal sealed class FakeLevelBuilder
         return this;
     }
 
+    /// <summary>Gives a trade post its traders (what the reader takes from <c>_traderMarkers</c>).</summary>
+    public FakeLevelBuilder Traders(int actor, params ScumStudio.Level.Model.TraderMarker[] markers)
+    {
+        _exports[actor] = _exports[actor] with { TraderMarkers = markers };
+        return this;
+    }
+
     public FakeLevelBuilder Attach(int component, int parent)
     {
         _exports[component] = _exports[component] with { AttachParent = parent };

@@ -65,11 +65,34 @@ public sealed record InstanceAdd(string Actor, string Component, FTransform Loca
 /// <param name="Instances">Component-space transforms in array order.</param>
 public sealed record InstanceArrayHint(string Actor, string Component, IReadOnlyList<FTransform> Instances);
 
+/// <summary>
+/// Another static mesh for one stored mesh component (the export of <see cref="Editing.ReplaceMeshOp"/>): its
+/// <c>StaticMesh</c> property points at a new import, the rest of the component stays.
+/// </summary>
+/// <param name="Actor">Owning actor name.</param>
+/// <param name="Component">Component name; null = the actor's <c>RootComponent</c>.</param>
+/// <param name="StaticMesh">Object path of the new mesh (a package path is accepted too).</param>
+/// <param name="MeshBodySetupGuid">
+/// The new mesh's <c>BodySetupGuid</c>, written over a spline piece's <c>CachedMeshBodySetupGuid</c> when the component
+/// stores one (with the old guid the game would rebuild the piece's collision from the mesh and lose it); null leaves it.
+/// </param>
+public sealed record MeshPatch(string Actor, string? Component, string StaticMesh, FGuid? MeshBodySetupGuid = null);
+
 /// <summary>What <see cref="LevelPackageEditor"/> changes in one level package.</summary>
 public sealed record LevelEditRequest
 {
+    /// <summary>Mesh components to point at another static mesh.</summary>
+    public IReadOnlyList<MeshPatch> Meshes { get; init; } = [];
+
     /// <summary>Actor object names to remove from the level's actor list (case-insensitive).</summary>
     public IReadOnlyCollection<string> DeleteActors { get; init; } = [];
+
+    /// <summary>
+    /// Components of kept actors to turn into inert objects, as (actor name, component name): the ChildActorComponents that
+    /// spawned deleted child actors. Left alone, such a component spawns a fresh child from its class when the level loads
+    /// (<c>UChildActorComponent::OnRegister</c> with a null <c>ChildActor</c>), so a deleted door would come back.
+    /// </summary>
+    public IReadOnlyList<(string Actor, string Component)> DeleteComponents { get; init; } = [];
 
     /// <summary>Relative transforms to patch into component exports.</summary>
     public IReadOnlyList<TransformPatch> Transforms { get; init; } = [];
@@ -98,9 +121,16 @@ public sealed record LevelEditRequest
     /// <summary>Spawner point arrays to rewrite.</summary>
     public IReadOnlyList<SpawnPointsPatch> SpawnPoints { get; init; } = [];
 
+    /// <summary>
+    /// Trade posts created by this request (<see cref="ForeignCopies"/>) to list in the <c>_assignedTradePosts</c> of the
+    /// level's own outpost manager of that outpost, as (post actor name, outpost name). A post whose outpost has no manager in
+    /// the level stays linked by its outpost name only (the game's banks and hunters are).
+    /// </summary>
+    public IReadOnlyList<(string Post, string Outpost)> TradeJoins { get; init; } = [];
+
     /// <summary>True when the request changes nothing.</summary>
-    public bool IsEmpty => DeleteActors.Count == 0 && Transforms.Count == 0 && Instances.Count == 0 && InstanceAdds.Count == 0 && Copies.Count == 0
-        && StaticMeshAdds.Count == 0 && ForeignCopies.Count == 0 && SplinePatches.Count == 0 && SpawnPoints.Count == 0;
+    public bool IsEmpty => DeleteActors.Count == 0 && DeleteComponents.Count == 0 && Transforms.Count == 0 && Instances.Count == 0 && InstanceAdds.Count == 0 && Copies.Count == 0
+        && StaticMeshAdds.Count == 0 && ForeignCopies.Count == 0 && SplinePatches.Count == 0 && SpawnPoints.Count == 0 && Meshes.Count == 0;
 }
 
 /// <summary>What <see cref="LevelPackageEditor.Apply"/> did to a level package.</summary>
@@ -136,6 +166,12 @@ public sealed record LevelEditReport
     /// <summary>ISM/HISM instances appended.</summary>
     public int AddedInstances { get; init; }
 
+    /// <summary>Exports of deleted actors (the actors and everything under them) turned into inert objects.</summary>
+    public int NeutralizedExports { get; init; }
+
+    /// <summary>Trade posts added to an outpost manager of the level, as (post, manager).</summary>
+    public IReadOnlyList<(string Post, string Manager)> JoinedTradePosts { get; init; } = [];
+
     /// <summary>Requested changes that could not be applied, with the reason.</summary>
     public required IReadOnlyList<string> Warnings { get; init; }
 }
@@ -143,8 +179,8 @@ public sealed record LevelEditReport
 /// <summary>
 /// Rewrites a cooked level package (<c>.umap</c> + <c>.uexp</c>) with actors removed and transforms changed, keeping
 /// everything else byte-identical. Deleting an actor removes its entry from the <c>ULevel::Actors</c> array in the
-/// level export's native data; the actor's own exports stay in the package (never registered with the world, they are
-/// garbage collected after load), so no package index has to be remapped and the header layout is unchanged. A transform
+/// level export's native data and turns its exports into inert plain objects in place (see
+/// <c>LevelPackageEditor.Delete.cs</c>), so no package index has to be remapped and the header layout is unchanged. A transform
 /// is written into the component's <c>RelativeLocation</c>/<c>RelativeRotation</c>/<c>RelativeScale3D</c> tags in place
 /// when they exist and inserted before the <c>None</c> terminator otherwise (adding the property and struct names to the
 /// name table when missing). The package is then rebuilt with <see cref="PackageWriter"/>, which recomputes export sizes
@@ -200,11 +236,21 @@ public static partial class LevelPackageEditor
         var actors = RemoveActors(package, levelIndex, request.DeleteActors, addedIndices, warnings);
         data[levelIndex] = actors.Payload;
         ForgetTradePosts(package, actors.Removed, data);
+        var joined = JoinTradePosts(package, levelIndex + 1, request.TradeJoins, exports, data, names);
 
         var patched = new List<string>();
         foreach (var patch in request.Transforms)
         {
             if (TryPatchTransform(package, levelIndex, patch, data, names, wide, addedNames, warnings) is { } label)
+            {
+                patched.Add(label);
+            }
+        }
+
+        // After the transforms (they may grow a payload), before the spline patches (a replaced piece's collision follows).
+        foreach (var patch in request.Meshes)
+        {
+            if (TryPatchMesh(package, levelIndex, patch, data, exports, imports, names, wide, addedNames, preload, warnings) is { } label)
             {
                 patched.Add(label);
             }
@@ -226,6 +272,10 @@ public static partial class LevelPackageEditor
                 patched.Add(label);
             }
         }
+
+        // Last: a deleted actor's exports become inert objects, whatever another patch wrote into them.
+        var neutralized = NeutralizeDeletedExports(package, levelIndex, actors.Removed, exports, data, imports, names, wide, addedNames, preload, warnings)
+            + NeutralizeComponents(package, levelIndex, request.DeleteComponents, exports, data, imports, names, wide, addedNames, preload, warnings);
 
         var bytes = PackageWriter.Build(new PackageBuildInput
         {
@@ -251,6 +301,8 @@ public static partial class LevelPackageEditor
             DeletedInstances = deletedInstances,
             MovedInstances = movedInstances,
             AddedInstances = addedInstances,
+            NeutralizedExports = neutralized,
+            JoinedTradePosts = joined,
             Warnings = warnings,
         };
         return (bytes, report);
@@ -338,6 +390,52 @@ public static partial class LevelPackageEditor
                 data[i] = payload;
             }
         }
+    }
+
+    /// <summary>
+    /// New trade posts join their outpost: each is appended to the <c>_assignedTradePosts</c> of the level's own outpost
+    /// manager whose <c>_outpostName</c> is the post's outpost (the stock managers list their outpost's posts this way).
+    /// Returns the posts listed, with their manager.
+    /// </summary>
+    private static List<(string Post, string Manager)> JoinTradePosts(
+        CookedPackage package, int levelPackageIndex, IReadOnlyList<(string Post, string Outpost)> joins, List<ExportEntry> exports, List<ReadOnlyMemory<byte>> data, List<string> names)
+    {
+        var joined = new List<(string, string)>();
+        if (joins.Count == 0)
+        {
+            return joined;
+        }
+
+        for (var i = 0; i < package.Exports.Count; i++)
+        {
+            if (!package.GetExportClassName(i).Contains("TradeOutpostManager", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var payload = data[i].ToArray();
+            var block = PropertyReader.ReadPayload(package, payload, i);
+            if (block.Find("_outpostName")?.Value is not NameValue outpost || block.Find("_assignedTradePosts") is not { Value: ArrayValue list } tag)
+            {
+                continue;
+            }
+
+            var posts = joins.Where(j => string.Equals(j.Outpost, outpost.Value, StringComparison.OrdinalIgnoreCase))
+                .Select(j => (j.Post, Index: FindLevelActor(exports, names, levelPackageIndex, j.Post)))
+                .Where(p => p.Index > 0)
+                .ToList();
+            if (posts.Count == 0)
+            {
+                continue;
+            }
+
+            var items = list.Items.OfType<ObjectValue>().Select(o => o.Index).Concat(posts.Select(p => p.Index)).ToList();
+            data[i] = WriteObjectArray(payload, tag, items);
+            var manager = package.ResolveName(package.Exports[i].ObjectName);
+            joined.AddRange(posts.Select(p => (p.Post, manager)));
+        }
+
+        return joined;
     }
 
     private static (ReadOnlyMemory<byte> Payload, int Before, int After, IReadOnlyList<string> Removed) RemoveActors(
@@ -449,51 +547,194 @@ public static partial class LevelPackageEditor
         return new ActorArrayLayout(payload, countOffset, indices, tailOffset);
     }
 
+    /// <summary>The export index of <paramref name="component"/> of <paramref name="actor"/> (null = its stored root), or -1 with a warning.</summary>
+    private static int FindComponent(CookedPackage package, int levelIndex, string actor, string? component, string what, List<string> warnings)
+    {
+        var actorIndex = FindExport(package, actor, levelIndex + 1);
+        if (actorIndex < 0)
+        {
+            warnings.Add($"Actor '{actor}' was not found in the level; its {what} was not written.");
+            return -1;
+        }
+
+        if (component is null)
+        {
+            if (package.ReadProperties(actorIndex).Find(RootComponentProperty)?.Value is ObjectValue { Index: > 0 } root && root.Index <= package.Exports.Count)
+            {
+                return root.Index - 1;
+            }
+
+            warnings.Add($"Actor '{actor}' stores no RootComponent; give the component name explicitly.");
+            return -1;
+        }
+
+        var componentIndex = FindExport(package, component, actorIndex + 1);
+        if (componentIndex < 0)
+        {
+            warnings.Add($"Component '{actor}.{component}' is not stored in the level package; its {what} was not written.");
+        }
+
+        return componentIndex;
+    }
+
+    /// <summary>
+    /// Points a stored mesh component at another mesh: its <c>StaticMesh</c> tag gets the new import (inserted before
+    /// <c>None</c> when the mesh came from the component's template), the import is added to the component's
+    /// create-before-serialize dependencies (the loader creates it first, as for a cooked component), and a spline piece's
+    /// cached body guid becomes the new mesh's. Returns the label written, or null with a warning.
+    /// </summary>
+    private static string? TryPatchMesh(CookedPackage package, int levelIndex, MeshPatch patch, IList<ReadOnlyMemory<byte>> data, List<ExportEntry> exports,
+        List<ImportEntry> imports, List<string> names, List<bool> wide, List<string> addedNames, List<int> preload, List<string> warnings)
+    {
+        var componentIndex = FindComponent(package, levelIndex, patch.Actor, patch.Component, "mesh", warnings);
+        if (componentIndex < 0)
+        {
+            return null;
+        }
+
+        var label = $"{patch.Actor}.{package.ResolveName(package.Exports[componentIndex].ObjectName)}";
+        var (meshPackage, meshName) = SplitObjectPath(patch.StaticMesh);
+        if (meshPackage.Length == 0 || meshName.Length == 0)
+        {
+            warnings.Add($"'{label}': '{patch.StaticMesh}' is not a mesh object path; its mesh was not written.");
+            return null;
+        }
+
+        var payload = data[componentIndex].ToArray();
+        PropertyBlock block;
+        try
+        {
+            block = PropertyReader.ReadPayload(package, payload, componentIndex);
+
+            // The new mesh is drawn with its own materials: the old mesh's OverrideMaterials address the old mesh's slots
+            // (a gravel road's end material on an asphalt piece), so the tag goes.
+            if (block.Find("OverrideMaterials") is { } overrides)
+            {
+                payload = [.. payload[..overrides.Offset], .. payload[overrides.EndOffset..]];
+                block = PropertyReader.ReadPayload(package, payload, componentIndex);
+            }
+        }
+        catch (Exception ex) when (ex is FormatException or EndOfStreamException or ArgumentOutOfRangeException or NotSupportedException or InvalidDataException or IndexOutOfRangeException)
+        {
+            warnings.Add($"'{label}': the export could not be read after its other edits ({ex.Message}); its mesh was not written.");
+            return null;
+        }
+
+        FNameRef Name(string value) => GetOrAddName(names, wide, addedNames, value);
+        var meshPkg = GetOrAddImport(imports, names, wide, addedNames, CoreUObjectPackage, "Package", 0, meshPackage);
+        var mesh = GetOrAddImport(imports, names, wide, addedNames, EnginePackage, StaticMeshClass, meshPkg, meshName);
+
+        if (block.Find(StaticMeshClass) is { Type: "ObjectProperty", Size: 4 } tag)
+        {
+            System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(tag.ValueOffset), mesh);
+        }
+        else
+        {
+            // The mesh came from the Blueprint's template: the tag is inserted before the terminating "None".
+            var terminator = block.EndOffset - 8;
+            if (terminator < 0 || terminator > payload.Length)
+            {
+                warnings.Add($"'{label}' has no tagged property block to extend; its mesh was not written.");
+                return null;
+            }
+
+            var w = new ByteWriter(payload.Length + 29);
+            w.Raw(payload.AsSpan(0, terminator));
+            WriteObjectTag(w, Name, StaticMeshClass, mesh);
+            w.Raw(payload.AsSpan(terminator));
+            payload = w.ToArray();
+        }
+
+        if (patch.MeshBodySetupGuid is { IsZero: false } guid && block.Find("CachedMeshBodySetupGuid") is { Type: StructPropertyType, Size: 16 } cached)
+        {
+            var g = new ByteWriter(16);
+            g.Guid(guid);
+            g.WrittenSpan.CopyTo(payload.AsSpan(cached.ValueOffset, 16));
+        }
+
+        data[componentIndex] = payload;
+
+        // The new mesh exists before the component is read: its dependency groups again, with the import added.
+        var entry = exports[componentIndex];
+        var first = preload.Count;
+        AppendGroups(package, package.Exports[componentIndex], new Dictionary<int, int>(), preload, extraCreateBeforeSerialize: [mesh]);
+        exports[componentIndex] = entry with
+        {
+            FirstExportDependency = first,
+            CreateBeforeSerializationDependencies = package.Exports[componentIndex].CreateBeforeSerializationDependencies + 1,
+        };
+        return label + " (mesh)";
+    }
+
     private static string? TryPatchTransform(
         CookedPackage package, int levelIndex, TransformPatch patch, IList<ReadOnlyMemory<byte>> data,
         List<string> names, List<bool> wide, List<string> addedNames, List<string> warnings)
     {
-        var actorIndex = FindExport(package, patch.Actor, levelIndex + 1);
-        if (actorIndex < 0)
+        var componentIndex = FindComponent(package, levelIndex, patch.Actor, patch.Component, "transform", warnings);
+        if (componentIndex < 0)
         {
-            warnings.Add($"Actor '{patch.Actor}' was not found in the level; its transform was not written.");
             return null;
-        }
-
-        int componentIndex;
-        if (patch.Component is null)
-        {
-            var actorProps = package.ReadProperties(actorIndex);
-            if (actorProps.Find(RootComponentProperty)?.Value is ObjectValue { Index: > 0 } root && root.Index <= package.Exports.Count)
-            {
-                componentIndex = root.Index - 1;
-            }
-            else
-            {
-                warnings.Add($"Actor '{patch.Actor}' stores no RootComponent; give the component name explicitly.");
-                return null;
-            }
-        }
-        else
-        {
-            componentIndex = FindExport(package, patch.Component, actorIndex + 1);
-            if (componentIndex < 0)
-            {
-                warnings.Add($"Component '{patch.Actor}.{patch.Component}' is not stored in the level package; its transform was not written.");
-                return null;
-            }
         }
 
         var componentName = package.ResolveName(package.Exports[componentIndex].ObjectName);
         var label = $"{patch.Actor}.{componentName}";
-        var patched = PatchTransformPayload(data[componentIndex].ToArray(), package.ReadProperties(componentIndex), patch.Value, label, names, wide, addedNames, warnings);
+        var payload = data[componentIndex].ToArray();
+        var block = package.ReadProperties(componentIndex);
+        var patched = PatchTransformPayload(payload, block, patch.Value, label, names, wide, addedNames, warnings);
         if (patched is null)
         {
             return null;
         }
 
+        if (patch.Value.Scale == FVector.Zero)
+        {
+            patched = RemoveMesh(patched, payload.Length, block, package.GetExportClassName(componentIndex), names, wide, addedNames);
+        }
+
         data[componentIndex] = patched;
         return label;
+    }
+
+    /// <summary>
+    /// A part scaled to nothing (the editor's delete of one Blueprint part or road piece) also loses its mesh: the engine
+    /// builds a body for a zero-scaled mesh anyway (the owner's outpost: solid ghosts where buildings and vehicle blockers
+    /// were; 545 "Scale3D is (nearly) zero" warnings in the game's log), a static mesh component without a mesh has none.
+    /// The stored <c>StaticMesh</c> is nulled, or set to null when the template provides it. The transform tags were just
+    /// written; the tail after the <c>None</c> terminator is as long as before, so the terminator is found from the end.
+    /// </summary>
+    private static byte[] RemoveMesh(byte[] patched, int originalLength, PropertyBlock original, string className, List<string> names, List<bool> wide, List<string> addedNames)
+    {
+        if (original.Find("StaticMesh") is { } mesh)
+        {
+            if (mesh.Type == "ObjectProperty" && mesh.Size == 4)
+            {
+                System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(patched.AsSpan(mesh.ValueOffset), 0);
+            }
+
+            return patched;
+        }
+
+        if (!className.EndsWith("StaticMeshComponent", StringComparison.Ordinal) && className != "SplineMeshComponent")
+        {
+            return patched;
+        }
+
+        var terminator = patched.Length - (originalLength - (original.EndOffset - 8));
+        if (terminator < 0 || terminator > patched.Length)
+        {
+            return patched;
+        }
+
+        var w = new ByteWriter(patched.Length + 29);
+        w.Raw(patched.AsSpan(0, terminator));
+        w.FName(GetOrAddName(names, wide, addedNames, "StaticMesh"));
+        w.FName(GetOrAddName(names, wide, addedNames, "ObjectProperty"));
+        w.I32(4);
+        w.I32(0); // ArrayIndex
+        w.U8(0); // HasPropertyGuid
+        w.I32(0); // null
+        w.Raw(patched.AsSpan(terminator));
+        return w.ToArray();
     }
 
     /// <summary>

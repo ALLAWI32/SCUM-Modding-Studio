@@ -247,6 +247,28 @@ public sealed partial class SettingsPageViewModel : PageViewModel, IDisposable
         Reload();
     }
 
+    /// <summary>The map gizmo's arrows follow the selected object's own axes (on by default); the map follows this setting live.</summary>
+    public bool LocalAxes
+    {
+        get => _services.UiState.Current.LocalAxes;
+        set
+        {
+            _services.UiState.Update(u => u with { LocalAxes = value });
+            OnPropertyChanged();
+        }
+    }
+
+    /// <summary>Reopen the last project when the app starts (on by default).</summary>
+    public bool ReopenLastProject
+    {
+        get => _services.UiState.Current.ReopenLastProject;
+        set
+        {
+            _services.UiState.Update(u => u with { ReopenLastProject = value });
+            OnPropertyChanged();
+        }
+    }
+
     /// <summary>3D view quality (the Map toolbar shows the same choice).</summary>
     [ObservableProperty]
     private ScumStudio.Core.Settings.RenderQuality _renderQuality = ScumStudio.Core.Settings.RenderQuality.Balanced;
@@ -461,6 +483,34 @@ public sealed partial class SettingsPageViewModel : PageViewModel, IDisposable
 
     [RelayCommand]
     private void OpenSetup() => _openSetup();
+
+    /// <summary>Where the prefab files (saved selections, plain JSON) live.</summary>
+    public string PrefabsFolder => _services.Prefabs.Folder;
+
+    /// <summary>Opens the prefab library folder in the file manager.</summary>
+    [RelayCommand]
+    private void OpenPrefabsFolder()
+    {
+        try
+        {
+            Directory.CreateDirectory(PrefabsFolder);
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(PrefabsFolder) { UseShellExecute = true });
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or PlatformNotSupportedException or IOException or UnauthorizedAccessException)
+        {
+            _services.Notifications.Info(Loc.T("Settings.Prefabs.Folder"), PrefabsFolder + Environment.NewLine + ex.Message);
+        }
+    }
+
+    /// <summary>Import…: a .ssprefab file someone shared goes into the library.</summary>
+    [RelayCommand]
+    private async Task ImportPrefabAsync()
+    {
+        if (await _services.Dialogs.OpenFileAsync(Loc.T("Map.Prefabs.Import.Title"), ScumStudio.Level.Editing.Prefab.Extension[1..], Loc.T("Map.Prefabs.FileType"), _services.Prefabs.Folder).ConfigureAwait(true) is { } path)
+        {
+            _services.Prefabs.ImportFile(path, _services.Workspace.Catalog, _services.Notifications);
+        }
+    }
 
     /// <summary>The project's home page (source, releases, issues).</summary>
     public const string ProjectPage = "https://github.com/ALLAWI32/SCUM-Modding-Studio";

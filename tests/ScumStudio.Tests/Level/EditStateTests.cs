@@ -41,6 +41,40 @@ public sealed class EditStateTests
     }
 
     [Fact]
+    public void AReplacedMeshIsKeptPerComponentAndUndoneExactly()
+    {
+        const string boulder = "/Game/ConZ_Files/Models/Rocks/SM_Boulder.SM_Boulder";
+        const string pebble = "/Game/ConZ_Files/Models/Rocks/SM_Pebble.SM_Pebble";
+        var state = new EditState();
+        var root = new ReplaceMeshOp(House, null, Rock, boulder);
+        var door = new ReplaceMeshOp(House, "Door", Rock, pebble);
+        state.Apply(root);
+        state.Apply(door);
+        Assert.Equal(boulder, state.GetMeshOverride(House));
+        Assert.Equal(pebble, state.GetMeshOverride(House, "Door"));
+        Assert.Null(state.GetMeshOverride(Crate));
+        Assert.Equal([Outpost], state.ChangedLevels);
+
+        // Out of date: the component no longer draws what the edit expects; a deleted actor takes none.
+        Assert.NotNull(state.Validate(new ReplaceMeshOp(House, null, Rock, pebble)));
+        Assert.Null(state.Validate(new ReplaceMeshOp(House, null, boulder, pebble)));
+        state.Apply(new DeleteActorOp(House));
+        Assert.NotNull(state.Validate(new ReplaceMeshOp(House, null, boulder, pebble)));
+        state.Apply(new RestoreActorOp(House));
+
+        // Back to the level's mesh: no override left; a replaced added actor forgets it when the actor goes.
+        state.Apply(root.Inverse());
+        state.Apply(door.Inverse());
+        Assert.True(state.IsEmpty, state.Describe());
+        var added = new AddStaticMeshActorOp(Port, "SM_Rock_Added", Rock, Elsewhere);
+        state.Apply(added);
+        state.Apply(new ReplaceMeshOp(added.Created, null, Rock, boulder));
+        Assert.Equal(boulder, state.GetMeshOverride(added.Created));
+        state.Apply(added.Inverse());
+        Assert.True(state.IsEmpty, state.Describe());
+    }
+
+    [Fact]
     public void ApplyingInversesInReverseOrderRestoresTheEmptyState()
     {
         var state = new EditState();

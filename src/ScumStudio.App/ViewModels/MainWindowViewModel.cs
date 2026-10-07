@@ -17,7 +17,7 @@ namespace ScumStudio.App.ViewModels;
 public sealed partial class MainWindowViewModel : ViewModelBase, IDisposable
 {
     /// <summary>Navigation keys in rail order.</summary>
-    public static IReadOnlyList<string> PageKeys { get; } = ["map", "vehicles", "weapons", "spawns", "assets", "projects", "settings"];
+    public static IReadOnlyList<string> PageKeys { get; } = ["map", "vehicles", "weapons", "spawns", "economy", "assets", "projects", "settings"];
 
     private readonly List<IDisposable> _disposables = [];
 
@@ -27,10 +27,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IDisposable
         Services = services;
         NavItems =
         [
-            new NavItemViewModel("map", "Map", "Icon.Map", null, () => Track(new MapPageViewModel(services, OpenSetup))),
+            new NavItemViewModel("map", "Map", "Icon.Map", null, () => Track(CreateMap(services))),
             new NavItemViewModel("vehicles", "Vehicles", "Icon.Vehicle", null, () => Track(new VehiclesPageViewModel(services, OpenSetup))),
             new NavItemViewModel("weapons", "Weapons", "Icon.Weapon", null, () => Track(new WeaponsPageViewModel(services, OpenSetup))),
             new NavItemViewModel("spawns", "Spawns", "Icon.Pin", null, () => Track(new SpawnsPageViewModel(services, OpenSetup))),
+            new NavItemViewModel("economy", "Economy", "Icon.Coins", null, () => Track(new EconomyPageViewModel(services, OpenSetup))),
             new NavItemViewModel("assets", "Assets", "Icon.Assets", null, () => Track(new AssetsPageViewModel(services, OpenSetup, PlaceInMap))),
             new NavItemViewModel("projects", "Projects", "Icon.Projects", null, () => Track(new ProjectsPageViewModel(services))),
             new NavItemViewModel("settings", "Settings", "Icon.Settings", null, () => Track(new SettingsPageViewModel(services, OpenSetup))),
@@ -139,10 +140,14 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IDisposable
                 OpenSetup();
             }
 
-            if (!string.IsNullOrWhiteSpace(settings.LastProjectPath) && Level.Projects.Project.Exists(settings.LastProjectPath))
+            if (Services.UiState.Current.ReopenLastProject && !string.IsNullOrWhiteSpace(settings.LastProjectPath) && Level.Projects.Project.Exists(settings.LastProjectPath))
             {
                 var path = settings.LastProjectPath;
-                await Services.Operations.RunAsync(Loc.T("Shell.OpeningLastProject"), (_, ct) => Services.Projects.OpenAsync(path, ct)).ConfigureAwait(true);
+                var (ok, project) = await Services.Operations.RunAsync(Loc.T("Shell.OpeningLastProject"), (_, ct) => Services.Projects.OpenAsync(path, ct)).ConfigureAwait(true);
+                if (ok && project is not null)
+                {
+                    Services.Notifications.Success(Loc.F("Shell.Reopened", project.Manifest.Name), project.DirectoryPath);
+                }
             }
 
             _ = StartUpdatesAsync();
@@ -169,6 +174,27 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IDisposable
 
         SelectedNavItem = item;
         return item.Page;
+    }
+
+    /// <summary>Top bar: the project label opens the Projects page (the list of your projects).</summary>
+    [RelayCommand]
+    private void ShowProjects() => NavigateTo("projects");
+
+    /// <summary>The Map page, wired to open a trader's economy ("Edit stock").</summary>
+    private MapPageViewModel CreateMap(AppServices services)
+    {
+        var map = new MapPageViewModel(services, OpenSetup);
+        map.SetEconomyOpener(OpenEconomy);
+        return map;
+    }
+
+    /// <summary>Switches to the Economy page at <paramref name="trader"/>'s section.</summary>
+    public void OpenEconomy(string trader)
+    {
+        if (NavigateTo("economy") is EconomyPageViewModel economy)
+        {
+            economy.OpenTrader(trader);
+        }
     }
 
     /// <summary>Switches to the Map page and places <paramref name="objectPath"/> there (a mesh, or a copy of a placed Blueprint).</summary>

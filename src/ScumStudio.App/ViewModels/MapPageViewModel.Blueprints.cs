@@ -212,12 +212,20 @@ public sealed partial class MapPageViewModel
                     _foreignReads.Remove(source.Level);
                     if (t.IsFaulted)
                     {
-                        _services.Logger.LogWarning("{Level} could not be read to draw the copies made from it: {Message}", source.Level, t.Exception?.GetBaseException().Message);
+                        var reason = t.Exception?.GetBaseException().Message ?? string.Empty;
+                        _services.Logger.LogWarning("{Level} could not be read to draw the copies made from it: {Message}", source.Level, reason);
+                        _services.Notifications.Warning(Localization.Loc.T("Map.CopyNotDrawn"), Localization.Loc.F("Map.CopyNotDrawnDetail", source.Level[(source.Level.LastIndexOf('/') + 1)..], reason));
                     }
 
                     foreach (var reference in wanted)
                     {
-                        _foreignPlacements.TryAdd(reference, t.IsCompletedSuccessfully ? t.Result[reference] : []);
+                        var placements = t.IsCompletedSuccessfully ? t.Result[reference] : [];
+                        if (t.IsCompletedSuccessfully && placements.Count == 0)
+                        {
+                            _services.Notifications.Warning(Localization.Loc.T("Map.CopyNotDrawn"), Localization.Loc.F("Map.CopyNothingToDraw", reference.Actor, reference.Level[(reference.Level.LastIndexOf('/') + 1)..]));
+                        }
+
+                        _foreignPlacements.TryAdd(reference, placements);
                     }
 
                     if (ReferenceEquals(_services.Workspace.Catalog, catalog))
@@ -231,8 +239,8 @@ public sealed partial class MapPageViewModel
     }
 
     /// <summary>The placements of one actor of <paramref name="document"/> (its meshes and spawn pins), as its level draws them.</summary>
-    private static IReadOnlyList<ScenePlacement> PlacementsOf(LevelDocument document, string actorName) =>
+    private IReadOnlyList<ScenePlacement> PlacementsOf(LevelDocument document, string actorName) =>
         document.FindActor(actorName) is { } actor
-            ? LevelScenePreparer.CollectPlacements(document, 0, new LevelSceneOptions { Filter = actor.Name }).Where(p => ReferenceEquals(p.Actor, actor)).ToList()
+            ? LevelScenePreparer.CollectPlacements(document, 0, new LevelSceneOptions { Filter = actor.Name }, _prepareCache.SpawnModels).Where(p => ReferenceEquals(p.Actor, actor)).ToList()
             : [];
 }

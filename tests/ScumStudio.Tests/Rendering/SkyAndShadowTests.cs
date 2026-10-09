@@ -139,7 +139,7 @@ public sealed class SkyAndShadowTests
     /// surface in its own colour (a white ground stays white in the box's shadow: no shadow pass, no shade); a still sea
     /// looks the same at any time.
     /// </summary>
-    [Fact]
+    [GlFact]
     public void LightingAndTheSeasWavesCanBeTurnedOff()
     {
         using var gl = GlHarness.Create(64, 64);

@@ -195,6 +195,10 @@ public sealed partial class ProjectsPageViewModel : PageViewModel, IDisposable
     [ObservableProperty]
     private bool _exportServer;
 
+    /// <summary>Also build the Craftables pak (on by default; only used when the project has craftables).</summary>
+    [ObservableProperty]
+    private bool _exportCraftables = true;
+
     /// <summary>Why the export button is disabled, or what it will do.</summary>
     [ObservableProperty]
     private string _exportHint = string.Empty;
@@ -526,7 +530,7 @@ public sealed partial class ProjectsPageViewModel : PageViewModel, IDisposable
         }
 
         var folder = Path.GetFullPath(ExportFolder.Trim());
-        var request = new ModExportRequest(project, folder, string.IsNullOrWhiteSpace(ExportModName) ? null : ExportModName.Trim(), ExportServer);
+        var request = new ModExportRequest(project, folder, string.IsNullOrWhiteSpace(ExportModName) ? null : ExportModName.Trim(), ExportServer) { IncludeCraftables = ExportCraftables };
         var (ok, results) = await _services.Operations.RunAsync(Loc.F("Projects.Exporting", project.Manifest.Name),
             (progress, ct) => ModExportService.ExportAsync(_services, request, progress, ct)).ConfigureAwait(true);
         if (!ok || results is null)

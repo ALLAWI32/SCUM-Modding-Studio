@@ -33,6 +33,18 @@ public sealed record StaticMeshActorAdd(string NewName, string StaticMesh, Trans
     /// with <c>bUseDefaultCollision</c> off; null collides as the mesh does by default.
     /// </summary>
     public string? CollisionProfile { get; init; }
+
+    /// <summary>
+    /// Draw into the landscape's virtual texture (<c>RuntimeVirtualTextures</c> = <c>RTV_Landscape</c>), as the game places its
+    /// road pieces; the ground then shows the road (<see cref="BendMesh.DrawsIntoLandscape"/>).
+    /// </summary>
+    public bool DrawsIntoLandscape { get; init; }
+
+    /// <summary>
+    /// And never on screen, with no shadow (<c>VirtualTextureRenderPassType</c> Never, <c>CastShadow</c> off), as the game's
+    /// gravel road pieces (<see cref="BendMesh.OnlyIntoLandscape"/>): on screen they show bright pink.
+    /// </summary>
+    public bool OnlyIntoLandscape { get; init; }
 }
 
 /// <summary>
@@ -53,6 +65,7 @@ public static partial class LevelPackageEditor
     private const string StaticMeshComponent0 = "StaticMeshComponent0";
     private const uint ActorFlags = 0x8; // RF_Transactional
     private const uint ComponentFlags = 0x40008; // RF_DefaultSubObject | RF_Transactional
+    private const string LandscapeTexturePackage = "/Game/ConZ_Files/Landscape/VT_Landscape/RTV_Landscape";
 
     private static List<int> AddStaticMeshActors(
         CookedPackage package, int levelIndex, IReadOnlyList<StaticMeshActorAdd> adds, List<ExportEntry> exports, List<ReadOnlyMemory<byte>> data,
@@ -97,6 +110,9 @@ public static partial class LevelPackageEditor
             var componentArchetype = Import(EnginePackage, componentClassName, actorArchetype, componentName);
             var meshPkg = Import(CoreUObjectPackage, "Package", 0, meshPackage);
             var mesh = Import(EnginePackage, StaticMeshClass, meshPkg, meshName);
+            var landscapeTexture = add.DrawsIntoLandscape
+                ? Import(EnginePackage, "RuntimeVirtualTexture", Import(CoreUObjectPackage, "Package", 0, LandscapeTexturePackage), "RTV_Landscape")
+                : 0;
 
             var actorIndex = exports.Count + 1;
             var componentIndex = exports.Count + 2;
@@ -120,6 +136,23 @@ public static partial class LevelPackageEditor
             if (spline is not null)
             {
                 WriteSplineParams(component, Name, spline);
+            }
+
+            if (landscapeTexture != 0)
+            {
+                WriteObjectArrayTag(component, Name, "RuntimeVirtualTextures", [landscapeTexture]);
+            }
+
+            if (landscapeTexture != 0 && add.OnlyIntoLandscape)
+            {
+                WriteBoolTag(component, Name, "CastShadow", false);
+                component.FName(Name("VirtualTextureRenderPassType"));
+                component.FName(Name("EnumProperty"));
+                component.I32(8);
+                component.I32(0);
+                component.FName(Name("ERuntimeVirtualTextureMainPassType"));
+                component.U8(0);
+                component.FName(Name("ERuntimeVirtualTextureMainPassType::Never"));
             }
 
             if (bodySetupIndex == 0 && add.CollisionProfile is { Length: > 0 } profile)
@@ -164,6 +197,11 @@ public static partial class LevelPackageEditor
             preload.Add(levelPackageIndex); // create-before-create
             var componentFirst = preload.Count;
             preload.AddRange([mesh, actorArchetype]); // create-before-serialize
+            if (landscapeTexture != 0)
+            {
+                preload.Add(landscapeTexture); // as on the game's road pieces
+            }
+
             if (bodySetupIndex != 0)
             {
                 preload.Add(bodySetupIndex); // its collision exists before it is read (as on a cooked road piece)
@@ -201,7 +239,7 @@ public static partial class LevelPackageEditor
                 PackageFlags = levelEntry.PackageFlags,
                 FirstExportDependency = componentFirst,
                 SerializationBeforeSerializationDependencies = 0,
-                CreateBeforeSerializationDependencies = bodySetupIndex != 0 ? 3 : 2,
+                CreateBeforeSerializationDependencies = 2 + (bodySetupIndex != 0 ? 1 : 0) + (landscapeTexture != 0 ? 1 : 0),
                 SerializationBeforeCreateDependencies = 2,
                 CreateBeforeCreateDependencies = 1,
             });

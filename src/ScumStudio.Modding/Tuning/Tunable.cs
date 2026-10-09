@@ -34,6 +34,15 @@ public enum TunableKind
 
     /// <summary>Native LinearColor struct: "r, g, b, a".</summary>
     Color,
+
+    /// <summary>
+    /// The part a vehicle spawn preset puts in one slot (<see cref="VehicleParts"/>): the attachment class path
+    /// (<c>/Game/…/BPC_X.BPC_X_C</c>), or empty for "no part".
+    /// </summary>
+    Part,
+
+    /// <summary>Whether a weapon socket takes attachments of one mount type (<see cref="WeaponMounts"/>): "true"/"false".</summary>
+    Mount,
 }
 
 /// <summary>
@@ -137,7 +146,7 @@ public static class TunableValue
                 TunableKind.Double => double.Parse(a, CultureInfo.InvariantCulture).Equals(double.Parse(b, CultureInfo.InvariantCulture)),
                 TunableKind.Int => long.Parse(a.Trim(), CultureInfo.InvariantCulture) == long.Parse(b.Trim(), CultureInfo.InvariantCulture),
                 TunableKind.UInt => ulong.Parse(a.Trim(), CultureInfo.InvariantCulture) == ulong.Parse(b.Trim(), CultureInfo.InvariantCulture),
-                TunableKind.Bool => ParseBool(a) == ParseBool(b),
+                TunableKind.Bool or TunableKind.Mount => ParseBool(a) == ParseBool(b),
                 TunableKind.Vector or TunableKind.Rotator => ParseFloats(a, 3).SequenceEqual(ParseFloats(b, 3)),
                 TunableKind.Color => ParseFloats(a, 4).SequenceEqual(ParseFloats(b, 4)),
                 _ => string.Equals(a, b, StringComparison.Ordinal),

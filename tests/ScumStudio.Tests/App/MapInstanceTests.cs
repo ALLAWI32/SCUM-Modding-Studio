@@ -74,7 +74,8 @@ public sealed class MapInstanceTests
         var copy = InstanceKey.Of(rocks.SelectableId, "Rocks", 2);
         Assert.Equal(copy, map.SelectedInstanceKey);
         Assert.True(map.HasSelectedInstance);
-        Assert.Equal(source.Translation.X + 200f, map.InstanceTransforms[copy].Translation.X, 0.5f);
+        Assert.Equal(source.Translation.X, map.InstanceTransforms[copy].Translation.X, 0.5f); // in place, held for two seconds
+        Assert.True(map.SelectionHoldUntil > DateTime.UtcNow);
         Assert.Contains(map.ActorProperties, r => r.Name == "Instance" && r.Value.StartsWith("#2 of Rocks", StringComparison.Ordinal));
         Assert.DoesNotContain(map.AllActors, a => a.IsAdded); // no mesh actor
 

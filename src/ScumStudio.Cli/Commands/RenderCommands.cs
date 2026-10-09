@@ -18,6 +18,7 @@ using ScumStudio.Rendering.Import;
 using ScumStudio.Rendering.Procedural;
 using ScumStudio.Rendering.Resources;
 using ScumStudio.Rendering.Snapshots;
+using ScumStudio.Viewport;
 
 namespace ScumStudio.Cli.Commands;
 
@@ -69,11 +70,12 @@ internal sealed partial class RenderCommands : ICommandModule
         var pitch = PitchOption(-20f);
         var dist = DistOption();
         var lod = new Option<int>("--lod", () => 0, "LOD index to render.");
-        var noTexture = new Option<bool>("--no-texture", "Do not look up the first material's base colour texture.");
+        var noTexture = new Option<bool>("--no-texture", "Flat grey: no textures.");
+        var textureSize = new Option<int>("--texture-size", () => 8192, "Largest texture edge in pixels (the default takes the game's full size, as the Assets page does).");
         var noGrid = NoGridOption();
-        var command = new Command("mesh", "Render a cooked StaticMesh or SkeletalMesh (via ScumStudio.Assets) to PNG.")
+        var command = new Command("mesh", "Render a cooked StaticMesh or SkeletalMesh as the Assets page shows it (every material, normal maps) to PNG.")
         {
-            source, objectPath, aes, output, size, yaw, pitch, dist, lod, noTexture, noGrid,
+            source, objectPath, aes, output, size, yaw, pitch, dist, lod, noTexture, textureSize, noGrid,
         };
         command.SetHandler(async (InvocationContext ctx) =>
         {
@@ -97,19 +99,60 @@ internal sealed partial class RenderCommands : ICommandModule
                     return 2;
                 }
 
-                var mesh = MeshExtractor.Extract(obj, parse.GetValueForOption(lod));
-                var texture = parse.GetValueForOption(noTexture) ? null : TryLoadBaseColor(catalog, MeshExtractor.Describe(obj), logger);
-                var options = new SnapshotOptions
+                // The Assets page's 3D preview: a part per material with its colour texture, normal map and roughness, at
+                // the game's full texture size (block-compressed on the GPU), under the same studio light.
+                var lodIndex = parse.GetValueForOption(lod);
+                var loader = new MeshPreviewLoader(catalog, logger)
                 {
-                    Width = width,
-                    Height = height,
-                    Yaw = parse.GetValueForOption(yaw),
-                    Pitch = parse.GetValueForOption(pitch),
-                    Distance = parse.GetValueForOption(dist),
-                    ShowGrid = !parse.GetValueForOption(noGrid),
-                    Tint = texture is null ? new SnapshotOptions().Tint : System.Numerics.Vector4.One,
+                    TextureSize = parse.GetValueForOption(noTexture) ? 0 : Math.Max(16, parse.GetValueForOption(textureSize)),
+                    ForGpu = true,
+                    LodOf = lodIndex > 0 ? lods => Math.Min(lodIndex, lods.Count - 1) : null,
                 };
-                return await RenderSnapshotAsync(mesh, MeshSpace.Unreal, options, texture, parse.GetValueForOption(output)!, logger, ct).ConfigureAwait(false);
+                var model = loader.LoadMesh(parse.GetValueForArgument(objectPath));
+                if (!TryCreateContext(width, height, logger, out var context))
+                {
+                    return NoGlExitCode;
+                }
+
+                byte[] rgba;
+                float distance;
+                using (context)
+                {
+                    using var renderer = new SceneRenderer(context);
+                    using var scene = PreviewScene.Upload(renderer, model);
+                    var bounds = scene.Bounds;
+                    var radius = MathF.Max(bounds.Extent.Length(), 1f);
+                    var camera = new FlyCamera();
+                    distance = camera.Frame(bounds, (float)width / height, parse.GetValueForOption(yaw), parse.GetValueForOption(pitch));
+                    if (parse.GetValueForOption(dist) is { } d && d > 0f)
+                    {
+                        distance = d;
+                        camera.FitClipRange(d, radius);
+                        camera.Orbit(bounds.Center, parse.GetValueForOption(yaw), parse.GetValueForOption(pitch), d);
+                    }
+
+                    renderer.Settings = renderer.Settings with
+                    {
+                        SkyColor = new System.Numerics.Vector3(0.5f, 0.52f, 0.56f),
+                        GroundColor = new System.Numerics.Vector3(0.2f, 0.19f, 0.17f),
+                        LightColor = new System.Numerics.Vector3(0.72f, 0.7f, 0.64f),
+                        LightDirection = System.Numerics.Vector3.Normalize(camera.Forward - (camera.Up * 0.8f) + (camera.Right * 0.35f)),
+                        ShowGrid = !parse.GetValueForOption(noGrid),
+                        GridHeight = bounds.IsEmpty ? 0f : bounds.Min.Y,
+                        GridCellSize = MathF.Pow(10f, MathF.Floor(MathF.Log10(radius)) - 1f),
+                        GridFadeDistance = MathF.Max(distance * 3f, radius * 6f),
+                    };
+                    using var target = renderer.CreateTarget(width, height);
+                    renderer.Render(target, scene.Scene, camera);
+                    rgba = target.ReadColorRgba();
+                }
+
+                var file = parse.GetValueForOption(output)!;
+                await ImageExport.SavePngAsync(rgba, width, height, file.FullName, ct).ConfigureAwait(false);
+                var normals = model.Parts.Count(p => p.NormalPath is not null);
+                Console.Out.WriteLine(Invariant($"{model.Name}: {model.Parts.Count} part(s), {model.Triangles:N0} triangles, {model.Textures.Count} texture(s) ({string.Join(", ", model.Textures.Values.Select(t => $"{t.Width}x{t.Height}").Distinct())}), {normals} part(s) with a normal map, distance {distance:0.#}"));
+                Console.Out.WriteLine(file.FullName);
+                return 0;
             }).ConfigureAwait(false);
         });
         return command;
@@ -297,43 +340,6 @@ internal sealed partial class RenderCommands : ICommandModule
         Console.Out.WriteLine(Invariant($"{mesh.Name}: {mesh.VertexCount} vertices, {mesh.TriangleCount} triangles, texture {(texture is null ? "none" : $"{texture.Value.Width}x{texture.Value.Height}")}, bounds (GL) ({b.Min.X:0.#}, {b.Min.Y:0.#}, {b.Min.Z:0.#}) .. ({b.Max.X:0.#}, {b.Max.Y:0.#}, {b.Max.Z:0.#}), distance {result.Distance:0.#}"));
         Console.Out.WriteLine(output.FullName);
         return 0;
-    }
-
-    private static (int Width, int Height, byte[] Rgba, bool Srgb)? TryLoadBaseColor(AssetCatalog catalog, MeshAssetInfo info, ILogger logger, int maxSize = 2048, bool quiet = false)
-    {
-        foreach (var slot in info.Materials)
-        {
-            if (string.IsNullOrEmpty(slot.MaterialPath))
-            {
-                continue;
-            }
-
-            try
-            {
-                var material = new MaterialInspector(catalog).Inspect(slot.MaterialPath);
-                if (material.BaseColorTexture is not { } texturePath)
-                {
-                    continue;
-                }
-
-                var image = TextureDecoder.Decode(catalog.LoadObject<UTexture2D>(texturePath), maxSize: maxSize);
-                if (!quiet)
-                {
-                    logger.LogInformation("Base colour texture: {Texture} ({Width}x{Height}).", texturePath, image.Width, image.Height);
-                }
-
-                return (image.Width, image.Height, image.Rgba, image.IsSrgb);
-            }
-            catch (Exception ex) when (ex is not OutOfMemoryException)
-            {
-                if (!quiet)
-                {
-                    logger.LogWarning("Material {Material}: no usable base colour texture ({Message}).", slot.MaterialPath, ex.Message);
-                }
-            }
-        }
-
-        return null;
     }
 
     internal static bool TryCreateContext(int width, int height, ILogger logger, out OffscreenGlContext context)

@@ -1,3 +1,4 @@
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Input.Platform;
@@ -52,6 +53,14 @@ public partial class MapPageView : UserControl
             _viewModel?.PaintPicker.Prefetch();
         };
         paint.Closed += (_, _) => _viewModel?.PaintPicker.Close();
+        // Plant chosen with nothing to plant yet: the palette opens right away (the owner looked for where to pick trees).
+        BrushPaintModeButton.IsCheckedChanged += (_, _) =>
+        {
+            if (BrushPaintModeButton.IsChecked == true && _viewModel is { HasPaintPalette: false })
+            {
+                Avalonia.Threading.Dispatcher.UIThread.Post(() => PaintPaletteButton.Flyout?.ShowAt(PaintPaletteButton));
+            }
+        };
         var landscape = (Flyout)LandscapeButton.Flyout!;
         _landscapeFlyout = landscape;
         landscape.Opening += (_, _) =>
@@ -155,11 +164,13 @@ public partial class MapPageView : UserControl
         if (_viewModel is not null)
         {
             _viewModel.FrameSelectionRequested -= OnFrameSelectionRequested;
+            _viewModel.CopiedObjects -= OnCopiedObjects;
         }
 
         _viewModel = viewModel;
         if (_viewModel is not null)
         {
+            _viewModel.CopiedObjects += OnCopiedObjects;
             // First open of the map this run: start where the camera was left, so streaming loads that area right away.
             if (_viewModel.SavedView is { } saved && !_viewModel.HasView)
             {
@@ -310,6 +321,37 @@ public partial class MapPageView : UserControl
         HandleShortcut(e);
     }
 
+    private TopLevel? _keyRoot;
+
+    /// <inheritdoc />
+    protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnAttachedToVisualTree(e);
+        // The shortcuts also work while focus is outside the page (a toast, the tab bar, the title bar): the owner found
+        // Delete, Ctrl+C and Ctrl+V "sometimes working, sometimes not". The page's own handler runs first and marks the key.
+        _keyRoot = TopLevel.GetTopLevel(this);
+        _keyRoot?.AddHandler(KeyDownEvent, OnRootKeyDown, RoutingStrategies.Bubble);
+    }
+
+    /// <inheritdoc />
+    protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        _keyRoot?.RemoveHandler(KeyDownEvent, OnRootKeyDown);
+        _keyRoot = null;
+        base.OnDetachedFromVisualTree(e);
+    }
+
+    private void OnRootKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (IsEffectivelyVisible)
+        {
+            HandleShortcut(e);
+        }
+    }
+
+    /// <summary>Copy stored something in the studio: the system clipboard empties, so Ctrl+V pastes that and not an older Assets path.</summary>
+    private void OnCopiedObjects() => _ = TopLevel.GetTopLevel(this)?.Clipboard?.ClearAsync();
+
     private void HandleShortcut(KeyEventArgs e)
     {
         if (e.Handled || _viewModel is null || e.Source is TextBox)
@@ -346,14 +388,22 @@ public partial class MapPageView : UserControl
         }
         else if (e.Key == Key.C && e.KeyModifiers.HasFlag(KeyModifiers.Control) && _viewModel.CopySelectedCommand.CanExecute(null))
         {
-            _viewModel.CopySelectedCommand.Execute(null);
-            // The last copy wins: a path copied in Assets earlier must not beat this object on Ctrl+V.
-            _ = TopLevel.GetTopLevel(this)?.Clipboard?.ClearAsync();
+            _viewModel.CopySelectedCommand.Execute(null); // empties the system clipboard too (CopiedObjects)
             e.Handled = true;
         }
         else if (e.Key == Key.E && e.KeyModifiers.HasFlag(KeyModifiers.Control))
         {
             _viewModel.Extend(backwards: e.KeyModifiers.HasFlag(KeyModifiers.Shift));
+            e.Handled = true;
+        }
+        else if (e.Key == Key.End && e.KeyModifiers == KeyModifiers.None && _viewModel.FitToGroundCommand.CanExecute(null))
+        {
+            _viewModel.FitToGroundCommand.Execute(null); // Unreal's key for dropping an object to the floor
+            e.Handled = true;
+        }
+        else if (e.Key == Key.OemComma && e.KeyModifiers == KeyModifiers.None)
+        {
+            _viewModel.CycleOrientation(); // Blender's key for the transform orientation
             e.Handled = true;
         }
         else if (e.Key == Key.Back && e.KeyModifiers == KeyModifiers.None)

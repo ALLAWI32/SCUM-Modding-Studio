@@ -4,6 +4,7 @@ using ScumStudio.Core.Abstractions;
 using ScumStudio.Core.Games;
 using ScumStudio.Level.Export;
 using ScumStudio.Level.Projects;
+using ScumStudio.Modding.Crafting;
 
 namespace ScumStudio.App.Services;
 
@@ -18,7 +19,11 @@ public sealed record ModExportRequest(
     string OutputFolder,
     string? ModName,
     bool IncludeServer,
-    int PakChunkIndex = ProjectExporter.DefaultPakChunkIndex);
+    int PakChunkIndex = ProjectExporter.DefaultPakChunkIndex)
+{
+    /// <summary>Also build the Craftables pak (<see cref="CraftablesExporter"/>) when the project has craftables.</summary>
+    public bool IncludeCraftables { get; init; } = true;
+}
 
 /// <summary>
 /// Runs <see cref="ProjectExporter"/> for the app: the client pak against the connected workspace catalog and, on request,
@@ -35,7 +40,7 @@ public static class ModExportService
             return Localization.Loc.T("Export.OpenProjectFirst");
         }
 
-        if (project.State.IsEmpty)
+        if (project.State.IsEmpty && CraftablesFile.Load(project.DirectoryPath).Items.Count == 0)
         {
             return Localization.Loc.T("Export.NothingYet");
         }
@@ -85,11 +90,33 @@ public static class ModExportService
             Mods = ProjectMods.Folders(request.Project.DirectoryPath),
         };
         var exporter = new ProjectExporter(services.Logger);
-        var results = new List<ExportResult>(2);
+        var results = new List<ExportResult>(4);
+        var craftables = request.IncludeCraftables ? CraftablesFile.Load(request.Project.DirectoryPath) : new CraftablesFile();
+        var modName = request.ModName ?? request.Project.Manifest.Name;
+
+        // The project's pak (levels, vehicles, items), then the Craftables pak on top of its registry.
+        async Task ExportRole(AssetCatalog source, ProjectSourceRole role)
+        {
+            ExportResult? main = null;
+            if (!request.Project.State.IsEmpty)
+            {
+                main = await exporter.ExportAsync(request.Project, source, options, role, new StepProgress(progress), cancellationToken).ConfigureAwait(false);
+                results.Add(main);
+            }
+
+            if (craftables.Items.Count > 0)
+            {
+                progress.Report(Localization.Loc.T("Export.Craftables"), 0, 0);
+                if (await CraftablesExporter.ExportAsync(craftables, modName, source, options, role, CraftablesExporter.StagedRegistry(main),
+                        services.Logger, cancellationToken).ConfigureAwait(false) is { } crafted)
+                {
+                    results.Add(crafted);
+                }
+            }
+        }
 
         progress.Report(Localization.Loc.T("Export.ClientPak"), 0, 0);
-        results.Add(await exporter.ExportAsync(request.Project, catalog, options, ProjectSourceRole.Client,
-            new StepProgress(progress), cancellationToken).ConfigureAwait(false));
+        await ExportRole(catalog, ProjectSourceRole.Client).ConfigureAwait(false);
         CollisionDoctor.Exported(request.Project);
         if (results[0].SolidPieces > 0)
         {
@@ -127,8 +154,7 @@ public static class ModExportService
                     services.Keys.TryGet(out var key);
                     using var server = AssetCatalog.OpenPaks(serverFolder, new AssetCatalogOptions { AesKey = key, Logger = services.Logger, LooseOverlays = options.Mods });
                     progress.Report(Localization.Loc.T("Export.ServerPak"), 0, 0);
-                    results.Add(await exporter.ExportAsync(request.Project, server, options, ProjectSourceRole.Server,
-                        new StepProgress(progress), cancellationToken).ConfigureAwait(false));
+                    await ExportRole(server, ProjectSourceRole.Server).ConfigureAwait(false);
                 }
                 catch (Exception ex) when (ex is InvalidOperationException or IOException or InvalidDataException)
                 {

@@ -193,6 +193,9 @@ public sealed record UiPreferences
 
     /// <summary>3D view quality: how far levels stream in and objects draw, LOD detail and texture size.</summary>
     public RenderQuality RenderQuality { get; init; } = RenderQuality.Balanced;
+
+    /// <summary>New objects (added, pasted, copied, extended, replaced, painted) clear the grass under them in the exported mod.</summary>
+    public bool ClearGrassUnderNewObjects { get; init; } = true;
 }
 
 /// <summary>3D view quality presets (faster on weaker PCs, more detail on strong ones).</summary>

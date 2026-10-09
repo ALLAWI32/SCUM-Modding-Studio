@@ -48,9 +48,8 @@ public static partial class MaterialParameters
             }
 
             // One edit at a time on a re-parsed package: offsets and the name table are always those of the current bytes.
-            var names = current.Names.ToList();
-            var wide = current.NameEntries.Select(n => n.IsWide).ToList();
-            var tables = new Tables(names, wide, current.Imports.ToList(), current.Exports.ToList(), current.ReadPreloadDependencies().ToList(), exportIndex);
+            var tables = PackageTables.Of(current, exportIndex);
+            var (names, wide) = (tables.Names, tables.Wide);
             var payloads = Enumerable.Range(0, current.Exports.Count).Select(i => current.GetExportData(i).ToArray()).ToArray();
             var name = match.Groups["name"].Value;
             payloads[exportIndex] = Set(current, payloads[exportIndex], exportIndex, match.Groups["array"].Value, name, edit.Value,
@@ -123,7 +122,7 @@ public static partial class MaterialParameters
         return import.OuterIndex < 0 ? instance.ResolveName(instance.Imports[-import.OuterIndex - 1].ObjectName) : null;
     }
 
-    private static byte[] Set(CookedPackage package, byte[] payload, int exportIndex, string array, string name, string value, byte[]? guid, Tables tables)
+    private static byte[] Set(CookedPackage package, byte[] payload, int exportIndex, string array, string name, string value, byte[]? guid, PackageTables tables)
     {
         var block = PropertyReader.ReadPayload(package, payload, exportIndex);
         if (block.Find(array) is not { Value: ArrayValue { InnerTag: { } inner, Items.Count: > 0 } list } tag)
@@ -164,7 +163,7 @@ public static partial class MaterialParameters
         return result;
     }
 
-    private static void WriteValue(byte[] target, PropertyTag tag, string array, string value, Tables tables, int shift = 0)
+    private static void WriteValue(byte[] target, PropertyTag tag, string array, string value, PackageTables tables, int shift = 0)
     {
         var at = tag.ValueOffset + shift;
         try
@@ -195,57 +194,9 @@ public static partial class MaterialParameters
         }
     }
 
-    /// <summary>The package's name, import, export and preload tables while one edit is made.</summary>
-    private sealed record Tables(List<string> Names, List<bool> Wide, List<ImportEntry> Imports, List<ExportEntry> Exports, List<int> Preload, int ExportIndex);
+    /// <summary>The import index of texture <paramref name="objectPath"/> (<c>/Game/…/T_X.T_X</c>), added when missing.</summary>
+    private static int TextureImport(PackageTables t, string objectPath) => t.Import("/Script/Engine", "Texture2D", objectPath);
 
-    /// <summary>
-    /// The import index of texture <paramref name="objectPath"/> (<c>/Game/…/T_X.T_X</c>), added (package and Texture2D
-    /// imports, plus a create-before-serialize dependency of the edited export) when the package does not import it yet.
-    /// </summary>
-    private static int TextureImport(Tables t, string objectPath)
-    {
-        var dot = objectPath.LastIndexOf('.');
-        var packagePath = dot > 0 ? objectPath[..dot] : objectPath;
-        var objectName = dot > 0 ? objectPath[(dot + 1)..] : objectPath[(objectPath.LastIndexOf('/') + 1)..];
-        bool Is(FNameRef n, string text) => string.Equals(n.Format(t.Names), text, StringComparison.OrdinalIgnoreCase);
-        var package = t.Imports.FindIndex(im => im.OuterIndex == 0 && Is(im.ClassName, "Package") && Is(im.ObjectName, packagePath));
-        if (package >= 0 && t.Imports.FindIndex(im => im.OuterIndex == -(package + 1) && Is(im.ObjectName, objectName)) is >= 0 and var existing)
-        {
-            return -(existing + 1);
-        }
-
-        if (package < 0)
-        {
-            t.Imports.Add(new ImportEntry(AddName(t.Names, t.Wide, "/Script/CoreUObject"), AddName(t.Names, t.Wide, "Package"), 0, AddName(t.Names, t.Wide, packagePath)));
-            package = t.Imports.Count - 1;
-        }
-
-        t.Imports.Add(new ImportEntry(AddName(t.Names, t.Wide, "/Script/Engine"), AddName(t.Names, t.Wide, "Texture2D"), -(package + 1), AddName(t.Names, t.Wide, objectName)));
-        var index = -t.Imports.Count;
-
-        // The export's dependency groups are SBS, CBS, SBC, CBC in that order: the new one goes at the end of its CBS group,
-        // and every later group of any export moves up by one.
-        var export = t.Exports[t.ExportIndex];
-        if (export.FirstExportDependency < 0)
-        {
-            t.Exports[t.ExportIndex] = export with { FirstExportDependency = t.Preload.Count, CreateBeforeSerializationDependencies = 1 };
-            t.Preload.Add(index);
-            return index;
-        }
-
-        var at = export.FirstExportDependency + export.SerializationBeforeSerializationDependencies + export.CreateBeforeSerializationDependencies;
-        t.Preload.Insert(at, index);
-        for (var i = 0; i < t.Exports.Count; i++)
-        {
-            if (i != t.ExportIndex && t.Exports[i].FirstExportDependency >= at)
-            {
-                t.Exports[i] = t.Exports[i] with { FirstExportDependency = t.Exports[i].FirstExportDependency + 1 };
-            }
-        }
-
-        t.Exports[t.ExportIndex] = export with { CreateBeforeSerializationDependencies = export.CreateBeforeSerializationDependencies + 1 };
-        return index;
-    }
     private static FNameRef AddName(List<string> names, List<bool> wide, string name)
     {
         var index = names.IndexOf(name);

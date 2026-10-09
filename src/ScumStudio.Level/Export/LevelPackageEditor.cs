@@ -121,6 +121,9 @@ public sealed record LevelEditRequest
     /// <summary>Spawner point arrays to rewrite.</summary>
     public IReadOnlyList<SpawnPointsPatch> SpawnPoints { get; init; } = [];
 
+    /// <summary>Loot of mesh components (pristine or created by this request) to write.</summary>
+    public IReadOnlyList<LootPatch> Loot { get; init; } = [];
+
     /// <summary>
     /// Trade posts created by this request (<see cref="ForeignCopies"/>) to list in the <c>_assignedTradePosts</c> of the
     /// level's own outpost manager of that outpost, as (post actor name, outpost name). A post whose outpost has no manager in
@@ -130,7 +133,7 @@ public sealed record LevelEditRequest
 
     /// <summary>True when the request changes nothing.</summary>
     public bool IsEmpty => DeleteActors.Count == 0 && DeleteComponents.Count == 0 && Transforms.Count == 0 && Instances.Count == 0 && InstanceAdds.Count == 0 && Copies.Count == 0
-        && StaticMeshAdds.Count == 0 && ForeignCopies.Count == 0 && SplinePatches.Count == 0 && SpawnPoints.Count == 0 && Meshes.Count == 0;
+        && StaticMeshAdds.Count == 0 && ForeignCopies.Count == 0 && SplinePatches.Count == 0 && SpawnPoints.Count == 0 && Meshes.Count == 0 && Loot.Count == 0;
 }
 
 /// <summary>What <see cref="LevelPackageEditor.Apply"/> did to a level package.</summary>
@@ -165,6 +168,9 @@ public sealed record LevelEditReport
 
     /// <summary>ISM/HISM instances appended.</summary>
     public int AddedInstances { get; init; }
+
+    /// <summary>Landscape grass density samples set to 0 under placed objects (see <see cref="GrassClearing"/>).</summary>
+    public int ClearedGrassSamples { get; init; }
 
     /// <summary>Exports of deleted actors (the actors and everything under them) turned into inert objects.</summary>
     public int NeutralizedExports { get; init; }
@@ -242,6 +248,14 @@ public static partial class LevelPackageEditor
         foreach (var patch in request.Transforms)
         {
             if (TryPatchTransform(package, levelIndex, patch, data, names, wide, addedNames, warnings) is { } label)
+            {
+                patched.Add(label);
+            }
+        }
+
+        foreach (var patch in request.Loot)
+        {
+            if (TryPatchLoot(package, levelIndex, patch, exports, data, imports, names, wide, addedNames, preload, warnings) is { } label)
             {
                 patched.Add(label);
             }

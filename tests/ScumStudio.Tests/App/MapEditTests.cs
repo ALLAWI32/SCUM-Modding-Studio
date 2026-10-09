@@ -63,8 +63,11 @@ public sealed class MapEditTests
         Assert.Contains(ctx.Services.Notifications.Toasts, t => t.Title == "Invalid transform");
         map.EditScale = "2, 2, 2";
 
-        // Duplicate: a synthetic entity 2 m along +X, drawn as a clone of the source, selected afterwards.
+        // Duplicate: a synthetic entity exactly where the source stands, drawn as a clone of it, selected and held for two
+        // seconds so a click on that spot takes the copy (owner: "in the same place, highlighted, let me grab it").
+        var before = DateTime.UtcNow;
         map.DuplicateSelectedCommand.Execute(null);
+        Assert.InRange(map.SelectionHoldUntil, before + TimeSpan.FromSeconds(1.9), DateTime.UtcNow + MapPageViewModel.DuplicateHold);
         Assert.Equal(4, map.AllActors.Count);
         var copy = Assert.Single(map.AllActors, a => a.IsAdded);
         Assert.Equal("StaticMeshActor_1_Copy", copy.Name);
@@ -74,8 +77,8 @@ public sealed class MapEditTests
         var clone = Assert.Single(map.Clones);
         Assert.Equal(copy.SelectableId, clone.Id);
         Assert.Equal(house.SelectableId, clone.SourceId);
-        Assert.Equal(1700f, clone.RootWorld.Translation.X, 0.01f); // 1500 (moved) + 200
-        Assert.Equal("1700, 20, -5", map.EditLocation);
+        Assert.Equal(1500f, clone.RootWorld.Translation.X, 0.01f); // where the moved house stands
+        Assert.Equal("1500, 20, -5", map.EditLocation);
         Assert.True(map.DuplicateSelectedCommand.CanExecute(null)); // a copy of a copy is a copy of the source
         Assert.True(map.ApplyTransformCommand.CanExecute(null));
         Assert.Contains(map.ActorProperties, r => r.Name == "State" && r.Value.Contains("added", StringComparison.Ordinal));
@@ -157,6 +160,51 @@ public sealed class MapEditTests
         ctx.Services.Projects.Undo();
         Assert.Empty(map.Clones);
         Assert.DoesNotContain(map.AllActors, a => a.IsAdded);
+    }
+
+    [Fact]
+    public async Task ClearGrassUnderItIsOnForNewObjectsJournaledAndFollowsTheSetting()
+    {
+        using var ctx = AppTestContext.Create();
+        var game = ctx.Combine("game");
+        SyntheticLevels.WriteContent(game, withBlueprintPackage: true);
+        using var map = new MapPageViewModel(ctx.Services);
+        await ctx.Services.Workspace.OpenLooseAsync(game, ProgressSink.Null);
+        await map.LoadCompletion;
+        map.AimPointProvider = () => new FVector(1234, -56, 78);
+        await map.LoadLevelsAsync([SyntheticLevels.LevelPath]);
+        await ctx.Services.Projects.CreateAsync(ctx.Combine("projects"), "Grass");
+        var state = () => ctx.Services.Projects.Current!.State;
+
+        // A stock object that was not moved has no setting to show.
+        map.SelectedActor = map.AllActors.First(a => !a.IsAdded);
+        Assert.False(map.HasGrassOption);
+
+        const string mesh = SyntheticLevels.RockPackage + ".SM_Rock";
+        Assert.True(map.AddMeshActor(mesh));
+        var added = map.SelectedActor!;
+        Assert.True(map.HasGrassOption);
+        Assert.True(map.ClearsGrass);
+        Assert.True(state().ClearsGrass(added.Reference));
+
+        map.ClearsGrass = false; // "let the grass show"
+        Assert.False(state().ClearsGrass(added.Reference));
+        Assert.StartsWith("Grass under ", ctx.Services.Projects.History[0].Summary, StringComparison.Ordinal);
+        ctx.Services.Projects.Undo();
+        Assert.True(state().ClearsGrass(added.Reference));
+        Assert.True(map.ClearsGrass);
+        ctx.Services.Projects.Redo();
+        Assert.False(map.ClearsGrass);
+
+        // Switched off in Settings: a new object lets the grass show, in the same undo step as its placing.
+        ctx.Services.UpdateSettings(s => s with { Ui = s.Ui with { ClearGrassUnderNewObjects = false } });
+        Assert.True(map.AddMeshActor(mesh));
+        var second = map.SelectedActor!;
+        Assert.False(state().ClearsGrass(second.Reference));
+        Assert.False(map.ClearsGrass);
+        ctx.Services.Projects.Undo();
+        Assert.DoesNotContain(map.AllActors, a => a.Reference == second.Reference);
+        Assert.Null(state().GetClearGrass(second.Reference));
     }
 
     [Fact]
@@ -337,9 +385,39 @@ public sealed class MapEditTests
         var copyGap = state.GetAddedTransform(rocksCopy.Reference)!.Value.Location - state.GetAddedTransform(houseCopy.Reference)!.Value.Location;
         Assert.True(FVector.Distance(gap, copyGap) < 0.5f, $"{copyGap} instead of {gap}");
 
-        // Delete removes exactly the selected copies, in one step.
-        await map.DeleteKindSelectionAsync();
+        // A multi-selection with no single object selected (a brush sweep leaves it so) still copies: Copy was off then.
+        var gapCopies = map.AllActors.Where(a => a.IsAdded).ToList();
+        map.ClearKindSelection();
+        map.SelectedActor = null;
+        map.BrushSelect = true;
+        map.BrushRadius = 30;
+        var at = state.GetAddedTransform(houseCopy.Reference)!.Value.Location;
+        map.BrushAt(at);
+        map.BrushSelect = false;
+        Assert.True(map.HasGroup);
+        Assert.Null(map.SelectedActor);
+        Assert.True(map.CopySelectedCommand.CanExecute(null));
+        var copied = 0;
+        map.CopiedObjects += () => copied++;
+        map.CopySelectedCommand.Execute(null);
+        Assert.Equal(1, copied); // the view empties the system clipboard on this
+        map.PasteCommand.Execute(null);
         Assert.Equal(3, history.Count);
+        Assert.True(map.AllActors.Count(a => a.IsAdded) > gapCopies.Count); // what the brush took (actors or their instances), pasted in one step
+        ctx.Services.Projects.Undo();
+        Assert.Equal(gapCopies.Count, map.AllActors.Count(a => a.IsAdded));
+        map.ClearKindSelection();
+        map.SelectedActor = gapCopies[0];
+        foreach (var c in gapCopies.Skip(1))
+        {
+            map.ToggleGroup(c.SelectableId, null);
+        }
+
+        // The chip's Delete removes exactly the selected copies, in one step.
+        Assert.True(map.HasGroup);
+        var rowsBefore = history.Count;
+        await map.DeleteMultiCommand.ExecuteAsync(null);
+        Assert.Equal(rowsBefore + 1, history.Count);
         Assert.All(copies, c => Assert.True(state.IsDeleted(c.Reference)));
         Assert.False(state.IsDeleted(house.Reference));
         Assert.False(map.HasGroup);
@@ -440,6 +518,8 @@ public sealed class MapEditTests
         map.BrushPaint = true;
         map.BrushRadius = 5;
         map.PaintSpacing = 2;
+        Assert.Equal(3, map.PaintSpacingMax); // the default range's top (1–3 m) stays above the new bottom
+        Assert.Equal("2–3 m", map.PaintSpacingText);
 
         // A sweep along y = 100 over the lamp (-500, 250), the rocks (near 10, 0 and 80, 70) and the house (1000, 0), 1 m a dab.
         var rows = ctx.Services.Projects.History.Count;
@@ -495,6 +575,10 @@ public sealed class MapEditTests
             }
         }
 
+        // Each keeps its own distance within 2–3 m: some neighbours closer than the top of the range (a grid would not).
+        var nearest = planted.Select((p, i) => planted.Where((_, j) => j != i).Min(q => FVector.Distance(p, q))).ToList();
+        Assert.Contains(nearest, d => d < 290f);
+
         // Nothing on what already stood there (both levels hold the same rocks and house).
         var rocks = map.AllActors.First(a => a.Name == "Rocks_Actor").Actor.InstanceTransforms.Select(i => i.WorldTransform.Translation);
         var house = map.AllActors.First(a => a.Name == "StaticMeshActor_1").Actor.WorldTransform.Translation;
@@ -517,6 +601,7 @@ public sealed class MapEditTests
         await ctx.Services.Projects.OpenAsync(folder);
         Assert.Equal([SyntheticLevels.RockPackage, Oak], map.PaintPalette.Select(p => p.Choice.PackagePath));
         Assert.Equal(2, map.PaintSpacing);
+        Assert.Equal(3, map.PaintSpacingMax);
 
         static float Flat(FVector a, FVector b) => MathF.Sqrt(((a.X - b.X) * (a.X - b.X)) + ((a.Y - b.Y) * (a.Y - b.Y)));
     }

@@ -36,6 +36,13 @@ public sealed record UiState
     /// <summary>The gizmo's arrows follow the selected object's own axes (Discord salvador), not the world's.</summary>
     public bool LocalAxes { get; init; } = true;
 
+    /// <summary>The gizmo's orientation (Blender's Global / Local / View); null in files written before it: <see cref="LocalAxes"/> decides.</summary>
+    public GizmoOrientation? Orientation { get; init; }
+
+    /// <summary>The orientation in effect.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public GizmoOrientation GizmoAxes => Orientation ?? (LocalAxes ? GizmoOrientation.Local : GizmoOrientation.Global);
+
     /// <summary>
     /// Spawn pin layers switched off in the map's legend (<c>Loot</c>, <c>Vehicles</c>, <c>Zones</c>, ...). The two big circle
     /// kinds start off: the owner found the rings everywhere confusing before they were explained.
@@ -47,6 +54,22 @@ public sealed record UiState
 
     /// <summary>Where the map camera was last (the map reopens there), or null.</summary>
     public MapView? MapView { get; init; }
+}
+
+/// <summary>
+/// Which way the gizmo's arrows, squares and rings point (a Discord user: "like Blender's transform orientation"): the
+/// world's north, east and up; the selected object's own front, side and up; or the screen's right, up and towards you.
+/// </summary>
+public enum GizmoOrientation
+{
+    /// <summary>The world's axes.</summary>
+    Global,
+
+    /// <summary>The selected object's own axes.</summary>
+    Local,
+
+    /// <summary>The view's axes: right, up and towards the camera.</summary>
+    View,
 }
 
 /// <summary>A map camera: position in UE world space (cm) and the camera's yaw and pitch (degrees, as the viewport keeps them).</summary>

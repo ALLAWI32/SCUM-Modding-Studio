@@ -1,6 +1,7 @@
 using ScumStudio.App.ViewModels;
 using ScumStudio.Core.Abstractions;
 using ScumStudio.Core.Mathematics;
+using ScumStudio.Level.Editing;
 using ScumStudio.Level.Model;
 using ScumStudio.Level.World;
 using ScumStudio.Pak;
@@ -225,6 +226,104 @@ public sealed class FitToGroundRealTests
         ActorItemViewModel Now(ActorItemViewModel item) => map.AllActors.First(a => a.IsAdded && a.Name == item.Name);
     }
 
+    /// <summary>
+    /// Owner (2026-10-09): "Fit to ground: some cars go into the ground, some things go through the bridge I built". A bridge
+    /// piece bent 60 degrees holds a crate up where the view draws its bent deck (it held things with its straight shape), and
+    /// a van half over the edge of a deck 15 m up stands level on the deck (his van came out rolled 68 degrees at Z -30: two
+    /// corners found the deck, two the ground far below).
+    /// </summary>
+    [Fact]
+    public async Task ThingsStandOnABentBridgeAndAVanOverAnEdgeStaysLevel()
+    {
+        if (Environment.GetEnvironmentVariable("SCUM_PAKS") is not { Length: > 0 } paks || !Directory.Exists(paks))
+        {
+            return; // not asked for
+        }
+
+        const string Fill = "/Game/ConZ_Files/Models/Road/KrkBridge/KB_Meshes/SM_KrkBridge_Fill.SM_KrkBridge_Fill";
+        const string Crate = "/Game/ConZ_Files/Models/Objects/Outdoor/Crate/SM_Crate_02_A.SM_Crate_02_A";
+        const string Van = "/Game/ConZ_Files/Models/Objects/Outdoor/Cars/Van_01/SM_Van_01.SM_Van_01";
+        using var ctx = AppTestContext.Create();
+        ctx.Services.Keys.Set(AesKeyText.FromEnvironmentOrStore()!);
+        ctx.Services.UpdateSettings(s => s with { GamePaksFolder = paks });
+        await ctx.Services.Workspace.ConnectAsync(ProgressSink.Null);
+        using var map = new MapPageViewModel(ctx.Services);
+        await map.LoadCompletion;
+        var project = await ctx.Services.Projects.CreateAsync(ctx.Combine("projects"), "Bridge");
+        await map.LoadLevelsAsync([Farm]);
+        var centre = map.AllActors.First(a => a.Actor.Kind == ActorKind.StaticMeshActor).Actor.WorldTransform.Translation;
+        var world = WorldIndex.FromCatalog(ctx.Services.Workspace.Catalog!).WithTileInfo(ctx.Services.Workspace.Catalog!, null);
+        var tiles = MapPageViewModel.LevelsAround(world, centre, 3000f).Where(p => p.Contains("/Landscape_", StringComparison.OrdinalIgnoreCase)).ToList();
+        await map.LoadLevelsAsync([Farm, .. tiles]);
+        var scene = map.PreparedScene!;
+        float Terrain(float x, float y) => scene.HeightField!.SampleHeight(x, y)!.Value;
+        var open = Enumerable.Range(0, 200).Select(i => new FVector(centre.X + (MathF.Cos(i * 0.9f) * (5000f + (i * 30f))), centre.Y + (MathF.Sin(i * 0.9f) * (5000f + (i * 30f))), 0f))
+            .Where(q => scene.HeightField!.SampleHeight(q.X, q.Y) is not null).Take(2).ToList();
+
+        // A bridge piece 15 m over the ground, bent 60 degrees.
+        var piece = Add(Fill, open[0] with { Z = Terrain(open[0].X, open[0].Y) + 1500f });
+        project.Apply(new BendActorOp(piece.Reference, 0f, 60f));
+        ctx.Services.Projects.Refresh();
+        await WaitForMesh(Fill);
+        Assert.True(map.Bends.TryGetValue(Now(piece).SelectableId, out var pieces));
+        var fill = MeshOf(Fill);
+        var at = Now(piece).Actor.WorldTransform;
+        var bent = new Surface(ScumStudio.Level.Model.SplineMeshDeformer.DeformPieces(fill, pieces), at);
+        var straight = new Surface(fill, at);
+
+        // A flat spot of the bent deck that the straight piece does not cover.
+        var spot = Spots(bent.Box, 60f).First(q => bent.Flat(q.X, q.Y, 60f) is { } z && z > Terrain(q.X, q.Y) + 1000f
+                                                  && new[] { (0f, 0f), (60f, 0f), (-60f, 0f), (0f, 60f), (0f, -60f) }.All(o => straight.Top(q.X + o.Item1, q.Y + o.Item2) is null));
+        var deck = bent.Top(spot.X, spot.Y)!.Value;
+        var crateBox = MeshOf(Crate).Bounds;
+        var crate = Add(Crate, new FVector(spot.X, spot.Y, deck + 300f - crateBox.Min.Z));
+        map.FitToGroundCommand.Execute(null);
+        var bottom = Now(crate).Actor.WorldTransform.TransformPosition(new FVector(crateBox.Center.X, crateBox.Center.Y, crateBox.Min.Z));
+        _output.WriteLine($"crate over the bent deck: bottom {bottom.Z:0.0} cm, bent deck {deck:0.0} cm, terrain {Terrain(bottom.X, bottom.Y):0.0} cm");
+        Assert.InRange(bottom.Z - deck, -10f, 10f);
+
+        // A straight piece elsewhere and a van along its side, half over the edge.
+        var second = Add(Fill, open[1] with { Z = Terrain(open[1].X, open[1].Y) + 1500f });
+        var flat = new Surface(fill, Now(second).Actor.WorldTransform);
+        var mid = Now(second).Actor.WorldTransform;
+        var edge = Enumerable.Range(0, 400).Select(i => fill.Bounds.Max.Y - (i * 5f))
+            .Select(y => mid.TransformPosition(new FVector(fill.Bounds.Center.X, y, fill.Bounds.Max.Z)))
+            .First(q => flat.Top(q.X, q.Y) is { } z && z > Terrain(q.X, q.Y) + 1000f);
+        var deckTop = flat.Top(edge.X, edge.Y)!.Value;
+        var van = Add(Van, new FVector(edge.X, edge.Y, deckTop + 500f));
+        await WaitForMesh(Van);
+        var vanBox = MeshOf(Van).Bounds;
+        map.ApplyDraggedTransform(Now(van).SelectableId, new FTransform(mid.Rotation, new FVector(edge.X, edge.Y, deckTop + 200f - vanBox.Min.Z), FVector.One));
+        map.SelectedActor = Now(van);
+        map.FitToGroundCommand.Execute(null);
+        var placed = Now(van).Actor.WorldTransform;
+        var up = placed.Rotation.RotateVector(FVector.Up);
+        var corners = Corners(placed, vanBox).ToList();
+        _output.WriteLine($"van over the edge: up {up}, corners {string.Join(", ", corners.Select(c => c.Z.ToString("0.0")))} cm, deck {deckTop:0.0} cm");
+        Assert.True(up.Z > MathF.Cos(2f * MathF.PI / 180f), "it stands level, not rolled over the edge");
+        Assert.InRange(corners.Min(c => c.Z) - deckTop, -10f, 10f);
+
+        ActorItemViewModel Add(string mesh, FVector where)
+        {
+            map.AimPointProvider = () => where;
+            Assert.True(map.AddMeshActor(mesh));
+            return map.SelectedActor!;
+        }
+
+        ActorItemViewModel Now(ActorItemViewModel item) => map.AllActors.First(a => a.IsAdded && a.Name == item.Name);
+
+        ScumStudio.Core.Geometry.MeshData MeshOf(string mesh) =>
+            (scene.Meshes.GetValueOrDefault(mesh) ?? map.ExtraMeshes.First(m => string.Equals(m.Asset.MeshPath, mesh, StringComparison.OrdinalIgnoreCase)).Asset).Mesh;
+
+        async Task WaitForMesh(string mesh)
+        {
+            for (var i = 0; i < 300 && !scene.Meshes.ContainsKey(mesh) && !map.ExtraMeshes.Any(m => string.Equals(m.Asset.MeshPath, mesh, StringComparison.OrdinalIgnoreCase)); i++)
+            {
+                await Task.Delay(100);
+            }
+        }
+    }
+
     private static bool Near(ScumStudio.Core.Geometry.BoundingBox b, FVector p, float margin) =>
         p.X >= b.Min.X - margin && p.X <= b.Max.X + margin && p.Y >= b.Min.Y - margin && p.Y <= b.Max.Y + margin;
 
@@ -278,6 +377,23 @@ public sealed class FitToGroundRealTests
                 _meshes.Add((world, asset.Mesh.Indices));
             }
 
+            Box = box;
+        }
+
+        /// <summary>One mesh standing at <paramref name="world"/> (a bent piece's bent mesh).</summary>
+        public Surface(ScumStudio.Core.Geometry.MeshData mesh, FTransform world)
+        {
+            var box = ScumStudio.Core.Geometry.BoundingBox.Empty;
+            var src = mesh.Positions;
+            var placed = new float[src.Length];
+            for (var i = 0; i < src.Length; i += 3)
+            {
+                var w = world.TransformPosition(new FVector(src[i], src[i + 1], src[i + 2]));
+                (placed[i], placed[i + 1], placed[i + 2]) = (w.X, w.Y, w.Z);
+                box = box.Include(new System.Numerics.Vector3(w.X, w.Y, w.Z));
+            }
+
+            _meshes.Add((placed, mesh.Indices));
             Box = box;
         }
 

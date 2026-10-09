@@ -315,6 +315,7 @@ internal sealed partial class AssetCommands : ICommandModule
 
         o.WriteLine($"  base colour texture: {info.BaseColorTexture ?? "(none)"}");
         o.WriteLine($"  used with spline meshes: {(info.UsedWithSplineMeshes ? "yes" : "no")}");
+        o.WriteLine($"  draws into the landscape texture: {(info.WritesLandscapeTexture ? "yes" : "no")}");
         o.WriteLine($"  tint: {(info.TintColor is { } tint ? $"{tint.X:0.###} {tint.Y:0.###} {tint.Z:0.###} {tint.W:0.###}" : "(none)")}");
         foreach (var t in info.Textures)
         {

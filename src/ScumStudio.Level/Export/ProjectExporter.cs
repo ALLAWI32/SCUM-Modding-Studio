@@ -377,7 +377,13 @@ public sealed partial class ProjectExporter
                 level, report.ActorsBefore, report.ActorsAfter, report.RemovedActors.Count, report.PatchedTransforms.Count);
         }
 
-        GrowStreamingAreas(staging, placed, bendMeshes, warnings, cancellationToken);
+        var footprints = new List<System.Numerics.Vector2[]>();
+        GrowStreamingAreas(staging, placed, bendMeshes, warnings, cancellationToken, GrassFootprints(state, catalog, bendMeshes), footprints);
+        if (footprints.Count > 0)
+        {
+            progress?.Report("Clearing the grass under placed objects");
+            ClearGrassUnder(catalog, reader, footprints, staging, levels, warnings, cancellationToken);
+        }
         if (placedMeshes.Count > 0)
         {
             warnings.AddRange(CollisionCheck.Placed(placedMeshes, bendMeshes, options.Ground ?? new GroundHeights(catalog).At));
@@ -475,7 +481,7 @@ public sealed partial class ProjectExporter
             documentCache.Where(d => d.Value is not null && TraderPosts.IsOutpostLevel(d.Key)).Select(d => d.Value!)).Order(StringComparer.OrdinalIgnoreCase).ToList();
         if (EconomyFor(state, options.Economy, removedTraders) is { } economy)
         {
-            economyPath = economy.SaveTo(roleDirectory);
+            economyPath = economy.SaveTo(roleDirectory, withNote: true);
         }
 
         var result = new ExportResult
@@ -578,7 +584,8 @@ public sealed partial class ProjectExporter
     /// in the level as written (read back from <paramref name="staging"/>: bent pieces, copies, attached parts in place).
     /// </summary>
     private void GrowStreamingAreas(string staging, List<(string Level, string File, HashSet<string> Actors)> placed,
-        Func<string, BendMesh?> meshes, List<string> warnings, CancellationToken cancellationToken)
+        Func<string, BendMesh?> meshes, List<string> warnings, CancellationToken cancellationToken,
+        Func<string, ActorRecord, IEnumerable<System.Numerics.Vector2[]>>? footprintsOf = null, List<System.Numerics.Vector2[]>? footprints = null)
     {
         if (placed.All(p => p.Actors.Count == 0))
         {
@@ -599,6 +606,12 @@ public sealed partial class ProjectExporter
                 try
                 {
                     var document = LevelDocument.Load(reader, level, cancellationToken);
+                    if (footprintsOf is not null && footprints is not null)
+                    {
+                        // "Clear grass under it": the footprints as written (bent pieces bent, copies in place).
+                        footprints.AddRange(document.Actors.Where(a => actors.Contains(a.Name)).SelectMany(a => footprintsOf(level, a)));
+                    }
+
                     if (StreamingArea.Of(document.Actors.Where(a => actors.Contains(a.Name)), meshes) is { } box)
                     {
                         boxes.Add((level, file, box.Min, box.Max));
@@ -832,6 +845,8 @@ public sealed partial class ProjectExporter
                     meshAdds.Add(new StaticMeshActorAdd(meshActor.NewName, addedMesh, state.GetAddedTransform(added) ?? meshActor.Transform)
                     {
                         CollisionProfile = meshActor.CollisionProfile ?? StandingTreeProfile(addedMesh, bendMeshes),
+                        DrawsIntoLandscape = bendMeshes?.Invoke(addedMesh)?.DrawsIntoLandscape == true,
+                        OnlyIntoLandscape = bendMeshes?.Invoke(addedMesh)?.OnlyIntoLandscape == true,
                     });
                     break;
                 case AddBlueprintActorOp blueprint when sourcePackages is not null:
@@ -958,8 +973,42 @@ public sealed partial class ProjectExporter
             }
         }
 
+        // Loot of mesh components (the Map's loot editor, a copied part's loot); a duplicate carries its source's loot edits.
+        var loot = new List<LootPatch>();
+        foreach (var (actor, component, setting) in state.LootOverrides.Where(l => SameLevel(l.Actor.Level, level) && !state.IsDeleted(l.Actor) && !deleted.Contains(l.Actor.Actor)))
+        {
+            if (LootComponent(actor, component) is { } name)
+            {
+                loot.Add(new LootPatch(actor.Actor, name, setting));
+            }
+            else
+            {
+                warnings.Add($"{actor}: no mesh component to carry its loot; it was not written.");
+            }
+        }
+
+        foreach (var meshActor in state.AddedActors.Where(a => SameLevel(a.Key.Level, level) && !state.IsDeleted(a.Key)).Select(a => a.Value).OfType<AddStaticMeshActorOp>())
+        {
+            if (meshActor.Loot is { } presets && state.GetLoot(new ActorRef(meshActor.Level, meshActor.NewName)) is null)
+            {
+                loot.Add(new LootPatch(meshActor.NewName, "StaticMeshComponent0", new LootSetting(presets.Count > 0, presets))); // a copied part's loot (none = decoration)
+            }
+        }
+
+        foreach (var copy in copies)
+        {
+            foreach (var (actor, component, setting) in state.LootOverrides.Where(l => SameLevel(l.Actor.Level, level) && string.Equals(l.Actor.Actor, copy.SourceActor, StringComparison.OrdinalIgnoreCase)))
+            {
+                if (state.GetLoot(actor with { Actor = copy.NewName }, component) is null && LootComponent(actor, component) is { } name)
+                {
+                    loot.Add(new LootPatch(copy.NewName, name, setting));
+                }
+            }
+        }
+
         return new LevelEditRequest
         {
+            Loot = loot,
             DeleteActors = deleted.ToList(),
             DeleteComponents = deleteComponents,
             Transforms = transforms,
@@ -982,6 +1031,17 @@ public sealed partial class ProjectExporter
                 instancePatches.Add(new InstancePatch(instance.Actor, instance.Component, instance.Index, local));
             }
         }
+
+        // The stored mesh component a loot setting is for: named, or the root (an added mesh's StaticMeshComponent0, a copy's source's root).
+        string? LootComponent(ActorRef actor, string component) =>
+            component.Length > 0 ? component
+            : state.IsAdded(actor) ? state.AddedActors[actor] switch
+            {
+                AddStaticMeshActorOp => "StaticMeshComponent0",
+                DuplicateActorOp d => document?.FindActor(d.Source.Actor)?.Root is { IsSynthesized: false } r ? r.Name : null,
+                _ => null,
+            }
+            : document?.FindActor(actor.Actor)?.Root is { IsSynthesized: false } root ? root.Name : null;
 
         // The component's pristine instance list (read once per component); false, with a warning, when it has none.
         bool EnsureHint(InstanceRef instance)
@@ -1088,7 +1148,11 @@ public sealed partial class ProjectExporter
             {
                 var pieceName = i == 0 ? name : UniqueName(document, name + "_" + (i + 1).ToString(CultureInfo.InvariantCulture), meshAdds.Concat(bent));
                 var collision = PieceCollision.Bend(meshBoxes, pieces[i], info.Bounds);
-                bent.Add(new StaticMeshActorAdd(pieceName, mesh, transform with { Scale = FVector.One }, pieces[i], collision, info.BodySetupGuid));
+                bent.Add(new StaticMeshActorAdd(pieceName, mesh, transform with { Scale = FVector.One }, pieces[i], collision, info.BodySetupGuid)
+                {
+                    DrawsIntoLandscape = info.DrawsIntoLandscape,
+                    OnlyIntoLandscape = info.OnlyIntoLandscape,
+                });
             }
 
             switch (added)

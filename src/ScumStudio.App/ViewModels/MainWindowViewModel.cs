@@ -17,7 +17,7 @@ namespace ScumStudio.App.ViewModels;
 public sealed partial class MainWindowViewModel : ViewModelBase, IDisposable
 {
     /// <summary>Navigation keys in rail order.</summary>
-    public static IReadOnlyList<string> PageKeys { get; } = ["map", "vehicles", "weapons", "spawns", "economy", "assets", "projects", "settings"];
+    public static IReadOnlyList<string> PageKeys { get; } = ["map", "vehicles", "weapons", "spawns", "economy", "craftables", "assets", "projects", "settings"];
 
     private readonly List<IDisposable> _disposables = [];
 
@@ -31,8 +31,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IDisposable
             new NavItemViewModel("vehicles", "Vehicles", "Icon.Vehicle", null, () => Track(new VehiclesPageViewModel(services, OpenSetup))),
             new NavItemViewModel("weapons", "Weapons", "Icon.Weapon", null, () => Track(new WeaponsPageViewModel(services, OpenSetup))),
             new NavItemViewModel("spawns", "Spawns", "Icon.Pin", null, () => Track(new SpawnsPageViewModel(services, OpenSetup))),
-            new NavItemViewModel("economy", "Economy", "Icon.Coins", null, () => Track(new EconomyPageViewModel(services, OpenSetup))),
-            new NavItemViewModel("assets", "Assets", "Icon.Assets", null, () => Track(new AssetsPageViewModel(services, OpenSetup, PlaceInMap))),
+            new NavItemViewModel("economy", "Economy", "Icon.Coins", null, () => Track(CreateEconomy(services))),
+            new NavItemViewModel("craftables", "Craftables", "Icon.Cube3d", null, () => Track(new CraftablesPageViewModel(services, OpenSetup))),
+            new NavItemViewModel("assets", "Assets", "Icon.Assets", null, () => Track(new AssetsPageViewModel(services, OpenSetup, PlaceInMap, MakeCraftable))),
             new NavItemViewModel("projects", "Projects", "Icon.Projects", null, () => Track(new ProjectsPageViewModel(services))),
             new NavItemViewModel("settings", "Settings", "Icon.Settings", null, () => Track(new SettingsPageViewModel(services, OpenSetup))),
         ];
@@ -188,6 +189,23 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IDisposable
         return map;
     }
 
+    /// <summary>The Economy page, wired to place traders on the Map.</summary>
+    private EconomyPageViewModel CreateEconomy(AppServices services)
+    {
+        var economy = new EconomyPageViewModel(services, OpenSetup);
+        economy.SetTraderPlacer(PlaceTrader);
+        return economy;
+    }
+
+    /// <summary>Switches to the Map page and places a trader of <paramref name="type"/> where its camera aims.</summary>
+    public void PlaceTrader(string type)
+    {
+        if (NavigateTo("map") is MapPageViewModel map)
+        {
+            map.PlaceTraderOfType(type);
+        }
+    }
+
     /// <summary>Switches to the Economy page at <paramref name="trader"/>'s section.</summary>
     public void OpenEconomy(string trader)
     {
@@ -203,6 +221,15 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IDisposable
         if (NavigateTo("map") is MapPageViewModel map)
         {
             map.AddObject(objectPath);
+        }
+    }
+
+    /// <summary>Switches to the Craftables page and adds <paramref name="objectPath"/> (a static mesh or Blueprint) to the project's craftables.</summary>
+    public void MakeCraftable(string objectPath)
+    {
+        if (NavigateTo("craftables") is CraftablesPageViewModel craftables)
+        {
+            _ = craftables.AddAsync(objectPath);
         }
     }
 

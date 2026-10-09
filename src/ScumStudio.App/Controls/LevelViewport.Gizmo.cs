@@ -277,8 +277,13 @@ public sealed partial class LevelViewport
                 if (GizmoMath.TryClosestParameter(origin, direction, f.Origin, f.Axis(_dragAxis), out var t, out _))
                 {
                     var delta = t - _dragStartParameter;
-                    result = GizmoMath.Translate(start, AxisUe(_dragAxis, start), delta, translationSnap);
+                    var axisUe = AxisUe(_dragAxis, start);
+                    result = GizmoMath.Translate(start, axisUe, delta, translationSnap);
                     label = Metres(GizmoMath.Snap(delta, translationSnap));
+                    if (PieceSnapAlong(result.Value, axisUe.GetSafeNormal(), null) is { } joined)
+                    {
+                        result = joined; // a piece reaching the same piece's end joins it (green box)
+                    }
                 }
 
                 break;
@@ -291,6 +296,11 @@ public sealed partial class LevelViewport
                     var (da, db) = (Vector3.Dot(moved, f.Axis(a)), Vector3.Dot(moved, f.Axis(b)));
                     result = GizmoMath.TranslateInPlane(start, AxisUe(a, start), AxisUe(b, start), da, db, translationSnap);
                     label = Metres(GizmoMath.Snap(da, translationSnap)) + "  " + Metres(GizmoMath.Snap(db, translationSnap));
+                    var normalUe = FVector.Cross(AxisUe(a, start), AxisUe(b, start)).GetSafeNormal();
+                    if (PieceSnapAlong(result.Value, null, normalUe) is { } joined)
+                    {
+                        result = joined;
+                    }
                 }
 
                 break;
@@ -327,7 +337,7 @@ public sealed partial class LevelViewport
                 }
 
                 // Scale3D is the object's own: with world axes, the cube on a world axis stretches the object's axis closest to it.
-                var cube = LocalAxes || _dragAxis == GizmoAxis.ScaleUniform ? _dragAxis : ClosestLocalCube(_dragAxis, start);
+                var cube = LocalAxes || _dragAxis == GizmoAxis.ScaleUniform ? _dragAxis : ClosestLocalCube(AxisUe(GizmoMath.AxisOf(_dragAxis), start), start);
                 var scaled = GizmoMath.Scale(start, cube, ratio, _snapHeld ? 0.1f : 0f);
                 result = AboutPivot(start, scaled);
                 var shown = cube switch
@@ -352,10 +362,9 @@ public sealed partial class LevelViewport
 
     private static float Safe(float scale) => MathF.Abs(scale) < 1e-6f ? 1e-6f : scale;
 
-    /// <summary>The scale cube of the object's own axis that lies closest to the world axis of <paramref name="cube"/>.</summary>
-    private static GizmoAxis ClosestLocalCube(GizmoAxis cube, FTransform root)
+    /// <summary>The scale cube of the object's own axis that lies closest to <paramref name="world"/> (the dragged cube's arrow).</summary>
+    private static GizmoAxis ClosestLocalCube(FVector world, FTransform root)
     {
-        var world = GizmoMath.UeDirection(GizmoMath.AxisOf(cube));
         return new (GizmoAxis Cube, GizmoAxis Axis)[] { (GizmoAxis.ScaleX, GizmoAxis.X), (GizmoAxis.ScaleY, GizmoAxis.Y), (GizmoAxis.ScaleZ, GizmoAxis.Z) }
             .MaxBy(p => MathF.Abs(FVector.Dot(root.Rotation.RotateVector(GizmoMath.UeDirection(p.Axis)), world)))
             .Cube;

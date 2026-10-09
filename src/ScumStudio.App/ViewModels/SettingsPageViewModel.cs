@@ -200,6 +200,7 @@ public sealed partial class SettingsPageViewModel : PageViewModel, IDisposable
         {
             SelectedLanguage = Loc.Languages.FirstOrDefault(l => l.Code == s.Ui.Language) ?? Loc.Languages[0];
             RenderQuality = s.Ui.RenderQuality;
+            ClearGrassUnderNew = s.Ui.ClearGrassUnderNewObjects;
             McpEnabled = s.Mcp.Enabled;
             McpPort = s.Mcp.Port.ToString(System.Globalization.CultureInfo.InvariantCulture);
         }
@@ -247,14 +248,20 @@ public sealed partial class SettingsPageViewModel : PageViewModel, IDisposable
         Reload();
     }
 
-    /// <summary>The map gizmo's arrows follow the selected object's own axes (on by default); the map follows this setting live.</summary>
-    public bool LocalAxes
+    /// <summary>The orientations the gizmo can take.</summary>
+    public IReadOnlyList<OrientationItem> Orientations { get; } = OrientationItem.All;
+
+    /// <summary>The map gizmo's orientation (Local by default); the map follows this setting live.</summary>
+    public OrientationItem Orientation
     {
-        get => _services.UiState.Current.LocalAxes;
+        get => OrientationItem.All.First(o => o.Value == _services.UiState.Current.GizmoAxes);
         set
         {
-            _services.UiState.Update(u => u with { LocalAxes = value });
-            OnPropertyChanged();
+            if (value is not null)
+            {
+                _services.UiState.Update(u => u with { Orientation = value.Value, LocalAxes = value.Value == GizmoOrientation.Local });
+                OnPropertyChanged();
+            }
         }
     }
 
@@ -275,6 +282,18 @@ public sealed partial class SettingsPageViewModel : PageViewModel, IDisposable
 
     /// <summary>The quality presets.</summary>
     public IReadOnlyList<ScumStudio.Core.Settings.RenderQuality> RenderQualities { get; } = Enum.GetValues<ScumStudio.Core.Settings.RenderQuality>();
+
+    /// <summary>New objects get "Clear grass under it" switched on (each object can still be switched in the Map).</summary>
+    [ObservableProperty]
+    private bool _clearGrassUnderNew = true;
+
+    partial void OnClearGrassUnderNewChanged(bool value)
+    {
+        if (!_reloading)
+        {
+            _services.UpdateSettings(s => s with { Ui = s.Ui with { ClearGrassUnderNewObjects = value } });
+        }
+    }
 
     partial void OnRenderQualityChanged(ScumStudio.Core.Settings.RenderQuality value)
     {

@@ -30,6 +30,20 @@ public sealed record BendMesh(BoundingBox Bounds, string? FlatMaterial = null, I
     /// </summary>
     public IReadOnlyList<FVector>? Rim { get; init; }
 
+    /// <summary>
+    /// True for a road surface: every material comes from SCUM's gravel or asphalt road master. The game places such
+    /// pieces drawing into the landscape's virtual texture (<c>RTV_Landscape</c>), which the ground shows; a copy must too.
+    /// Most other masters (buildings, rocks, bridges) can also write that texture, but the game never asks them to.
+    /// </summary>
+    public bool DrawsIntoLandscape { get; init; }
+
+    /// <summary>
+    /// True for a gravel road or dirt runway piece (<c>M_DirtRoad_Master</c>): the game draws it only into the landscape
+    /// texture (pass type Never, no shadow). On screen by itself it shows its material's placeholder, bright pink (owner,
+    /// 2026-10-09: "the road I copied is purple").
+    /// </summary>
+    public bool OnlyIntoLandscape { get; init; }
+
     /// <summary>Why the mesh stays straight in an export, or null.</summary>
     public string? Problem => FlatMaterial is null ? null : $"its material {FlatMaterial[(FlatMaterial.LastIndexOf('/') + 1)..]} cannot be drawn bent in the game";
 }
@@ -50,7 +64,9 @@ public sealed class BendSupport(AssetCatalog catalog)
     public static bool IsRock(string meshPath) => meshPath.Contains("/Landscape/Rocks/", StringComparison.OrdinalIgnoreCase);
 
     private readonly Dictionary<string, BendMesh?> _meshes = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, bool> _materials = new(StringComparer.OrdinalIgnoreCase);
+    private const string DirtRoadMaster = "/Game/ConZ_Files/Materials/Road/Gravel_Road/M_DirtRoad_Master";
+    private const string AsphaltRoadMaster = "/Game/ConZ_Files/Materials/Road/AsphaltRoad_Master/M_Asphalt_Road_Master";
+    private readonly Dictionary<string, (bool Bends, string Base)> _materials = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// The <see cref="BendMesh"/> of <paramref name="meshPath"/>, or null when it is not a readable static mesh. Answers are
@@ -87,8 +103,8 @@ public sealed class BendSupport(AssetCatalog catalog)
         }
 
         var info = MeshExtractor.DescribeStaticMesh(mesh);
-        var flat = info.Materials.Select(m => m.MaterialPath).Where(p => p.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase)
-            .FirstOrDefault(p => !BendsInGame(p));
+        var materials = info.Materials.Select(m => m.MaterialPath).Where(p => p.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var flat = materials.FirstOrDefault(p => !Material(p).Bends);
         // The body first: a dedicated server's cook keeps it but strips the render geometry the columns are read from.
         MeshCollisionInfo? simple = null;
         Formats.FGuid? guid = null;
@@ -123,6 +139,8 @@ public sealed class BendSupport(AssetCatalog catalog)
             DefaultProfile = simple?.DefaultProfile,
             LetsThrough = simple?.LetsThrough ?? (noBody ? ["Pawn", "PhysicsBody"] : null),
             Rim = simple?.TraceFlag == "CTF_UseComplexAsSimple" ? RimOf(mesh) : null,
+            DrawsIntoLandscape = materials.Count > 0 && materials.All(p => IsUnder(Material(p).Base, DirtRoadMaster) || IsUnder(Material(p).Base, AsphaltRoadMaster)),
+            OnlyIntoLandscape = materials.Count > 0 && materials.All(p => IsUnder(Material(p).Base, DirtRoadMaster)),
         };
     }
 
@@ -178,22 +196,27 @@ public sealed class BendSupport(AssetCatalog catalog)
         return rim;
     }
 
-    private bool BendsInGame(string materialPath)
+    private static bool IsUnder(string materialPath, string master) =>
+        materialPath.Equals(master, StringComparison.OrdinalIgnoreCase) || materialPath.StartsWith(master + ".", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Whether the material can be drawn bent, and its base material (the end of its parent chain).</summary>
+    private (bool Bends, string Base) Material(string materialPath)
     {
-        if (!_materials.TryGetValue(materialPath, out var bends))
+        if (!_materials.TryGetValue(materialPath, out var known))
         {
             try
             {
-                bends = new MaterialInspector(catalog).Inspect(materialPath).UsedWithSplineMeshes;
+                var info = new MaterialInspector(catalog).Inspect(materialPath);
+                known = (info.UsedWithSplineMeshes, info.ParentChain.Count > 0 ? info.ParentChain[^1] : info.ObjectPath);
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                bends = false;
+                known = (false, string.Empty);
             }
 
-            _materials[materialPath] = bends;
+            _materials[materialPath] = known;
         }
 
-        return bends;
+        return known;
     }
 }

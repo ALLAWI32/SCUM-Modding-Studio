@@ -19,6 +19,7 @@ public sealed class ViewLocator : IDataTemplate
         [typeof(WeaponsPageViewModel)] = () => new ModulePageView(),
         [typeof(SpawnsPageViewModel)] = () => new SpawnsPageView(),
         [typeof(EconomyPageViewModel)] = () => new EconomyPageView(),
+        [typeof(CraftablesPageViewModel)] = () => new CraftablesPageView(),
         [typeof(AssetsPageViewModel)] = () => new AssetsPageView(),
         [typeof(ProjectsPageViewModel)] = () => new ProjectsPageView(),
         [typeof(SettingsPageViewModel)] = () => new SettingsPageView(),

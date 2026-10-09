@@ -40,6 +40,10 @@ public sealed class MeshPreview : OpenGlControlBase
     public static readonly StyledProperty<string> SelectedPartProperty =
         AvaloniaProperty.Register<MeshPreview, string>(nameof(SelectedPart), string.Empty);
 
+    /// <summary>Vehicle attachment package whose parts are drawn highlighted (<see cref="PreviewPart.Attachment"/>), or empty.</summary>
+    public static readonly StyledProperty<string> HighlightAttachmentProperty =
+        AvaloniaProperty.Register<MeshPreview, string>(nameof(HighlightAttachment), string.Empty);
+
     /// <summary>"3 parts · 12,345 tris" for the uploaded model (read-only).</summary>
     public static readonly StyledProperty<string> InfoProperty =
         AvaloniaProperty.Register<MeshPreview, string>(nameof(Info), string.Empty);
@@ -56,6 +60,7 @@ public sealed class MeshPreview : OpenGlControlBase
     private RenderTarget? _target;
     private PreviewScene? _scene;
     private bool _modelDirty;
+    private bool _highlightDirty;
     private bool _frameRequested;
     private BoundingBox _bounds = BoundingBox.Empty;
     private Vector3 _orbitCentre;
@@ -80,6 +85,11 @@ public sealed class MeshPreview : OpenGlControlBase
             c.RequestNextFrameRendering();
         });
         ShowGridProperty.Changed.AddClassHandler<MeshPreview>((c, _) => c.RequestNextFrameRendering());
+        HighlightAttachmentProperty.Changed.AddClassHandler<MeshPreview>((c, _) =>
+        {
+            c._highlightDirty = true;
+            c.RequestNextFrameRendering();
+        });
     }
 
     /// <inheritdoc cref="ModelProperty" />
@@ -108,6 +118,13 @@ public sealed class MeshPreview : OpenGlControlBase
     {
         get => GetValue(SelectedPartProperty);
         private set => SetValue(SelectedPartProperty, value);
+    }
+
+    /// <inheritdoc cref="HighlightAttachmentProperty" />
+    public string HighlightAttachment
+    {
+        get => GetValue(HighlightAttachmentProperty);
+        set => SetValue(HighlightAttachmentProperty, value);
     }
 
     /// <inheritdoc cref="InfoProperty" />
@@ -192,18 +209,21 @@ public sealed class MeshPreview : OpenGlControlBase
         }
 
         _target.Resize(w, h);
-        if (_modelDirty)
+        if (_modelDirty || _highlightDirty)
         {
-            _modelDirty = false;
+            var modelChanged = _modelDirty;
+            _modelDirty = _highlightDirty = false;
             // A repaint of the same parts keeps the scene and the camera; the same model with other parts (an armour kit)
             // keeps the camera; anything else is a new model, framed.
-            if (Model is null || _scene is null || !_scene.Restyle(Model))
+            if (modelChanged && (Model is null || _scene is null || !_scene.Restyle(Model)))
             {
                 var sameModel = Model is not null && _scene?.Model.Name == Model.Name;
                 Upload(Model);
                 _frameRequested = !sameModel;
                 SelectPart(null);
             }
+
+            _scene?.Highlight(HighlightAttachment); // a part row's "show on the car" (the selection colour)
         }
 
         if (_frameRequested)

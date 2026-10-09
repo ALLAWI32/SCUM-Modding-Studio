@@ -423,6 +423,7 @@ public sealed partial class Cue4ParseLevelReader : ILevelReader
         {
             PatrolPoints = patrol,
             TraderMarkers = ReadTraderMarkers(actor),
+            IsItemContainer = ClassChain(header.ClassPath, header.IsBlueprintClass).Contains("ItemContainer", StringComparer.Ordinal),
             IsLoaded = true,
             PropertyNames = PropertyNames(actor),
             RootComponent = root,
@@ -558,7 +559,49 @@ public sealed partial class Cue4ParseLevelReader : ILevelReader
             : null;
 
         return new ComponentValues(location, rotation, scale, absLocation, absRotation, absScale, mesh, instances, isInstancedClass,
-            isMesh, isScene, isComponent, visible, childActorClass, spline, fromTemplate, endCullDistance, overrides, markers, collision, boxExtent);
+            isMesh, isScene, isComponent, visible, childActorClass, spline, fromTemplate, endCullDistance, overrides, markers, collision, boxExtent,
+            isMesh ? ReadLootPresets(templates) : null);
+    }
+
+    /// <summary>
+    /// The loot presets of a mesh component's <c>AssetUserData</c> entries of class <c>ExamineAssetData</c> (what a player's
+    /// search of it spawns: <c>SpawnerPreset.Preset</c>, e.g. <c>Examine_Weapon_Locker_Lockpick_Weapon_C</c>). A level's own
+    /// entries are usually empty (12 bytes) and take the preset from their archetype, so each entry's templates are followed.
+    /// </summary>
+    private IReadOnlyList<string>? ReadLootPresets(TemplateChain templates)
+    {
+        var ignored = false;
+        if (!TryGetProperty(templates, "AssetUserData", out FPackageIndex[] entries, ref ignored) || entries.Length == 0)
+        {
+            return null;
+        }
+
+        var presets = new List<string>();
+        foreach (var entry in entries)
+        {
+            try
+            {
+                for (var o = entry.IsNull ? null : entry.Load(); o is not null && presets.Count < 64; o = o.Template?.Load())
+                {
+                    if (o.Class?.Name != "ExamineAssetData")
+                    {
+                        break;
+                    }
+
+                    if (o.TryGetValue(out FStructFallback spawner, "SpawnerPreset") && spawner.TryGetValue(out FPackageIndex preset, "Preset") && !preset.IsNull)
+                    {
+                        presets.Add(ObjectPathOf(preset));
+                        break;
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                _logger.LogDebug("AssetUserData {Entry}: {Message}", entry.Name, ex.Message);
+            }
+        }
+
+        return presets.Count > 0 ? presets : null;
     }
 
     private readonly Dictionary<string, (string Name, string Type)> _personalities = new(StringComparer.OrdinalIgnoreCase);

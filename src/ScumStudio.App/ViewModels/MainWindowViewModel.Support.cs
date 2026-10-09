@@ -30,7 +30,7 @@ public sealed partial class MainWindowViewModel
     public const string DiscordUrl = "https://discord.gg/ympctW5SYG";
 
     /// <summary>Below this window width the title strip shows the tabs as icons only (their names stay in the tooltips).</summary>
-    public const double CompactHeaderWidth = 1420;
+    public const double CompactHeaderWidth = 1640; // nine tabs (Craftables): Russian names need ~1615 px
 
     /// <summary>True in a narrow window: the tab labels and the "Project" caption hide so the search field and the buttons never overlap.</summary>
     [ObservableProperty]

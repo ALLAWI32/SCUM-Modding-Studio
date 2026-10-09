@@ -155,7 +155,7 @@ public sealed partial class MapPageViewModel
         _streamed = wanted;
         _loadedCell = CellAt(world, camera.X, camera.Y);
         WorldStatus = Localization.Loc.F("Map.World.Streaming", added);
-        LevelLoadCompletion = LoadLevelsAsync(wanted, landscapeStep: 4, seaPlane: false, streamed: true)
+        LevelLoadCompletion = LoadLevelsAsync(wanted, landscapeStep: 4, streamed: true)
             .ContinueWith(_ => WorldStatus = Localization.Loc.F("Map.World.Around", wanted.Count), TaskScheduler.FromCurrentSynchronizationContext());
     }
 

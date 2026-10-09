@@ -24,8 +24,10 @@ internal static class ShaderSources
         uniform int uBillboard;
         uniform vec3 uCameraRight;
         uniform vec3 uCameraUp;
+        uniform vec3 uCameraPosition;
 
         out vec3 vNormal;
+        out vec3 vView;
         out vec2 vUv;
         out vec3 vWorld;
         out vec4 vTint;
@@ -51,6 +53,7 @@ internal static class ShaderSources
 
             vUv = aUv;
             vWorld = world.xyz;
+            vView = world.xyz - uCameraPosition; // small numbers: smooth screen derivatives for normal mapping near the camera
             vTint = iTint;
             vPickId = iIdFlags.x;
             vFlags = iIdFlags.y;
@@ -69,27 +72,34 @@ internal static class ShaderSources
         in vec3 vNormal;
         in vec2 vUv;
         in vec3 vWorld;
+        in vec3 vView;
         in vec4 vTint;
         flat in uint vPickId;
         flat in uint vFlags;
         flat in vec2 vSurface;
 
         uniform sampler2D uTexture;
+        uniform sampler2D uNormalMap;
+        uniform int uHasNormalMap;
+        uniform vec2 uRoughness;
         uniform int uHasTexture;
         uniform float uAlphaCutoff;
         uniform vec4 uSectionTint;
         uniform vec3 uSkyColor;
         uniform vec3 uGroundColor;
-        uniform vec3 uLightDirection;
-        uniform vec3 uLightColor;
         uniform vec4 uHighlight;
-        uniform vec3 uCameraPosition;
-        uniform int uEncodeSrgb;
-        uniform vec3 uFogColor;
-        uniform float uFogDensity;
         uniform int uOpaque;
+        uniform int uWater;
+        uniform int uSceneCopy;
+        uniform sampler2D uSceneColor;
+        uniform sampler2D uSceneDepth;
+        uniform mat4 uInvProj;
+        uniform int uDepthZeroToOne;
+        uniform int uShadows;
+        uniform mat4 uShadowMatrix;
+        uniform sampler2DShadow uShadowMap;
+        uniform float uShadowTexel;
         uniform int uShimmer;
-        uniform float uTime;
         uniform int uTerrainDetail;
         uniform sampler2D uWeights;
         uniform sampler2D uLayer0;
@@ -103,17 +113,57 @@ internal static class ShaderSources
         uniform vec3 uLayerMean3;
 
         layout(location = 0) out vec4 oColor;
-
-        vec3 linearToSrgb(vec3 c)
+        """ + "\n" + Atmosphere + "\n" + """
+        // Sun visibility at this fragment: 3x3 filtered taps of the shadow map, pushed off the surface along the normal by
+        // a texel and a half (no acne on the terrain), fading out toward the edge of the shadowed square.
+        float sunShadow(vec3 n)
         {
-            c = clamp(c, 0.0, 1.0);
-            vec3 lo = c * 12.92;
-            vec3 hi = 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055;
-            return mix(hi, lo, vec3(lessThanEqual(c, vec3(0.0031308))));
+            if (uShadows == 0)
+            {
+                return 1.0;
+            }
+
+            vec3 c = (uShadowMatrix * vec4(vWorld + n * (uShadowTexel * 1.5), 1.0)).xyz * 0.5 + 0.5;
+            float edge = max(abs(c.x - 0.5), abs(c.y - 0.5)) * 2.0;
+            if (edge >= 1.0 || c.z >= 1.0)
+            {
+                return 1.0;
+            }
+
+            vec2 texel = 1.0 / vec2(textureSize(uShadowMap, 0));
+            float sum = 0.0;
+            for (int y = -1; y <= 1; y++)
+            {
+                for (int x = -1; x <= 1; x++)
+                {
+                    sum += texture(uShadowMap, vec3(c.xy + vec2(x, y) * texel, c.z));
+                }
+            }
+
+            return mix(sum / 9.0, 1.0, smoothstep(0.8, 1.0, edge));
+        }
+
+        // Normal mapping without precomputed tangents (Christian Schüler, "Followup: Normal Mapping Without Precomputed
+        // Tangents", 2013): the cotangent frame of the surface from the screen derivatives of position and UV. UE normal
+        // maps are DirectX style (green = +V), which is exactly this frame's B axis.
+        vec3 perturbNormal(vec3 n, vec3 dpx, vec3 dpy, vec2 duvx, vec2 duvy, vec2 xy)
+        {
+            vec3 dp2perp = cross(dpy, n);
+            vec3 dp1perp = cross(n, dpx);
+            vec3 t = dp2perp * duvx.x + dp1perp * duvy.x;
+            vec3 b = dp2perp * duvx.y + dp1perp * duvy.y;
+            float scale = inversesqrt(max(max(dot(t, t), dot(b, b)), 1e-30));
+            float z = sqrt(max(1.0 - dot(xy, xy), 0.0));
+            return normalize((t * xy.x + b * xy.y) * scale + n * z);
         }
 
         void main()
         {
+            // Derivatives first, while every pixel of the quad is still running (masked texels are discarded below).
+            vec3 dpx = dFdx(vView);
+            vec3 dpy = dFdy(vView);
+            vec2 duvx = dFdx(vUv);
+            vec2 duvy = dFdy(vUv);
             vec4 albedo = vTint * uSectionTint; // node tint x material colour
             float paintMask = 1.0;
             if (uHasTexture != 0)
@@ -161,9 +211,83 @@ internal static class ShaderSources
                 n = -n;
             }
 
+            // Opaque and masked surfaces cover the pixel: a texture's alpha (a far leaf mip, a spec mask) must not let the
+            // window behind the view show through (distant trees came out white). Stand-ins (spawn models) glint: their
+            // opacity breathes a fifth either way over 1.5 s.
+            float alpha = uOpaque != 0 ? 1.0 : albedo.a * (uShimmer != 0 ? 1.0 + 0.2 * sin(uTime * 4.1887902) : 1.0);
+            vec3 geometric = n;
+            if (uHasNormalMap != 0 && uHasTexture != 0)
+            {
+                n = perturbNormal(n, dpx, dpy, duvx, duvy, texture(uNormalMap, vUv).rg * 2.0 - 1.0);
+            }
+
             vec3 hemi = mix(uGroundColor, uSkyColor, n.y * 0.5 + 0.5);
             float key = max(dot(n, -uLightDirection), 0.0);
+            key *= key > 0.0 ? sunShadow(geometric) : 1.0;
             vec3 lit = albedo.rgb * (hemi + uLightColor * key);
+            if (uRoughness.y > 0.0 && uHasTexture != 0)
+            {
+                // The sun's highlight on a dielectric (F0 = 0.04): GGX distribution, Schlick Fresnel and the implicit
+                // geometry term; roughness from the texture's alpha scaled into the material's range.
+                float rough = clamp(mix(uRoughness.x, uRoughness.y, paintMask), 0.15, 1.0);
+                float a2 = rough * rough * rough * rough;
+                vec3 h = normalize(toCamera - uLightDirection);
+                float nh = max(dot(n, h), 0.0);
+                float d = nh * nh * (a2 - 1.0) + 1.0;
+                float fresnel = 0.04 + 0.96 * pow(1.0 - max(dot(h, toCamera), 0.0), 5.0);
+                lit += uLightColor * (key * fresnel * 0.25 * a2 / (3.14159265 * d * d));
+            }
+            if (uWater != 0)
+            {
+                // Water: the tint is the colour of deep water. Swells and small waves bend the normal (the small ones fade
+                // out with the pixel's footprint and leave their roughness to the sun's glitter), Fresnel mixes in the
+                // sky's reflection. With the scene copy, the ground below shows through by the water's thickness: clear
+                // turquoise in the shallows, opaque blue where it is deep, a light foam line where it meets the shore.
+                float footprint = length(fwidth(vWorld.xz)); // world size of a pixel on the water (a uniform branch)
+                vec4 wave = waterNormal(vWorld.xz, footprint);
+                n = toCamera.y < 0.0 ? -wave.xyz : wave.xyz;
+                float fresnel = 0.02 + 0.98 * pow(1.0 - max(dot(n, toCamera), 0.0), 5.0);
+                vec3 r = reflect(-toCamera, n);
+                r.y = abs(r.y);
+                float shine = mix(1400.0, 24.0, wave.w);
+                float glint = pow(max(dot(r, -uLightDirection), 0.0), shine) * shine * 0.012;
+                vec3 sunlight = uLightColor * max(-uLightDirection.y, 0.0);
+                // Light scattered back out of deep water: brighter on the slopes facing the sun (the waves read from above)
+                // and in kilometre-wide patches (wind on the water), so a calm sea is not one flat colour from high up.
+                float patches = 0.5 + 0.5 * sin(dot(vWorld.xz, vec2(0.00004, 0.00009))) * sin(dot(vWorld.xz, vec2(0.00007, -0.00003)) + 2.0);
+                vec3 deep = albedo.rgb * (uSkyColor * 0.8 + sunlight * 0.35) * (0.4 + 1.3 * max(dot(n, -uLightDirection), 0.0)) * (0.85 + 0.3 * patches);
+                vec3 below = deep;
+                if (uSceneCopy != 0)
+                {
+                    ivec2 pixel = ivec2(gl_FragCoord.xy);
+                    float depth = texelFetch(uSceneDepth, pixel, 0).r;
+                    float thickness = 1e7;
+                    if (depth != (uDepthZeroToOne != 0 ? 0.0 : 1.0))
+                    {
+                        // The ground behind this pixel, back in view space from the depth buffer: the water's thickness
+                        // along the ray is how much farther it is than the surface.
+                        vec2 ndc = gl_FragCoord.xy / vec2(textureSize(uSceneDepth, 0)) * 2.0 - 1.0;
+                        vec4 behind = uInvProj * vec4(ndc, uDepthZeroToOne != 0 ? depth : depth * 2.0 - 1.0, 1.0);
+                        thickness = max(length(behind.xyz / behind.w) - length(vView), 0.0);
+                    }
+
+                    // Red is absorbed in a couple of metres, blue in tens of metres (per cm): shallows turn turquoise.
+                    vec3 transmit = exp(-vec3(0.0045, 0.0012, 0.0008) * thickness);
+                    vec3 ground = inverseToneMap(decodeOutput(texelFetch(uSceneColor, pixel, 0).rgb));
+                    below = ground * transmit + deep * (1.0 - transmit);
+                    float shore = 1.0 - smoothstep(0.0, 70.0, thickness * abs(toCamera.y));
+                    float lace = 0.55 + 0.45 * sin(dot(vWorld.xz, vec2(0.031, 0.017)) + uTime * 1.3) * sin(dot(vWorld.xz, vec2(-0.013, 0.029)) - uTime);
+                    below = mix(below, (uSkyColor + sunlight) * 0.9, shore * lace * 0.7);
+                    alpha = 1.0;
+                }
+                else
+                {
+                    alpha = mix(alpha, 1.0, clamp(fresnel + glint, 0.0, 1.0));
+                }
+
+                lit = mix(below, skyRadiance(r, false), fresnel) + uLightColor * glint;
+            }
+
             float metal = vSurface.x * paintMask;
             float gloss = vSurface.y * paintMask;
             if (metal + gloss > 0.0)
@@ -184,23 +308,194 @@ internal static class ShaderSources
                 lit /= max(1.0, max(lit.r, max(lit.g, lit.b)));
             }
 
-            if (uFogDensity > 0.0)
-            {
-                float fog = 1.0 - exp(-uFogDensity * length(uCameraPosition - vWorld));
-                lit = mix(lit, uFogColor, fog);
-            }
-
+            lit = toneMap(applyAtmosphere(lit, vWorld));
             if ((vFlags & 1u) != 0u)
             {
+                // After tone mapping, so the selection keeps the UI accent whatever the light.
                 float rim = pow(1.0 - max(dot(n, toCamera), 0.0), 2.0);
                 lit = mix(lit, uHighlight.rgb, uHighlight.a) + uHighlight.rgb * rim * 0.8;
             }
 
-            // Opaque and masked surfaces cover the pixel: a texture's alpha (a far leaf mip, a spec mask) must not let the
-            // window behind the view show through (distant trees came out white). Stand-ins (spawn models) glint: their
-            // opacity breathes a fifth either way over 1.5 s.
-            float alpha = uOpaque != 0 ? 1.0 : albedo.a * (uShimmer != 0 ? 1.0 + 0.2 * sin(uTime * 4.1887902) : 1.0);
-            oColor = vec4(uEncodeSrgb != 0 ? linearToSrgb(lit) : lit, alpha);
+            oColor = vec4(encodeOutput(lit), alpha);
+        }
+        """;
+
+    /// <summary>
+    /// Shared by the mesh and sky programs: the sky's colour along a view direction (horizon haze to zenith blue, the
+    /// sun's glow and disc), height-aware distance haze that fades toward the horizon colour and brightens toward the
+    /// sun, the sea's wave normals, an optional ACES-fit tone curve and the sRGB encode.
+    /// </summary>
+    private const string Atmosphere = """
+        uniform vec3 uLightDirection;
+        uniform vec3 uLightColor;
+        uniform vec3 uCameraPosition;
+        uniform int uEncodeSrgb;
+        uniform vec3 uFogColor;
+        uniform float uFogDensity;
+        uniform float uFogFalloff;
+        uniform int uSky;
+        uniform vec3 uSkyZenith;
+        uniform vec3 uSkyHorizon;
+        uniform float uExposure;
+        uniform float uTime;
+
+        vec3 linearToSrgb(vec3 c)
+        {
+            c = clamp(c, 0.0, 1.0);
+            vec3 lo = c * 12.92;
+            vec3 hi = 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055;
+            return mix(hi, lo, vec3(lessThanEqual(c, vec3(0.0031308))));
+        }
+
+        vec3 encodeOutput(vec3 c)
+        {
+            return uEncodeSrgb != 0 ? linearToSrgb(c) : c;
+        }
+
+        // A colour as the target stores it, back to linear (the scene copy under water).
+        vec3 decodeOutput(vec3 c)
+        {
+            return uEncodeSrgb != 0 ? mix(pow((c + 0.055) / 1.055, vec3(2.4)), c / 12.92, vec3(lessThanEqual(c, vec3(0.04045)))) : c;
+        }
+
+        // The colour before toneMap gave this one (its inverse; the curve is a ratio of quadratics).
+        vec3 inverseToneMap(vec3 y)
+        {
+            if (uExposure <= 0.0)
+            {
+                return y;
+            }
+
+            y = clamp(y, 0.0, 0.98);
+            vec3 a = 2.51 - 2.43 * y;
+            vec3 b = 0.03 - 0.59 * y;
+            vec3 c = -0.14 * y;
+            return (-b + sqrt(b * b - 4.0 * a * c)) / (2.0 * a) / uExposure;
+        }
+
+        // Narkowicz's ACES filmic fit after an exposure; exposure 0 leaves the colour as it is.
+        vec3 toneMap(vec3 c)
+        {
+            if (uExposure <= 0.0)
+            {
+                return c;
+            }
+
+            c *= uExposure;
+            return clamp((c * (2.51 * c + 0.03)) / (c * (2.43 * c + 0.59) + 0.14), 0.0, 1.0);
+        }
+
+        // Light scattered toward the eye around the sun: a wide warm glow and a tighter halo.
+        vec3 sunGlow(vec3 v)
+        {
+            float s = max(dot(v, -uLightDirection), 0.0);
+            return uLightColor * (0.06 * pow(s, 5.0) + 0.22 * pow(s, 40.0));
+        }
+
+        // The sky along the unit direction v: the horizon's haze turns deeper blue toward the zenith; below the horizon
+        // the haze darkens a little. The haze at the horizon is exactly the colour distant ground fades to.
+        vec3 skyRadiance(vec3 v, bool disc)
+        {
+            float up = max(v.y, 0.0);
+            vec3 c = mix(uSkyHorizon, uSkyZenith, 1.0 - exp(-up * 4.0)) * (1.0 - 0.2 * smoothstep(0.0, 0.3, -v.y));
+            c += sunGlow(v) * (1.0 - 0.6 * up);
+            if (disc)
+            {
+                c += uLightColor * 14.0 * smoothstep(0.99985, 0.99993, dot(v, -uLightDirection));
+            }
+
+            return c;
+        }
+
+        vec3 hazeColor(vec3 v)
+        {
+            return uSky != 0 ? uSkyHorizon + sunGlow(v) : uFogColor;
+        }
+
+        // Exponential distance fog, thinning with height above sea level (y = 0) when uFogFalloff > 0: the density
+        // uFogDensity * exp(-uFogFalloff * y) integrated along the ray from the camera.
+        vec3 applyAtmosphere(vec3 c, vec3 world)
+        {
+            if (uFogDensity <= 0.0)
+            {
+                return c;
+            }
+
+            vec3 d = world - uCameraPosition;
+            float dist = max(length(d), 1e-6);
+            float depth = uFogDensity * dist;
+            if (uFogFalloff > 0.0)
+            {
+                // Both exponents stay small or negative, so a camera far above the island cannot overflow.
+                float camera = exp(-uFogFalloff * max(uCameraPosition.y, -1e5));
+                float k = uFogFalloff * d.y;
+                depth *= abs(k) > 1e-4 ? (camera - exp(-uFogFalloff * max(world.y, -1e5))) / k : camera;
+            }
+
+            return mix(c, hazeColor(d / dist), 1.0 - exp(-depth));
+        }
+
+        // Normal of the water at UE-plane point p (cm), and in w how much of the small waves the pixel's footprint has
+        // filtered out (0 = all there, 1 = gone: the sun's glint then spreads into a wide glitter). Gravity waves at
+        // deep-water speeds and spread-out headings: three long swells (80-400 m) that stay visible from kilometres up,
+        // and ten short waves faded out once a pixel covers a good part of their wavelength, so far water does not flicker.
+        vec4 waterNormal(vec2 p, float footprint)
+        {
+            vec2 g = vec2(0.0);
+            float lost = 0.0;
+            float swell = 0.7 + 0.3 * sin(dot(p, vec2(0.00011, 0.00007)) + 1.3) * sin(dot(p, vec2(-0.00005, 0.00013)));
+            for (int i = 0; i < 3; i++)
+            {
+                float a = float(i) * 2.1 + 0.3;
+                vec2 dir = vec2(cos(a), sin(a));
+                float wavelength = 40000.0 * pow(0.45, float(i));
+                float k = 6.2831853 / wavelength;
+                g += dir * (0.03 * (1.0 - smoothstep(0.08, 0.35, footprint / wavelength))) * cos(dot(dir, p) * k - sqrt(981.0 * k) * uTime + float(i));
+            }
+
+            for (int i = 0; i < 10; i++)
+            {
+                float a = float(i) * 2.39996 + 0.7;
+                vec2 dir = vec2(cos(a), sin(a));
+                float wavelength = 3000.0 * pow(0.72, float(i));
+                float k = 6.2831853 / wavelength;
+                float fade = 1.0 - smoothstep(0.08, 0.35, footprint / wavelength);
+                g += dir * (0.035 * swell * fade) * cos(dot(dir, p) * k - sqrt(981.0 * k) * uTime + float(i) * 1.7);
+                lost += (1.0 - fade) * 0.1;
+            }
+
+            return vec4(normalize(vec3(-g.x, 1.0, -g.y)), lost * swell);
+        }
+        """;
+
+    /// <summary>Sky pass: the full-screen triangle of <see cref="GridVertex"/>, drawn only where the depth buffer is still clear.</summary>
+    public const string SkyFragment = """
+        #version 430 core
+        in vec3 vNear;
+        in vec3 vFar;
+        uniform float uFarDepth;
+        layout(location = 0) out vec4 oColor;
+        """ + "\n" + Atmosphere + "\n" + """
+        void main()
+        {
+            gl_FragDepth = uFarDepth;
+            oColor = vec4(encodeOutput(toneMap(skyRadiance(normalize(vFar - vNear), true))), 1.0);
+        }
+        """;
+
+    /// <summary>Shadow pass: depth only; masked sections (leaves) cut their holes so they cast the leaves' shape.</summary>
+    public const string ShadowFragment = """
+        #version 430 core
+        in vec2 vUv;
+        uniform sampler2D uTexture;
+        uniform float uAlphaCutoff;
+
+        void main()
+        {
+            if (uAlphaCutoff > 0.0 && texture(uTexture, vUv).a < uAlphaCutoff)
+            {
+                discard;
+            }
         }
         """;
 

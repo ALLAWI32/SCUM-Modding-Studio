@@ -23,12 +23,14 @@ public sealed partial class EditState
     private readonly Dictionary<(ActorRef Actor, string Component), BendValue> _segmentSways = new(TransformKeyComparer.Instance);
     private readonly Dictionary<(ActorRef Actor, string Component, string Array), PointsOverride> _spawnPoints = new(PointsKeyComparer.Instance);
     private readonly Dictionary<(ActorRef Actor, string Component), MeshOverride> _meshes = new(TransformKeyComparer.Instance);
+    private readonly Dictionary<(ActorRef Actor, string Component), (LootSetting Base, LootSetting Current)> _loot = new(TransformKeyComparer.Instance);
+    private readonly Dictionary<ActorRef, bool> _grass = new(ActorRef.Comparer);
 
     /// <summary>True when no operation has a net effect.</summary>
     public bool IsEmpty =>
         _deletedActors.Count == 0 && _deletedInstances.Count == 0 && _transforms.Count == 0 && _instanceTransforms.Count == 0 && _added.Count == 0
         && _addedInstances.Count == 0 && _clones.Count == 0 && _values.Count == 0 && _replacements.Count == 0 && _bends.Count == 0 && _segmentSways.Count == 0 && _spawnPoints.Count == 0
-        && _meshes.Count == 0;
+        && _meshes.Count == 0 && _loot.Count == 0;
 
     /// <summary>Every mesh component drawing another mesh (see <see cref="ReplaceMeshOp"/>): the actor, the component (empty = the root) and the mesh now.</summary>
     public IEnumerable<(ActorRef Actor, string Component, string Mesh)> MeshOverrides =>
@@ -37,6 +39,18 @@ public sealed partial class EditState
     /// <summary>The mesh an actor's root (or named component) draws instead of its own, or null when it draws its own.</summary>
     public string? GetMeshOverride(ActorRef actor, string? component = null) =>
         _meshes.TryGetValue((actor, component ?? string.Empty), out var o) ? o.Current : null;
+
+    /// <summary>Every mesh component whose loot was set (see <see cref="SetLootOp"/>): the actor, the component (empty = the root) and its loot now.</summary>
+    public IEnumerable<(ActorRef Actor, string Component, LootSetting Loot)> LootOverrides => _loot.Select(l => (l.Key.Actor, l.Key.Component, l.Value.Current));
+
+    /// <summary>The loot set on a component, or null when it is as the level (or its copy source) has it.</summary>
+    public LootSetting? GetLoot(ActorRef actor, string? component = null) => _loot.TryGetValue((actor, component ?? string.Empty), out var l) ? l.Current : null;
+
+    /// <summary>The "clear grass under it" setting of an actor as set (see <see cref="SetClearGrassOp"/>), or null for the default.</summary>
+    public bool? GetClearGrass(ActorRef actor) => _grass.TryGetValue(actor, out var on) ? on : null;
+
+    /// <summary>True when the export clears the grass under the actor: as set, else on for an actor the project added.</summary>
+    public bool ClearsGrass(ActorRef actor) => GetClearGrass(actor) ?? IsAdded(actor);
 
     /// <summary>Deleted actors (pristine or added).</summary>
     public IReadOnlyCollection<ActorRef> DeletedActors => _deletedActors;
@@ -100,6 +114,7 @@ public sealed partial class EditState
             .Concat(_segmentSways.Keys.Select(k => k.Actor.Level))
             .Concat(_spawnPoints.Keys.Select(k => k.Actor.Level))
             .Concat(_meshes.Keys.Select(k => k.Actor.Level))
+            .Concat(_loot.Keys.Select(k => k.Actor.Level))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(l => l, StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -185,6 +200,11 @@ public sealed partial class EditState
                 }
 
                 return original.Equals(remove.Original) ? null : $"{remove.Target} was added by a different operation.";
+            case SetLootOp loot:
+                return _deletedActors.Contains(loot.Target) ? $"{loot.Target} is deleted." : null;
+            case SetClearGrassOp grass:
+                return _deletedActors.Contains(grass.Target) ? $"{grass.Target} is deleted."
+                    : GetClearGrass(grass.Target) != grass.Old ? $"{grass.Target}: the grass setting is not as expected (edit is out of date)." : null;
             case SetTransformOp set:
                 if (_deletedActors.Contains(set.Target))
                 {
@@ -380,6 +400,11 @@ public sealed partial class EditState
                     _meshes.Remove(key);
                 }
 
+                foreach (var key in _loot.Keys.Where(k => ActorRef.Comparer.Equals(k.Actor, remove.Target)).ToList())
+                {
+                    _loot.Remove(key);
+                }
+
                 break;
             case ReplaceMeshOp mesh:
                 var meshKey = (mesh.Target, mesh.Component ?? string.Empty);
@@ -397,6 +422,30 @@ public sealed partial class EditState
                 else
                 {
                     _meshes[meshKey] = drawn with { Current = mesh.New };
+                }
+
+                break;
+            case SetLootOp loot:
+                var lootKey = (loot.Target, loot.Component ?? string.Empty);
+                var lootBase = _loot.TryGetValue(lootKey, out var known) ? known.Base : loot.Old;
+                if (lootBase.Equals(loot.New))
+                {
+                    _loot.Remove(lootKey);
+                }
+                else
+                {
+                    _loot[lootKey] = (lootBase, loot.New);
+                }
+
+                break;
+            case SetClearGrassOp grass:
+                if (grass.New is { } on)
+                {
+                    _grass[grass.Target] = on;
+                }
+                else
+                {
+                    _grass.Remove(grass.Target);
                 }
 
                 break;
@@ -507,6 +556,9 @@ public sealed partial class EditState
         Copy(_bends, copy._bends);
         Copy(_segmentSways, copy._segmentSways);
         Copy(_spawnPoints, copy._spawnPoints);
+        Copy(_loot, copy._loot);
+        Copy(_meshes, copy._meshes);
+        Copy(_grass, copy._grass);
         CopyAssets(copy);
         return copy;
 

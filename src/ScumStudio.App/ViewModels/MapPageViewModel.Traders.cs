@@ -102,6 +102,9 @@ public sealed partial class MapPageViewModel
         }), TaskScheduler.Default);
     }
 
+    /// <summary>Places a trader of <paramref name="type"/> with the cell's default name and outpost (from the Economy page).</summary>
+    public void PlaceTraderOfType(string type) => AddCompletion = AddTraderAsync(type);
+
     [RelayCommand]
     private void PlaceTrader()
     {
@@ -193,6 +196,30 @@ public sealed partial class MapPageViewModel
             _services.Notifications.Error(Loc.T("Map.AddFailed"), ex.Message);
             return false;
         }
+    }
+
+    /// <summary>
+    /// Places a trader of the type whose NPC is <paramref name="npcPackage"/> (a trader character picked in Assets): its
+    /// trade post with that NPC, named and joined to its outpost by the cell, where the camera aims.
+    /// </summary>
+    public async Task<bool> AddTraderForNpcAsync(string npcPackage)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(npcPackage);
+        if (_services.Workspace.Catalog is not { } catalog)
+        {
+            return false;
+        }
+
+        var kinds = await TraderKindsAsync(catalog).ConfigureAwait(true);
+        var kind = kinds.FirstOrDefault(k => k.NpcClass.Length > 0
+            && string.Equals(AssetPaths.SplitObjectPath(k.NpcClass).PackagePath, npcPackage, StringComparison.OrdinalIgnoreCase));
+        if (kind is null)
+        {
+            _services.Notifications.Warning(Loc.T("Map.Trader.NotATrader"), Loc.F("Map.Trader.NotATraderDetail", npcPackage[(npcPackage.LastIndexOf('/') + 1)..]));
+            return false;
+        }
+
+        return await AddTraderAsync(kind.Type).ConfigureAwait(true);
     }
 
     /// <summary>The game's placeable trade post kinds for <paramref name="catalog"/>, read once on a worker.</summary>

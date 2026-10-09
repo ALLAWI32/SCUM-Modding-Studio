@@ -82,6 +82,41 @@ public sealed class EconomyOverrideTests
     }
 
     [Fact]
+    public void TheFileIsWrittenWithANoteSayingWhereItGoes()
+    {
+        // Owner: "with the economy file a txt telling where to put it, single player and server".
+        var folder = Path.Combine(Path.GetTempPath(), "ss-economy-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var path = EconomyOverride.CreateDefault().SaveTo(folder, withNote: true);
+            Assert.True(File.Exists(path));
+            var note = File.ReadAllText(Path.Combine(folder, EconomyOverride.ReadmeName));
+            Assert.Contains(@"SCUM\Saved\Config\WindowsServer\EconomyOverride.json", note, StringComparison.Ordinal);
+            Assert.Contains(@"%LOCALAPPDATA%\SCUM\Saved\Config\WindowsNoEditor\EconomyOverride.json", note, StringComparison.Ordinal);
+            Assert.Contains("السيرفر", note, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(folder, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void TheGamesTraderCharactersAreKnownAndOthersAreNot()
+    {
+        Assert.True(TraderPosts.IsTraderNpcPackage("/Game/ConZ_Files/Characters/NPCs/Vendors/Arms_Dealer/Arms_Dealer_01/BP_ArmsDealer_01"));
+        Assert.True(TraderPosts.IsTraderNpcPackage("/Game/ConZ_Files/Characters/NPCs/Vendors/Banker/Banker_01/BP_Banker01"));
+        Assert.False(TraderPosts.IsTraderNpcPackage("/Game/ConZ_Files/Characters/NPCs/Vendors/BP_Master_Trader"));
+        Assert.False(TraderPosts.IsTraderNpcPackage("/Game/ConZ_Files/Characters/NPCs/SedentaryNPCs/BackgroundInteractions/BP_BackgroundInteraction_Angry"));
+        Assert.False(TraderPosts.IsTraderNpcPackage("/Game/ConZ_Files/Characters/NPCs/Armed_NPCs/Blueprint/Guard/BP_Guard_Lvl_1"));
+        var traders = ScumStudio.Assets.Catalog.AssetDumper.Packages.Where(ScumStudio.App.ViewModels.AssetsPageViewModel.IsTraderNpc).ToList();
+        Assert.True(traders.Count >= 8, string.Join(", ", traders.Select(t => t.PackagePath)));
+        Assert.True(ScumStudio.App.ViewModels.AssetsPageViewModel.AsksForTraders(" Trader "));
+        Assert.True(ScumStudio.App.ViewModels.AssetsPageViewModel.AsksForTraders("تاجر"));
+        Assert.False(ScumStudio.App.ViewModels.AssetsPageViewModel.AsksForTraders("table"));
+    }
+
+    [Fact]
     public void ANewFileHasTheGamesDefaultSettings()
     {
         var economy = EconomyOverride.CreateDefault();

@@ -27,6 +27,7 @@ public sealed class AppHeadlessTests
         ["weapons"] = typeof(ModulePageView),
         ["spawns"] = typeof(SpawnsPageView),
         ["economy"] = typeof(EconomyPageView),
+        ["craftables"] = typeof(CraftablesPageView),
         ["assets"] = typeof(AssetsPageView),
         ["projects"] = typeof(ProjectsPageView),
         ["settings"] = typeof(SettingsPageView),
@@ -45,9 +46,9 @@ public sealed class AppHeadlessTests
         {
             var nav = HeadlessUi.FindNamed<ListBox>(window, "NavList");
             Assert.NotNull(nav);
-            Assert.Equal(8, nav!.ItemCount);
+            Assert.Equal(9, nav!.ItemCount);
             var texts = HeadlessUi.Find<TextBlock>(window).Select(t => t.Text).ToHashSet();
-            foreach (var title in new[] { "Map", "Vehicles", "Weapons", "Spawns", "Economy", "Assets", "Projects", "Settings" })
+            foreach (var title in new[] { "Map", "Vehicles", "Weapons", "Spawns", "Economy", "Craftables", "Assets", "Projects", "Settings" })
             {
                 Assert.Contains(title, texts);
             }

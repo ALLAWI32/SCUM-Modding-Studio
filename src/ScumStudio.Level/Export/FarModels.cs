@@ -216,7 +216,7 @@ public static class FarModels
                     continue;
                 }
 
-                var rotation = Find(transform, "Rotation")?.Value is QuatValue q ? new FQuat(q.X, q.Y, q.Z, q.W) : FQuat.Identity;
+                var rotation = Find(transform, "Rotation")?.Value is QuatValue q ? new FQuat(q.X, q.Y, q.Z, q.W).GetNormalized() : FQuat.Identity;
                 var translation = Find(transform, "Translation")?.Value is VectorValue t ? new FVector(t.X, t.Y, t.Z) : FVector.Zero;
                 var meshes = Find(item, "MeshLODs")?.Value is ArrayValue lods
                     ? lods.Items.OfType<SoftObjectValue>().Select(s => s.AssetPath).Where(p => p.Length > 0 && p != "None").ToList()

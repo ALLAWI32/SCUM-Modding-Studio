@@ -102,6 +102,65 @@ public sealed class CrossLevelPasteRealTests
         Assert.NotEmpty((await DrawnCloneAsync(map, streamedOp.NewName)).Placements!);
     }
 
+    [Fact]
+    public async Task AWholeBuildingWithItsContentsCopiedInC2PastesInB4()
+    {
+        // Owner: "I copied a building with everything in it, flew to another place, pasted, and nothing spawned".
+        if (Environment.GetEnvironmentVariable("SCUM_PAKS") is not { Length: > 0 } paks || !Directory.Exists(paks))
+        {
+            return; // not asked for
+        }
+
+        using var ctx = AppTestContext.Create();
+        ctx.Services.Keys.Set(AesKeyText.FromEnvironmentOrStore()!);
+        ctx.Services.UpdateSettings(s => s with { GamePaksFolder = paks });
+        await ctx.Services.Workspace.ConnectAsync(ProgressSink.Null);
+        using var map = new MapPageViewModel(ctx.Services);
+        await map.LoadCompletion;
+        await ctx.Services.Projects.CreateAsync(ctx.Combine("projects"), "Group");
+        var project = ctx.Services.Projects.Current!;
+
+        // A building and the drawn objects nearest to it, as one multi-selection (Ctrl+click), copied in C_2.
+        await map.LoadLevelsAsync([C2]);
+        var building = map.AllActors.First(a => a.Actor.Kind == ActorKind.Blueprint && !a.IsAdded && a.Actor.ParentComponent is null
+            && a.Actor.Components.Count(c => c.StaticMeshPath is not null && !c.IsSynthesized && c.IsVisible) >= 3);
+        var around = building.Actor.WorldTransform.Translation;
+        var contents = map.AllActors.Where(a => a != building && !a.IsAdded && a.Actor.Kind == ActorKind.StaticMeshActor && a.Actor.StaticMeshPath is not null)
+            .OrderBy(a => FVector.Distance(a.Actor.WorldTransform.Translation, around)).Take(4).ToList();
+        Assert.Equal(4, contents.Count);
+        map.SelectedActor = building;
+        foreach (var c in contents)
+        {
+            map.ToggleGroup(c.SelectableId, null);
+        }
+
+        Assert.True(map.HasGroup);
+        map.CopySelectedCommand.Execute(null);
+        var gaps = contents.Select(c => c.Actor.WorldTransform.Translation - building.Actor.WorldTransform.Translation).ToList();
+
+        // Fly to B_4: C_2 is gone. Paste puts all five there, laid out as they were, in one step, into a B_4 level.
+        await map.LoadLevelsAsync([B4]);
+        Assert.DoesNotContain(map.AllActors, a => !a.IsAdded && a.Reference == building.Reference);
+        var aim = map.AllActors[0].Actor.WorldTransform.Translation + new FVector(2000f, 0f, 0f);
+        map.AimPointProvider = () => aim;
+        map.SelectedActor = null;
+        var rows = project.Journal.Applied.Count;
+        Assert.True(map.PasteCommand.CanExecute(null));
+        map.PasteCommand.Execute(null);
+        Assert.Equal(rows + 1, project.Journal.Applied.Count);
+        var batch = Assert.IsType<BatchOp>(project.Journal.Applied[^1].Op);
+        Assert.Equal(5, batch.Ops.Count);
+        Assert.All(batch.Ops, o => Assert.StartsWith(B4, o.GetTouchedLevels()[0], StringComparison.Ordinal));
+        var copyOfBuilding = Assert.IsType<AddBlueprintActorOp>(batch.Ops[0]);
+        Assert.Equal(building.Reference, copyOfBuilding.Source);
+        var drawn = await DrawnCloneAsync(map, copyOfBuilding.NewName);
+        Assert.True((drawn.RootWorld.Translation - aim).Size() < 1f);
+        foreach (var (op, gap) in batch.Ops.Skip(1).Cast<AddStaticMeshActorOp>().Zip(gaps))
+        {
+            Assert.True(FVector.Distance(op.Transform.Location - copyOfBuilding.Transform.Location, gap) < 1f, $"{op.NewName} is not where it stood next to the building");
+        }
+    }
+
     /// <summary>The clone with its drawn parts (the source level is read on a worker after the paste).</summary>
     private static async Task<ActorClone> DrawnCloneAsync(MapPageViewModel map, string name)
     {

@@ -124,9 +124,34 @@ public sealed partial class ProjectSession : ObservableObject, IDisposable
     public JournalEntry Apply(EditOp op)
     {
         var project = Current ?? throw new InvalidOperationException("No project is open.");
-        var entry = project.Apply(op);
+        var entry = project.Apply(WithGrassDefault(op));
         Refresh();
         return entry;
+    }
+
+    /// <summary>
+    /// New objects clear the grass under them (<see cref="EditState.ClearsGrass"/>); with that switched off in Settings,
+    /// each object <paramref name="op"/> creates gets "let the grass show" in the same journal step.
+    /// </summary>
+    private EditOp WithGrassDefault(EditOp op)
+    {
+        var created = Created(op).ToList();
+        if (created.Count == 0 || _services.Settings.Load().Ui.ClearGrassUnderNewObjects)
+        {
+            return op;
+        }
+
+        var grass = created.Select(a => (EditOp)new SetClearGrassOp(a, null, false));
+        return op is BatchOp batch ? batch with { Ops = [.. batch.Ops, .. grass] } : new BatchOp(op.Describe(), [op, .. grass]);
+
+        static IEnumerable<ActorRef> Created(EditOp op) => op switch
+        {
+            AddStaticMeshActorOp a => [a.Created],
+            AddBlueprintActorOp b => [b.Created],
+            DuplicateActorOp d => [d.Created],
+            BatchOp batch => batch.Ops.SelectMany(Created),
+            _ => [],
+        };
     }
 
     /// <summary>Undoes the last edit; returns it or null.</summary>

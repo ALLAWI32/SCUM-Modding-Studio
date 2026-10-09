@@ -354,15 +354,67 @@ public sealed class EconomyOverride
     /// Writes the file into <paramref name="directory"/> (created when missing); returns its path. The text goes to a
     /// temporary file first that then replaces the old one, so a crash mid-write never leaves half a file.
     /// </summary>
-    public string SaveTo(string directory)
+    /// <param name="directory">Folder to write into.</param>
+    /// <param name="withNote">True next to an exported pak: also writes <see cref="ReadmeName"/> (where the file goes).</param>
+    public string SaveTo(string directory, bool withNote = false)
     {
         Directory.CreateDirectory(directory);
         var path = Path.Combine(directory, FileName);
         var temp = path + ".tmp";
         File.WriteAllText(temp, ToJson(), new UTF8Encoding(false));
         File.Move(temp, path, overwrite: true);
+        if (withNote)
+        {
+            File.WriteAllText(Path.Combine(directory, ReadmeName), Readme, new UTF8Encoding(true)); // the owner: "a txt that says where it goes"
+        }
+
         return path;
     }
+
+    /// <summary>The note written next to the file: where it goes for a server and for single player.</summary>
+    public const string ReadmeName = "EconomyOverride - where it goes.txt";
+
+    private const string Readme = """
+        EconomyOverride.json - where it goes
+        ====================================
+
+        Dedicated server (online)
+          1. Stop the server.
+          2. Copy EconomyOverride.json to   <server folder>\SCUM\Saved\Config\WindowsServer\EconomyOverride.json
+          3. Put the Server mod pak (and its .sig) in   <server folder>\SCUM\Content\Paks\~mods   and start the server
+             with -fileopenlog (as for every mod pak). Placed traders are server objects: without the server pak nobody sees them.
+          4. Start the server. It reads the file when it starts.
+
+        Single player / sandbox (your own PC)
+          1. Close the game.
+          2. Copy EconomyOverride.json to   %LOCALAPPDATA%\SCUM\Saved\Config\WindowsNoEditor\EconomyOverride.json
+             (paste that path into the Explorer address bar to open the folder).
+          3. Put the Client mod pak (and its .sig) in the game's   SCUM\Content\Paks\~mods   folder and start the game.
+
+        Each section is one trader by name (A_0_Armory, B_4_Hospital ...); traders you placed carry the names you gave them.
+        "-1" or "default" keeps the game's own value. Players need the Client mod pak too, so their game knows the new traders.
+
+        ------------------------------------------------------------
+
+        EconomyOverride.json - مكان الملف
+        ====================================
+
+        السيرفر (أونلاين)
+          1. أطفئ السيرفر.
+          2. انسخ EconomyOverride.json إلى   <مجلد السيرفر>\SCUM\Saved\Config\WindowsServer\EconomyOverride.json
+          3. ضع باك السيرفر (مع ملف .sig) في   <مجلد السيرفر>\SCUM\Content\Paks\~mods   وشغّل السيرفر مع -fileopenlog.
+             التجّار الذين وضعتهم من كائنات السيرفر: بدون باك السيرفر لا يراهم أحد.
+          4. شغّل السيرفر؛ يقرأ الملف عند التشغيل.
+
+        اللعب الفردي / الساندبوكس (على جهازك)
+          1. أغلق اللعبة.
+          2. انسخ EconomyOverride.json إلى   %LOCALAPPDATA%\SCUM\Saved\Config\WindowsNoEditor\EconomyOverride.json
+             (الصق هذا المسار في شريط عنوان مستكشف الملفات لفتح المجلد).
+          3. ضع باك الكلاينت (مع ملف .sig) في مجلد اللعبة   SCUM\Content\Paks\~mods   وشغّل اللعبة.
+
+        كل قسم في الملف تاجر باسمه (A_0_Armory و B_4_Hospital ...)؛ التجّار الذين وضعتهم بأسمائهم التي اخترتها.
+        القيمة "-1" أو "default" تعني قيمة اللعبة نفسها. اللاعبون يحتاجون باك الكلاينت أيضاً حتى تعرف لعبتهم التجّار الجدد.
+        """;
 
     private List<TradeableOverride> Section(string trader, bool create)
     {

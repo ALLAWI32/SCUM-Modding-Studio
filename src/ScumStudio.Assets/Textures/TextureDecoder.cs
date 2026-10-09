@@ -59,6 +59,37 @@ public static class TextureDecoder
     }
 
     /// <summary>
+    /// For the GPU: a BC1/2/3/5/7 texture keeps its cooked blocks (<see cref="TextureImage.CompressedMips"/>, from the mip
+    /// <see cref="Decode"/> would pick down to the smallest with data, <see cref="TextureImage.Rgba"/> empty): no CPU decode
+    /// and a quarter to an eighth of the memory. Other formats are decoded as <see cref="Decode"/> does.
+    /// </summary>
+    public static TextureImage DecodeForGpu(UTexture2D texture, int maxSize = 0)
+    {
+        ArgumentNullException.ThrowIfNull(texture);
+        if (texture.Format is not (EPixelFormat.PF_DXT1 or EPixelFormat.PF_DXT3 or EPixelFormat.PF_DXT5 or EPixelFormat.PF_BC5 or EPixelFormat.PF_BC7))
+        {
+            return Decode(texture, maxSize);
+        }
+
+        var mips = texture.PlatformData.Mips;
+        var index = SelectMip(mips.Select(m => (m.SizeX, m.SizeY, m.BulkData?.Data is { Length: > 0 })).ToList(), maxSize);
+        if (index < 0)
+        {
+            throw new InvalidDataException($"{texture.Name} has no mip with data (missing .ubulk?).");
+        }
+
+        var blocks = new List<byte[]>();
+        for (var i = index; i < mips.Length && mips[i].BulkData?.Data is { Length: > 0 } data; i++)
+        {
+            blocks.Add(data);
+        }
+
+        var first = mips[0];
+        return new TextureImage(texture.Name, mips[index].SizeX, mips[index].SizeY, [], texture.Format.ToString(), index,
+            first.SizeX, first.SizeY, texture.SRGB, texture.IsNormalMap) { CompressedMips = blocks };
+    }
+
+    /// <summary>
     /// Picks the mip to decode: the largest mip with data whose sizes are both &lt;= <paramref name="maxSize"/>
     /// (any size when <paramref name="maxSize"/> &lt;= 0); falls back to the smallest mip with data; -1 when none has data.
     /// Mips are ordered largest first.

@@ -115,6 +115,24 @@ public sealed class LevelViewportGizmoTests
     }
 
     [AvaloniaFact]
+    public void ViewAxesFollowTheScreen()
+    {
+        // Blender's View orientation (Discord request): the red arrow is the screen's right, flat when the camera is level-ish,
+        // and never along the camera's line of sight.
+        var (window, viewport, drags) = Show();
+        viewport.Orientation = ScumStudio.App.Services.GizmoOrientation.View;
+        Assert.False(viewport.LocalAxes);
+        var preview = Drag(window, viewport, GizmoAxis.X, towards: GizmoAxis.X);
+        var moved = (preview.Translation - Start.Translation).GetSafeNormal();
+        var forward = UeToGl.ToUeDirection(Vector3.Normalize(viewport.Camera.Forward));
+        Assert.True((preview.Translation - Start.Translation).Size() > 1f);
+        Assert.Equal(0f, FVector.Dot(moved, forward), 1e-3f);
+        Assert.Equal(0f, moved.Z, 1e-3f); // the screen's right is level: the camera never rolls
+        Assert.Single(drags);
+        window.Close();
+    }
+
+    [AvaloniaFact]
     public void PlaneSquaresMoveInTheirPlane()
     {
         var (window, viewport, drags) = Show();

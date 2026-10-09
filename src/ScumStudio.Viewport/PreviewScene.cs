@@ -40,6 +40,9 @@ public sealed class PreviewScene : IDisposable
 
                 handle = renderer.AddMesh(prepared, texture, null, cutoffs);
                 meshes[part.Mesh] = handle;
+                var gpu = renderer.Meshes[handle.Id];
+                gpu.NormalMap = texture is null ? null : NormalOf(part, model);
+                gpu.Roughness = part.Roughness;
                 _handles.Add(handle);
             }
 
@@ -86,7 +89,9 @@ public sealed class PreviewScene : IDisposable
         {
             var (node, handle) = _parts[i];
             Style(node, model.Parts[i]);
-            _renderer.SetMeshTexture(handle, TextureOf(model.Parts[i], model));
+            var texture = TextureOf(model.Parts[i], model);
+            _renderer.SetMeshTexture(handle, texture);
+            _renderer.Meshes[handle.Id].NormalMap = texture is null ? null : NormalOf(model.Parts[i], model);
         }
 
         var used = _textures.Values.Select(t => t.Texture).ToHashSet();
@@ -100,6 +105,35 @@ public sealed class PreviewScene : IDisposable
     }
 
     /// <summary>Releases the GPU meshes and textures (GL context current).</summary>
+    /// <summary>
+    /// Draws the parts of vehicle attachment <paramref name="attachment"/> (a package path) selected, every other part plain;
+    /// empty clears. Parts match by name without the vehicle (<c>BPC_WolfArmour_Door_FrontLeft</c> = <c>BPC_WolfsWagen_Door_FrontLeft</c>):
+    /// a clone is drawn from its template's packages.
+    /// </summary>
+    /// <returns>How many parts are highlighted.</returns>
+    public int Highlight(string attachment)
+    {
+        var count = 0;
+        for (var i = 0; i < _parts.Count; i++)
+        {
+            var on = attachment.Length > 0 && Model.Parts[i].Attachment.Length > 0 && string.Equals(PartKey(Model.Parts[i].Attachment), PartKey(attachment), StringComparison.OrdinalIgnoreCase);
+            _parts[i].Node.Selected = on;
+            count += on ? 1 : 0;
+        }
+
+        return count;
+    }
+
+    /// <summary><c>/Game/…/BPC_WolfsWagen_Door_FrontLeft</c> → <c>Door_FrontLeft</c> (the leaf without <c>BPC_</c> and the vehicle token).</summary>
+    private static string PartKey(string package)
+    {
+        var leaf = package[(package.LastIndexOf('/') + 1)..];
+        leaf = leaf.StartsWith("BPC_", StringComparison.OrdinalIgnoreCase) ? leaf[4..] : leaf;
+        var token = leaf.IndexOf('_');
+        return token > 0 ? leaf[(token + 1)..] : leaf;
+    }
+
+    /// <inheritdoc />
     public void Dispose()
     {
         Scene.Root.Clear();
@@ -125,9 +159,14 @@ public sealed class PreviewScene : IDisposable
     }
 
     /// <summary>The part's texture, uploaded once per path and again when the model brings a new image for that path.</summary>
-    private GpuTexture? TextureOf(PreviewPart part, PreviewModel model)
+    private GpuTexture? TextureOf(PreviewPart part, PreviewModel model) => Upload(part.TexturePath, model);
+
+    /// <summary>The part's normal map (linear), uploaded like <see cref="TextureOf"/>.</summary>
+    private GpuTexture? NormalOf(PreviewPart part, PreviewModel model) => Upload(part.NormalPath, model);
+
+    private GpuTexture? Upload(string? path, PreviewModel model)
     {
-        if (part.TexturePath is not { } path || !model.Textures.TryGetValue(path, out var image))
+        if (path is null || !model.Textures.TryGetValue(path, out var image))
         {
             return null;
         }
@@ -137,7 +176,7 @@ public sealed class PreviewScene : IDisposable
             return known.Texture;
         }
 
-        var texture = _renderer.CreateTexture(image.Width, image.Height, image.Rgba, image.IsSrgb);
+        var texture = TextureUpload.Create(_renderer, image);
         _textures[path] = (image, texture);
         return texture;
     }

@@ -32,6 +32,33 @@ public sealed class PieceSnapTests
     }
 
     [Fact]
+    public void AStretchedPieceRunsAlongItsStretchedAxis()
+    {
+        // Owner: a bridge piece stretched along X did not join the same piece. A 4 x 5 m slab (longer along Y) stretched
+        // 1.5x along X runs along X (6 m) and joins end to end along X.
+        var slab = new BoundingBox(new Vector3(0, 0, 0), new Vector3(400, 500, 50));
+        Assert.True(PieceSnap.Ends(slab).AlongY);
+        Assert.False(PieceSnap.Ends(slab, new FVector(1.5f, 1f, 1f)).AlongY);
+        var stretched = new FVector(1.5f, 1f, 1f);
+        var target = new SnapPiece("SM_Slab", new FTransform(new FRotator(0, 0, 0), FVector.Zero, stretched), slab);
+        var moving = target with { World = new FTransform(new FRotator(0, 0, 0), new FVector(650, 30, 0), stretched) };
+        var snapped = PieceSnap.Best(moving, [target], PieceSnap.Reach(moving));
+        Assert.NotNull(snapped);
+        Assert.Equal(600f, snapped!.Value.World.Translation.X, 0.5f); // right after the 6 m piece
+        Assert.Equal(0f, snapped.Value.World.Translation.Y, 0.5f);
+        Assert.Equal(stretched, snapped.Value.World.Scale3D);
+    }
+
+    [Theory]
+    [InlineData("/Game/ConZ_Files/Models/Road/KrkBridge/KB_Meshes/SM_KrkBridge_Fill", true)]
+    [InlineData("/Game/ConZ_Files/Models/Road/RiverBridge/SM_RiverBridge_01", true)]
+    [InlineData("/Game/ConZ_Files/Models/Buildings/Prison/Buildings/SM_Prison_Bridge", true)]
+    [InlineData("/Game/ConZ_Files/Landscape/Landscape_WM/SM_A_0_4c_Bridge_01_WM", false)]
+    [InlineData("/Game/ConZ_Files/Models/Buildings/Church/SM_Church_01", false)]
+    public void RoadAndBridgePiecesBendWhateverTheirShape(string mesh, bool bends) =>
+        Assert.Equal(bends, GizmoMath.IsRoadOrBridgePiece(mesh));
+
+    [Fact]
     public void AJointMadeByHandIsOfferedAgain()
     {
         var pillar = new BoundingBox(new Vector3(-100, -100, 0), new Vector3(100, 100, 800)); // square: "along X"

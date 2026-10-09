@@ -3,6 +3,135 @@
 All notable changes are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [semantic versioning](https://semver.org/).
 
+## [Unreleased]
+
+## [3.0.0] - 2026-10-09
+
+### New in this release
+- **Water that looks like water**: the sea, lakes and rivers are clear turquoise in the shallows, deep blue where they are
+  deep and have a light foam line along the shore; long swells, the sky's reflection and a sun glitter stay visible from
+  kilometres up.
+- **Drop to the surface from the toolbar** (owner: "a cone floating in the air: one click and it sits on what is under
+  it"): the toolbar shows "Fit to ground" while something is selected, and the End key does the same, as in Unreal. The
+  selection is set down on whatever is right under it (ground, road, roof, wall, a vehicle) without sinking in.
+- **Sky, haze, sea and sun shadows in the Map view**: a blue sky with the sun behind the island instead of a flat colour,
+  distant hills fading blue-grey into the horizon (thinner haze higher up), a sea with small moving waves, the sky's
+  reflection and a sun glint, warmer daylight with tone mapping, and soft sun shadows of trees, buildings and hills within
+  150 m of the camera (off on the Performance quality). `scumstudio render level` draws the same (`--no-shadows` to skip).
+- **Materials closer to the game**: buildings, rocks, vehicles and props now use their normal maps (bricks, planks,
+  corrugated roofs and rock faces catch the light like in game) and a sun highlight set by the material's roughness.
+  Textures stay block-compressed on the graphics card as the game ships them, so they take a quarter of the memory:
+  Ultra now loads 2048-pixel textures (was 1024) and the Assets page's 3D preview shows every texture at its full size.
+  `scumstudio render mesh` renders an asset as the Assets page shows it (every material, normal maps).
+- **Clear grass under it** (a Discord user: "I placed a bridge and the meadow grass grows through it"): a checkbox in the
+  Map's properties for a placed or moved object, also for a multi-selection. On, the exported mod removes the landscape
+  grass and the bushes and small plants standing under the object's outline (a bent road or bridge piece by its bent
+  shape), so nothing pokes through. It is on for every new object (added, pasted, copied, extended, replaced, painted,
+  prefabs) and off for moved game objects until you tick it; Settings has the default for new objects. The 3D view hides
+  the bushes that will go. The game spaces its grass samples 1.5 m apart, so the grass thins out up to about 1.5 m
+  around the edge, and a bush goes whole when its foot is under the object.
+- **Vehicle parts**: the Vehicles page has a "Default parts" entry for each spawn preset of a vehicle (admin spawn, world
+  spawns, traders; a clone gets its own). Every slot shows the part it spawns with: take a part away (No part), or put
+  another part that fits in the slot, e.g. heavy or light armour on a door. The cube button shows the part highlighted
+  on the car in the 3D view. Changes go into the project journal (undo/redo) and into the exported mod.
+- **Weapon attachments**: the Weapons page has an "Attachments" entry: each socket of the weapon (rail, magazine,
+  muzzle, light, ghillie, charm …) with a tick for every mount type of its kind. Tick one to let the weapon take those
+  attachments or magazines (e.g. AK-15 magazines in the AK-47), untick to take one away (e.g. the bayonet).
+- **The brush's options sit right under the toolbar** while the brush is on, in a bar at the top of the 3D view: Select or
+  Plant, the circle's size, and for planting the palette and the spacing. Choosing Plant with an empty palette opens the
+  palette at once.
+- **Copy, Paste and Delete buttons on a multi-selection**: the selection chip says "27 objects selected" and has Copy,
+  Paste, Delete and ✕ next to it instead of a long line of key hints.
+- **Gizmo orientation like Blender**: Global (the world's axes), Local (the object's own, best for objects already turned)
+  or View (the screen's right, up and towards you). A picker sits in the Map toolbar while something is selected, the
+  comma key cycles it, and Settings keeps the default. It replaces the Local axes switch.
+- **Planting spacing is a random range** (1–3 m by default): each tree, bush or rock keeps its own distance between the two
+  values from its neighbours, so a planted patch looks grown rather than gridded. Older palettes keep their one spacing.
+- **Loot editor** (Map, properties panel): every searchable object (lockers, safes, crates, cabinets, wardrobes, a
+  building's searchable parts) shows a **Lootable** box (off = decoration only: nothing to search, no loot) and a
+  collapsible list of its loot presets (`Examine_*`) with Remove buttons and a box to add another of the game's presets;
+  the groups and items of the presets are listed under "What can spawn here". Every change is one journal step (undo/redo)
+  and the export writes it into the component's `ExamineAssetData`, the way the game reads it.
+- **Craftables page and the Craftables mod**: any static mesh or Blueprint that does not move on its own (furniture,
+  walls, a house, a tree, a pole, a pump …) becomes a craftable that players build and place like the game's own
+  furniture. Add it from the page's search or with **Make craftable** on the Assets page; each entry has a 3D picture,
+  its name in game, a recipe suggested from its material and size (scaled from the game's own base-building recipes,
+  editable: add, remove, change tags and amounts, tool or material), a station it needs nearby, and for power objects
+  the power radius, output and fuel use. Kept in the project as `craftables.json` with Undo.
+- **Export mod** builds them as their own pak, `pakchunk<N+1>-<Name>Craftables_P.pak`, with a copied stock `.sig`
+  (Projects page: "Also build the Craftables mod"; CLI `project export`, `--no-craftables` to skip). Each craftable is a
+  renamed copy of the game's own crafting family (improvised chair recipe and base element; the improvised workbench for
+  a station, whose item carries the station's own ingredient tag; the electricity generator for power) with the chosen
+  mesh, registered in `AssetRegistry.bin` like the game's recipes.
+- Not in the game's data, so kept but reported at export: "station needs electricity" and solar "only by day".
+
+### Fixes
+- **The Map camera no longer flies on while you are in another app** (owner: "I pressed W, came back and it was flying
+  by itself, as if someone controlled my PC"): the view read the whole keyboard, so W held in a game or a chat in front
+  kept it flying when the switch never reached its window. With another app in front it now lets go of every key,
+  mouse-look and drone mode.
+- **Fit to ground no longer sinks cars into the ground or drops things through a bent bridge** (owner: "some cars go
+  into the ground, some things go through the bridge I built"): a bridge or road piece you bent holds things up where
+  it is drawn bent, and something whose corners stand on different things (one on a deck, one on the ground far below)
+  stands level on the highest of them instead of tipping over (a van came out rolled 68 degrees, half underground).
+- **The sea no longer turns into blue ground** when the levels around the camera finish loading in whole-island mode: the
+  detailed levels painted their seabed over the island's sea. The detailed scene now brings the one sea of the view.
+- **No more "Cannot access a disposed object" and freezes on Ultra** (owner: "the app froze, it got too heavy"): a sharper
+  copy of a texture now takes over the old one in place, so nothing is left drawing a deleted texture; and Ultra loads
+  1024-pixel textures again (2048 took 24-32 GB to read and prepare around the B_4 outpost and filled the memory).
+  Textures and normal maps stay compressed on the graphics card, so Ultra still uses less memory than before.
+- **A selected object is always lit orange** (owner: "sometimes it shows no orange, only its numbers"): a copy re-added,
+  a piece re-bent or an instance given its own node after the selection was lit came back unlit; the Map lights the
+  selection again whenever the 3D view builds new objects.
+- `scumstudio render level --island` no longer shows flat brown and green patches of the coarse island terrain through
+  the detailed ground: each landscape tile is drawn once, as the Map view and the game do.
+- **Sharper textures after raising the 3D quality**: the Map kept drawing the smaller copies of textures it had already
+  loaded until the level was opened again; now the sharper copy replaces them at once.
+- **Added or copied roads are no longer pink in game** (owner: "the road I copied is purple"): the game draws its road
+  pieces into the ground (the landscape's virtual texture), and its gravel pieces only there, never by themselves; on
+  their own their material shows a placeholder pink. Added, copied and bent gravel and asphalt road pieces are now
+  written the way the game places them (gravel: only into the ground, no shadow; asphalt: into the ground), so the ground
+  shows them. Rocks, bridges and buildings draw as before. Export the project again to fix roads already placed.
+- **Traders are easy to find**: the Assets page opens with a Traders category (the game's armorer, general goods,
+  mechanic, doctor, barber, bartender, harbourmaster, banker; searching "trader" or "shop" shows it), and "Place in map"
+  on one places a whole working trader of that type (trade post, NPC, outpost, economy section) where the Map's camera
+  aims. The Economy page has a "Place a trader" menu that does the same, and every exported EconomyOverride.json comes
+  with "EconomyOverride - where it goes.txt" (server and single player folders, in English and Arabic).
+- **A copied building pastes anywhere on the island**: a multi-selection (a building with everything in it) is copied as
+  it is, so flying to the other end of the island and pasting places all of it, laid out as before, after a short load
+  of its own models. Copies go into the loaded level nearest to where the camera aims (the game streams them with that
+  area; a far level showed them only when it loaded), and a paste that cannot make anything says so.
+- **Every road and bridge piece bends**: a bridge deck or fill piece of any shape (not only long, narrow ones) now takes
+  the Shape tools: curve it left or right, raise or lower its middle, or lay it in an S like a road.
+- **Snap joins pieces moved with the gizmo too**: dragging a bridge, road or wall piece by its arrows or squares now joins
+  the same piece end to end when its end reaches the other's (green box), as a free drag did; elsewhere the arrows still
+  move smoothly. A stretched piece runs along its stretched side.
+- **Duplicate makes the copy exactly in place**, selected, and for two seconds a click or drag on that spot takes the copy,
+  not the original under it, so it can be pulled off straight away (it used to appear 2 m off along the world's X).
+- **The camera no longer flies on by itself**: a W/A/S/D press whose release went to another control (a toast, a menu, the
+  entity list) kept the camera moving, and a right button released over another window left mouse-look on so the cursor
+  jumped about. The view now checks every frame which keys and buttons are really held and lets go of the rest.
+- **Ctrl+C on a multi-selection works every time**: after a brush sweep no single object was "the" selected one, so Copy
+  stayed off; and Delete, Ctrl+C and Ctrl+V now work while the keyboard focus is anywhere in the window, not only inside
+  the map. Every copy in the studio empties the system clipboard, so Ctrl+V pastes it and not an older Assets path.
+- Prefab file names are made safe by Windows' rules on every system (the public build on Linux let "a:b" through).
+- Island spawn places read their turn as a unit quaternion: the game stores some as not-quite-unit, and copies and moves of
+  tilted zombie places are now proven to keep their turn exactly (16 of 28 places around the A_3 farm stand tilted in the
+  game's own data; the Global gizmo orientation keeps the gizmo level on them).
+- **Copied lockers, safes and crates were only shapes** (Discord: "the duplicated police locker appears open", "nobody can
+  loot the copies"): a click on a locker in part mode took its mesh, so Duplicate and Copy/Paste made a plain mesh
+  without its lock or its loot. A container (`ItemContainer` class) is now picked and copied whole, and a searchable part
+  copied out of a building (a closet, a file cabinet) carries its loot presets onto the new mesh. Copies keep loot edits.
+- **One of two crates moved together floated in game** (Discord, police station): the upper crate pile is attached to
+  the lower one, so the game moves it with its parent; the editor also moved it by the same amount relative to the old
+  place of the parent, and in game it moved twice. A group move now leaves attached members to their moved parent, a
+  move of an attached object is relative to where its parent stands now, and the Map draws objects attached to a moved
+  object where the game will put them.
+- A copy made inside one level now also gets a fresh `_gameUniqueId` (as copies from other levels already did).
+
+### Changed
+- The title strip shows the workspace tabs as icons below 1640 px (nine tabs now).
+
 ## [0.2.8] - 2026-10-07
 
 ### New in this release

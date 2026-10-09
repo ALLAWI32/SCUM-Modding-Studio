@@ -183,6 +183,9 @@
                 <CheckBox IsChecked="{Binding ExportServer}" ToolTip.Tip="{Tr Projects.ExportServer.Tip}">
                   <TextBlock Text="{Tr Projects.ExportServer}" TextWrapping="Wrap" />
                 </CheckBox>
+                <CheckBox x:Name="ExportCraftablesCheck" IsChecked="{Binding ExportCraftables}" ToolTip.Tip="{Tr Projects.ExportCraftables.Tip}">
+                  <TextBlock Text="{Tr Projects.ExportCraftables}" TextWrapping="Wrap" />
+                </CheckBox>
                 <TextBlock Text="{Binding ExportHint}" Classes="caption wrap" x:Name="ExportHintText" />
 
                 <StackPanel Spacing="8" IsVisible="{Binding HasExportResult}">

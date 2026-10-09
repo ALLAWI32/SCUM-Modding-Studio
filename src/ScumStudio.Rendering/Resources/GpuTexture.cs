@@ -32,9 +32,10 @@ public sealed class GpuTexture : IDisposable
     private readonly GL _gl;
     private bool _disposed;
 
-    private GpuTexture(GL gl, uint handle, uint sampler, int width, int height, bool srgb, TextureWrap wrap)
+    private GpuTexture(GL gl, uint handle, uint sampler, int width, int height, bool srgb, TextureWrap wrap, long bytes = 0)
     {
         _gl = gl;
+        EstimatedBytes = bytes > 0 ? bytes : (long)width * height * 4 * 4 / 3;
         Handle = handle;
         Sampler = sampler;
         Width = width;
@@ -44,25 +45,94 @@ public sealed class GpuTexture : IDisposable
     }
 
     /// <summary>Texture object name.</summary>
-    public uint Handle { get; }
+    public uint Handle { get; private set; }
 
     /// <summary>Sampler object name (bound to the same unit by <see cref="Bind"/>).</summary>
-    public uint Sampler { get; }
+    public uint Sampler { get; private set; }
 
     /// <summary>Width in pixels.</summary>
-    public int Width { get; }
+    public int Width { get; private set; }
 
     /// <summary>Height in pixels.</summary>
-    public int Height { get; }
+    public int Height { get; private set; }
 
     /// <summary>True when stored as <c>GL_SRGB8_ALPHA8</c> (colour); false for linear data (masks, normals).</summary>
-    public bool IsSrgb { get; }
+    public bool IsSrgb { get; private set; }
 
     /// <summary>Wrap mode used on both axes.</summary>
-    public TextureWrap Wrap { get; }
+    public TextureWrap Wrap { get; private set; }
 
-    /// <summary>Approximate GPU memory of the texture in bytes (RGBA8 plus a third for the mip chain).</summary>
-    public long EstimatedBytes => (long)Width * Height * 4 * 4 / 3;
+    /// <summary>Approximate GPU memory of the texture in bytes (RGBA8 plus a third for the mip chain, or the compressed mips as uploaded).</summary>
+    public long EstimatedBytes { get; private set; }
+
+    /// <summary>Bytes of one 4x4 block of <paramref name="format"/>.</summary>
+    public static int BlockBytes(CompressedFormat format) => format == CompressedFormat.Bc1 ? 8 : 16;
+
+    /// <summary>Bytes of a <paramref name="width"/> x <paramref name="height"/> mip of <paramref name="format"/>.</summary>
+    public static int CompressedSize(CompressedFormat format, int width, int height) =>
+        Math.Max(1, (width + 3) / 4) * Math.Max(1, (height + 3) / 4) * BlockBytes(format);
+
+    /// <summary>
+    /// Uploads block-compressed mips as they are (no decode, a quarter to an eighth of RGBA8's memory): <paramref name="mips"/>
+    /// from the largest (<paramref name="width"/> x <paramref name="height"/>) down, each halving, with trilinear and
+    /// anisotropic filtering over them. BC1-BC3 need <see cref="Context.GlInfo.SupportsS3tc"/>.
+    /// </summary>
+    public static unsafe GpuTexture FromCompressed(GL gl, CompressedFormat format, int width, int height, IReadOnlyList<byte[]> mips, bool srgb)
+    {
+        ArgumentNullException.ThrowIfNull(gl);
+        ArgumentNullException.ThrowIfNull(mips);
+        if (width <= 0 || height <= 0 || mips.Count == 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(width), "Texture size must be positive and there must be a mip.");
+        }
+
+        srgb &= format is not CompressedFormat.Bc5; // two-channel data (normal maps) has no sRGB form
+        var internalFormat = (InternalFormat)(format switch
+        {
+            CompressedFormat.Bc1 => srgb ? 0x8C4C : 0x83F0, // (S)RGB_S3TC_DXT1: no alpha, so a stray transparent block cannot cut holes
+            CompressedFormat.Bc2 => srgb ? 0x8C4E : 0x83F2,
+            CompressedFormat.Bc3 => srgb ? 0x8C4F : 0x83F3,
+            CompressedFormat.Bc5 => 0x8DBD, // RG_RGTC2
+            _ => srgb ? 0x8E8D : 0x8E8C, // (SRGB_ALPHA_)BPTC_UNORM
+        });
+        var handle = gl.GenTexture();
+        gl.BindTexture(TextureTarget.Texture2D, handle);
+        var levels = 0;
+        long bytes = 0;
+        for (var level = 0; level < mips.Count; level++)
+        {
+            var (w, h) = (Math.Max(1, width >> level), Math.Max(1, height >> level));
+            var size = CompressedSize(format, w, h);
+            if (mips[level].Length < size)
+            {
+                break; // a short mip ends the chain; the levels above it still draw
+            }
+
+            fixed (byte* p = mips[level])
+            {
+                gl.CompressedTexImage2D(TextureTarget.Texture2D, level, internalFormat, (uint)w, (uint)h, 0, (uint)size, p);
+            }
+
+            bytes += size;
+            levels++;
+            if (w == 1 && h == 1)
+            {
+                break;
+            }
+        }
+
+        gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureBaseLevel, 0);
+        gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMaxLevel, Math.Max(0, levels - 1));
+        gl.BindTexture(TextureTarget.Texture2D, 0);
+        var minFilter = levels > 1 ? TextureMinFilter.LinearMipmapLinear : TextureMinFilter.Linear;
+        var sampler = gl.GenSampler();
+        gl.SamplerParameter(sampler, SamplerParameterI.WrapS, (int)TextureWrapMode.Repeat);
+        gl.SamplerParameter(sampler, SamplerParameterI.WrapT, (int)TextureWrapMode.Repeat);
+        gl.SamplerParameter(sampler, SamplerParameterI.MagFilter, (int)TextureMagFilter.Linear);
+        gl.SamplerParameter(sampler, SamplerParameterI.MinFilter, (int)minFilter);
+        ApplyAnisotropy(gl, sampler);
+        return new GpuTexture(gl, handle, sampler, width, height, srgb, TextureWrap.Repeat, bytes);
+    }
 
     /// <summary>
     /// Uploads tightly packed RGBA8 pixels (row-major, first row = top of the image, i.e. UV v = 0 as in UE and glTF).
@@ -147,6 +217,27 @@ public sealed class GpuTexture : IDisposable
     {
         ArgumentNullException.ThrowIfNull(gl);
         gl.BindSampler((uint)unit, 0);
+    }
+
+    /// <summary>
+    /// Becomes <paramref name="sharper"/> in place (its GL texture, sampler and size) and frees its own old GL texture with
+    /// <paramref name="sharper"/>, which is disposed. Every mesh, material and cache holding this object draws the sharper
+    /// image at once and none is left with a deleted texture (a copy swapped and deleted threw "Cannot access a disposed
+    /// object" from a list still holding it).
+    /// </summary>
+    public void TakeOver(GpuTexture sharper)
+    {
+        ArgumentNullException.ThrowIfNull(sharper);
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ObjectDisposedException.ThrowIf(sharper._disposed, sharper);
+        (Handle, sharper.Handle) = (sharper.Handle, Handle);
+        (Sampler, sharper.Sampler) = (sharper.Sampler, Sampler);
+        (Width, sharper.Width) = (sharper.Width, Width);
+        (Height, sharper.Height) = (sharper.Height, Height);
+        (IsSrgb, sharper.IsSrgb) = (sharper.IsSrgb, IsSrgb);
+        (Wrap, sharper.Wrap) = (sharper.Wrap, Wrap);
+        (EstimatedBytes, sharper.EstimatedBytes) = (sharper.EstimatedBytes, EstimatedBytes);
+        sharper.Dispose();
     }
 
     /// <summary>Deletes the texture and its sampler.</summary>

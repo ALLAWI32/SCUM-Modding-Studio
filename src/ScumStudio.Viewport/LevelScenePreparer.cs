@@ -131,7 +131,7 @@ public sealed record ScenePlacement(
     /// </summary>
     public InstanceKey? PickKey(bool parts) =>
         InstanceKey is { } key && (key.InstanceIndex != Viewport.InstanceKey.Part || Spawner is not null || SpawnPoint is not null
-                                   || (parts && Component is not { IsNativeSubobject: true }))
+                                   || (parts && Component is not { IsNativeSubobject: true } && !Actor.IsItemContainer))
             ? key
             : null;
 
@@ -280,6 +280,12 @@ public sealed record PreparedMeshAsset(string MeshPath, MeshData Mesh, string? T
     /// <summary>Materials without a texture (glass, painted plastic, rubber): material path → their colour (linear RGBA).</summary>
     public IReadOnlyDictionary<string, Vector4> MaterialTints { get; init; } = new Dictionary<string, Vector4>(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// Opaque materials with a roughness range (SCUM's master shader scales the base colour's alpha into it): material path
+    /// → (min, max). Their normal maps are in <see cref="MaterialTextures"/> under the material path plus <c>GpuMesh.NormalMapSuffix</c>.
+    /// </summary>
+    public IReadOnlyDictionary<string, Vector2> MaterialRoughness { get; init; } = new Dictionary<string, Vector2>(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>The mesh's material per slot (index = slot, the order <c>OverrideMaterials</c> addresses).</summary>
     public IReadOnlyList<string> MaterialSlots { get; init; } = [];
 
@@ -294,10 +300,13 @@ public sealed record PreparedMeshAsset(string MeshPath, MeshData Mesh, string? T
 
     /// <summary>A camera-facing card (an item's inventory icon at a loot point): drawn spanning the camera's right and up.</summary>
     public bool Billboard { get; init; }
+
+    /// <summary>Every material is water (a lake surface, a river piece): drawn with the sea's water shading (<c>GpuMesh.Water</c>).</summary>
+    public bool Water { get; init; }
 }
 
 /// <summary>What a material contributes to the viewport: its base-colour texture (or colour without one) and, when masked, the alpha clip value.</summary>
-internal readonly record struct MaterialLook(string? Texture, float AlphaCutoff, Vector4 Tint);
+internal readonly record struct MaterialLook(string? Texture, float AlphaCutoff, Vector4 Tint, string? Normal = null, Vector2 Roughness = default);
 
 /// <summary>A terrain component ready for upload (positions already in UE world centimetres).</summary>
 public sealed record PreparedTerrain(string Name, string LevelName, MeshData Mesh)
@@ -1128,9 +1137,10 @@ public sealed class LevelScenePreparer
             var materialTextures = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             var alphaCutoffs = new Dictionary<string, float>(StringComparer.OrdinalIgnoreCase);
             var tints = new Dictionary<string, Vector4>(StringComparer.OrdinalIgnoreCase);
+            var roughness = new Dictionary<string, Vector2>(StringComparer.OrdinalIgnoreCase);
             if (options.TextureSize > 0)
             {
-                FindMaterialTextures(info.Materials.Select(m => m.MaterialPath), options.TextureSize, textures, materials, materialTextures, alphaCutoffs, tints, prefetch);
+                FindMaterialTextures(info.Materials.Select(m => m.MaterialPath), options.TextureSize, textures, materials, materialTextures, alphaCutoffs, tints, prefetch, roughness);
             }
 
             asset = new PreparedMeshAsset(meshPath, chain.Lods[0], materialTextures.Values.FirstOrDefault())
@@ -1142,6 +1152,8 @@ public sealed class LevelScenePreparer
                 MaterialTextures = materialTextures,
                 MaterialAlphaCutoffs = alphaCutoffs,
                 MaterialTints = tints,
+                MaterialRoughness = roughness,
+                Water = info.Materials.Count > 0 && info.Materials.All(m => tints.TryGetValue(m.MaterialPath, out var t) && t == WaterColor),
             };
             reason = string.Empty;
             return true;
@@ -1246,13 +1258,17 @@ public sealed class LevelScenePreparer
                 if (Warm(inspected) && inspected.Value.BaseColorTexture is { } texture && !textures.ContainsKey(texture))
                 {
                     Warm(TextureAhead(texture));
+                    if (inspected.Value.NormalTexture is { } normal && !textures.ContainsKey(normal))
+                    {
+                        Warm(TextureAhead(normal));
+                    }
                 }
             }
         });
         return prefetch;
 
         Lazy<TextureImage> TextureAhead(string path) => prefetch.Textures.GetOrAdd(path, p =>
-            new Lazy<TextureImage>(() => TextureDecoder.Decode(_catalog.LoadObject<UTexture2D>(p), maxSize: options.TextureSize)));
+            new Lazy<TextureImage>(() => TextureDecoder.DecodeForGpu(_catalog.LoadObject<UTexture2D>(p), maxSize: options.TextureSize)));
 
         // The exception stays in the Lazy and is thrown again where the sequential loop asks for the value.
         static bool Warm<T>(Lazy<T> lazy)
@@ -1277,7 +1293,7 @@ public sealed class LevelScenePreparer
     private TextureImage Decode(string texturePath, int maxSize, Prefetch? prefetch) =>
         prefetch is not null && prefetch.TextureSize == maxSize && prefetch.Textures.TryGetValue(texturePath, out var early)
             ? early.Value
-            : TextureDecoder.Decode(_catalog.LoadObject<UTexture2D>(texturePath), maxSize: maxSize);
+            : TextureDecoder.DecodeForGpu(_catalog.LoadObject<UTexture2D>(texturePath), maxSize: maxSize); // cooked blocks: no decode, a quarter of the memory
 
     /// <summary>The coarsest LOD that still has a thousand triangles (a stand-in's skeletal mesh or vehicle part), else the finest.</summary>
     private static int StandInLod(IReadOnlyList<MeshLodInfo> lods)
@@ -1324,9 +1340,10 @@ public sealed class LevelScenePreparer
         var materialTextures = new Dictionary<string, string>(asset.MaterialTextures, StringComparer.OrdinalIgnoreCase);
         var alphaCutoffs = new Dictionary<string, float>(asset.MaterialAlphaCutoffs, StringComparer.OrdinalIgnoreCase);
         var tints = new Dictionary<string, Vector4>(asset.MaterialTints, StringComparer.OrdinalIgnoreCase);
+        var roughness = new Dictionary<string, Vector2>(asset.MaterialRoughness, StringComparer.OrdinalIgnoreCase);
         if (options.TextureSize > 0)
         {
-            FindMaterialTextures(bySlot.Values.Distinct(StringComparer.OrdinalIgnoreCase), options.TextureSize, textures, materials, materialTextures, alphaCutoffs, tints);
+            FindMaterialTextures(bySlot.Values.Distinct(StringComparer.OrdinalIgnoreCase), options.TextureSize, textures, materials, materialTextures, alphaCutoffs, tints, roughness: roughness);
         }
 
         var lods = asset.Lods.Select(lod => lod with
@@ -1341,8 +1358,33 @@ public sealed class LevelScenePreparer
             MaterialTextures = materialTextures,
             MaterialAlphaCutoffs = alphaCutoffs,
             MaterialTints = tints,
+            MaterialRoughness = roughness,
             IsEditorOnly = false,
         };
+    }
+
+    /// <summary>The material's normal map decoded into <paramref name="textures"/> (once per path), or null when it has none or it cannot be read.</summary>
+    private string? DecodeNormal(MaterialInfo material, int maxSize, Dictionary<string, TextureImage> textures, Prefetch? prefetch)
+    {
+        if (material.NormalTexture is not { } path)
+        {
+            return null;
+        }
+
+        try
+        {
+            if (!textures.ContainsKey(path))
+            {
+                textures[path] = Decode(path, maxSize, prefetch);
+            }
+
+            return path;
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogDebug("Material {Material}: normal map {Texture} could not be decoded ({Message}).", material.ObjectPath, path, ex.Message);
+            return null;
+        }
     }
 
     private static bool IsWater(string materialPath)
@@ -1358,7 +1400,8 @@ public sealed class LevelScenePreparer
     /// <paramref name="tints"/>.
     /// </summary>
     private void FindMaterialTextures(IEnumerable<string> materialPaths, int maxSize, Dictionary<string, TextureImage> textures, Dictionary<string, MaterialLook> materials,
-        Dictionary<string, string> result, Dictionary<string, float> alphaCutoffs, Dictionary<string, Vector4> tints, Prefetch? prefetch = null)
+        Dictionary<string, string> result, Dictionary<string, float> alphaCutoffs, Dictionary<string, Vector4> tints, Prefetch? prefetch = null,
+        Dictionary<string, Vector2>? roughness = null)
     {
         foreach (var slot in materialPaths.Select(p => new { MaterialPath = p }))
         {
@@ -1370,6 +1413,8 @@ public sealed class LevelScenePreparer
             if (!materials.TryGetValue(slot.MaterialPath, out var look))
             {
                 string? texturePath = null;
+                string? normalPath = null;
+                var range = Vector2.Zero;
                 float clip = 0f;
                 var tint = Untextured;
                 try
@@ -1396,6 +1441,10 @@ public sealed class LevelScenePreparer
                         }
 
                         texturePath = path;
+                        normalPath = DecodeNormal(material, maxSize, textures, prefetch);
+
+                        // Opaque only: a masked or translucent material's alpha is its coverage, not its roughness.
+                        range = clip == 0f && !material.IsTranslucent && material.RoughnessRange is { } r ? r : Vector2.Zero;
                     }
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
@@ -1403,7 +1452,7 @@ public sealed class LevelScenePreparer
                     _logger.LogDebug("Material {Material}: no usable base colour texture ({Message}).", slot.MaterialPath, ex.Message);
                 }
 
-                look = new MaterialLook(texturePath, clip, tint);
+                look = new MaterialLook(texturePath, clip, tint, normalPath, range);
                 materials[slot.MaterialPath] = look;
             }
             else if (look.Texture is { } kept && !textures.ContainsKey(kept))
@@ -1421,9 +1470,33 @@ public sealed class LevelScenePreparer
                 }
             }
 
+            if (look is { Texture: not null, Normal: { } dropped } && !textures.ContainsKey(dropped))
+            {
+                // The same for the normal map, also when another material brought the colour texture back already.
+                try
+                {
+                    textures[dropped] = Decode(dropped, maxSize, prefetch);
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    _logger.LogDebug("Material {Material}: normal map {Texture} could not be decoded again ({Message}).", slot.MaterialPath, dropped, ex.Message);
+                    look = look with { Normal = null };
+                }
+            }
+
             if (look.Texture is not null)
             {
                 result[slot.MaterialPath] = look.Texture;
+                if (look.Normal is { } normalMap && textures.ContainsKey(normalMap))
+                {
+                    result[slot.MaterialPath + ScumStudio.Rendering.Resources.GpuMesh.NormalMapSuffix] = normalMap;
+                }
+
+                if (look.Roughness.Y > 0f && roughness is not null)
+                {
+                    roughness[slot.MaterialPath] = look.Roughness;
+                }
+
                 if (look.AlphaCutoff > 0f)
                 {
                     alphaCutoffs[slot.MaterialPath] = look.AlphaCutoff; // masked: the texture's alpha cuts the leaves out

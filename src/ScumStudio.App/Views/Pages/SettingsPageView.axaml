@@ -58,8 +58,12 @@
                       ToolTip.Tip="{Tr Settings.Quality.Tip}" />
           </StackPanel>
           <CheckBox x:Name="ReopenLastProject" IsChecked="{Binding ReopenLastProject}" Content="{Tr Settings.ReopenLast}" ToolTip.Tip="{Tr Settings.ReopenLast.Tip}" />
+          <CheckBox x:Name="ClearGrassUnderNew" IsChecked="{Binding ClearGrassUnderNew}" Content="{Tr Settings.ClearGrass}" ToolTip.Tip="{Tr Settings.ClearGrass.Tip}" />
           <!-- Owner: the toolbar button for this was pointless; the choice lives here now -->
-          <CheckBox x:Name="LocalAxes" IsChecked="{Binding LocalAxes}" Content="{Tr Map.LocalAxes}" ToolTip.Tip="{Tr Map.LocalAxes.Tip}" />
+          <StackPanel>
+            <TextBlock Text="{Tr Map.Axes}" Classes="label" />
+            <ComboBox x:Name="AxesPicker" ItemsSource="{Binding Orientations}" SelectedItem="{Binding Orientation}" MinWidth="220" ToolTip.Tip="{Tr Map.Axes.Tip}" />
+          </StackPanel>
         </StackPanel>
       </Border>
 

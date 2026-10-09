@@ -23,8 +23,14 @@ public sealed record VehicleCloneOptions
 /// <param name="Packages">(old, new) package paths, the primary first.</param>
 public sealed record ClonePlan(string Template, string NewPrimary, IReadOnlyList<KeyValuePair<string, string>> Packages)
 {
+    /// <summary>
+    /// (stock, existing) package paths the clones point at instead (a craftable's chosen mesh in place of the template's):
+    /// remapped in the clones' names like <see cref="Packages"/>, but nothing is copied to them.
+    /// </summary>
+    public IReadOnlyList<KeyValuePair<string, string>> Redirects { get; init; } = [];
+
     /// <summary>The rename map of the plan.</summary>
-    public PackageMap ToMap() => new(Packages);
+    public PackageMap ToMap() => new(Packages.Concat(Redirects));
 }
 
 /// <summary>

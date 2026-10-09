@@ -147,6 +147,9 @@ public sealed record LevelExportData
     /// <summary>Item spawner components: <c>SpawnerMarkers</c> (where loot appears); null for other components.</summary>
     public IReadOnlyList<SpawnMarker>? SpawnMarkers { get; init; }
 
+    /// <summary>Loot presets of the component's <c>ExamineAssetData</c> (what a search of it gives); null when it has none.</summary>
+    public IReadOnlyList<string>? LootPresets { get; init; }
+
     /// <summary>Primitive components: <c>BodyInstance.CollisionProfileName</c> as stored (or in a template), or null.</summary>
     public string? CollisionProfile { get; init; }
 
@@ -158,6 +161,9 @@ public sealed record LevelExportData
 
     /// <summary>Trade post actors: their traders (<c>_traderMarkers</c>, usually from the class); null for other actors.</summary>
     public IReadOnlyList<TraderMarker>? TraderMarkers { get; init; }
+
+    /// <summary>Actors whose class chain reaches SCUM's native <c>ItemContainer</c> (lockable, lootable containers).</summary>
+    public bool IsItemContainer { get; init; }
 
     /// <summary>True when the relative transform or instances were taken from the template instead of the export itself.</summary>
     public bool UsesTemplateValues { get; init; }

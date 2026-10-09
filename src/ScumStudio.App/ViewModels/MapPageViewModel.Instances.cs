@@ -1,6 +1,7 @@
 using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using ScumStudio.App.Services;
 using ScumStudio.Core.Mathematics;
 using ScumStudio.Level.Editing;
 using ScumStudio.Level.Model;
@@ -23,11 +24,48 @@ public sealed partial class MapPageViewModel
 
     partial void OnPickPartsChanged(bool value) => _services.UiState.Update(u => u with { PickParts = value });
 
-    /// <summary>The gizmo's arrows follow the object's own axes (kept for the next start); off: the world's.</summary>
+    /// <summary>The gizmo's orientation: Global, Local or View (kept for the next start; Settings shows the same choice).</summary>
     [ObservableProperty]
-    private bool _localAxes;
+    [NotifyPropertyChangedFor(nameof(LocalAxes), nameof(SelectedOrientation))]
+    private GizmoOrientation _orientation;
 
-    partial void OnLocalAxesChanged(bool value) => _services.UiState.Update(u => u with { LocalAxes = value });
+    partial void OnOrientationChanged(GizmoOrientation value)
+    {
+        if (_services.UiState.Current.GizmoAxes != value)
+        {
+            _services.UiState.Update(u => u with { Orientation = value, LocalAxes = value == GizmoOrientation.Local });
+        }
+    }
+
+    /// <summary>True for the Local orientation; setting it picks Local or Global.</summary>
+    public bool LocalAxes
+    {
+        get => Orientation == GizmoOrientation.Local;
+        set => Orientation = value ? GizmoOrientation.Local : GizmoOrientation.Global;
+    }
+
+    /// <summary>The orientations the toolbar's picker offers.</summary>
+    public IReadOnlyList<OrientationItem> Orientations { get; } = OrientationItem.All;
+
+    /// <summary>The picker's item of <see cref="Orientation"/>.</summary>
+    public OrientationItem SelectedOrientation
+    {
+        get => OrientationItem.All.First(o => o.Value == Orientation);
+        set
+        {
+            if (value is not null)
+            {
+                Orientation = value.Value;
+            }
+        }
+    }
+
+    /// <summary>Global → Local → View → Global (the comma key, as in Blender); a toast names the new one.</summary>
+    public void CycleOrientation()
+    {
+        Orientation = (GizmoOrientation)(((int)Orientation + 1) % 3);
+        _services.Notifications.Info(Localization.Loc.F("Map.Axes.Now", SelectedOrientation.Label), Localization.Loc.T("Map.Axes.Tip"));
+    }
 
     /// <summary>The selected instance (bound two-way to the viewport), or null when a whole actor is selected.</summary>
     [ObservableProperty]
@@ -50,7 +88,7 @@ public sealed partial class MapPageViewModel
     /// A copied instance: Paste adds an instance to its component (<c>Source</c>, a stored foliage/ISM component)
     /// when pasting into its own level, else places its mesh as a new StaticMeshActor.
     /// </summary>
-    private (string Mesh, TransformValue World, string? Collision, InstanceRef? Source)? _copiedInstance;
+    private (string Mesh, TransformValue World, string? Collision, InstanceRef? Source, IReadOnlyList<string>? Loot)? _copiedInstance;
 
     /// <summary>True when one instance (not a whole actor) is selected.</summary>
     public bool HasSelectedInstance => SelectedInstanceInfo() is not null;
@@ -386,8 +424,9 @@ public sealed partial class MapPageViewModel
     }
 
     /// <summary>
-    /// A copy of the instance 2 m along +X: a new instance of its own foliage/ISM component when the level stores it (a
-    /// tree that is chopped and harvested like the stock ones), else its mesh as a new StaticMeshActor (a part).
+    /// A copy of the instance in its place, selected and held for <see cref="DuplicateHold"/>: a new instance of its own
+    /// foliage/ISM component when the level stores it (a tree that is chopped and harvested like the stock ones), else its
+    /// mesh as a new StaticMeshActor (a part).
     /// </summary>
     private void DuplicateInstance(SelectedInstance sel)
     {
@@ -399,19 +438,21 @@ public sealed partial class MapPageViewModel
         try
         {
             var world = TransformValue.FromTransform(CurrentInstanceTransform(sel).ToTransform() * SpaceOf(sel));
-            var shifted = world with { Location = new FVector(world.Location.X + 200f, world.Location.Y, world.Location.Z) };
+            var shifted = world; // exactly where the source stands
             if (StoredInstanceOf(sel) is { } source)
             {
                 AddInstance(sel.Item, source.Component, shifted, project, Localization.Loc.T("Map.Duplicated"));
+                SelectionHoldUntil = DateTime.UtcNow + DuplicateHold;
                 return;
             }
 
             // It collides as the tree, rock or part it was copied from (a tree mesh's own default lets players through).
-            var op = EditOpFactory.AddStaticMeshActor(sel.Item.Level, mesh, shifted, project.State) with { CollisionProfile = sel.Component.CollisionProfile };
+            var op = EditOpFactory.AddStaticMeshActor(sel.Item.Level, mesh, shifted, project.State) with { CollisionProfile = sel.Component.CollisionProfile, Loot = LootOf(sel.Item, sel.Component) };
             var entry = _services.Projects.Apply(op);
             _services.Notifications.Info(Localization.Loc.T("Map.Duplicated"), entry.Op.Describe());
             RefreshEdits();
             SelectedActor = AllActors.FirstOrDefault(a => a.IsAdded && a.Name == op.NewName) ?? SelectedActor;
+            SelectionHoldUntil = DateTime.UtcNow + DuplicateHold;
         }
         catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or IOException)
         {
@@ -443,7 +484,7 @@ public sealed partial class MapPageViewModel
             return;
         }
 
-        _copiedInstance = (mesh, TransformValue.FromTransform(CurrentInstanceTransform(sel).ToTransform() * SpaceOf(sel)), sel.Component.CollisionProfile, StoredInstanceOf(sel));
+        _copiedInstance = (mesh, TransformValue.FromTransform(CurrentInstanceTransform(sel).ToTransform() * SpaceOf(sel)), sel.Component.CollisionProfile, StoredInstanceOf(sel), LootOf(sel.Item, sel.Component));
         CopiedActor = null;
         OnPropertyChanged(nameof(HasCopiedActor));
         OnPropertyChanged(nameof(PasteTip));
@@ -470,7 +511,7 @@ public sealed partial class MapPageViewModel
                 return true;
             }
 
-            var op = EditOpFactory.AddStaticMeshActor(target, copied.Mesh, copied.World with { Location = at }, project.State) with { CollisionProfile = copied.Collision };
+            var op = EditOpFactory.AddStaticMeshActor(target, copied.Mesh, copied.World with { Location = at }, project.State) with { CollisionProfile = copied.Collision, Loot = copied.Loot };
             var entry = _services.Projects.Apply(op);
             _services.Notifications.Info(Localization.Loc.T("Map.Pasted"), entry.Op.Describe());
             RefreshEdits();
@@ -488,4 +529,23 @@ public sealed partial class MapPageViewModel
 
     /// <summary>One selected ISM/HISM/foliage instance, or (Instance null) one spline mesh segment.</summary>
     private sealed record SelectedInstance(ActorItemViewModel Item, ActorInstance? Instance, ComponentRecord Component);
+}
+
+/// <summary>An orientation in the toolbar's and Settings' pickers.</summary>
+/// <param name="Value">The orientation.</param>
+public sealed record OrientationItem(GizmoOrientation Value)
+{
+    /// <summary>Global, Local and View.</summary>
+    public static IReadOnlyList<OrientationItem> All { get; } = [new(GizmoOrientation.Global), new(GizmoOrientation.Local), new(GizmoOrientation.View)];
+
+    /// <summary>Shown name.</summary>
+    public string Label => Value switch
+    {
+        GizmoOrientation.Global => Localization.Loc.T("Map.Axes.Global"),
+        GizmoOrientation.View => Localization.Loc.T("Map.Axes.View"),
+        _ => Localization.Loc.T("Map.Axes.Local"),
+    };
+
+    /// <inheritdoc />
+    public override string ToString() => Label;
 }

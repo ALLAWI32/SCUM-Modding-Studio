@@ -12,6 +12,12 @@ namespace ScumStudio.Rendering.Context;
 /// <param name="SupportsClipControl">True when <c>glClipControl</c> is available (GL 4.5 or ARB_clip_control), which enables reverse-Z depth.</param>
 public sealed record GlInfo(string Vendor, string Renderer, string Version, int Major, int Minor, bool SupportsClipControl)
 {
+    /// <summary>
+    /// True when BC1-BC3 (S3TC/DXT) textures, also as sRGB, can be uploaded as they are (<c>GL_EXT_texture_compression_s3tc</c>
+    /// and <c>GL_EXT_texture_sRGB</c>); BC5 and BC7 are core in GL 4.3.
+    /// </summary>
+    public bool SupportsS3tc { get; init; }
+
     /// <summary>True when the context version is at least <paramref name="major"/>.<paramref name="minor"/>.</summary>
     public bool IsAtLeast(int major, int minor) => Major > major || (Major == major && Minor >= minor);
 
@@ -36,7 +42,9 @@ public sealed record GlInfo(string Vendor, string Renderer, string Version, int 
         }
 
         var clipControl = major > 4 || (major == 4 && minor >= 5) || HasExtension(gl, "GL_ARB_clip_control");
-        return new GlInfo(vendor, renderer, version, major, minor, clipControl);
+        var s3tc = HasExtension(gl, "GL_EXT_texture_compression_s3tc")
+                   && (HasExtension(gl, "GL_EXT_texture_sRGB") || HasExtension(gl, "GL_EXT_texture_compression_s3tc_srgb"));
+        return new GlInfo(vendor, renderer, version, major, minor, clipControl) { SupportsS3tc = s3tc };
     }
 
     /// <summary>True when the current context advertises <paramref name="name"/>.</summary>

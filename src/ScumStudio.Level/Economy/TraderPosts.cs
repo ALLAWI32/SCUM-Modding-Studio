@@ -48,6 +48,16 @@ public static partial class TraderPosts
     /// <summary>The bank's "type" (it has no trader: a banker NPC and no economy section).</summary>
     public const string BankType = "Bank";
 
+    /// <summary>
+    /// True for one of the game's trader characters (<c>/Characters/NPCs/Vendors/…/BP_ArmsDealer_01</c>, the banker, the
+    /// mechanic …): placing one means placing a whole trader of its type (trade post, NPC, economy section), never a bare
+    /// character, which the game only spawns from a trade post.
+    /// </summary>
+    public static bool IsTraderNpcPackage(string package) =>
+        package.Contains("/Characters/NPCs/Vendors/", StringComparison.OrdinalIgnoreCase)
+        && !package.EndsWith("/BP_Master_Trader", StringComparison.OrdinalIgnoreCase)
+        && !package.Contains("/BackgroundInteractions/", StringComparison.OrdinalIgnoreCase);
+
     /// <summary>The mechanic's trader type (the lifts serve its trade post).</summary>
     public const string MechanicType = "Mechanic";
 
@@ -240,7 +250,7 @@ public static partial class TraderPosts
                 }
                 else if (!actor.PropertyNames.Contains("_traderMarkers") && actor.PropertyNames.Contains("_sedentaryNPCMarkers")) // the bank: its NPC marker has no personality
                 {
-                    kind = new TraderKind(BankType, actor.ClassPath, new ActorRef(level.PackagePath, actor.Name), null, string.Empty);
+                    kind = new TraderKind(BankType, actor.ClassPath, new ActorRef(level.PackagePath, actor.Name), null, actor.TraderMarkers.FirstOrDefault()?.NpcClass ?? string.Empty);
                 }
 
                 if (kind is not null && !kinds.Any(k => k.Type == kind.Type))

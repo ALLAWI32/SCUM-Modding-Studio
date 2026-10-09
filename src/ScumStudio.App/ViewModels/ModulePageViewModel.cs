@@ -871,6 +871,8 @@ public abstract partial class ModulePageViewModel : PageViewModel, ISearchablePa
             parts.AddRange(attachments);
         }
 
+        parts.AddRange(await Task.Run(() => SlotParts(catalog, item)).ConfigureAwait(true));
+
         if (!ReferenceEquals(SelectedItem, item))
         {
             return;
@@ -976,7 +978,7 @@ public abstract partial class ModulePageViewModel : PageViewModel, ISearchablePa
         IsLoadingValues = true;
         try
         {
-            var tunables = await Task.Run(() => RowFilter(part, TunableReader.Read(ReadForEditing(catalog, part.PackagePath)))).ConfigureAwait(true);
+            var tunables = await Task.Run(() => part.IsVehicleParts || part.IsWeaponMounts ? ReadSlots(catalog, part) : RowFilter(part, TunableReader.Read(ReadForEditing(catalog, part.PackagePath)))).ConfigureAwait(true);
             if (!ReferenceEquals(SelectedPart, part))
             {
                 return;
@@ -1080,7 +1082,7 @@ public abstract partial class ModulePageViewModel : PageViewModel, ISearchablePa
     {
         var tokens = ValueFilter.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         var rows = _allRows.Where(r => tokens.All(t => r.Tunable.Path.Contains(t, StringComparison.OrdinalIgnoreCase) || r.Label.Contains(t, StringComparison.OrdinalIgnoreCase) || r.Tunable.Group.Contains(t, StringComparison.OrdinalIgnoreCase)));
-        if (KeyStatsOnly)
+        if (KeyStatsOnly && SelectedPart is not ({ IsVehicleParts: true } or { IsWeaponMounts: true }))
         {
             var key = rows.Where(r => KeyStats.Contains(r.Tunable.Name)).ToList();
             rows = key.Count > 0 ? key : rows;

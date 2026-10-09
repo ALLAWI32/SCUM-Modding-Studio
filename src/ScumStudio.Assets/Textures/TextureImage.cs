@@ -21,7 +21,14 @@ public sealed record TextureImage(
     int SourceWidth,
     int SourceHeight,
     bool IsSrgb,
-    bool IsNormalMap);
+    bool IsNormalMap)
+{
+    /// <summary>
+    /// The cooked block-compressed mips from <see cref="MipIndex"/> down (largest first), for an upload without decoding
+    /// (<see cref="TextureDecoder.DecodeForGpu"/>); <see cref="Rgba"/> is then empty. Null for decoded images.
+    /// </summary>
+    public IReadOnlyList<byte[]>? CompressedMips { get; init; }
+}
 
 /// <summary>Mip chain entry of a texture (sizes only).</summary>
 /// <param name="Index">Mip index (0 = largest).</param>

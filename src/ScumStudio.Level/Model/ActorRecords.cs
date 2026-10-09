@@ -59,6 +59,12 @@ public sealed record ComponentRecord(
     public IReadOnlyList<SpawnMarker> SpawnMarkers { get; init; } = [];
 
     /// <summary>
+    /// Loot presets (class paths) of the component's own <c>ExamineAssetData</c> (stored or from its Blueprint template): a
+    /// player can search it for loot. Empty when the component has none (the mesh asset may still carry one).
+    /// </summary>
+    public IReadOnlyList<string> LootPresets { get; init; } = [];
+
+    /// <summary>
     /// The collision profile the component sets (<c>BodyInstance.CollisionProfileName</c>, stored or from a template): a
     /// tree's foliage <c>SCUM_TreeStump</c> while its mesh's own default lets players through. Null when not set.
     /// </summary>
@@ -231,6 +237,13 @@ public sealed record ActorRecord(
 
     /// <summary>Trade posts: the traders they place (<c>_traderMarkers</c> of the class); empty for other actors.</summary>
     public IReadOnlyList<TraderMarker> TraderMarkers { get; init; } = [];
+
+    /// <summary>
+    /// True for SCUM's lootable containers (class chain reaches the native <c>ItemContainer</c>: police and military weapon
+    /// lockers, safes, medical containers, cargo drops): a lock (<c>_upgradeItemsClasses</c>) and searchable meshes. Picked
+    /// and copied whole, never as a plain mesh of a part.
+    /// </summary>
+    public bool IsItemContainer { get; init; }
 
     /// <summary>Number of synthesized components (see <see cref="ComponentRecord.IsSynthesized"/>).</summary>
     public int SynthesizedComponentCount => Components.Count(c => c.IsSynthesized);

@@ -113,6 +113,7 @@ public static partial class LevelPackageEditor
                 var source = package.Exports[members[k]];
                 var payload = payloads[k];
                 RemapReferences(payload, blocks[k].Properties, remap);
+                FreshGameUniqueId(payload, blocks[k], package.BasePath, copy.NewName, k);
                 if (k == 0 && blocks[0].Find(ParentComponentProperty)?.Value is ObjectValue { Index: > 0 } parent && !remap.ContainsKey(parent.Index)
                     && parent.Offset >= 0 && parent.Offset + 4 <= payload.Length)
                 {
@@ -152,6 +153,19 @@ public static partial class LevelPackageEditor
 
         // The caller registers the new actors with the level export (RegisterActorsWithLevel) once for every kind of addition.
         return (addedIndices, added);
+    }
+
+    /// <summary>
+    /// A copy's own <c>_gameUniqueId</c> (UInt64; a trade post's quest giver has one): the game keeps state by it, so a copy
+    /// must not share its source's. Derived from the level, the copy's name and the member, so an export is repeatable.
+    /// </summary>
+    private static void FreshGameUniqueId(byte[] payload, PropertyBlock block, string? level, string copyName, int member)
+    {
+        if (block.Find("_gameUniqueId")?.Value is UInt64Value { Offset: >= 0 } unique && unique.Offset + 8 <= payload.Length)
+        {
+            var id = System.Security.Cryptography.MD5.HashData(System.Text.Encoding.UTF8.GetBytes($"{level}|{copyName}|{member}"));
+            id.AsSpan(0, 8).CopyTo(payload.AsSpan(unique.Offset));
+        }
     }
 
     /// <summary>The export and, in table order, every export whose outer chain leads to it.</summary>

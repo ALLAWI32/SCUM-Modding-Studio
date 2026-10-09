@@ -152,10 +152,13 @@ public sealed record Prefab
         File.WriteAllText(path, ToJson(), new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
     }
 
-    /// <summary>A file name stem for <paramref name="name"/> (invalid characters replaced, "Prefab" when empty).</summary>
+    /// <summary>
+    /// A file name stem for <paramref name="name"/> (invalid characters replaced, "Prefab" when empty). Windows' rules on every
+    /// OS: prefab files are shared between players, and Linux would let "a:b" through (the public CI build runs there).
+    /// </summary>
     public static string SafeFileName(string name)
     {
-        var stem = string.Concat((name ?? string.Empty).Trim().Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c)).Trim('.', ' ');
+        var stem = string.Concat((name ?? string.Empty).Trim().Select(c => c < 32 || "<>:\"/\\|?*".Contains(c) ? '_' : c)).Trim('.', ' ');
         return stem.Length == 0 ? "Prefab" : stem;
     }
 }

@@ -23,12 +23,20 @@ public sealed partial class MapPageViewModel
     /// <summary>A floor or road this far above an object's bottom still holds it (it was sunk a little into it, cm); a ceiling higher up does not.</summary>
     private const float SupportReach = 30f;
 
+    /// <summary>Steepest slope a building or vehicle is tilted to; steeper (or corners on different things) it stands level.</summary>
+    private const float MaxTiltDegrees = 50f; // the farm's shingle roofs hold a crate along them; a van rolled 68 degrees over an edge must not
+
+    /// <summary>How far the four corners may be out of one plane (cm) and still be one slope.</summary>
+    private const float MaxTwistCm = 30f;
+
     /// <summary>Size of the map cells the supports are sorted into for a fit, cm.</summary>
     private const float SupportCell = 2000f;
 
     private PreparedLevelScene? _supportScene;
     private BoundingBox[] _supportBoxes = [];
     private readonly Dictionary<string, MeshSurface?> _surfaces = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<(string Mesh, IReadOnlyList<SplineMeshParams> Bend), MeshSurface?> _bentSurfaces = [];
+    private object? _bentSurfacesOf;
 
     [RelayCommand]
     private void FitToGround()
@@ -153,17 +161,26 @@ public sealed partial class MapPageViewModel
             ground[i] = corners[i] with { Z = z };
         }
 
-        // The slope: the normal of the two diagonals (exact for a plane, the average tilt otherwise).
+        // The slope: the normal of the two diagonals (exact for a plane, the average tilt otherwise). Corners on different
+        // things (one on a bridge deck, the others on the seabed under it) are no slope: a van came out rolled 68 degrees,
+        // half in the ground (owner, 2026-10-09). Then it stands level on the highest of them.
         var normal = FVector.Cross(ground[2] - ground[0], ground[3] - ground[1]).GetSafeNormal();
         if (normal.Z < 0)
         {
             normal = -normal;
         }
 
+        var twist = MathF.Abs(ground[0].Z + ground[2].Z - ground[1].Z - ground[3].Z) / 2f;
+        var even = normal.Z >= MathF.Cos(MaxTiltDegrees * MathF.PI / 180f) && twist <= MaxTwistCm;
+        if (!even)
+        {
+            normal = FVector.Up;
+        }
+
         var rotation = FQuat.FindBetweenNormals(FVector.Up, normal) * facing;
         var bottom = new FVector(box.Center.X, box.Center.Y, box.Min.Z);
         var at = now.TransformPosition(bottom);
-        var height = ground.Average(g => g.Z);
+        var height = even ? ground.Average(g => g.Z) : ground.Max(g => g.Z);
         return new FTransform(rotation, new FVector(at.X, at.Y, height) - rotation.RotateVector(now.Scale3D * bottom), now.Scale3D);
     }
 
@@ -219,7 +236,7 @@ public sealed partial class MapPageViewModel
                 continue;
             }
 
-            if (SurfaceOf(s.Mesh)?.HighestBelow(s.World, bottom.X, bottom.Y, top) is { } z && !(best >= z))
+            if (SurfaceOf(s.Mesh, s.Bend)?.HighestBelow(s.World, bottom.X, bottom.Y, top) is { } z && !(best >= z))
             {
                 best = z;
             }
@@ -279,13 +296,14 @@ public sealed partial class MapPageViewModel
                 }
             }
 
+            var bend = Bends.GetValueOrDefault(p.SelectableId);
             if (ActorTransforms.TryGetValue(p.SelectableId, out var root))
             {
-                Add(p.MeshPath, p.World.GetRelativeTransform(p.Actor.WorldTransform) * root);
+                Add(p.MeshPath, p.World.GetRelativeTransform(p.Actor.WorldTransform) * root, null, bend);
             }
             else
             {
-                Add(p.MeshPath, p.World, _supportBoxes[i]);
+                Add(p.MeshPath, p.World, bend is null ? _supportBoxes[i] : null, bend);
             }
         }
 
@@ -300,7 +318,7 @@ public sealed partial class MapPageViewModel
             {
                 if (clone.MeshPath is { } mesh)
                 {
-                    Add(mesh, clone.RootWorld);
+                    Add(mesh, clone.RootWorld, null, Bends.GetValueOrDefault(clone.Id));
                 }
 
                 continue;
@@ -317,9 +335,9 @@ public sealed partial class MapPageViewModel
 
         return grid;
 
-        void Add(string mesh, FTransform world, BoundingBox? known = null)
+        void Add(string mesh, FTransform world, BoundingBox? known = null, IReadOnlyList<SplineMeshParams>? bend = null)
         {
-            if ((known ?? BoxOf(mesh, world)) is not { IsEmpty: false } box)
+            if ((known ?? BoxOf(mesh, world, bend)) is not { IsEmpty: false } box)
             {
                 return;
             }
@@ -335,7 +353,7 @@ public sealed partial class MapPageViewModel
             {
                 for (var x = x0; x <= x1; x++)
                 {
-                    (grid.TryGetValue((x, y), out var cell) ? cell : grid[(x, y)] = []).Add(new Support(box, world, mesh));
+                    (grid.TryGetValue((x, y), out var cell) ? cell : grid[(x, y)] = []).Add(new Support(box, world, mesh, bend));
                 }
             }
         }
@@ -346,10 +364,14 @@ public sealed partial class MapPageViewModel
         p.SpawnPoint is null && p.LootMarker is null && p.Spawner is null && !p.MeshPath.StartsWith(SpawnMarkers.Prefix, StringComparison.Ordinal)
         && MeshAsset(p.MeshPath) is { Shimmer: false, Billboard: false, IsEditorOnly: false };
 
-    /// <summary>The world box of <paramref name="mesh"/> placed at <paramref name="world"/>; null when the mesh is not loaded or is scaled to nothing.</summary>
-    private BoundingBox? BoxOf(string mesh, FTransform world)
+    /// <summary>
+    /// The world box of <paramref name="mesh"/> placed at <paramref name="world"/> (bent along <paramref name="bend"/> when
+    /// given); null when the mesh is not loaded or is scaled to nothing.
+    /// </summary>
+    private BoundingBox? BoxOf(string mesh, FTransform world, IReadOnlyList<SplineMeshParams>? bend = null)
     {
-        if (MeshAsset(mesh)?.Mesh.Bounds is not { IsEmpty: false } b || world.Scale3D.X * world.Scale3D.Y * world.Scale3D.Z == 0f)
+        var bounds = bend is not null && MeshAsset(mesh) is { } asset ? SplineMeshDeformer.DeformPieces(asset.Mesh, bend).Bounds : MeshAsset(mesh)?.Mesh.Bounds;
+        if (bounds is not { IsEmpty: false } b || world.Scale3D.X * world.Scale3D.Y * world.Scale3D.Z == 0f)
         {
             return null;
         }
@@ -368,9 +390,27 @@ public sealed partial class MapPageViewModel
     private PreparedMeshAsset? MeshAsset(string mesh) =>
         PreparedScene?.Meshes.GetValueOrDefault(mesh) ?? ExtraMeshes.FirstOrDefault(m => string.Equals(m.Asset.MeshPath, mesh, StringComparison.OrdinalIgnoreCase))?.Asset;
 
-    /// <summary>The cached surface of a mesh (built on first use).</summary>
-    private MeshSurface? SurfaceOf(string mesh)
+    /// <summary>The cached surface of a mesh (built on first use), bent along <paramref name="bend"/> when it is drawn bent.</summary>
+    private MeshSurface? SurfaceOf(string mesh, IReadOnlyList<SplineMeshParams>? bend = null)
     {
+        if (bend is not null)
+        {
+            // A bridge or road piece the owner bent holds things up as the view draws it: with its straight shape, things set
+            // down on a bent bridge went through it or floated over it (owner, 2026-10-09).
+            if (!ReferenceEquals(_bentSurfacesOf, Bends))
+            {
+                _bentSurfacesOf = Bends;
+                _bentSurfaces.Clear();
+            }
+
+            if (!_bentSurfaces.TryGetValue((mesh, bend), out var bent) && MeshAsset(mesh) is { } shaped)
+            {
+                _bentSurfaces[(mesh, bend)] = bent = MeshSurface.Of(shaped with { Mesh = SplineMeshDeformer.DeformPieces(shaped.Mesh, bend) });
+            }
+
+            return bent;
+        }
+
         if (!_surfaces.TryGetValue(mesh, out var surface) && MeshAsset(mesh) is { } asset)
         {
             _surfaces[mesh] = surface = MeshSurface.Of(asset);
@@ -382,7 +422,7 @@ public sealed partial class MapPageViewModel
     private static (int X, int Y) SupportCellOf(float x, float y) => ((int)MathF.Floor(x / SupportCell), (int)MathF.Floor(y / SupportCell));
 
     /// <summary>A drawn mesh something can stand on: its world box, where it stands and its mesh key.</summary>
-    private readonly record struct Support(BoundingBox Box, FTransform World, string Mesh);
+    private readonly record struct Support(BoundingBox Box, FTransform World, string Mesh, IReadOnlyList<SplineMeshParams>? Bend = null);
 
     /// <summary>The supports of one fit by map cell (<see cref="SupportCellOf"/>).</summary>
     private sealed class SupportGrid : Dictionary<(int X, int Y), List<Support>>

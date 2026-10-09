@@ -64,4 +64,19 @@ public sealed record MaterialInfo(
     /// draw a bent copy of a mesh with it; otherwise a cooked game falls back to the engine's default material.
     /// </summary>
     public bool UsedWithSplineMeshes { get; init; }
+
+    /// <summary>The tangent-space normal map (SCUM's master shaders call it <c>Normal</c>), or null.</summary>
+    public string? NormalTexture { get; init; }
+
+    /// <summary>
+    /// Roughness range (min, max) of SCUM's opaque master shader, which scales the base colour's alpha between the two
+    /// (<c>Base Material Roughness Min/Max</c> or <c>Roughness Min/Max</c>); null when the material has neither.
+    /// </summary>
+    public System.Numerics.Vector2? RoughnessRange { get; init; }
+
+    /// <summary>
+    /// True when the base material can draw into a runtime virtual texture (<c>CachedExpressionData.bHasRuntimeVirtualTextureOutput</c>).
+    /// Most SCUM masters can (buildings, rocks, roads); the game asks only its road pieces to, see <c>BendMesh.DrawsIntoLandscape</c>.
+    /// </summary>
+    public bool WritesLandscapeTexture { get; init; }
 }

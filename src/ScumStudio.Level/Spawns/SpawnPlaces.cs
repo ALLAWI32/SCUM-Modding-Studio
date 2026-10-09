@@ -271,7 +271,9 @@ public static class SpawnPlaces
             return null;
         }
 
-        var q = Member(t, "Rotation")?.Value is QuatValue r ? new FQuat(r.X, r.Y, r.Z, r.W) : FQuat.Identity;
+        // Normalized: the island data stores some turns as not-quite-unit quaternions, and their angles came out a little off,
+        // so every copy of a tilted zombie place stood a bit more crooked (Discord report).
+        var q = Member(t, "Rotation")?.Value is QuatValue r ? new FQuat(r.X, r.Y, r.Z, r.W).GetNormalized() : FQuat.Identity;
         var p = Member(t, "Translation")?.Value is VectorValue v ? new FVector(v.X, v.Y, v.Z) : FVector.Zero;
         var s = Member(t, "Scale3D")?.Value is VectorValue sc ? new FVector(sc.X, sc.Y, sc.Z) : FVector.One;
         return new FTransform(q, p, s);

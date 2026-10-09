@@ -55,6 +55,10 @@ public sealed partial class AssetsPageViewModel
     private static readonly string[] WorldRoots = ["buildings", "furniture", "exterior", "basebuilding", "nature", "wrecks", "vehicles", "roads", "water", "characters"];
 
     private List<(DumpPackage Package, PackageEntry Entry)> _objects = [];
+    private ObjectCategoryNode? _tradersNode;
+
+    /// <summary>Words that show the Traders category instead of a name search (the owner searched "trader" and found nothing).</summary>
+    private static readonly string[] TraderWords = ["trader", "traders", "shop", "shops", "vendor", "vendors", "outpost", "تاجر", "تجار", "التجار", "التاجر"];
 
     /// <summary>Objects (by category) instead of the package folders; on by default.</summary>
     [ObservableProperty]
@@ -100,7 +104,11 @@ public sealed partial class AssetsPageViewModel
 
         var roots = AssetDumper.Tree.ToDictionary(n => n.Id, StringComparer.Ordinal);
         var world = Group(Loc.T("Assets.Group.World"), WorldRoots);
-        ObjectRoots = [Sets(), Group(Loc.T("Assets.Group.PickUp"), PickUpRoots), world];
+        // The game's traders first: "Place in map" puts a whole working trader (trade post, NPC, economy) there.
+        _tradersNode = new ObjectCategoryNode(Loc.T("Assets.Group.Traders"), [], [], _objects.Count(o => IsTraderNpc(o.Package))) { Match = IsTraderNpc };
+        ObjectRoots = _tradersNode.Count > 0
+            ? [_tradersNode, Sets(), Group(Loc.T("Assets.Group.PickUp"), PickUpRoots), world]
+            : [Sets(), Group(Loc.T("Assets.Group.PickUp"), PickUpRoots), world];
         SelectedCategory = world;
 
         ObjectCategoryNode Node(DumpNode n) =>
@@ -131,6 +139,13 @@ public sealed partial class AssetsPageViewModel
             && !NameHas(p, "railroad", "sign", "tunnel", "decal", "lamp", "light")),
         ("Assets.Set.Bridges", p => NameHas(p, "bridge") && !NameHas(p, "distant")),
     ];
+
+    /// <summary>A trader character of the game (see <see cref="Level.Economy.TraderPosts.IsTraderNpcPackage"/>).</summary>
+    internal static bool IsTraderNpc(DumpPackage package) =>
+        package.ClassName == "Blueprint" && Level.Economy.TraderPosts.IsTraderNpcPackage(package.PackagePath);
+
+    /// <summary>True when <paramref name="text"/> asks for traders by a word, not by a name.</summary>
+    internal static bool AsksForTraders(string text) => TraderWords.Contains(text.Trim(), StringComparer.OrdinalIgnoreCase);
 
     private static bool NameHas(DumpPackage package, params string[] words)
     {

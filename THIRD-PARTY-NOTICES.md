@@ -21,6 +21,10 @@ Serilog, Blake3, LZMA-SDK) keep their respective licences (MIT / Apache-2.0 / BS
 
 Ideas (not code) were taken from FModel/Snooper (GPL-3.0) and CodeWalker for the editor UX; no GPL code is included.
 
+Rendering formulas: the mesh shader builds its normal-mapping frame from screen derivatives after Christian Schüler,
+"Followup: Normal Mapping Without Precomputed Tangents" (2013, http://www.thetenthplanet.de/archives/1180), and tone maps
+with Krzysztof Narkowicz's ACES filmic curve fit (2016). Both are re-written from the published formulas.
+
 ## Fonts (bundled)
 
 These font files ship inside the app (`src/ScumStudio.App/Assets/Fonts/`, embedded as Avalonia resources). They are the

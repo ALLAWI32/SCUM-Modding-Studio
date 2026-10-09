@@ -1,3 +1,4 @@
+using CommunityToolkit.Mvvm.Input;
 using System.Globalization;
 using System.Numerics;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -19,7 +20,7 @@ namespace ScumStudio.App.ViewModels;
 public sealed partial class MapPageViewModel
 {
     private readonly List<GroupMember> _group = [];
-    private List<(GroupMember Member, FTransform World)>? _copiedGroup;
+    private List<CopiedMember>? _copiedGroup;
 
     /// <summary>Members of the multi-selection with their current world transform, for the viewport's group drag.</summary>
     [ObservableProperty]
@@ -111,7 +112,18 @@ public sealed partial class MapPageViewModel
         GroupWorlds = worlds;
         KindSelectionText = _group.Count == 0 ? null : Loc.F("Map.Group.Selected", _group.Count.ToString("N0", CultureInfo.CurrentCulture));
         SavePrefabCommand.NotifyCanExecuteChanged();
+        CopySelectedCommand.NotifyCanExecuteChanged();
+        OnPropertyChanged(nameof(HasGroup));
+        RefreshGrassOption();
     }
+
+    /// <summary>The selection chip's Delete: the whole multi-selection (or all of a kind), like the Delete key.</summary>
+    [RelayCommand]
+    private Task DeleteMultiAsync() => DeleteKindSelectionAsync();
+
+    /// <summary>The selection chip's ✕: ends the multi-selection, like Esc.</summary>
+    [RelayCommand]
+    private void ClearMulti() => ClearKindSelection();
 
     /// <summary>The world transform an actor's root is drawn at (scale 1 when bent: the scale is in the curve).</summary>
     private FTransform Drawn(ActorItemViewModel item) => RootWorldOf(item, Drawn(item, CurrentRootTransform(item)));
@@ -218,10 +230,27 @@ public sealed partial class MapPageViewModel
             || removed.Any(r => r.Instance is { } ri && ri.InstanceIndex == i.Index && string.Equals(ri.ComponentName, i.Component, StringComparison.OrdinalIgnoreCase)));
     }
 
-    /// <summary>Remembers every member and where it is, for <see cref="TryPasteGroup"/>.</summary>
+    /// <summary>
+    /// Remembers every member as it is now, for <see cref="TryPasteGroup"/>: the object itself, where it stands and, for one
+    /// tree or rock, its mesh and collision. Nothing refers back to the loaded scene, so the copy survives flying to the
+    /// other end of the island (the owner copied a building with everything in it, flew off, pasted, and got nothing).
+    /// </summary>
     private void CopyGroup()
     {
-        _copiedGroup = GroupItems().Select(m => (m.Member, WorldOf(m.Item, m.Instance))).ToList();
+        _copiedGroup = [];
+        foreach (var (member, item, instance) in GroupItems())
+        {
+            RememberCopySource(item);
+            if (instance is null)
+            {
+                _copiedGroup.Add(new CopiedMember(member, item, WorldOf(item, null), null, null));
+            }
+            else if (member.Index != InstanceKey.Segment && MeshOf(instance) is { } mesh)
+            {
+                _copiedGroup.Add(new CopiedMember(member, item, WorldOf(item, instance), mesh, instance.Component.CollisionProfile) { Loot = LootOf(item, instance.Component) });
+            }
+        }
+
         CopiedActor = null;
         _copiedInstance = null;
         OnPropertyChanged(nameof(HasCopiedActor));
@@ -238,9 +267,17 @@ public sealed partial class MapPageViewModel
             return false;
         }
 
+        if (PreparedScene is not { Documents.Count: > 0 } scene)
+        {
+            _services.Notifications.Warning(Loc.T("Map.NoLevelLoaded"), Loc.T("Map.NoLevelLoadedDetail"));
+            return true;
+        }
+
+        // Into the level of the selection, else the loaded level nearest the aim: a copy pasted far away belongs there.
         var aim = AimPointProvider?.Invoke() ?? copied[0].World.Translation;
         var offset = aim - copied[0].World.Translation;
-        return PlaceCopies(copied, offset, Loc.T("Map.Pasted"));
+        var into = SelectedActor?.Level ?? NewObjectLevel(scene, aim);
+        return PlaceCopies(copied, offset, Loc.T("Map.Pasted"), into: into);
     }
 
     /// <summary>
@@ -271,11 +308,17 @@ public sealed partial class MapPageViewModel
         var along = members.Select(m => FVector.Dot(m.World.Translation, axis)).ToList();
         var step = (along.Max() - along.Min()) + pieceLength;
         var offset = axis * (backwards ? -step : step);
-        PlaceCopies(members.Select(m => (m.Member, m.World)).ToList(), offset, Loc.T("Map.Extend"), selectCopies: true);
+        PlaceCopies(members.Select(m => new CopiedMember(m.Member, m.Item, m.World, m.Instance is { } s ? MeshOf(s) : null, m.Instance?.Component.CollisionProfile)
+            { Loot = m.Instance is { } li ? LootOf(m.Item, li.Component) : null }).ToList(),
+            offset, Loc.T("Map.Extend"), selectCopies: true);
     }
 
-    /// <summary>Copies of the members moved by <paramref name="offset"/>, as one journal step; the copies are selected.</summary>
-    private bool PlaceCopies(IReadOnlyList<(GroupMember Member, FTransform World)> members, FVector offset, string title, bool selectCopies = true)
+    /// <summary>
+    /// Copies of the members moved by <paramref name="offset"/>, as one journal step; the copies are selected. Without
+    /// <paramref name="into"/> each copy goes into its member's level at the member's place now (Extend); with it, all go
+    /// into that level at the places they were copied from (Paste: the members' own levels may have streamed out).
+    /// </summary>
+    private bool PlaceCopies(IReadOnlyList<CopiedMember> members, FVector offset, string title, bool selectCopies = true, LevelDocument? into = null)
     {
         if (_services.Projects.Current is not { } project || PreparedScene is null)
         {
@@ -287,25 +330,22 @@ public sealed partial class MapPageViewModel
         var ops = new List<EditOp>();
         try
         {
-            foreach (var (member, world) in members)
+            foreach (var copied in members)
             {
-                if (ActorOf(member.Actor) is not { } item)
-                {
-                    continue;
-                }
-
+                var member = copied.Member;
+                var item = ActorOf(member.Actor) ?? copied.Item; // the record taken at Copy when its level streamed out since
+                var level = into ?? item.Level;
                 if (member.Component is null)
                 {
-                    var current = RootWorldOf(item, CurrentRootTransform(item));
-                    ops.Add(CopyOp(item, item.Level, current with { Translation = current.Translation + offset }, project.State, reserved));
+                    var world = into is null ? RootWorldOf(item, CurrentRootTransform(item)) : copied.World;
+                    ops.Add(CopyOp(item, level, world with { Translation = world.Translation + offset }, project.State, reserved));
                 }
-                else if (member.Index != InstanceKey.Segment
-                         && InstanceInfo(item, InstanceKey.Of(item.SelectableId, member.Component, member.Index)) is { } sel && MeshOf(sel) is { } mesh)
+                else if (member.Index != InstanceKey.Segment && copied.Mesh is { } mesh)
                 {
-                    // One tree or rock becomes a mesh actor of its own.
-                    var placed = TransformValue.FromTransform(world);
-                    ops.Add(EditOpFactory.AddStaticMeshActor(item.Level, mesh, placed with { Location = placed.Location + offset }, project.State, reserved)
-                        with { CollisionProfile = sel.Component.CollisionProfile }); // it collides as what it was copied from
+                    // One tree or rock becomes a mesh actor of its own; it collides as what it was copied from.
+                    var placed = TransformValue.FromTransform(copied.World);
+                    ops.Add(EditOpFactory.AddStaticMeshActor(level, mesh, placed with { Location = placed.Location + offset }, project.State, reserved)
+                        with { CollisionProfile = copied.Collision, Loot = copied.Loot }); // and holds loot as what it was copied from
                 }
             }
         }
@@ -317,6 +357,7 @@ public sealed partial class MapPageViewModel
 
         if (ops.Count == 0)
         {
+            _services.Notifications.Info(Loc.T("Map.NothingToPaste"), Loc.T("Map.NothingToPasteDetail")); // never a silent nothing
             return true;
         }
 
@@ -365,16 +406,18 @@ public sealed partial class MapPageViewModel
 
         var motion = before.Inverse() * after;
         var ops = new List<EditOp>();
+        var members = GroupItems();
+        var whole = members.Where(m => m.Instance is null && !IsImmovable(m.Item)).Select(m => m.Item).ToHashSet();
         try
         {
-            foreach (var (_, item, sel) in GroupItems())
+            foreach (var (_, item, sel) in members)
             {
                 var world = WorldOf(item, sel) * motion;
                 if (sel is null)
                 {
-                    if (IsImmovable(item))
+                    if (IsImmovable(item) || CarriedBy(item, whole))
                     {
-                        continue;
+                        continue; // attached to another moved member (a crate stacked on a crate): it goes along with it
                     }
 
                     var value = RelativeOf(item, world) with { Scale = CurrentRootTransform(item).Scale };
@@ -398,6 +441,28 @@ public sealed partial class MapPageViewModel
         ApplyGroupOps(ops, Loc.T("Map.Moved"));
         RefreshGroup();
         return true;
+    }
+
+    /// <summary>True when the actor's root hangs (directly or through other actors) on an actor of <paramref name="moved"/>.</summary>
+    private bool CarriedBy(ActorItemViewModel item, HashSet<ActorItemViewModel> moved)
+    {
+        for (var (current, depth) = (item, 0); depth < 8 && ParentOf(current) is { } parent; depth++)
+        {
+            if (OwnerOf(current.Level, parent.ExportIndex) is not { } owner
+                || !_pristineByRef.TryGetValue(new ActorRef(current.Level.PackagePath, owner.Name), out var next) || ReferenceEquals(next, current))
+            {
+                return false;
+            }
+
+            if (moved.Contains(next))
+            {
+                return true;
+            }
+
+            current = next;
+        }
+
+        return false;
     }
 
     private void ApplyGroupOps(IReadOnlyList<EditOp> ops, string title)
@@ -876,6 +941,16 @@ public sealed partial class MapPageViewModel
     }
 
     /// <summary>One object of the multi-selection: a whole actor (Component null) or one instance / road piece of it.</summary>
+    /// <summary>
+    /// One copied member, on its own: the object as it was read (kept when its level streams out), where it stood, and for
+    /// one tree or rock its mesh and collision profile.
+    /// </summary>
+    private sealed record CopiedMember(GroupMember Member, ActorItemViewModel Item, FTransform World, string? Mesh, string? Collision)
+    {
+        /// <summary>The loot presets a searchable part carries onto its copy (see <c>LootOf</c>).</summary>
+        public IReadOnlyList<string>? Loot { get; init; }
+    }
+
     private sealed record GroupMember(ActorRef Actor, string? Component, int Index)
     {
         public bool Equals(GroupMember? other) =>

@@ -144,10 +144,21 @@ public sealed partial class LevelViewport : OpenGlControlBase
     /// The gizmo's arrows follow the object's own axes (its front, side and up) instead of the world's (Discord salvador:
     /// "the gizmo is rotated, it doesn't align with the object's orientation"). The turn ring stays level.
     /// </summary>
-    public static readonly StyledProperty<bool> LocalAxesProperty =
-        AvaloniaProperty.Register<LevelViewport, bool>(nameof(LocalAxes), defaultValue: true);
+    public static readonly StyledProperty<GizmoOrientation> OrientationProperty =
+        AvaloniaProperty.Register<LevelViewport, GizmoOrientation>(nameof(Orientation), defaultValue: GizmoOrientation.Local);
 
     /// <summary>Part mode: a click picks the one part of a Blueprint under the cursor (a hangar's wall or lamp), not the whole Blueprint. Alt+click does it once.</summary>
+    /// <summary>Until when (UTC) a click keeps the current selection instead of picking what is under the cursor (a fresh duplicate).</summary>
+    public static readonly StyledProperty<DateTime> SelectionHoldUntilProperty =
+        AvaloniaProperty.Register<LevelViewport, DateTime>(nameof(SelectionHoldUntil));
+
+    /// <inheritdoc cref="SelectionHoldUntilProperty" />
+    public DateTime SelectionHoldUntil
+    {
+        get => GetValue(SelectionHoldUntilProperty);
+        set => SetValue(SelectionHoldUntilProperty, value);
+    }
+
     public static readonly StyledProperty<bool> PickPartsProperty =
         AvaloniaProperty.Register<LevelViewport, bool>(nameof(PickParts));
 
@@ -197,6 +208,7 @@ public sealed partial class LevelViewport : OpenGlControlBase
     private object? _backdropHiddenFor;
     private static readonly object EmptyMarker = new();
     private bool _selectionDirty;
+    private int _litNodes = -1;
     private bool _visibilityDirty;
     private bool _transformsDirty;
     private bool _clonesDirty;
@@ -524,16 +536,50 @@ public sealed partial class LevelViewport : OpenGlControlBase
         set => SetValue(AutoSnapProperty, value);
     }
 
-    /// <inheritdoc cref="LocalAxesProperty" />
-    public bool LocalAxes
+    /// <inheritdoc cref="OrientationProperty" />
+    public GizmoOrientation Orientation
     {
-        get => GetValue(LocalAxesProperty);
-        set => SetValue(LocalAxesProperty, value);
+        get => GetValue(OrientationProperty);
+        set => SetValue(OrientationProperty, value);
     }
 
-    /// <summary>The UE-space direction of a gizmo arrow: the object's own axis with <see cref="LocalAxes"/>, else the world's.</summary>
-    private FVector AxisUe(GizmoAxis axis, FTransform root) =>
-        LocalAxes && axis is GizmoAxis.X or GizmoAxis.Y or GizmoAxis.Z ? root.Rotation.RotateVector(GizmoMath.UeDirection(axis)) : GizmoMath.UeDirection(axis);
+    /// <summary>True for <see cref="GizmoOrientation.Local"/>; setting it picks Local or Global.</summary>
+    public bool LocalAxes
+    {
+        get => Orientation == GizmoOrientation.Local;
+        set => Orientation = value ? GizmoOrientation.Local : GizmoOrientation.Global;
+    }
+
+    /// <summary>The UE-space direction of a gizmo arrow in the current <see cref="Orientation"/>.</summary>
+    private FVector AxisUe(GizmoAxis axis, FTransform root)
+    {
+        if (axis is not (GizmoAxis.X or GizmoAxis.Y or GizmoAxis.Z))
+        {
+            return GizmoMath.UeDirection(axis);
+        }
+
+        return Orientation switch
+        {
+            GizmoOrientation.Local => root.Rotation.RotateVector(GizmoMath.UeDirection(axis)),
+            GizmoOrientation.View => ViewAxisUe(axis),
+            _ => GizmoMath.UeDirection(axis),
+        };
+    }
+
+    /// <summary>The view's axis: X the screen's right, Y its up, Z towards the camera (Blender's View orientation).</summary>
+    private FVector ViewAxisUe(GizmoAxis axis)
+    {
+        var forward = Vector3.Normalize(_camera.Forward);
+        var right = Vector3.Cross(forward, Vector3.UnitY);
+        right = right.LengthSquared() < 1e-6f ? Vector3.UnitX : Vector3.Normalize(right); // looking straight down or up
+        var up = Vector3.Normalize(Vector3.Cross(right, forward));
+        return UeToGl.ToUeDirection(axis switch
+        {
+            GizmoAxis.X => right,
+            GizmoAxis.Y => up,
+            _ => -forward,
+        });
+    }
 
     private Vector3 AxisGl(GizmoAxis axis, FTransform root) => UeToGl.Direction(AxisUe(axis, root));
 
@@ -870,10 +916,14 @@ public sealed partial class LevelViewport : OpenGlControlBase
 
         _target.Resize(w, h);
         var quality = RenderQualityProfile.For(Quality);
+        var shadows = Quality != RenderQuality.Performance; // sun shadows cost a second geometry pass near the camera
         if (_renderer.Settings.ObjectDrawDistance != quality.ObjectDistanceCm || _renderer.Settings.LodBias != quality.LodBias
-            || _renderer.Settings.CullPixelSize != quality.CullPixels)
+            || _renderer.Settings.CullPixelSize != quality.CullPixels || _renderer.Settings.Shadows != shadows)
         {
-            _renderer.Settings = _renderer.Settings with { ObjectDrawDistance = quality.ObjectDistanceCm, LodBias = quality.LodBias, CullPixelSize = quality.CullPixels };
+            _renderer.Settings = _renderer.Settings with
+            {
+                ObjectDrawDistance = quality.ObjectDistanceCm, LodBias = quality.LodBias, CullPixelSize = quality.CullPixels, Shadows = shadows,
+            };
         }
 
         if (_sceneDirty)
@@ -952,11 +1002,7 @@ public sealed partial class LevelViewport : OpenGlControlBase
         {
             // The tiles the detail scene brings at full resolution are hidden in the coarse backdrop.
             _backdropHiddenFor = _uploadedScene ?? EmptyMarker;
-            var detailed = _uploadedScene?.Terrain.Select(t => t.LevelName).ToHashSet(StringComparer.OrdinalIgnoreCase);
-            foreach (var node in backdrop.TerrainNodes)
-            {
-                node.Visible = detailed is null || !detailed.Contains(node.Name[..Math.Max(0, node.Name.IndexOf('/'))]);
-            }
+            backdrop.HideTerrainOf(_uploadedScene);
         }
 
         if (_level is { } level)
@@ -992,21 +1038,6 @@ public sealed partial class LevelViewport : OpenGlControlBase
                 _selectionDirty = true;
                 _visibilityDirty = true;
                 _transformsDirty = true;
-            }
-
-            if (_selectionDirty)
-            {
-                _selectionDirty = false;
-                if (SelectedInstance is { } instance && instance.SelectableId == SelectedId)
-                {
-                    level.SelectInstance(instance);
-                }
-                else
-                {
-                    level.SetSelection(SelectedId == 0 ? [] : [SelectedId]);
-                }
-
-                level.HighlightAlso(KindIds ?? [], KindInstances ?? []);
             }
 
             if (_clonesDirty)
@@ -1099,6 +1130,7 @@ public sealed partial class LevelViewport : OpenGlControlBase
                 {
                     level.SetSegmentBend(key, spline, parts?.GetValueOrDefault(key));
                 }
+
             }
 
             if (_transformsDirty)
@@ -1119,6 +1151,24 @@ public sealed partial class LevelViewport : OpenGlControlBase
                 }
 
                 level.SetInstanceTransforms(InstanceTransforms);
+            }
+
+            // After every step that builds nodes (owner: "sometimes a selected object shows no orange, only its numbers":
+            // a copy re-added, a piece re-bent or an instance given its own node after the selection was lit came back unlit).
+            if (_selectionDirty || level.NodesBuilt != _litNodes)
+            {
+                _selectionDirty = false;
+                _litNodes = level.NodesBuilt;
+                if (SelectedInstance is { } instance && instance.SelectableId == SelectedId)
+                {
+                    level.SelectInstance(instance);
+                }
+                else
+                {
+                    level.SetSelection(SelectedId == 0 ? [] : [SelectedId]);
+                }
+
+                level.HighlightAlso(KindIds ?? [], KindInstances ?? []);
             }
 
             if (_visibilityDirty)
@@ -1186,6 +1236,7 @@ public sealed partial class LevelViewport : OpenGlControlBase
         var interval = now - _lastFrameSeconds;
         var dt = (float)Math.Clamp(interval, 0.0, 0.1);
         _lastFrameSeconds = now;
+        ReleaseLostKeys();
         // Smooth start and stop: the velocity eases towards what the keys ask for (about 0.1 s), like the in-game drone.
         var f = (_forward ? 1f : 0f) - (_backward ? 1f : 0f);
         var r = (_right ? 1f : 0f) - (_left ? 1f : 0f);
@@ -1227,6 +1278,12 @@ public sealed partial class LevelViewport : OpenGlControlBase
             // a part of a Blueprint is picked on its own only in part mode (or with Alt), a spawn part (its pin or the item it
             // spawns: a house's drill press, a car shop's vehicle box) always, a door's leaf never (ScenePlacement.PickKey).
             var instance = !_pickWhole && result?.Node.Tag is ScenePlacement placed ? placed.PickKey(_pickPart) : null;
+            if (!_pickToggle && SelectedId != 0 && DateTime.UtcNow < SelectionHoldUntil)
+            {
+                // A fresh duplicate stands on its source: the click (and a drag from it) keeps taking the copy.
+                id = SelectedId;
+                instance = SelectedInstance;
+            }
             if (_pickToggle)
             {
                 _pickToggle = false;
@@ -1371,7 +1428,7 @@ public sealed partial class LevelViewport : OpenGlControlBase
     protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
     {
         base.OnPropertyChanged(change);
-        if (change.Property == BrushModeProperty || change.Property == BrushRadiusProperty || change.Property == LocalAxesProperty)
+        if (change.Property == BrushModeProperty || change.Property == BrushRadiusProperty || change.Property == OrientationProperty)
         {
             RequestNextFrameRendering(); // the circle shows, hides or changes size
             return;
@@ -2104,6 +2161,42 @@ public sealed partial class LevelViewport : OpenGlControlBase
         }
     }
 
+    /// <summary>
+    /// The end-to-end join of the piece a gizmo drags, when there is one in reach that needs no turn and lies along the
+    /// dragged arrow (<paramref name="along"/>) or in the dragged plane (normal <paramref name="planeNormal"/>): gizmo moves
+    /// join pieces like a free drag does (owner: "Snap is on but the bridge piece does not stick to the same piece"), and
+    /// move freely everywhere else (no stepping onto other objects' boxes). Alt lets go. Null when nothing joins.
+    /// </summary>
+    private FTransform? PieceSnapAlong(FTransform moved, FVector? along, FVector? planeNormal)
+    {
+        _snappedTo = null;
+        if (!AutoSnap || _altHeld || _snapPiece is not { } piece || _snapPieces.Count == 0)
+        {
+            return null;
+        }
+
+        var moving = piece with { World = moved with { Scale3D = piece.World.Scale3D } };
+        if (PieceSnap.Best(moving, _snapPieces, PieceSnap.Reach(moving), t => _learnedJoints.GetValueOrDefault((piece.Mesh, t.Mesh)) ?? []) is not { } snap
+            || !snap.World.Rotation.Equals(moved.Rotation, 2e-3f))
+        {
+            return null;
+        }
+
+        var jump = snap.World.Translation - moved.Translation;
+        if (along is { } a && (jump - (a * FVector.Dot(jump, a))).Size() > 5f)
+        {
+            return null; // the joint is off to the side of the arrow
+        }
+
+        if (planeNormal is { } n && MathF.Abs(FVector.Dot(jump, n)) > 5f)
+        {
+            return null; // the joint is out of the dragged plane
+        }
+
+        _snappedTo = snap.Target;
+        return snap.World with { Scale3D = moved.Scale3D };
+    }
+
     /// <summary><paramref name="moved"/> shifted onto the nearest neighbour face in reach (only along <paramref name="axis"/> when given).</summary>
     private FTransform AutoSnapped(FTransform moved, FVector? axis)
     {
@@ -2153,6 +2246,59 @@ public sealed partial class LevelViewport : OpenGlControlBase
         }
 
         RequestNextFrameRendering();
+    }
+
+    /// <summary>
+    /// Lets go of keys and buttons the system says are up but whose release never reached the view: focus moved while a
+    /// key was held (a toast, a menu, the entity list), so the key-up went elsewhere and the camera kept flying; a right
+    /// button released over another window left mouse-look on and the cursor jumped (owner: "I press W once and it keeps
+    /// going; the mouse jumps up, right, left"). Windows only; never in headless tests.
+    /// </summary>
+    private void ReleaseLostKeys()
+    {
+        if (!CursorLock.IsSupported || _topLevel?.TryGetPlatformHandle() is null)
+        {
+            return;
+        }
+
+        // Another app in front (a game, a chat): its keys are not ours, even when the switch never reached the window
+        // (owner: "I pressed W, came back and it was flying by itself, as if someone controlled my PC").
+        if (CursorLock.AppIsInFront() == false)
+        {
+            _forward = _backward = _left = _right = _up = _down = _fast = _panning = false;
+            if (_looking)
+            {
+                _looking = false;
+                if (!_drone)
+                {
+                    UnlockCursor();
+                }
+            }
+
+            return;
+        }
+
+        static bool Up(params int[] keys) => keys.All(k => CursorLock.IsDown(k) == false);
+        if (_forward && Up(0x57)) { _forward = false; } // W
+        if (_backward && Up(0x53)) { _backward = false; } // S
+        if (_left && Up(0x41)) { _left = false; } // A
+        if (_right && Up(0x44)) { _right = false; } // D
+        if (_up && Up(0x45, 0x20)) { _up = false; } // E, Space
+        if (_down && Up(0x51, 0x43)) { _down = false; } // Q, C
+        if (_fast && Up(0x10)) { _fast = false; } // Shift
+        if (_looking && Up(0x02, 0x01)) // right (or, with swapped buttons, left) button
+        {
+            _looking = false;
+            if (!_drone)
+            {
+                UnlockCursor();
+            }
+        }
+
+        if (_panning && Up(0x04)) // middle button
+        {
+            _panning = false;
+        }
     }
 
     private bool SetKey(Key key, bool down)

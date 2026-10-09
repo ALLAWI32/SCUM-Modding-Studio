@@ -327,6 +327,14 @@
                       <TextBlock Text="{Tr Assets.PlaceInMap}" />
                     </StackPanel>
                   </Button>
+                  <Button x:Name="MakeCraftableButton" ToolTip.Tip="{Tr Assets.MakeCraftable.Tip}"
+                          IsEnabled="{Binding $parent[UserControl].((vm:AssetsPageViewModel)DataContext).CanMakeCraftable}"
+                          Command="{Binding $parent[UserControl].((vm:AssetsPageViewModel)DataContext).MakeCraftableCommand}">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                      <c:GlyphIcon Kind="Icon.Cube3d" IconSize="14" />
+                      <TextBlock Text="{Tr Assets.MakeCraftable}" />
+                    </StackPanel>
+                  </Button>
                   <Button Classes="ghost" ToolTip.Tip="{Tr Assets.CopyPath.Tip}"
                           Command="{Binding $parent[UserControl].((vm:AssetsPageViewModel)DataContext).CopyPathCommand}">
                     <c:GlyphIcon Kind="Icon.Copy" IconSize="15" />

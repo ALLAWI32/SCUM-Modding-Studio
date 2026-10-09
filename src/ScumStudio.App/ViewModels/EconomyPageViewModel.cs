@@ -34,6 +34,26 @@ public sealed partial class EconomyPageViewModel : PageViewModel, ISearchablePag
     private bool _keepRows;
 
     /// <summary>Creates the page.</summary>
+    private Action<string>? _placeTrader;
+
+    /// <summary>The trader types the "Place a trader" menu offers.</summary>
+    public IReadOnlyList<TraderTypeItem> PlaceableTraders { get; } =
+        new[] { "Armorer", "GeneralGoods", "Mechanic", "Doctor", "Bartender", "Barber", "Harbourmaster", "Hunter", "MasterHunter", Level.Economy.TraderPosts.BankType }
+            .Select(t => new TraderTypeItem(t)).ToList();
+
+    /// <summary>Wires "Place a trader" to the Map page (set by the main window).</summary>
+    public void SetTraderPlacer(Action<string> placeTrader) => _placeTrader = placeTrader;
+
+    /// <summary>Places a trader of <paramref name="type"/> on the Map where its camera aims; its section appears here with the game's stock.</summary>
+    [CommunityToolkit.Mvvm.Input.RelayCommand]
+    private void PlaceTrader(TraderTypeItem? type)
+    {
+        if (type is not null)
+        {
+            _placeTrader?.Invoke(type.Type);
+        }
+    }
+
     public EconomyPageViewModel(AppServices services, Action? openSetup = null)
         : base("economy", "Economy", "Traders, prices and stock: the server's EconomyOverride.json")
     {
@@ -332,8 +352,8 @@ public sealed partial class EconomyPageViewModel : PageViewModel, ISearchablePag
         try
         {
             var economy = _store.ForExport();
-            var server = economy.SaveTo(Path.Combine(folder, ProjectExporter.ServerFolderName));
-            economy.SaveTo(Path.Combine(folder, ProjectExporter.ClientFolderName));
+            var server = economy.SaveTo(Path.Combine(folder, ProjectExporter.ServerFolderName), withNote: true);
+            economy.SaveTo(Path.Combine(folder, ProjectExporter.ClientFolderName), withNote: true);
             LastExportPath = server;
             _services.Notifications.Success(Loc.T("Economy.Exported"), Loc.F("Economy.ExportedDetail", server));
             _services.Logger.LogInformation("Economy written to {Path} (copy it to the server's SCUM\\Saved\\Config\\WindowsServer).", server);

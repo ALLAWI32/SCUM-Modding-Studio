@@ -72,7 +72,7 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
         var ui = services.Settings.Load().Ui;
         _translationSnap = ui.TranslationSnap;
         _rotationSnap = ui.RotationSnapDegrees;
-        _localAxes = services.UiState.Current.LocalAxes;
+        _orientation = services.UiState.Current.GizmoAxes;
         _renderQuality = ui.RenderQuality;
         _showSpawns = services.UiState.Current.ShowSpawnPoints;
         _pickParts = services.UiState.Current.PickParts;
@@ -495,12 +495,12 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
         _services.Prefabs.Changed -= OnPrefabsChanged;
     }
 
-    /// <summary>The Settings page changed a choice the map shows (Local axes).</summary>
+    /// <summary>The Settings page changed a choice the map shows (the gizmo's orientation).</summary>
     private void OnUiStateChanged(UiState state)
     {
-        if (LocalAxes != state.LocalAxes)
+        if (Orientation != state.GizmoAxes)
         {
-            LocalAxes = state.LocalAxes;
+            Orientation = state.GizmoAxes;
         }
     }
 
@@ -583,6 +583,9 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
     /// </summary>
     public async Task LoadLevelsAsync(IReadOnlyList<string> packagePaths, int landscapeStep = 1, bool seaPlane = true, bool streamed = false)
     {
+        // The island's spawn data is no level: its places come up by themselves over whatever is loaded (the owner's log:
+        // "The_Island_LevelStaticData is not a level package", four times, from the World tree).
+        packagePaths = packagePaths.Where(p => !Level.Spawns.SpawnPlaces.IsStaticData(p)).ToList();
         if (_services.Workspace.Catalog is not { } catalog || packagePaths.Count == 0)
         {
             return;
@@ -780,6 +783,9 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
                     hiddenInstances.Add(InstanceKey.Of(id, instance.Component, instance.Index));
                 }
             }
+
+            // "Clear grass under it": the bushes and grass the export removes under placed objects.
+            hiddenInstances.UnionWith(GrassClearedInstances(state).Where(k => !hidden.Contains(k.SelectableId)));
         }
 
         // Spawn pins off (all of them, or the kinds switched off in the legend).
@@ -793,6 +799,7 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
         ApplyTransformCommand.NotifyCanExecuteChanged();
         OnPropertyChanged(nameof(DeleteAllOfMeshTip));
         OnPropertyChanged(nameof(DeleteAllOfClassTip));
+        RefreshGrassOption();
     }
 
     /// <summary>Re-derives everything the project's edits change in the loaded scene: added actors, hidden ids, moved actors.</summary>
@@ -1079,6 +1086,12 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
             return false;
         }
 
+        if (TraderPosts.IsTraderNpcPackage(package))
+        {
+            AddCompletion = AddTraderForNpcAsync(package); // a whole trader of its type, not a bare character
+            return true;
+        }
+
         var className = known.PackagePath is not null ? known.ClassName : _services.Workspace.Catalog?.GetMainClassName(package);
         if (className is "Blueprint" or "BlueprintGeneratedClass")
         {
@@ -1159,6 +1172,11 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
                 {
                     moved[item.SelectableId] = RootWorldOf(item, Drawn(item, CurrentRootTransform(item)));
                 }
+                else if (item.Actor.Root is { AttachParent: not null } root && ParentOf(item) is not null
+                         && RootWorldOf(item, root.Relative) is var carried && !carried.Translation.Equals(root.WorldTransform.Translation, 0.5f))
+                {
+                    moved[item.SelectableId] = carried; // attached to a moved actor: it goes along in game, so it does here
+                }
             }
         }
 
@@ -1184,7 +1202,7 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
     /// have no parent, a stored child actor's root is attached to a component of another actor.
     /// </summary>
     private FTransform RootWorldOf(ActorItemViewModel item, TransformValue relative) =>
-        ParentOf(item) is { } parent ? relative.ToTransform() * parent.WorldTransform : relative.ToTransform();
+        ParentOf(item) is { } parent ? relative.ToTransform() * ParentWorld(item, parent) : relative.ToTransform();
 
     /// <summary>
     /// The relative root transform that puts an actor's root at <paramref name="world"/>: the inverse of
@@ -1192,13 +1210,55 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
     /// needs this too (a world place stored as relative sent copies kilometres off the map).
     /// </summary>
     private TransformValue RelativeOf(ActorItemViewModel item, FTransform world) =>
-        TransformValue.FromTransform(ParentOf(item) is { } parent ? world.GetRelativeTransform(parent.WorldTransform) : world);
+        TransformValue.FromTransform(ParentOf(item) is { } parent ? world.GetRelativeTransform(ParentWorld(item, parent)) : world);
+
+    /// <summary>
+    /// Where the component an actor is attached to stands now: its stored place carried along by its own actor's move.
+    /// The game composes the child's relative transform with the parent's exported place, so a crate stacked on a crate
+    /// (C_0 police station: <c>SM_Military_CratePile_243</c> is attached to <c>_247</c>) moved with it in one drag must
+    /// be relative to the moved parent, not the stored one, or it moves twice in game (Discord: "one of them was
+    /// floating outside the station").
+    /// </summary>
+    private FTransform ParentWorld(ActorItemViewModel child, ComponentRecord parent, int depth = 0)
+    {
+        if (depth < 8 && OwnerOf(child.Level, parent.ExportIndex) is { } ownerRecord && ownerRecord.Root is { } root
+            && _pristineByRef.TryGetValue(new ActorRef(child.Level.PackagePath, ownerRecord.Name), out var owner) && !ReferenceEquals(owner, child)
+            && (_services.Projects.Current?.State.GetTransformOverride(owner.Reference) is not null || ParentOf(owner) is not null))
+        {
+            var ownerNow = ParentOf(owner) is { } grand
+                ? CurrentRootTransform(owner).ToTransform() * ParentWorld(owner, grand, depth + 1)
+                : CurrentRootTransform(owner).ToTransform();
+            return root.ExportIndex == parent.ExportIndex ? ownerNow : parent.WorldTransform.GetRelativeTransform(root.WorldTransform) * ownerNow;
+        }
+
+        return parent.WorldTransform;
+    }
 
     /// <summary>The component an actor's root is attached to, or null for a root of its own.</summary>
     private static ComponentRecord? ParentOf(ActorItemViewModel item) =>
-        item.Actor.Root?.AttachParent is { } parentIndex
-            ? item.Level.Actors.SelectMany(a => a.Components).FirstOrDefault(c => c.ExportIndex == parentIndex)
-            : null;
+        item.Actor.Root?.AttachParent is { } parentIndex && ComponentOwners(item.Level).TryGetValue(parentIndex, out var found) ? found.Component : null;
+
+    /// <summary>The actor that owns the stored component <paramref name="exportIndex"/> of <paramref name="level"/>.</summary>
+    private static ActorRecord? OwnerOf(LevelDocument level, int exportIndex) =>
+        ComponentOwners(level).TryGetValue(exportIndex, out var found) ? found.Actor : null;
+
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<LevelDocument, Dictionary<int, (ActorRecord Actor, ComponentRecord Component)>> s_componentOwners = new();
+
+    /// <summary>Stored components of a level by export index, with their actor (built once per document).</summary>
+    private static Dictionary<int, (ActorRecord Actor, ComponentRecord Component)> ComponentOwners(LevelDocument level) =>
+        s_componentOwners.GetValue(level, static l =>
+        {
+            var map = new Dictionary<int, (ActorRecord, ComponentRecord)>();
+            foreach (var actor in l.Actors)
+            {
+                foreach (var component in actor.Components)
+                {
+                    map.TryAdd(component.ExportIndex, (actor, component));
+                }
+            }
+
+            return map;
+        });
 
     private IReadOnlyList<PropertyRow> DescribeSelected(ActorItemViewModel item) =>
         DescribeActor(item, RootWorldOf(item, CurrentRootTransform(item)));
@@ -1267,7 +1327,25 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
         ApplyRootTransform(item, value, Localization.Loc.T("Map.Moved"));
     }
 
-    private bool CanCopySelected() => SelectedActor is not null && !IsLootPointSelected && !IsMeshlessSelected;
+    // A brush or Ctrl+click multi-selection copies as a whole even when no single object is "the" selected one (the owner:
+    // "Ctrl+C sometimes works, sometimes not" — after a brush sweep nothing was selected singly, so Copy stayed off).
+    private bool CanCopySelected() => HasGroup || (SelectedActor is not null && !IsLootPointSelected && !IsMeshlessSelected);
+
+    /// <summary>Raised after Copy stored something here; the view empties the system clipboard so Ctrl+V pastes this, not an older path.</summary>
+    public event Action? CopiedObjects;
+
+    /// <summary>The originals of copied duplicates, kept so a paste still finds them after their level streamed out.</summary>
+    private readonly Dictionary<ActorRef, ActorItemViewModel> _copySources = new(ActorRef.Comparer);
+
+    /// <summary>Keeps the original of <paramref name="item"/> when it is a duplicate the project made (see <see cref="_copySources"/>).</summary>
+    private void RememberCopySource(ActorItemViewModel item)
+    {
+        if (item.IsAdded && _services.Projects.Current?.State.AddedActors.GetValueOrDefault(item.Reference) is DuplicateActorOp duplicate
+            && PristineOf(duplicate.Source) is { } source)
+        {
+            _copySources[duplicate.Source] = source;
+        }
+    }
 
     /// <summary>Remembers the selected actor (or instance) for Paste.</summary>
     [RelayCommand(CanExecute = nameof(CanCopySelected))]
@@ -1276,6 +1354,7 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
         if (HasGroup)
         {
             CopyGroup();
+            CopiedObjects?.Invoke();
             return;
         }
 
@@ -1289,14 +1368,17 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
         if (SelectedInstanceInfo() is { } sel)
         {
             CopyInstance(sel);
+            CopiedObjects?.Invoke();
             return;
         }
 
         if (SelectedActor is { } item)
         {
             _copiedInstance = null;
+            RememberCopySource(item);
             CopiedActor = item;
             _services.Notifications.Info(Localization.Loc.T("Assets.Copied"), Localization.Loc.F("Map.CopiedActor", item.Name));
+            CopiedObjects?.Invoke();
         }
     }
 
@@ -1338,8 +1420,8 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
             return;
         }
 
-        var target = SelectedActor?.Level ?? scene.Documents.FirstOrDefault(d => !d.Name.StartsWith("Landscape_", StringComparison.OrdinalIgnoreCase)) ?? scene.Documents[0];
         var at = AimPointProvider?.Invoke() ?? copied.Actor.WorldTransform.Translation;
+        var target = SelectedActor?.Level ?? NewObjectLevel(scene, at);
         try
         {
             // The copied item may come from a level the island streamed out since: its own record is all that is needed.
@@ -1368,7 +1450,7 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
             switch (state.AddedActors.GetValueOrDefault(item.Reference))
             {
                 case AddStaticMeshActorOp mesh:
-                    return EditOpFactory.AddStaticMeshActor(target, mesh.StaticMesh, transform, state, reserved) with { CollisionProfile = mesh.CollisionProfile };
+                    return EditOpFactory.AddStaticMeshActor(target, mesh.StaticMesh, transform, state, reserved) with { CollisionProfile = mesh.CollisionProfile, Loot = state.GetLoot(item.Reference) is { } set ? (set.Lootable ? set.Presets : []) : mesh.Loot };
                 case AddBlueprintActorOp blueprint:
                     // A copy of a placed item spawner spawns the same item (Item), not the item of the spawner it was made from;
                     // a copy of a placed trader is a trader of its own (its name is its economy section and its id).
@@ -1381,8 +1463,8 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
                             ? trader with { Name = FreeDefaultName(CellOf(target) ?? TraderPosts.CellOf(trader.Name) ?? "X_0", trader.Type, reserved) }
                             : blueprint.Trader,
                     };
-                case DuplicateActorOp duplicate when PristineOf(duplicate.Source) is { } source:
-                    item = source;
+                case DuplicateActorOp duplicate when (PristineOf(duplicate.Source) ?? _copySources.GetValueOrDefault(duplicate.Source)) is { } source:
+                    item = source; // the original, also when its level streamed out since the copy
                     break;
                 default:
                     throw new InvalidOperationException(item.Name); // undone since it was copied
@@ -1396,7 +1478,7 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
         }
 
         return item.Actor.Kind == ActorKind.StaticMeshActor && item.Actor.StaticMeshPath is { } meshPath
-            ? EditOpFactory.AddStaticMeshActor(target, meshPath, transform, state, reserved) with { CollisionProfile = item.Actor.Root?.CollisionProfile }
+            ? EditOpFactory.AddStaticMeshActor(target, meshPath, transform, state, reserved) with { CollisionProfile = item.Actor.Root?.CollisionProfile, Loot = item.Actor.Root is { } r ? LootOf(item, r) : null }
             : new AddBlueprintActorOp(target.PackagePath, EditOpFactory.UniqueActorName(target, BaseName(item) + "_Added", state, reserved), item.Actor.ClassPath, item.Reference, transform);
     }
 
@@ -1413,7 +1495,18 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
 
     private bool CanDuplicateSelected() => SelectedActor is { IsDeleted: false } && !IsLootPointSelected && !IsMeshlessSelected;
 
-    /// <summary>Copies the selected pristine actor 2 m along +X (the copy is exported as a copy of the source's exports).</summary>
+    /// <summary>
+    /// Until when a click keeps the selection on what Duplicate just made (bound to the viewport): the copy stands exactly
+    /// on its source, so for two seconds a click or drag on that spot takes the copy, not the original under it (owner:
+    /// "make it in the same place, highlighted, and let me grab it for two seconds").
+    /// </summary>
+    [ObservableProperty]
+    private DateTime _selectionHoldUntil;
+
+    /// <summary>How long a fresh duplicate keeps the selection.</summary>
+    public static readonly TimeSpan DuplicateHold = TimeSpan.FromSeconds(2);
+
+    /// <summary>Copies the selected actor in place, selected and held (the copy is exported as a copy of the source's exports).</summary>
     [RelayCommand(CanExecute = nameof(CanDuplicateSelected))]
     private void DuplicateSelected()
     {
@@ -1443,10 +1536,11 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
         try
         {
             var world = RootWorldOf(item, CurrentRootTransform(item));
-            var op = CopyOp(item, item.Level, world with { Translation = world.Translation + new FVector(200f, 0f, 0f) }, project.State);
+            var op = CopyOp(item, item.Level, world, project.State); // exactly where the source stands: drag it off from there
             var entry = _services.Projects.Apply(op);
             _services.Notifications.Info(Localization.Loc.T("Map.Duplicated"), entry.Op.Describe());
             SelectCreated(op);
+            SelectionHoldUntil = DateTime.UtcNow + DuplicateHold;
         }
         catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or IOException)
         {

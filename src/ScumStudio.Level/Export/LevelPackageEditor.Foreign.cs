@@ -173,12 +173,8 @@ public static partial class LevelPackageEditor
                     itemWritten = true;
                 }
 
-                if (blocks[k].Find("_gameUniqueId")?.Value is UInt64Value { Offset: >= 0 } unique && unique.Offset + 8 <= payload.Length)
-                {
-                    // A trade post's quest giver has an id of its own in the game: a copy must not share its source's.
-                    var id = System.Security.Cryptography.MD5.HashData(System.Text.Encoding.UTF8.GetBytes($"{target.BasePath}|{copy.NewName}|{k}"));
-                    id.AsSpan(0, 8).CopyTo(payload.AsSpan(unique.Offset));
-                }
+                FreshGameUniqueId(payload, blocks[k], target.BasePath, copy.NewName, k); // a trade post's quest giver has an id of its own
+
 
                 if (k == 0 && copy.Trade is { } trade)
                 {

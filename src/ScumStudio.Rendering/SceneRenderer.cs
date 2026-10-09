@@ -26,6 +26,8 @@ public sealed class SceneRenderer : IDisposable
     private readonly ShaderProgram _meshProgram;
     private readonly ShaderProgram _pickProgram;
     private readonly ShaderProgram _gridProgram;
+    private readonly ShaderProgram _skyProgram;
+    private readonly ShaderProgram _shadowProgram;
     private readonly ShaderProgram _lineProgram;
     private readonly GpuTexture _white;
     private readonly uint _emptyVao;
@@ -37,8 +39,16 @@ public sealed class SceneRenderer : IDisposable
     // other scene's batches away (that rebuilt and re-uploaded ~100k instances twice a frame: 84 ms instead of 2).
     private readonly System.Runtime.CompilerServices.ConditionalWeakTable<Scene, BatchState> _batchers = new();
     private readonly List<DrawRange> _draws = [];
+    private readonly List<DrawRange> _shadowDraws = [];
     private DrawElementsIndirectCommand[] _commands = new DrawElementsIndirectCommand[1024];
     private int[] _lodOfCluster = new int[256];
+    private int[] _shadowLodOfCluster = new int[256];
+    private uint _shadowFbo;
+    private uint _shadowMap;
+    private uint _copyFbo;
+    private uint _copyColor;
+    private uint _copyDepth;
+    private (int W, int H) _copySize;
     private int _nextMeshId = 1;
     private bool _disposed;
 
@@ -52,6 +62,8 @@ public sealed class SceneRenderer : IDisposable
         _meshProgram = new ShaderProgram(_gl, "mesh", ShaderSources.MeshVertex, ShaderSources.MeshFragment);
         _pickProgram = new ShaderProgram(_gl, "pick", ShaderSources.MeshVertex, ShaderSources.PickFragment);
         _gridProgram = new ShaderProgram(_gl, "grid", ShaderSources.GridVertex, ShaderSources.GridFragment);
+        _skyProgram = new ShaderProgram(_gl, "sky", ShaderSources.GridVertex, ShaderSources.SkyFragment);
+        _shadowProgram = new ShaderProgram(_gl, "shadow", ShaderSources.MeshVertex, ShaderSources.ShadowFragment);
         _lineProgram = new ShaderProgram(_gl, "line", ShaderSources.LineVertex, ShaderSources.LineFragment);
         _strokeProgram = new ShaderProgram(_gl, "stroke", ShaderSources.StrokeVertex, ShaderSources.StrokeFragment);
         _white = GpuTexture.Solid(_gl, 255, 255, 255);
@@ -114,11 +126,11 @@ public sealed class SceneRenderer : IDisposable
     /// </summary>
     public MeshHandle AddMesh(PreparedMesh mesh, GpuTexture? texture = null, IReadOnlyDictionary<string, GpuTexture>? materialTextures = null,
         IReadOnlyDictionary<string, float>? materialAlphaCutoffs = null, IReadOnlyDictionary<string, Vector4>? materialTints = null,
-        bool shimmer = false, bool billboard = false)
+        bool shimmer = false, bool billboard = false, IReadOnlyDictionary<string, Vector2>? materialRoughness = null)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         var id = _nextMeshId++;
-        var gpu = new GpuMesh(_gl, id, mesh, texture, materialTextures, materialAlphaCutoffs, materialTints, shimmer, billboard);
+        var gpu = new GpuMesh(_gl, id, mesh, texture, materialTextures, materialAlphaCutoffs, materialTints, shimmer, billboard, materialRoughness);
         _meshes[id] = gpu;
         GlErrors.Check(_gl, $"uploading mesh '{mesh.Name}'");
         return new MeshHandle(id, mesh.Name, mesh.Bounds);
@@ -127,6 +139,15 @@ public sealed class SceneRenderer : IDisposable
     /// <summary>Uploads an RGBA8 texture (see <see cref="GpuTexture.FromRgba8"/>); the caller owns it.</summary>
     public GpuTexture CreateTexture(int width, int height, ReadOnlySpan<byte> rgba, bool srgb = true) =>
         GpuTexture.FromRgba8(_gl, width, height, rgba, srgb);
+
+    /// <summary>
+    /// Uploads block-compressed mips as they are (see <see cref="GpuTexture.FromCompressed"/>); null when the driver cannot
+    /// take <paramref name="format"/> (decode to RGBA8 and use <see cref="CreateTexture(int, int, ReadOnlySpan{byte}, bool)"/> instead). The caller owns it.
+    /// </summary>
+    public GpuTexture? CreateCompressedTexture(CompressedFormat format, int width, int height, IReadOnlyList<byte[]> mips, bool srgb) =>
+        format is CompressedFormat.Bc1 or CompressedFormat.Bc2 or CompressedFormat.Bc3 && !Info.SupportsS3tc
+            ? null
+            : GpuTexture.FromCompressed(_gl, format, width, height, mips, srgb);
 
     /// <summary>Uploads an RGBA8 texture with an explicit wrap mode (e.g. <see cref="TextureWrap.ClampToEdge"/> for terrain tiles); the caller owns it.</summary>
     public GpuTexture CreateTexture(int width, int height, ReadOnlySpan<byte> rgba, bool srgb, TextureWrap wrap) =>
@@ -210,10 +231,15 @@ public sealed class SceneRenderer : IDisposable
         ArgumentNullException.ThrowIfNull(camera);
 
         var aspect = target.AspectRatio;
-        PrepareFrame(scene, camera, aspect, target.Height, out var culled, out var instances);
+        var s = EffectiveSettings(scene);
+        ShadowFrame? shadow = s.Shadows ? ShadowView(s, camera) : null;
+        PrepareFrame(scene, camera, aspect, target.Height, out var culled, out var instances, shadow?.Bounds);
         var reverseZ = UsesReverseZ;
         var viewProj = camera.ViewMatrix * (reverseZ ? camera.GetReverseZProjection(aspect) : camera.GetProjection(aspect));
-        var s = EffectiveSettings(scene);
+        if (shadow is { } sun)
+        {
+            RenderShadowMap(sun.ViewProj);
+        }
 
         target.BindColor();
         BeginDepthState(reverseZ);
@@ -228,8 +254,6 @@ public sealed class SceneRenderer : IDisposable
         _meshProgram.Set("uTexture", 0);
         _meshProgram.Set("uSkyColor", s.SkyColor);
         _meshProgram.Set("uGroundColor", s.GroundColor);
-        _meshProgram.Set("uLightDirection", SafeNormalize(s.LightDirection));
-        _meshProgram.Set("uLightColor", s.LightColor);
         _meshProgram.Set("uHighlight", s.HighlightColor);
         _meshProgram.Set("uCameraPosition", camera.Position);
         _meshProgram.Set("uCameraRight", camera.Right);
@@ -237,9 +261,27 @@ public sealed class SceneRenderer : IDisposable
         _meshProgram.Set("uBillboard", 0);
         _meshProgram.Set("uShimmer", 0);
         _meshProgram.Set("uTime", Time);
-        _meshProgram.Set("uEncodeSrgb", s.EncodeSrgb ? 1 : 0);
         _meshProgram.Set("uFogColor", s.FogColor);
         _meshProgram.Set("uFogDensity", MathF.Max(0f, s.FogDensity));
+        SetAtmosphere(_meshProgram, s);
+        _meshProgram.Set("uWater", 0);
+        _meshProgram.Set("uSceneCopy", 0);
+        _meshProgram.Set("uSceneColor", CopyColorUnit);
+        _meshProgram.Set("uSceneDepth", CopyDepthUnit);
+        _meshProgram.Set("uNormalMap", NormalUnit);
+        _meshProgram.Set("uHasNormalMap", 0);
+        _meshProgram.Set("uRoughness", Vector2.Zero);
+        _meshProgram.Set("uShadowMap", ShadowUnit);
+        _meshProgram.Set("uShadows", shadow is null ? 0 : 1);
+        if (shadow is { } light)
+        {
+            _meshProgram.Set("uShadowMatrix", light.ViewProj);
+            _meshProgram.Set("uShadowTexel", light.Texel);
+            _gl.ActiveTexture(TextureUnit.Texture0 + ShadowUnit);
+            _gl.BindTexture(TextureTarget.Texture2D, _shadowMap);
+            _gl.BindSampler(ShadowUnit, 0);
+            _gl.ActiveTexture(TextureUnit.Texture0);
+        }
         _meshProgram.Set("uOpaque", 1);
         _meshProgram.Set("uTerrainDetail", 0);
         _meshProgram.Set("uWeights", 1);
@@ -257,6 +299,9 @@ public sealed class SceneRenderer : IDisposable
         var sectionTint = new Vector4(-1f);
         var shimmer = false;
         var billboard = false;
+        var water = false;
+        GpuTexture? boundNormal = null;
+        var roughness = Vector2.Zero;
         List<DrawRange>? translucent = null;
         foreach (var draw in _draws)
         {
@@ -271,6 +316,13 @@ public sealed class SceneRenderer : IDisposable
 
         _gl.BindVertexArray(0);
         _gl.BindBuffer(BufferTargetARB.DrawIndirectBuffer, 0);
+        if (clear && s.Sky)
+        {
+            // Only behind the first scene of a frame: a scene drawn over it (clear: false) must not paint sky over the
+            // first scene's sea, which writes no depth.
+            DrawSky(s, camera, aspect, reverseZ);
+        }
+
         if (s.ShowGrid)
         {
             DrawGrid(s, camera, aspect, viewProj, reverseZ);
@@ -279,8 +331,20 @@ public sealed class SceneRenderer : IDisposable
         if (translucent is not null)
         {
             // Translucent nodes (tint alpha < 1, e.g. a sea plane) after everything opaque: blended, no depth writes.
+            // Water first, over a copy of what is drawn so far (its colour and depth): the water shades the ground it
+            // covers by its thickness and covers it, and glass drawn after it still blends over it.
+            translucent = [.. translucent.Where(d => d.Mesh.Water), .. translucent.Where(d => !d.Mesh.Water)];
             _meshProgram.Use();
             _meshProgram.Set("uOpaque", 0);
+            if (translucent[0].Mesh.Water)
+            {
+                CopyScene(target);
+                Matrix4x4.Invert(reverseZ ? camera.GetReverseZProjection(aspect) : camera.GetProjection(aspect), out var invProj);
+                _meshProgram.Set("uInvProj", invProj);
+                _meshProgram.Set("uDepthZeroToOne", reverseZ ? 1 : 0);
+                _meshProgram.Set("uSceneCopy", 1);
+            }
+
             _gl.Enable(EnableCap.Blend);
             _gl.BlendFuncSeparate(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha, BlendingFactor.One, BlendingFactor.OneMinusSrcAlpha);
             _gl.DepthMask(false);
@@ -303,9 +367,16 @@ public sealed class SceneRenderer : IDisposable
         }
 
         GpuTexture.UnbindSampler(_gl);
+        GpuTexture.UnbindSampler(_gl, NormalUnit);
         for (var unit = 1; unit <= 5; unit++)
         {
             GpuTexture.UnbindSampler(_gl, unit);
+        }
+
+        foreach (var unit in (int[])[ShadowUnit, CopyColorUnit, CopyDepthUnit])
+        {
+            _gl.ActiveTexture(TextureUnit.Texture0 + unit);
+            _gl.BindTexture(TextureTarget.Texture2D, 0);
         }
 
         _gl.ActiveTexture(TextureUnit.Texture0);
@@ -364,6 +435,26 @@ public sealed class SceneRenderer : IDisposable
             {
                 _meshProgram.Set("uBillboard", draw.Mesh.Billboard ? 1 : 0);
                 billboard = draw.Mesh.Billboard;
+            }
+
+            if (draw.Mesh.Water != water)
+            {
+                _meshProgram.Set("uWater", draw.Mesh.Water ? 1 : 0);
+                water = draw.Mesh.Water;
+            }
+
+            if (!ReferenceEquals(draw.NormalMap, boundNormal))
+            {
+                draw.NormalMap?.Bind(NormalUnit);
+                _gl.ActiveTexture(TextureUnit.Texture0);
+                _meshProgram.Set("uHasNormalMap", draw.NormalMap is null ? 0 : 1);
+                boundNormal = draw.NormalMap;
+            }
+
+            if (draw.Roughness != roughness)
+            {
+                _meshProgram.Set("uRoughness", draw.Roughness);
+                roughness = draw.Roughness;
             }
 
             if (!ReferenceEquals(draw.Mesh.Detail, boundDetail))
@@ -486,6 +577,20 @@ public sealed class SceneRenderer : IDisposable
         _meshProgram.Dispose();
         _pickProgram.Dispose();
         _gridProgram.Dispose();
+        _skyProgram.Dispose();
+        _shadowProgram.Dispose();
+        if (_shadowFbo != 0)
+        {
+            _gl.DeleteFramebuffer(_shadowFbo);
+            _gl.DeleteTexture(_shadowMap);
+        }
+
+        if (_copyFbo != 0)
+        {
+            _gl.DeleteFramebuffer(_copyFbo);
+            _gl.DeleteTexture(_copyColor);
+            _gl.DeleteTexture(_copyDepth);
+        }
         _lineProgram.Dispose();
         _strokeProgram.Dispose();
         _gl.DeleteVertexArray(_lineVao);
@@ -550,7 +655,7 @@ public sealed class SceneRenderer : IDisposable
     /// LOD) and writes one indirect draw command per visible cluster and material section of its LOD into
     /// <see cref="_indirectBuffer"/> (left bound), grouped into one <see cref="DrawRange"/> per mesh, LOD and section.
     /// </summary>
-    private BatchResult PrepareFrame(Scene scene, FlyCamera camera, float aspect, int viewportHeight, out int culled, out int drawn)
+    private BatchResult PrepareFrame(Scene scene, FlyCamera camera, float aspect, int viewportHeight, out int culled, out int drawn, BoundingBox? shadowBox = null)
     {
         var state = _batchers.GetValue(scene, _ => new BatchState());
         var batcher = state.Batcher;
@@ -602,6 +707,7 @@ public sealed class SceneRenderer : IDisposable
         var minScreenSize = s.CullPixelSize > 0f && viewportHeight > 0 ? s.CullPixelSize / viewportHeight / distanceScale : 0f;
         var eye = camera.Position;
         _draws.Clear();
+        _shadowDraws.Clear();
         var count = 0;
         culled = 0;
         drawn = 0;
@@ -612,70 +718,112 @@ public sealed class SceneRenderer : IDisposable
                 continue;
             }
 
-            if (frustum is { } f && !f.Intersects(batch.Bounds))
+            var inView = frustum is not { } f || f.Intersects(batch.Bounds);
+            var caster = shadowBox is { } box && !mesh.Billboard && !mesh.Water && Overlaps(box, batch.Bounds);
+            if (!inView)
             {
                 culled += batch.Instances.Length;
-                continue;
+                if (!caster)
+                {
+                    continue;
+                }
             }
 
             var clusters = batch.Clusters;
             if (_lodOfCluster.Length < clusters.Length)
             {
                 Array.Resize(ref _lodOfCluster, Math.Max(clusters.Length, _lodOfCluster.Length * 2));
+                Array.Resize(ref _shadowLodOfCluster, _lodOfCluster.Length);
             }
 
             var usedLods = 0;
+            var shadowLods = 0;
             for (var c = 0; c < clusters.Length; c++)
             {
-                var lod = LodMath.Classify(clusters[c], frustum, eye, tanHalfFov, minScreenSize, distanceScale, mesh.LodScreenSizes, s.ObjectDrawDistance, s.LodBias);
+                var lod = -1;
+                if (inView)
+                {
+                    lod = LodMath.Classify(clusters[c], frustum, eye, tanHalfFov, minScreenSize, distanceScale, mesh.LodScreenSizes, s.ObjectDrawDistance, s.LodBias);
+                    if (lod < 0)
+                    {
+                        culled += clusters[c].Count;
+                    }
+                    else
+                    {
+                        drawn += clusters[c].Count;
+                        usedLods |= 1 << lod;
+                    }
+                }
+
                 _lodOfCluster[c] = lod;
-                if (lod < 0)
+
+                // Sun shadows: the clusters in the shadow box, also those just outside the view (a tree behind the camera
+                // still shades the ground in front of it), at the LOD and draw distance they would have on screen.
+                var shadowLod = -1;
+                if (caster && Overlaps(shadowBox!.Value, clusters[c].Bounds))
                 {
-                    culled += clusters[c].Count;
+                    shadowLod = lod >= 0 ? lod : LodMath.Classify(clusters[c], null, eye, tanHalfFov, minScreenSize, distanceScale, mesh.LodScreenSizes, s.ObjectDrawDistance, s.LodBias);
+                    shadowLods |= shadowLod >= 0 ? 1 << shadowLod : 0;
                 }
-                else
-                {
-                    drawn += clusters[c].Count;
-                    usedLods |= 1 << lod;
-                }
+
+                _shadowLodOfCluster[c] = shadowLod;
             }
 
-            if (usedLods == 0)
+            if (usedLods == 0 && shadowLods == 0)
             {
                 continue;
             }
 
             var translucent = IsTranslucent(batch);
             var pickable = Array.Exists(batch.Instances, i => i.PickCode != 0);
-            for (var lod = 0; lod < mesh.Lods.Length; lod++)
+            Emit(_draws, _lodOfCluster, usedLods, castersOnly: false);
+            if (!translucent)
             {
-                if ((usedLods & (1 << lod)) == 0)
-                {
-                    continue;
-                }
+                Emit(_shadowDraws, _shadowLodOfCluster, shadowLods, castersOnly: true);
+            }
 
-                foreach (var section in mesh.Lods[lod].Sections)
+            void Emit(List<DrawRange> into, int[] lodOfCluster, int lods, bool castersOnly)
+            {
+                for (var lod = 0; lod < mesh.Lods.Length; lod++)
                 {
-                    var first = count;
-                    var visible = 0;
-                    for (var c = 0; c < clusters.Length; c++)
+                    if ((lods & (1 << lod)) == 0)
                     {
-                        if (_lodOfCluster[c] != lod)
-                        {
-                            continue;
-                        }
-
-                        if (count == _commands.Length)
-                        {
-                            Array.Resize(ref _commands, count * 2);
-                        }
-
-                        var cluster = clusters[c];
-                        _commands[count++] = new DrawElementsIndirectCommand(section.IndexCount, (uint)cluster.Count, section.FirstIndex, section.BaseVertex, (uint)cluster.First);
-                        visible += cluster.Count;
+                        continue;
                     }
 
-                    _draws.Add(new DrawRange(mesh, section.HasOwnColour ? null : section.Texture ?? mesh.Texture, (int)section.IndexCount, first, count - first, visible, translucent || section.Tint.W < 0.999f, section.AlphaCutoff, section.Tint, pickable));
+                    foreach (var section in mesh.Lods[lod].Sections)
+                    {
+                        if (castersOnly && section.Tint.W < 0.999f)
+                        {
+                            continue; // glass and water do not cast
+                        }
+
+                        var first = count;
+                        var visible = 0;
+                        for (var c = 0; c < clusters.Length; c++)
+                        {
+                            if (lodOfCluster[c] != lod)
+                            {
+                                continue;
+                            }
+
+                            if (count == _commands.Length)
+                            {
+                                Array.Resize(ref _commands, count * 2);
+                            }
+
+                            var cluster = clusters[c];
+                            _commands[count++] = new DrawElementsIndirectCommand(section.IndexCount, (uint)cluster.Count, section.FirstIndex, section.BaseVertex, (uint)cluster.First);
+                            visible += cluster.Count;
+                        }
+
+                        // A section with its own texture brings its own normal map and roughness; one drawn with the mesh's texture takes the mesh's.
+                        var own = section.Texture is not null;
+                        var texture = section.HasOwnColour ? null : section.Texture ?? mesh.Texture;
+                        var normal = texture is null || mesh.Billboard ? null : own ? section.NormalMap : mesh.NormalMap;
+                        into.Add(new DrawRange(mesh, texture, (int)section.IndexCount, first, count - first, visible, translucent || section.Tint.W < 0.999f, section.AlphaCutoff, section.Tint, pickable,
+                            normal, texture is null ? Vector2.Zero : own ? section.Roughness : mesh.Roughness));
+                    }
                 }
             }
         }
@@ -828,6 +976,183 @@ public sealed class SceneRenderer : IDisposable
         _gl.Disable(EnableCap.Blend);
     }
 
+    /// <summary>The sky, haze and tone-mapping uniforms shared by the mesh and sky programs.</summary>
+    private static void SetAtmosphere(ShaderProgram program, RenderSettings s)
+    {
+        program.Set("uLightDirection", SafeNormalize(s.LightDirection));
+        program.Set("uLightColor", s.LightColor);
+        program.Set("uFogFalloff", MathF.Max(0f, s.FogHeightFalloff));
+        program.Set("uSky", s.Sky ? 1 : 0);
+        program.Set("uSkyZenith", s.SkyZenithColor);
+        program.Set("uSkyHorizon", s.SkyHorizonColor);
+        program.Set("uExposure", MathF.Max(0f, s.Exposure));
+        program.Set("uEncodeSrgb", s.EncodeSrgb ? 1 : 0);
+    }
+
+    private const int ShadowUnit = 6;
+    private const int CopyColorUnit = 13;
+    private const int CopyDepthUnit = 14;
+
+    /// <summary>
+    /// Copies the target's colour and depth (everything opaque drawn so far, both scenes of a frame) into textures the water
+    /// reads at its own pixel, and binds them; the target is bound again for drawing.
+    /// </summary>
+    private void CopyScene(RenderTarget target)
+    {
+        if (_copySize != (target.Width, target.Height))
+        {
+            if (_copyFbo != 0)
+            {
+                _gl.DeleteFramebuffer(_copyFbo);
+                _gl.DeleteTexture(_copyColor);
+                _gl.DeleteTexture(_copyDepth);
+            }
+
+            _copyColor = CopyTexture(SizedInternalFormat.Rgba8);
+            _copyDepth = CopyTexture(SizedInternalFormat.DepthComponent32f);
+            _copyFbo = _gl.GenFramebuffer();
+            _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _copyFbo);
+            _gl.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0, TextureTarget.Texture2D, _copyColor, 0);
+            _gl.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.DepthAttachment, TextureTarget.Texture2D, _copyDepth, 0);
+            _copySize = (target.Width, target.Height);
+        }
+
+        _gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, target.ColorFramebuffer);
+        _gl.BindFramebuffer(FramebufferTarget.DrawFramebuffer, _copyFbo);
+        _gl.BlitFramebuffer(0, 0, target.Width, target.Height, 0, 0, target.Width, target.Height,
+            ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit, BlitFramebufferFilter.Nearest);
+        target.BindColor();
+        foreach (var (unit, texture) in (ReadOnlySpan<(int, uint)>)[(CopyColorUnit, _copyColor), (CopyDepthUnit, _copyDepth)])
+        {
+            _gl.ActiveTexture(TextureUnit.Texture0 + unit);
+            _gl.BindTexture(TextureTarget.Texture2D, texture);
+            _gl.BindSampler((uint)unit, 0);
+        }
+
+        _gl.ActiveTexture(TextureUnit.Texture0);
+
+        uint CopyTexture(SizedInternalFormat format)
+        {
+            var texture = _gl.GenTexture();
+            _gl.BindTexture(TextureTarget.Texture2D, texture);
+            _gl.TexStorage2D(TextureTarget.Texture2D, 1, format, (uint)target.Width, (uint)target.Height);
+            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
+            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
+            _gl.BindTexture(TextureTarget.Texture2D, 0);
+            return texture;
+        }
+    }
+    private const int NormalUnit = 7;
+
+    private static bool Overlaps(in BoundingBox a, in BoundingBox b) =>
+        a.Min.X <= b.Max.X && a.Max.X >= b.Min.X && a.Min.Y <= b.Max.Y && a.Max.Y >= b.Min.Y && a.Min.Z <= b.Max.Z && a.Max.Z >= b.Min.Z;
+
+    /// <summary>
+    /// The sun's orthographic view for this frame: a square of <see cref="RenderSettings.ShadowDistance"/> around a point
+    /// half that far in front of the camera, snapped to whole shadow texels so shadow edges do not crawl as the camera
+    /// moves, and the world box of everything it can shade.
+    /// </summary>
+    private static ShadowFrame ShadowView(RenderSettings s, FlyCamera camera)
+    {
+        var radius = MathF.Max(s.ShadowDistance, 100f);
+        var depth = (2f * radius) + 10_000f;
+        var dir = SafeNormalize(s.LightDirection);
+        var view = Matrix4x4.CreateLookAt(Vector3.Zero, dir, MathF.Abs(dir.Y) > 0.99f ? Vector3.UnitX : Vector3.UnitY);
+        var centre = Vector3.Transform(camera.Position + (camera.Forward * (radius * 0.5f)), view);
+        var texel = 2f * radius / ShadowMapSize;
+        centre.X = MathF.Round(centre.X / texel) * texel;
+        centre.Y = MathF.Round(centre.Y / texel) * texel;
+        var proj = Matrix4x4.CreateOrthographicOffCenter(centre.X - radius, centre.X + radius, centre.Y - radius, centre.Y + radius, -centre.Z - depth, -centre.Z + depth);
+        Matrix4x4.Invert(view, out var toWorld);
+        var bounds = new BoundingBox(new Vector3(float.MaxValue), new Vector3(float.MinValue));
+        for (var i = 0; i < 8; i++)
+        {
+            var corner = new Vector3(centre.X + ((i & 1) == 0 ? -radius : radius), centre.Y + ((i & 2) == 0 ? -radius : radius), centre.Z + ((i & 4) == 0 ? -depth : depth));
+            bounds = bounds.Include(Vector3.Transform(corner, toWorld));
+        }
+
+        return new ShadowFrame(view * proj, texel, bounds);
+    }
+
+    /// <summary>Depth of the shadow casters picked by <see cref="PrepareFrame"/>, seen from the sun (plain GL depth, not reverse-Z).</summary>
+    private void RenderShadowMap(in Matrix4x4 viewProj)
+    {
+        if (_shadowFbo == 0)
+        {
+            _shadowMap = _gl.GenTexture();
+            _gl.BindTexture(TextureTarget.Texture2D, _shadowMap);
+            _gl.TexStorage2D(TextureTarget.Texture2D, 1, SizedInternalFormat.DepthComponent32f, ShadowMapSize, ShadowMapSize);
+            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Linear);
+            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
+            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
+            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
+            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureCompareMode, (int)TextureCompareMode.CompareRefToTexture);
+            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureCompareFunc, (int)DepthFunction.Lequal);
+            _gl.BindTexture(TextureTarget.Texture2D, 0);
+            _shadowFbo = _gl.GenFramebuffer();
+            _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _shadowFbo);
+            _gl.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.DepthAttachment, TextureTarget.Texture2D, _shadowMap, 0);
+            _gl.DrawBuffer(DrawBufferMode.None);
+            _gl.ReadBuffer(ReadBufferMode.None);
+        }
+
+        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _shadowFbo);
+        _gl.Viewport(0, 0, ShadowMapSize, ShadowMapSize);
+        _gl.Disable(EnableCap.Blend);
+        _gl.Disable(EnableCap.CullFace);
+        _gl.Enable(EnableCap.DepthTest);
+        _gl.DepthFunc(DepthFunction.Less);
+        _gl.DepthMask(true);
+        _gl.ClearDepth(1.0);
+        _gl.Clear(ClearBufferMask.DepthBufferBit);
+        _gl.Enable(EnableCap.PolygonOffsetFill);
+        _gl.PolygonOffset(2f, 4f);
+        _shadowProgram.Use();
+        _shadowProgram.Set("uViewProj", viewProj);
+        _shadowProgram.Set("uTexture", 0);
+        _shadowProgram.Set("uBillboard", 0);
+        GpuTexture? bound = null;
+        var cutoff = -1f;
+        foreach (var draw in _shadowDraws)
+        {
+            var sectionCutoff = draw.Texture is null ? 0f : draw.AlphaCutoff;
+            if (sectionCutoff > 0f && !ReferenceEquals(draw.Texture, bound))
+            {
+                draw.Texture!.Bind(0); // masked leaves cast the shape of their leaves, not of their cards
+                bound = draw.Texture;
+            }
+
+            if (sectionCutoff != cutoff)
+            {
+                _shadowProgram.Set("uAlphaCutoff", sectionCutoff);
+                cutoff = sectionCutoff;
+            }
+
+            draw.Mesh.DrawIndirect(draw.FirstCommand, draw.CommandCount);
+        }
+
+        _gl.BindVertexArray(0);
+        _gl.Disable(EnableCap.PolygonOffsetFill);
+    }
+
+    /// <summary>Full-screen sky where the depth buffer is still clear (after the opaque pass, so covered pixels cost nothing).</summary>
+    private void DrawSky(RenderSettings s, FlyCamera camera, float aspect, bool reverseZ)
+    {
+        Matrix4x4.Invert(camera.GetViewProjection(aspect), out var invGl);
+        _gl.DepthMask(false);
+        _gl.Disable(EnableCap.CullFace);
+        _gl.DepthFunc(reverseZ ? DepthFunction.Gequal : DepthFunction.Lequal);
+        _skyProgram.Use();
+        SetAtmosphere(_skyProgram, s);
+        _skyProgram.Set("uInvViewProj", invGl);
+        _skyProgram.Set("uFarDepth", reverseZ ? 0f : 1f);
+        _gl.BindVertexArray(_emptyVao);
+        _gl.DrawArrays(PrimitiveType.Triangles, 0, 3);
+        _gl.BindVertexArray(0);
+        _gl.DepthFunc(reverseZ ? DepthFunction.Greater : DepthFunction.Less);
+        _gl.DepthMask(true);
+    }
+
     private void BeginDepthState(bool reverseZ)
     {
         _gl.Disable(EnableCap.FramebufferSrgb);
@@ -895,5 +1220,10 @@ public sealed class SceneRenderer : IDisposable
         public HashSet<RenderBatch> Uploaded { get; set; } = new(ReferenceEqualityComparer.Instance);
     }
 
-    private readonly record struct DrawRange(GpuMesh Mesh, GpuTexture? Texture, int IndexCount, int FirstCommand, int CommandCount, int Instances, bool Translucent, float AlphaCutoff, Vector4 Tint, bool Pickable);
+    private const uint ShadowMapSize = 2048;
+
+    private readonly record struct ShadowFrame(Matrix4x4 ViewProj, float Texel, BoundingBox Bounds);
+
+    private readonly record struct DrawRange(GpuMesh Mesh, GpuTexture? Texture, int IndexCount, int FirstCommand, int CommandCount, int Instances, bool Translucent, float AlphaCutoff, Vector4 Tint, bool Pickable,
+        GpuTexture? NormalMap = null, Vector2 Roughness = default);
 }

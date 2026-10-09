@@ -3,6 +3,7 @@ using System.CommandLine.Invocation;
 using Microsoft.Extensions.Logging;
 using ScumStudio.Level.Export;
 using ScumStudio.Level.Projects;
+using ScumStudio.Modding.Crafting;
 using ScumStudio.Pak;
 
 namespace ScumStudio.Cli.Commands;
@@ -25,10 +26,11 @@ internal sealed partial class ProjectCommands
         var pakIndex = new Option<int>("--pak-index", () => ProjectExporter.DefaultPakChunkIndex, "pakchunk number of the mod pak.");
         var sig = new Option<string?>("--sig", $"Stock .sig to copy next to the pak (default: {Pak.Writing.SigCopier.DefaultStockSigName} or another stock .sig found in the source Paks folder).");
         var noPak = new Option<bool>("--no-pak", "Only write the staged loose files (staging/SCUM/Content/...), do not pack.");
+        var noCraftables = new Option<bool>("--no-craftables", "Skip the Craftables pak (pakchunk<N+1>-<Name>Craftables_P.pak) even when the project has craftables.");
         var aes = new Option<string?>(["--aes", "-a"], $"AES-256 key (64 hex chars) for encrypted stock paks. Prefer the {AesKeyText.EnvironmentVariable} environment variable.");
         var command = new Command("export", "Rewrite every edited level (deleted actors, moved actors) and pack pakchunkNNN-<Name>_P.pak for the client and, with a server source, for the server.")
         {
-            dir, output, source, serverSource, clientOnly, name, pakIndex, sig, noPak, aes,
+            dir, output, source, serverSource, clientOnly, name, pakIndex, sig, noPak, noCraftables, aes,
         };
         command.SetHandler(async (InvocationContext ctx) =>
         {
@@ -37,7 +39,8 @@ internal sealed partial class ProjectCommands
             ctx.ExitCode = await LevelCliSupport.GuardedAsync(logger, async () =>
             {
                 using var project = Project.Open(parse.GetValueForArgument(dir));
-                if (project.State.IsEmpty)
+                var craftables = parse.GetValueForOption(noCraftables) ? new CraftablesFile() : CraftablesFile.Load(project.DirectoryPath);
+                if (project.State.IsEmpty && craftables.Items.Count == 0)
                 {
                     logger.LogError("Nothing to export: the project has no applied edits.");
                     return 2;
@@ -74,11 +77,17 @@ internal sealed partial class ProjectCommands
 
                     using var catalog = LevelCliSupport.OpenCatalog(path, aesText, logger);
                     meshes ??= new BendSupport(catalog);
-                    var result = await exporter.ExportAsync(project, catalog, options with { BendMeshes = meshes.Describe }, role, null, ctx.GetCancellationToken()).ConfigureAwait(false);
-                    PrintExport(result);
-                    foreach (var warning in result.Warnings)
+                    var result = project.State.IsEmpty ? null
+                        : await exporter.ExportAsync(project, catalog, options with { BendMeshes = meshes.Describe }, role, null, ctx.GetCancellationToken()).ConfigureAwait(false);
+                    var crafted = await CraftablesExporter.ExportAsync(craftables, options.ModName ?? project.Manifest.Name, catalog, options, role,
+                        CraftablesExporter.StagedRegistry(result), logger, ctx.GetCancellationToken()).ConfigureAwait(false);
+                    foreach (var exported in new[] { result, crafted }.OfType<ExportResult>())
                     {
-                        logger.LogWarning("{Warning}", warning);
+                        PrintExport(exported);
+                        foreach (var warning in exported.Warnings)
+                        {
+                            logger.LogWarning("{Warning}", warning);
+                        }
                     }
                 }
 

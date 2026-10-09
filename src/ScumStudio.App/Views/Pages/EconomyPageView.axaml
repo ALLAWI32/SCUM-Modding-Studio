@@ -89,6 +89,34 @@
         </StackPanel>
         <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
           <TextBlock Text="{Tr Economy.NoProject}" Classes="caption" VerticalAlignment="Center" IsVisible="{Binding !HasProject}" />
+          <!-- Owner: "I don't see where to spawn a trader": a trader of any type goes on the Map where its camera aims -->
+          <Button x:Name="PlaceTraderMenuButton" Classes="ghost" ToolTip.Tip="{Tr Economy.PlaceTrader.Tip}">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <c:GlyphIcon Kind="Icon.Plus" IconSize="14" />
+              <TextBlock Text="{Tr Economy.PlaceTrader}" />
+            </StackPanel>
+            <Button.Flyout>
+              <Flyout Placement="BottomEdgeAlignedRight">
+                <StackPanel Spacing="6" Width="260">
+                  <TextBlock Text="{Tr Economy.PlaceTrader.Caption}" Classes="caption wrap" />
+                  <ItemsControl x:Name="PlaceTraderList" ItemsSource="{Binding PlaceableTraders}">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="vm:TraderTypeItem">
+                        <Button Classes="ghost" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Margin="0,1"
+                                Command="{Binding $parent[ItemsControl].((vm:EconomyPageViewModel)DataContext).PlaceTraderCommand}" CommandParameter="{Binding}"
+                                ToolTip.Tip="{Tr Economy.PlaceTrader.Tip}">
+                          <StackPanel Orientation="Horizontal" Spacing="8">
+                            <c:GlyphIcon Kind="Icon.Map" IconSize="13" />
+                            <TextBlock Text="{Binding Label}" />
+                          </StackPanel>
+                        </Button>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                </StackPanel>
+              </Flyout>
+            </Button.Flyout>
+          </Button>
           <Button x:Name="EconomyExportButton" Classes="accent" Command="{Binding ExportCommand}" ToolTip.Tip="{Tr Economy.Export.Tip}">
             <StackPanel Orientation="Horizontal" Spacing="6">
               <c:GlyphIcon Kind="Icon.Export" IconSize="14" />

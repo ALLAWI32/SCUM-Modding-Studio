@@ -42,7 +42,10 @@ public sealed class GroundHeights(AssetCatalog catalog)
         return null;
     }
 
-    private List<(string Path, WorldTileInfo Tile)> Tiles() => _tiles ??= WorldIndex.FromCatalog(catalog).Packages
+    private List<(string Path, WorldTileInfo Tile)> Tiles() => _tiles ??= LandscapeTiles(catalog);
+
+    /// <summary>The catalog's landscape tile levels with their world bounds.</summary>
+    internal static List<(string Path, WorldTileInfo Tile)> LandscapeTiles(AssetCatalog catalog) => WorldIndex.FromCatalog(catalog).Packages
         .Where(p => p.Kind == WorldPackageKind.Landscape && p.IsMap && catalog.TryGetPackageFile(p.PackagePath, out _))
         .Select(p => (p.PackagePath, Tile: catalog.TryGetPackageFile(p.PackagePath, out var file) ? WorldTileInfo.TryRead(CookedPackage.Parse(file.Read(), [], null, p.PackagePath)) : null))
         .Where(t => t.Tile is { BoundsValid: true })

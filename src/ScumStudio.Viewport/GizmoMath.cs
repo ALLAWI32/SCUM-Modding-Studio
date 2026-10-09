@@ -434,6 +434,18 @@ public static class GizmoMath
         MathF.Max(length, width) >= (meshPath.Contains("/Models/Buildings/", StringComparison.OrdinalIgnoreCase) ? 6f : 2.5f) * MathF.Min(length, width);
 
     /// <summary>
+    /// True for a road or bridge piece of any proportions (the game's road folder, or "Bridge" in its name; not far-view
+    /// models): it bends, rises and curves in an S like a road (owner: "I am building a bridge and want to curve it; only
+    /// the roads bend"). Its collision is built from its deck when bent.
+    /// </summary>
+    public static bool IsRoadOrBridgePiece(string meshPath)
+    {
+        var name = meshPath[(meshPath.LastIndexOf('/') + 1)..];
+        return !name.Contains("_WM", StringComparison.OrdinalIgnoreCase) && !name.Contains("Distant", StringComparison.OrdinalIgnoreCase)
+            && (meshPath.Contains("/Models/Road/", StringComparison.OrdinalIgnoreCase) || name.Contains("Bridge", StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
     /// Where the gizmo stands in the space of the selection's root (UE cm, before its scale): the middle of
     /// <paramref name="box"/> (what is drawn of the selection, in that space), or for a long piece (<see cref="IsLong"/> by
     /// <paramref name="meshPath"/>, which null and a spawn stand-in never are) the point of its long middle line nearest the view ray from

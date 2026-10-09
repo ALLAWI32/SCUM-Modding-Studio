@@ -44,6 +44,21 @@ public sealed record SceneEnvironment
     /// <summary>Distance fog density per world unit (0 = no fog).</summary>
     public float? FogDensity { get; init; }
 
+    /// <summary>Fog thinning with height (see <see cref="RenderSettings.FogHeightFalloff"/>).</summary>
+    public float? FogHeightFalloff { get; init; }
+
+    /// <summary>Draw the sky and horizon haze (see <see cref="RenderSettings.Sky"/>).</summary>
+    public bool? Sky { get; init; }
+
+    /// <summary>Sky colour straight up.</summary>
+    public Vector3? SkyZenithColor { get; init; }
+
+    /// <summary>Sky colour at the horizon.</summary>
+    public Vector3? SkyHorizonColor { get; init; }
+
+    /// <summary>Tone-mapping exposure (see <see cref="RenderSettings.Exposure"/>).</summary>
+    public float? Exposure { get; init; }
+
     /// <summary>Grid handling for this scene.</summary>
     public GridPlacement Grid { get; init; } = GridPlacement.Settings;
 
@@ -63,6 +78,11 @@ public sealed record SceneEnvironment
             LightColor = o.LightColor,
             FogColor = o.FogColor,
             FogDensity = o.FogDensity,
+            FogHeightFalloff = o.FogHeightFalloff,
+            Sky = o.Sky,
+            SkyZenithColor = o.SkyZenithColor,
+            SkyHorizonColor = o.SkyHorizonColor,
+            Exposure = o.Exposure,
             Grid = grid,
             GridHeight = gridHeight,
         };
@@ -81,6 +101,11 @@ public sealed record SceneEnvironment
             LightColor = LightColor ?? settings.LightColor,
             FogColor = FogColor ?? settings.FogColor,
             FogDensity = FogDensity ?? settings.FogDensity,
+            FogHeightFalloff = FogHeightFalloff ?? settings.FogHeightFalloff,
+            Sky = Sky ?? settings.Sky,
+            SkyZenithColor = SkyZenithColor ?? settings.SkyZenithColor,
+            SkyHorizonColor = SkyHorizonColor ?? settings.SkyHorizonColor,
+            Exposure = Exposure ?? settings.Exposure,
             ShowGrid = Grid switch
             {
                 GridPlacement.Hidden => false,

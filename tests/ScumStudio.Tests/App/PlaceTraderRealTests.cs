@@ -191,6 +191,48 @@ public sealed class PlaceTraderRealTests
         Assert.Equal(["B_4_Armory_2", "B_4_Trader_2"], economy.Traders.Order(StringComparer.Ordinal).ToList()); // the bank has no section
     }
 
+    [Fact]
+    public async Task ATraderCharacterFromAssetsPlacesAWholeTraderOfItsType()
+    {
+        // Owner: "I can't find how to spawn traders" — Assets › Traders › Place in map, or the Economy page's menu.
+        if (Environment.GetEnvironmentVariable("SCUM_PAKS") is not { Length: > 0 } paks || !Directory.Exists(paks))
+        {
+            return; // not asked for
+        }
+
+        using var ctx = AppTestContext.Create();
+        ctx.Services.Keys.Set(AesKeyText.FromEnvironmentOrStore()!);
+        ctx.Services.UpdateSettings(s => s with { GamePaksFolder = paks });
+        await ctx.Services.Workspace.ConnectAsync(ProgressSink.Null);
+        using var map = new MapPageViewModel(ctx.Services);
+        await map.LoadCompletion;
+        await ctx.Services.Projects.CreateAsync(ctx.Combine("projects"), "FromAssets");
+        await map.LoadLevelsAsync([Farm]);
+        var aim = map.AllActors[0].Actor.WorldTransform.Translation + new FVector(800f, 0f, 0f);
+        map.AimPointProvider = () => aim;
+        var project = ctx.Services.Projects.Current!;
+
+        // The armorer character as the Assets page sends it: a whole Armory trader where the camera aims.
+        Assert.True(map.AddObject("/Game/ConZ_Files/Characters/NPCs/Vendors/Arms_Dealer/Arms_Dealer_01/BP_ArmsDealer_01.BP_ArmsDealer_01"));
+        Assert.True(await map.AddCompletion);
+        var armory = Assert.IsType<AddBlueprintActorOp>(project.Journal.Applied[^1].Op);
+        Assert.Equal("Armorer", armory.Trader!.Type);
+        Assert.Equal("Outpost_A_3", armory.Trader.Outpost);
+        Assert.True((Assert.Single(map.Clones, c => c.Name == armory.NewName).RootWorld.Translation - aim).Size() < 1f);
+
+        // The banker and the mechanic too; a guard is no trader and is refused with a message.
+        Assert.True(map.AddObject("/Game/ConZ_Files/Characters/NPCs/Vendors/Banker/Banker_01/BP_Banker01"));
+        Assert.True(await map.AddCompletion);
+        Assert.Equal(TraderPosts.BankType, Assert.IsType<AddBlueprintActorOp>(project.Journal.Applied[^1].Op).Trader!.Type);
+        map.PlaceTraderOfType("Mechanic"); // the Economy page's "Place a trader" menu
+        Assert.True(await map.AddCompletion);
+        Assert.Equal("Mechanic", Assert.IsType<AddBlueprintActorOp>(project.Journal.Applied[^1].Op).Trader!.Type);
+        var rows = project.Journal.Applied.Count;
+        Assert.True(map.AddObject("/Game/ConZ_Files/Characters/NPCs/Vendors/BP_Master_Trader") || true);
+        await map.AddCompletion;
+        Assert.Equal(rows, project.Journal.Applied.Count);
+    }
+
     private static int Export(CookedPackage package, string name) =>
         Enumerable.Range(0, package.Exports.Count).Single(i => package.ResolveName(package.Exports[i].ObjectName) == name);
 

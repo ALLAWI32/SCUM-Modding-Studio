@@ -20,6 +20,12 @@ public sealed record AssetModRequest(IReadOnlyList<ClonePlan> Clones, IReadOnlyD
     /// <summary>Data assets copied under a new path with ids of their own (a placed trader's personality, a new outpost's description).</summary>
     public IReadOnlyList<DataAssetCopy> DataAssets { get; init; } = [];
 
+    /// <summary>Recipe package → its new ingredient list (craftables, see <see cref="Crafting.RecipeIngredients"/>), written after the clones.</summary>
+    public IReadOnlyDictionary<string, IReadOnlyList<Crafting.CraftIngredient>> Ingredients { get; init; } = new Dictionary<string, IReadOnlyList<Crafting.CraftIngredient>>();
+
+    /// <summary>The <c>AssetRegistry.bin</c> to register into instead of the source's (the main pak's of the same export), or null.</summary>
+    public byte[]? BaseRegistry { get; init; }
+
     /// <summary>True when nothing is requested.</summary>
     public bool IsEmpty => Clones.Count == 0 && Edits.Count == 0 && Replacements.Count == 0 && DataAssets.Count == 0;
 }
@@ -165,6 +171,24 @@ public static class AssetModBuilder
             }
         }
 
+        // Craftables: each cloned recipe gets its own ingredient list (tag imports added where needed).
+        foreach (var (recipe, ingredients) in request.Ingredients)
+        {
+            var path = PackageMap.Normalize(recipe);
+            try
+            {
+                var found = built.TryGetValue(path, out var kept);
+                var isClone = found && kept.IsClone;
+                var package = found ? kept.Package : ModdableAssets.ReadPackage(catalog, path);
+                var bytes = Crafting.RecipeIngredients.Rewrite(package, ingredients);
+                built[path] = (CookedPackage.Parse(bytes.UAsset, bytes.UExp, package.UBulk, path), bytes, isClone);
+            }
+            catch (Exception ex) when (ex is FileNotFoundException or FormatException or InvalidDataException or IOException or InvalidOperationException)
+            {
+                warnings.Add($"{path}: ingredients not written ({ex.Message}).");
+            }
+        }
+
         var applied = new List<(string, string, string, string)>();
         foreach (var (packagePath, edits) in request.Edits)
         {
@@ -197,9 +221,22 @@ public static class AssetModBuilder
             try
             {
                 // Stored values first (same-size patches), then parameters by name (a material instance may gain entries).
-                var stored = edits.Where(e => !MaterialParameters.IsKeyed(e.Path)).ToList();
+                // Spawn preset slots and weapon sockets are rewritten whole (they add exports, imports and array items).
+                var parts = edits.Where(e => VehicleParts.IsEdit(e.Path)).ToList();
+                var mounts = edits.Where(e => WeaponMounts.IsEdit(e.Path)).ToList();
+                var stored = edits.Where(e => !MaterialParameters.IsKeyed(e.Path) && !VehicleParts.IsEdit(e.Path) && !WeaponMounts.IsEdit(e.Path)).ToList();
                 var keyed = edits.Where(e => MaterialParameters.IsKeyed(e.Path)).ToList();
                 var bytes = PackageWriter.Rebuild(package);
+                foreach (var (some, apply) in new (List<TunableEdit>, Func<CookedPackage, IEnumerable<TunableEdit>, PackageBytes>)[] { (parts, VehicleParts.Apply), (mounts, WeaponMounts.Apply) })
+                {
+                    if (some.Count > 0)
+                    {
+                        bytes = apply(package, some);
+                        package = CookedPackage.Parse(bytes.UAsset, bytes.UExp, package.UBulk, path);
+                        applied.AddRange(some.Select(e => (path, e.Export + "|" + e.Path, string.Empty, e.Value)));
+                    }
+                }
+
                 if (stored.Count > 0)
                 {
                     var result = TunablePatcher.Apply(package, stored);
@@ -226,9 +263,10 @@ public static class AssetModBuilder
         var registered = new List<RegisteredAsset>();
         if (maps.Count > 0)
         {
-            if (catalog.Provider.Files.TryGetValue(AssetRegistryPath, out var registryFile))
+            var source = request.BaseRegistry ?? (catalog.Provider.Files.TryGetValue(AssetRegistryPath, out var registryFile) ? registryFile.Read() : null);
+            if (source is not null)
             {
-                var registry = AssetRegistryFile.Parse(registryFile.Read());
+                var registry = AssetRegistryFile.Parse(source);
                 foreach (var map in maps)
                 {
                     registered.AddRange(RegistryCloner.Register(registry, map, warnings));

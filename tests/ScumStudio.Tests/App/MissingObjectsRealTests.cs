@@ -112,7 +112,13 @@ public sealed class MissingObjectsRealTests
             // The journal keeps the abandoned city's level paths.
             using var reopened = await Project.OpenAsync(Path.Combine(dir, "project"));
             var result = await new ProjectExporter().ExportAsync(reopened, catalog, new ExportOptions { OutputDirectory = Path.Combine(dir, "out"), WritePak = false });
-            var level = Assert.Single(result.Levels);
+            var level = Assert.Single(result.Levels, l => l.PackagePath == CityHall);
+            // Besides the hall's level, only landscape tiles whose grass and bushes the copy clears (no actor added or removed there).
+            Assert.All(result.Levels.Where(l => !ReferenceEquals(l, level)), l =>
+            {
+                Assert.Contains("/Landscape_", l.PackagePath, StringComparison.Ordinal);
+                Assert.Equal(l.Report.ActorsBefore, l.Report.ActorsAfter);
+            });
             Assert.Equal(CityHall, level.PackagePath);
             Assert.EndsWith("/" + WorldNameParser.PripyatFolder + "/C_0_AbandonedCity_02_CityHall_Ext.umap", level.VirtualPath, StringComparison.Ordinal);
             Assert.NotEmpty(result.FarModels); // the hall is cut out of the city's far view

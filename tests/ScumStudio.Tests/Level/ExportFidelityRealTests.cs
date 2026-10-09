@@ -54,7 +54,9 @@ public sealed class ExportFidelityRealTests
         project.Apply(op);
 
         var result = await new ProjectExporter().ExportAsync(project, catalog, new ExportOptions { OutputDirectory = temp.Combine("out"), WritePak = false });
-        var level = Assert.Single(result.Levels);
+        // The farm, and the coast's landscape tile with the grass under the new rock cleared (on for every placed object).
+        var level = Assert.Single(result.Levels, l => l.PackagePath == Farm);
+        Assert.Contains(result.Levels, l => l.PackagePath != Farm && l.Report.ClearedGrassSamples > 0);
         Assert.Equal([op.NewName], level.Report.AddedActors);
         // The only line about it is the collision check: this coastal rock is a shell whose open underside stands above the
         // farm's ground there (RockCollisionRealTests), so players could get inside it.

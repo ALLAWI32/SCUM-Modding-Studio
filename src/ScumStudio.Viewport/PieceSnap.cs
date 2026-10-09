@@ -22,13 +22,15 @@ public readonly record struct SnapPiece(string Mesh, FTransform World, BoundingB
 public static class PieceSnap
 {
     /// <summary>
-    /// The centres of a piece's two end faces along its length (its longer horizontal axis), in its own space, and that axis
-    /// (true = Y).
+    /// The centres of a piece's two end faces along its length (its longer horizontal axis as it stands, i.e. after
+    /// <paramref name="scale"/>: the owner stretched a bridge piece along X and it then ran along X), in its own space, and
+    /// that axis (true = Y).
     /// </summary>
-    public static (FVector Start, FVector End, bool AlongY) Ends(BoundingBox bounds)
+    public static (FVector Start, FVector End, bool AlongY) Ends(BoundingBox bounds, FVector? scale = null)
     {
         var c = bounds.Center;
-        return bounds.Size.Y > bounds.Size.X
+        var (sx, sy) = scale is { } s ? (MathF.Abs(s.X), MathF.Abs(s.Y)) : (1f, 1f);
+        return bounds.Size.Y * sy > bounds.Size.X * sx
             ? (new FVector(c.X, bounds.Min.Y, c.Z), new FVector(c.X, bounds.Max.Y, c.Z), true)
             : (new FVector(bounds.Min.X, c.Y, c.Z), new FVector(bounds.Max.X, c.Y, c.Z), false);
     }
@@ -40,8 +42,8 @@ public static class PieceSnap
     /// </summary>
     public static IEnumerable<FTransform> Candidates(SnapPiece moving, SnapPiece target, IEnumerable<FTransform>? learned = null)
     {
-        var (movingStart, movingEnd, movingY) = Ends(moving.Bounds);
-        var (targetStart, targetEnd, targetY) = Ends(target.Bounds);
+        var (movingStart, movingEnd, movingY) = Ends(moving.Bounds, moving.World.Scale3D);
+        var (targetStart, targetEnd, targetY) = Ends(target.Bounds, target.World.Scale3D);
         var turn = movingY == targetY ? FQuat.Identity : FQuat.FromAxisAngle(FVector.Up, (targetY ? 1f : -1f) * MathF.PI / 2f);
         var rotation = target.World.Rotation * turn;
         var along = movingY ? FVector.Right : FVector.Forward;
@@ -183,7 +185,7 @@ public static class PieceSnap
     /// </summary>
     public static EndSection[] EndSections(SnapPiece piece)
     {
-        var (start, end, alongY) = Ends(piece.Bounds);
+        var (start, end, alongY) = Ends(piece.Bounds, piece.World.Scale3D);
         var c = piece.Bounds.Center;
         var width = alongY ? piece.Bounds.Size.X * MathF.Abs(piece.World.Scale3D.X) : piece.Bounds.Size.Y * MathF.Abs(piece.World.Scale3D.Y);
         var middle = piece.World.TransformPosition(new FVector(c.X, c.Y, 0f));

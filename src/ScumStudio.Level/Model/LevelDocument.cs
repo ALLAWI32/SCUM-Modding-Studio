@@ -340,6 +340,7 @@ public sealed class LevelDocument
                 ParentComponent = actor.ParentComponent is { } pc && _exports.ContainsKey(pc) ? pc : null,
                 PatrolPoints = actor.PatrolPoints ?? [],
                 TraderMarkers = actor.TraderMarkers ?? [],
+                IsItemContainer = actor.IsItemContainer,
             };
         }
 
@@ -370,6 +371,7 @@ public sealed class LevelDocument
                 SplineMesh = c.SplineMesh,
                 OverrideMaterials = c.OverrideMaterials,
                 SpawnMarkers = c.SpawnMarkers ?? [],
+                LootPresets = c.LootPresets ?? [],
                 CollisionProfile = c.CollisionProfile,
                 BoxExtent = c.BoxExtent,
                 PropertyNames = c.PropertyNames,

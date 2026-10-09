@@ -49,12 +49,27 @@ public sealed class GpuMeshCache
     {
         if (!_textures.TryGetValue(path, out var entry))
         {
-            entry = (renderer.CreateTexture(image.Width, image.Height, image.Rgba, image.IsSrgb), 0);
+            entry = (TextureUpload.Create(renderer, image), 0);
+        }
+        else if (image.Width > entry.Texture.Width)
+        {
+            entry = entry with { Texture = Sharpen(renderer, entry.Texture, image) };
         }
 
         _textures[path] = entry with { Used = _generation };
         _taken?.Add(path);
         return entry.Texture;
+    }
+
+    /// <summary>
+    /// A sharper image of a texture already on the GPU (the texture quality went up): every mesh drawing with the old copy
+    /// switches to the new one, so a cached mesh never keeps showing the blurrier texture (owner: "sometimes it shows me
+    /// the weaker graphics").
+    /// </summary>
+    private static GpuTexture Sharpen(SceneRenderer renderer, GpuTexture old, TextureImage image)
+    {
+        old.TakeOver(TextureUpload.Create(renderer, image)); // the same object everywhere, now sharp
+        return old;
     }
 
     /// <summary>The mesh uploaded for <paramref name="meshPath"/>, if any (nothing is uploaded or counted as used).</summary>
@@ -175,9 +190,13 @@ public sealed class GpuMeshCache
             }
 
             var (path, image) = staging.Textures.Dequeue();
-            if (!_textures.ContainsKey(path))
+            if (!_textures.TryGetValue(path, out var known))
             {
-                _textures[path] = (renderer.CreateTexture(image.Width, image.Height, image.Rgba, image.IsSrgb), _generation);
+                _textures[path] = (TextureUpload.Create(renderer, image), _generation);
+            }
+            else if (image.Width > known.Texture.Width)
+            {
+                _textures[path] = known with { Texture = Sharpen(renderer, known.Texture, image) };
             }
         }
 

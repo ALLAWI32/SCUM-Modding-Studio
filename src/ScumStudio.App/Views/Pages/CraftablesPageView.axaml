@@ -1,0 +1,196 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:ScumStudio.App.ViewModels"
+             xmlns:c="using:ScumStudio.App.Controls"
+             x:Class="ScumStudio.App.Views.Pages.CraftablesPageView"
+             x:DataType="vm:CraftablesPageViewModel">
+  <UserControl.Styles>
+    <!-- Craftable rows: the 3D picture of the mesh, the name and what it is. -->
+    <Style Selector="Border.craftThumb">
+      <Setter Property="Width" Value="56" />
+      <Setter Property="Height" Value="56" />
+      <Setter Property="Background" Value="{DynamicResource Bg1Brush}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource StrokeBrush}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="{DynamicResource SmallCornerRadius}" />
+      <Setter Property="ClipToBounds" Value="True" />
+    </Style>
+    <Style Selector="Border.craftHero">
+      <Setter Property="Width" Value="168" />
+      <Setter Property="Height" Value="168" />
+      <Setter Property="Background" Value="{DynamicResource Bg1Brush}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource StrokeBrush}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="{DynamicResource PanelCornerRadius}" />
+      <Setter Property="ClipToBounds" Value="True" />
+    </Style>
+  </UserControl.Styles>
+
+  <DockPanel>
+    <!-- ===== Header ===== -->
+    <Border DockPanel.Dock="Top" Classes="pageHeader">
+      <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="14">
+        <Border Grid.Column="0" Classes="pageGlyph"><c:GlyphIcon Kind="{Binding IconKey}" IconSize="22" /></Border>
+        <StackPanel Grid.Column="1" Spacing="2" VerticalAlignment="Center">
+          <TextBlock Text="{Binding Title}" Classes="pageTitle" />
+          <TextBlock Text="{Binding Subtitle}" Classes="muted" TextTrimming="CharacterEllipsis" />
+        </StackPanel>
+        <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+          <TextBlock Text="{Tr Craftables.NoProject}" Classes="caption" VerticalAlignment="Center" IsVisible="{Binding !HasProject}" />
+          <Button x:Name="CraftUndoButton" Classes="ghost" Command="{Binding UndoCommand}" Content="{Tr Craftables.Undo}" ToolTip.Tip="{Tr Craftables.Undo.Tip}" />
+        </StackPanel>
+      </Grid>
+    </Border>
+
+    <Panel Margin="24,0,24,20">
+      <Border Classes="emptyState" IsVisible="{Binding !HasCatalog}">
+        <StackPanel Spacing="12">
+          <TextBlock Text="{Tr Module.Empty}" Classes="h2" HorizontalAlignment="Center" />
+          <TextBlock Classes="muted wrap" TextAlignment="Center" MaxWidth="520" Text="{Tr Craftables.Empty.Body}" />
+          <Button Classes="accent" HorizontalAlignment="Center" Content="{Tr Common.OpenSetup}" Command="{Binding OpenSetupCommand}" ToolTip.Tip="{Tr Common.OpenSetup.Tip}" />
+        </StackPanel>
+      </Border>
+
+      <Grid ColumnDefinitions="340,*" ColumnSpacing="12" IsVisible="{Binding HasCatalog}">
+        <!-- The list and the Add box -->
+        <Border Grid.Column="0" Classes="panel">
+          <DockPanel Margin="10">
+            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="8" Margin="2,0,0,8">
+              <TextBlock Text="{Tr Craftables.List}" Classes="h3" VerticalAlignment="Center" />
+              <Border Classes="badge"><TextBlock Text="{Binding Items.Count}" /></Border>
+            </StackPanel>
+            <StackPanel DockPanel.Dock="Top" Spacing="6" Margin="0,0,0,8">
+              <TextBox x:Name="CraftAddSearch" Classes="search" Text="{Binding AddQuery}" Watermark="{Tr Craftables.Add.Watermark}" ToolTip.Tip="{Tr Craftables.Add.Tip}" />
+              <ListBox x:Name="CraftAddResults" Classes="plain" ItemsSource="{Binding AddResults}" MaxHeight="180" IsVisible="{Binding HasAddResults}">
+                <ListBox.ItemTemplate>
+                  <DataTemplate x:DataType="vm:CraftSourceRow">
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
+                      <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                        <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" />
+                        <TextBlock Text="{Binding Detail}" Classes="caption" TextTrimming="CharacterEllipsis" />
+                      </StackPanel>
+                      <Button Grid.Column="1" Classes="ghost" Content="{Tr Craftables.Add}" ToolTip.Tip="{Tr Craftables.AddOne.Tip}"
+                              Command="{Binding $parent[UserControl].((vm:CraftablesPageViewModel)DataContext).AddSourceCommand}" CommandParameter="{Binding}" />
+                    </Grid>
+                  </DataTemplate>
+                </ListBox.ItemTemplate>
+              </ListBox>
+            </StackPanel>
+            <TextBlock DockPanel.Dock="Bottom" Classes="caption wrap" Text="{Tr Craftables.Note}" Margin="2,8,0,0" />
+            <ListBox x:Name="CraftList" Classes="plain" ItemsSource="{Binding Items}" SelectedItem="{Binding SelectedItem}">
+              <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="vm:CraftableRowViewModel">
+                  <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10" Margin="2,3">
+                    <Border Grid.Column="0" Classes="craftThumb">
+                      <c:ThumbnailImage Source="{Binding Thumbnail}" Stretch="Uniform" Margin="2" />
+                    </Border>
+                    <StackPanel Grid.Column="1" Spacing="2" VerticalAlignment="Center">
+                      <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                      <TextBlock Text="{Binding Caption}" Classes="caption" TextTrimming="CharacterEllipsis" />
+                      <StackPanel Orientation="Horizontal" Spacing="4">
+                        <Border Classes="chip"><TextBlock Text="{Binding Kind}" /></Border>
+                        <Border Classes="chip"><TextBlock Text="{Binding Material}" /></Border>
+                      </StackPanel>
+                    </StackPanel>
+                  </Grid>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+          </DockPanel>
+        </Border>
+
+        <!-- The selected craftable -->
+        <Border Grid.Column="1" Classes="panel">
+          <Panel>
+            <TextBlock Classes="muted wrap" Margin="16" Text="{Tr Craftables.SelectOne}" IsVisible="{Binding !HasSelection}" />
+            <ScrollViewer IsVisible="{Binding HasSelection}">
+              <StackPanel Margin="16,14" Spacing="12" DataContext="{Binding SelectedItem}" x:DataType="vm:CraftableRowViewModel">
+                <Grid ColumnDefinitions="Auto,*" ColumnSpacing="16">
+                  <Border Grid.Column="0" Classes="craftHero">
+                    <c:ThumbnailImage Source="{Binding Thumbnail}" Stretch="Uniform" Margin="6" />
+                  </Border>
+                  <StackPanel Grid.Column="1" Spacing="8">
+                    <TextBlock Text="{Tr Craftables.Name}" Classes="caption" />
+                    <TextBox x:Name="CraftNameBox" Text="{Binding Name}" ToolTip.Tip="{Tr Craftables.Name.Tip}" />
+                    <TextBlock Text="{Binding Source}" Classes="caption mono" TextTrimming="CharacterEllipsis" />
+                    <WrapPanel Orientation="Horizontal" ItemSpacing="8" LineSpacing="6">
+                      <StackPanel Spacing="2">
+                        <TextBlock Text="{Tr Craftables.Kind}" Classes="caption" />
+                        <ComboBox x:Name="CraftKindBox" MinWidth="150" SelectedItem="{Binding Kind}" ToolTip.Tip="{Tr Craftables.Kind.Tip}"
+                                  ItemsSource="{Binding $parent[UserControl].((vm:CraftablesPageViewModel)DataContext).Kinds}" />
+                      </StackPanel>
+                      <StackPanel Spacing="2">
+                        <TextBlock Text="{Tr Craftables.Material}" Classes="caption" />
+                        <ComboBox x:Name="CraftMaterialBox" MinWidth="150" SelectedItem="{Binding Material}" ToolTip.Tip="{Tr Craftables.Material.Tip}"
+                                  ItemsSource="{Binding $parent[UserControl].((vm:CraftablesPageViewModel)DataContext).Materials}" />
+                      </StackPanel>
+                      <StackPanel Spacing="2" IsVisible="{Binding IsBuilt}">
+                        <TextBlock Text="{Tr Craftables.Station}" Classes="caption" />
+                        <ComboBox x:Name="CraftStationBox" MinWidth="170" SelectedItem="{Binding Station}" ToolTip.Tip="{Tr Craftables.Station.Tip}"
+                                  ItemsSource="{Binding $parent[UserControl].((vm:CraftablesPageViewModel)DataContext).Stations}" />
+                      </StackPanel>
+                    </WrapPanel>
+                    <CheckBox IsChecked="{Binding NeedsPower}" IsVisible="{Binding IsBuilt}" ToolTip.Tip="{Tr Craftables.NeedsPower.Tip}">
+                      <TextBlock Text="{Tr Craftables.NeedsPower}" TextWrapping="Wrap" />
+                    </CheckBox>
+                  </StackPanel>
+                </Grid>
+
+                <!-- Power objects: the green circle, what they give and their fuel. -->
+                <Border Classes="card" IsVisible="{Binding IsPower}" Padding="12">
+                  <StackPanel Spacing="8">
+                    <TextBlock Text="{Tr Craftables.Power}" Classes="h3" />
+                    <WrapPanel Orientation="Horizontal" ItemSpacing="10" LineSpacing="6">
+                      <StackPanel Spacing="2">
+                        <TextBlock Text="{Tr Craftables.Radius}" Classes="caption" />
+                        <NumericUpDown x:Name="CraftRadiusBox" Value="{Binding Radius}" Minimum="1" Maximum="500" Increment="1" Width="140" ToolTip.Tip="{Tr Craftables.Radius.Tip}" />
+                      </StackPanel>
+                      <StackPanel Spacing="2">
+                        <TextBlock Text="{Tr Craftables.Output}" Classes="caption" />
+                        <NumericUpDown Value="{Binding Output}" Minimum="1" Maximum="100000" Increment="50" Width="140" ToolTip.Tip="{Tr Craftables.Output.Tip}" />
+                      </StackPanel>
+                      <StackPanel Spacing="2">
+                        <TextBlock Text="{Tr Craftables.Fuel}" Classes="caption" />
+                        <NumericUpDown Value="{Binding Fuel}" Minimum="0" Maximum="100" Increment="0.05" FormatString="0.#####" Width="140" ToolTip.Tip="{Tr Craftables.Fuel.Tip}" />
+                      </StackPanel>
+                    </WrapPanel>
+                    <CheckBox IsChecked="{Binding DayOnly}" ToolTip.Tip="{Tr Craftables.DayOnly.Tip}">
+                      <TextBlock Text="{Tr Craftables.DayOnly}" TextWrapping="Wrap" />
+                    </CheckBox>
+                  </StackPanel>
+                </Border>
+
+                <!-- The recipe -->
+                <DockPanel>
+                  <TextBlock DockPanel.Dock="Left" Text="{Tr Craftables.Recipe}" Classes="h3" VerticalAlignment="Center" />
+                  <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="6" HorizontalAlignment="Right">
+                    <Button Classes="ghost" Content="{Tr Craftables.Suggest}" ToolTip.Tip="{Tr Craftables.Suggest.Tip}"
+                            Command="{Binding $parent[UserControl].((vm:CraftablesPageViewModel)DataContext).SuggestRecipeCommand}" />
+                    <Button x:Name="CraftAddIngredientButton" Classes="ghost" Content="{Tr Craftables.AddIngredient}" ToolTip.Tip="{Tr Craftables.AddIngredient.Tip}"
+                            Command="{Binding $parent[UserControl].((vm:CraftablesPageViewModel)DataContext).AddIngredientCommand}" />
+                  </StackPanel>
+                </DockPanel>
+                <ItemsControl x:Name="CraftIngredients" ItemsSource="{Binding Ingredients}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:IngredientRowViewModel">
+                      <Grid ColumnDefinitions="*,120,Auto,Auto" ColumnSpacing="8" Margin="0,2">
+                        <AutoCompleteBox Grid.Column="0" Text="{Binding Tag}" FilterMode="Contains" ToolTip.Tip="{Tr Craftables.Tag.Tip}"
+                                         ItemsSource="{Binding $parent[UserControl].((vm:CraftablesPageViewModel)DataContext).Tags}" />
+                        <NumericUpDown Grid.Column="1" Value="{Binding Amount}" Minimum="1" Maximum="999" Increment="1" FormatString="0" ToolTip.Tip="{Tr Craftables.Amount.Tip}" />
+                        <CheckBox Grid.Column="2" IsChecked="{Binding IsTool}" Content="{Tr Craftables.Tool}" ToolTip.Tip="{Tr Craftables.Tool.Tip}" />
+                        <Button Grid.Column="3" Classes="ghost" Content="{Tr Craftables.RemoveIngredient}" Command="{Binding RemoveCommand}" ToolTip.Tip="{Tr Craftables.RemoveIngredient.Tip}" />
+                      </Grid>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <Button x:Name="CraftRemoveButton" Classes="danger" HorizontalAlignment="Left" Content="{Tr Craftables.Remove}" ToolTip.Tip="{Tr Craftables.Remove.Tip}"
+                        Command="{Binding $parent[UserControl].((vm:CraftablesPageViewModel)DataContext).RemoveCommand}" />
+              </StackPanel>
+            </ScrollViewer>
+          </Panel>
+        </Border>
+      </Grid>
+    </Panel>
+  </DockPanel>
+</UserControl>

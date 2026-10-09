@@ -56,7 +56,15 @@ public sealed partial class MapPageViewModel
     /// <summary>Least distance between two planted objects (and to an existing one), metres.</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(PaintSpacingText))]
-    private double _paintSpacing = 3.5;
+    private double _paintSpacing = 1;
+
+    /// <summary>
+    /// The largest spacing (m): each planted object keeps its own random distance between <see cref="PaintSpacing"/> and this
+    /// from its neighbours (owner: "between each tree 1, 2 or 3 m, random within these limits").
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(PaintSpacingText))]
+    private double _paintSpacingMax = 3;
 
     /// <summary>Plants come a little bigger or smaller (0.9–1.15; buildings and Blueprints always 1).</summary>
     [ObservableProperty]
@@ -66,8 +74,10 @@ public sealed partial class MapPageViewModel
     [ObservableProperty]
     private bool _paintRandomTurn = true;
 
-    /// <summary><see cref="PaintSpacing"/> as text ("3.5 m").</summary>
-    public string PaintSpacingText => string.Create(CultureInfo.CurrentCulture, $"{PaintSpacing:0.#} m");
+    /// <summary>The spacing range as text ("1–3 m", or "3.5 m" when both ends are the same).</summary>
+    public string PaintSpacingText => Math.Abs(PaintSpacingMax - PaintSpacing) < 0.05
+        ? string.Create(CultureInfo.CurrentCulture, $"{PaintSpacing:0.#} m")
+        : string.Create(CultureInfo.CurrentCulture, $"{PaintSpacing:0.#}–{PaintSpacingMax:0.#} m");
 
     /// <summary>What a stroke plants (picked from <see cref="PaintPicker"/>), saved with the project.</summary>
     public ObservableCollection<ReplaceCandidate> PaintPalette { get; } = [];
@@ -159,7 +169,25 @@ public sealed partial class MapPageViewModel
         SavePaintPalette();
     }
 
-    partial void OnPaintSpacingChanged(double value) => SavePaintPalette();
+    partial void OnPaintSpacingChanged(double value)
+    {
+        if (PaintSpacingMax < value)
+        {
+            PaintSpacingMax = value; // the range never turns round
+        }
+
+        SavePaintPalette();
+    }
+
+    partial void OnPaintSpacingMaxChanged(double value)
+    {
+        if (PaintSpacing > value)
+        {
+            PaintSpacing = value;
+        }
+
+        SavePaintPalette();
+    }
 
     partial void OnPaintRandomSizeChanged(bool value) => SavePaintPalette();
 
@@ -190,7 +218,7 @@ public sealed partial class MapPageViewModel
 
         try
         {
-            var data = new PaintPaletteFile([.. PaintPalette.Select(p => p.Choice.ObjectPath)], PaintSpacing, PaintRandomSize, PaintRandomTurn);
+            var data = new PaintPaletteFile([.. PaintPalette.Select(p => p.Choice.ObjectPath)], PaintSpacing, PaintRandomSize, PaintRandomTurn, PaintSpacingMax);
             File.WriteAllText(file, JsonSerializer.Serialize(data, PaletteJson));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -223,7 +251,9 @@ public sealed partial class MapPageViewModel
                     }
                 }
 
+                PaintSpacingMax = 20; // the max first, so the min is not pulled down on the way
                 PaintSpacing = Math.Clamp(data.Spacing, 1, 20);
+                PaintSpacingMax = Math.Clamp(data.SpacingMax > 0 ? data.SpacingMax : data.Spacing, PaintSpacing, 20); // older files: one spacing
                 PaintRandomSize = data.RandomSize;
                 PaintRandomTurn = data.RandomTurn;
             }
@@ -383,12 +413,14 @@ public sealed partial class MapPageViewModel
             }
         }
 
-        var spacing = (float)Math.Clamp(PaintSpacing, 1, 20) * 100f;
+        var least = (float)Math.Clamp(PaintSpacing, 1, 20) * 100f;
+        var spacing = MathF.Max(least, (float)Math.Clamp(PaintSpacingMax, 1, 20) * 100f); // the index cells hold the largest distance
         var radius = (float)BrushRadius * 100f;
         var seed = Mix(((ulong)BitConverter.SingleToUInt32Bits(at.X) << 32) | BitConverter.SingleToUInt32Bits(at.Y));
-        return new PaintStroke(project!, scene!, kinds, spacing, MathF.Max(spacing / 2f, 2f * radius / 150f), MathF.Max(radius, 1000f), seed,
+        return new PaintStroke(project!, scene!, kinds, spacing, MathF.Max(least / 2f, 2f * radius / 150f), MathF.Max(radius, 1000f), seed,
             PaintRandomSize, PaintRandomTurn)
         {
+            LeastSpacing = least,
             Target = scene is { Documents.Count: > 0 } ? NewObjectLevel(scene) : null,
         };
     }
@@ -467,7 +499,9 @@ public sealed partial class MapPageViewModel
         fresh.Sort((p, q) => p.Hash.CompareTo(q.Hash));
         foreach (var (h, at, z) in fresh)
         {
-            if (!TooClose(stroke, at, z))
+            // Each place keeps its own distance in the range, so the gaps vary like a grown forest's.
+            var keep = stroke.LeastSpacing + ((stroke.Spacing - stroke.LeastSpacing) * Unit(h, 7));
+            if (!TooClose(stroke, at, z, keep))
             {
                 Plant(stroke, at, z, h);
             }
@@ -498,11 +532,11 @@ public sealed partial class MapPageViewModel
         }
     }
 
-    /// <summary>True when a planted or existing object is closer to <paramref name="at"/> than the spacing.</summary>
-    private static bool TooClose(PaintStroke stroke, Vector2 at, float z)
+    /// <summary>True when a planted or existing object is closer to <paramref name="at"/> than <paramref name="keep"/> (cm).</summary>
+    private static bool TooClose(PaintStroke stroke, Vector2 at, float z, float keep)
     {
-        var s = stroke.Spacing;
-        var (cx, cy) = PaintCellOf(at, s);
+        var (cx, cy) = PaintCellOf(at, stroke.Spacing); // cells as large as the largest spacing: the 3x3 around holds every neighbour
+        var s = keep;
         for (var dy = -1; dy <= 1; dy++)
         {
             for (var dx = -1; dx <= 1; dx++)
@@ -738,7 +772,7 @@ public sealed partial class MapPageViewModel
     private static float Unit(ulong h, int i) => (Mix(h + (ulong)i) >> 40) / (float)(1 << 24);
 
     /// <summary>The palette file: object paths and the brush settings.</summary>
-    private sealed record PaintPaletteFile(List<string>? Items, double Spacing = 3.5, bool RandomSize = true, bool RandomTurn = true);
+    private sealed record PaintPaletteFile(List<string>? Items, double Spacing = 3.5, bool RandomSize = true, bool RandomTurn = true, double SpacingMax = 0);
 
     /// <summary>One palette object as a stroke plants it.</summary>
     /// <param name="Path">Mesh object path or Blueprint class path.</param>
@@ -762,6 +796,9 @@ public sealed partial class MapPageViewModel
 
         /// <summary>Where new actors go (the first loaded level that is not a landscape tile).</summary>
         public LevelDocument? Target { get; init; }
+
+        /// <summary>The smallest distance of the range (cm); <see cref="Spacing"/> is the largest.</summary>
+        public float LeastSpacing { get; init; }
 
         public HashSet<(int X, int Y)> Tried { get; } = [];
 

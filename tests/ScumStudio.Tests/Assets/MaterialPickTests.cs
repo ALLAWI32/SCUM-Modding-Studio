@@ -34,4 +34,19 @@ public sealed class MaterialPickTests
         Assert.Equal("/Game/T/T_ArmoryBuilding_ATLAS_D.T_ArmoryBuilding_ATLAS_D",
             MaterialInspector.PickTexture([T("Normal", "T_ArmoryBuilding_ATLAS_N"), T("Diffuse", "T_ArmoryBuilding_ATLAS_D")]));
     }
+
+    [Fact]
+    public void TheObjectsOwnNormalMap_NotADetailOrBlendLayerOrAFlatDummy()
+    {
+        // MI_CliffRock_01: 'Normal' is the rock's; 'DetailNormal' a tiled flat dummy.
+        Assert.Equal("/Game/T/T_CliffRock_01_N.T_CliffRock_01_N", MaterialInspector.PickNormal(
+        [
+            T("DetailNormal", "T_FlatNormal_Dummy_01"),
+            T("Color", "T_CliffRock_01_D"),
+            T("Normal", "T_CliffRock_01_N"),
+        ]));
+        Assert.Equal("/Game/T/T_Large_Rock_01_N.T_Large_Rock_01_N", MaterialInspector.PickNormal([T("Atlas_Normal", "T_Large_Rock_01_N"), T("Atlas_Masks", "T_M")]));
+        Assert.Null(MaterialInspector.PickNormal([T("Detail Normal", "T_Concrete_Detail_Normal_01"), T("B Material Normal Blend", "T_X_N")]));
+        Assert.Null(MaterialInspector.PickNormal([T("Normal", "T_FlatNormal_Dummy_01")]));
+    }
 }

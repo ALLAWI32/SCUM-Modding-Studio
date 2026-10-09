@@ -32,6 +32,15 @@ public sealed record PreviewPart(string Name, MeshData Mesh, string? TexturePath
 
     /// <summary>Shiny paint: metal (x) and gloss (y), 0..1, where the texture's alpha is set; zero = plain shading.</summary>
     public Vector2 Surface { get; init; }
+
+    /// <summary>Key into <see cref="PreviewModel.Textures"/> of the material's normal map, or null.</summary>
+    public string? NormalPath { get; init; }
+
+    /// <summary>Roughness range of an opaque master-shader material (see <c>GpuSection.Roughness</c>); zero = plain diffuse.</summary>
+    public Vector2 Roughness { get; init; }
+
+    /// <summary>The vehicle attachment package this part draws (<c>/Game/…/BPC_X_Door_FrontLeft</c>), or empty for the vehicle's own mesh.</summary>
+    public string Attachment { get; init; } = string.Empty;
 }
 
 /// <summary>A CPU-side model for <c>MeshPreview</c>: parts plus the decoded base-colour textures they share.</summary>
@@ -82,6 +91,12 @@ public sealed class MeshPreviewLoader
 
     /// <summary>Largest texture edge in pixels (0 = no textures).</summary>
     public int TextureSize { get; init; } = 1024;
+
+    /// <summary>
+    /// Keep colour textures and normal maps as their cooked blocks for the GPU (<see cref="TextureDecoder.DecodeForGpu"/>):
+    /// full-size textures at a quarter of the memory, but no RGBA pixels (repainting needs those: leave it off there).
+    /// </summary>
+    public bool ForGpu { get; init; }
 
     /// <summary>The LOD taken for each part, from the mesh's LOD list (null = the finest with render data).</summary>
     public Func<IReadOnlyList<MeshLodInfo>, int>? LodOf { get; init; }
@@ -561,7 +576,12 @@ public sealed class MeshPreviewLoader
             var mesh = string.IsNullOrEmpty(meshPath) || meshPath == "None" ? null : TryLoadMeshObject(meshPath);
             if (mesh is not null)
             {
+                var first = parts.Count;
                 AddMeshParts(parts, mesh, meshPath!, world);
+                for (var i = first; i < parts.Count; i++)
+                {
+                    parts[i] = parts[i] with { Attachment = attachmentPackage };
+                }
             }
 
             var children = cdo.GetOrDefault<FStructFallback[]>("_slots");
@@ -624,6 +644,7 @@ public sealed class MeshPreviewLoader
         foreach (var group in groups)
         {
             var (texture, tint, clip) = ResolveMaterial(group.Key);
+            var (normal, roughness) = texture is null ? (null, Vector2.Zero) : ResolveSurface(group.Key, clip);
             MeshData part;
             if (groups.Count == 1)
             {
@@ -641,7 +662,7 @@ public sealed class MeshPreviewLoader
             }
 
             var name = group.Key.Length == 0 ? data.Name : data.Name + " / " + group.Key[(group.Key.LastIndexOfAny(['/', '.']) + 1)..];
-            parts.Add(new PreviewPart(name, part, texture, transform, tint, clip) { Material = group.Key });
+            parts.Add(new PreviewPart(name, part, texture, transform, tint, clip) { Material = group.Key, NormalPath = normal, Roughness = roughness });
         }
     }
 
@@ -673,7 +694,7 @@ public sealed class MeshPreviewLoader
             _materials[materialPath] = material;
         }
 
-        if (material?.BaseColorTexture is { } texturePath && Decoded(texturePath, () => TextureDecoder.Decode(_catalog.LoadObject<UTexture2D>(texturePath), maxSize: TextureSize)))
+        if (material?.BaseColorTexture is { } texturePath && Decoded(texturePath, () => DecodeTexture(texturePath)))
         {
             return (texturePath, null, material.OpacityMaskClip ?? 0f);
         }
@@ -685,6 +706,24 @@ public sealed class MeshPreviewLoader
 
         return (null, material?.TintColor is { } tint && tint.W > 0f ? tint with { W = 1f } : Untextured, 0f);
     }
+
+    /// <summary>The material's normal map (decoded once per path) and, for an opaque one, its roughness range.</summary>
+    private (string? NormalPath, Vector2 Roughness) ResolveSurface(string materialPath, float clip)
+    {
+        if (!_materials.TryGetValue(materialPath, out var material) || material is null)
+        {
+            return (null, Vector2.Zero);
+        }
+
+        var roughness = clip == 0f && !material.IsTranslucent && material.RoughnessRange is { } r ? r : Vector2.Zero;
+        return material.NormalTexture is { } path && Decoded(path, () => DecodeTexture(path))
+            ? (path, roughness)
+            : (null, roughness);
+    }
+
+    private TextureImage DecodeTexture(string path) => ForGpu
+        ? TextureDecoder.DecodeForGpu(_catalog.LoadObject<UTexture2D>(path), maxSize: TextureSize)
+        : TextureDecoder.Decode(_catalog.LoadObject<UTexture2D>(path), maxSize: TextureSize);
 
     private static Vector4 Untextured => new(0.6f, 0.6f, 0.6f, 1f);
 
@@ -831,6 +870,7 @@ public sealed class MeshPreviewLoader
         var materialTextures = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var tints = new Dictionary<string, Vector4>(StringComparer.OrdinalIgnoreCase);
         var cutoffs = new Dictionary<string, float>(StringComparer.OrdinalIgnoreCase);
+        var roughness = new Dictionary<string, Vector2>(StringComparer.OrdinalIgnoreCase);
         foreach (var part in model.Parts)
         {
             var mesh = part.Mesh;
@@ -860,6 +900,15 @@ public sealed class MeshPreviewLoader
             if (part.TexturePath is { } texture)
             {
                 materialTextures[material] = texture;
+                if (part.NormalPath is { } normal)
+                {
+                    materialTextures[material + ScumStudio.Rendering.Resources.GpuMesh.NormalMapSuffix] = normal;
+                }
+
+                if (part.Roughness.Y > 0f)
+                {
+                    roughness[material] = part.Roughness;
+                }
             }
 
             if (part.Tint is { } tint)
@@ -880,6 +929,7 @@ public sealed class MeshPreviewLoader
             MaterialTextures = materialTextures,
             MaterialTints = tints,
             MaterialAlphaCutoffs = cutoffs,
+            MaterialRoughness = roughness,
         };
     }
 

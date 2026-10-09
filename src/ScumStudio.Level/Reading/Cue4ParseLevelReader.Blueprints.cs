@@ -375,7 +375,8 @@ public sealed partial class Cue4ParseLevelReader
         IReadOnlyList<string?>? OverrideMaterials = null,
         IReadOnlyList<SpawnMarker>? SpawnMarkers = null,
         string? CollisionProfile = null,
-        FVector? BoxExtent = null)
+        FVector? BoxExtent = null,
+        IReadOnlyList<string>? LootPresets = null)
     {
         public LevelExportData ApplyTo(LevelExportData header) => header with
         {
@@ -399,6 +400,7 @@ public sealed partial class Cue4ParseLevelReader
             SplineMesh = SplineMesh,
             OverrideMaterials = OverrideMaterials,
             SpawnMarkers = SpawnMarkers,
+            LootPresets = LootPresets,
             CollisionProfile = CollisionProfile,
         };
     }

@@ -5,11 +5,32 @@ using ScumStudio.Core.Geometry;
 
 namespace ScumStudio.Rendering.Resources;
 
+/// <summary>Block-compressed GPU texture formats (<see cref="GpuTexture.FromCompressed"/>), named as in D3D.</summary>
+public enum CompressedFormat
+{
+    /// <summary>DXT1: RGB, 8 bytes per 4x4 block.</summary>
+    Bc1,
+
+    /// <summary>DXT3: RGB + explicit alpha.</summary>
+    Bc2,
+
+    /// <summary>DXT5: RGB + interpolated alpha.</summary>
+    Bc3,
+
+    /// <summary>Two channels (UE normal maps: X, Y).</summary>
+    Bc5,
+
+    /// <summary>BPTC RGBA.</summary>
+    Bc7,
+}
+
 /// <summary>A material section of an uploaded LOD: an index range and the texture it is drawn with.</summary>
 public sealed class GpuSection
 {
-    internal GpuSection(PreparedSection section, GpuTexture? texture, float alphaCutoff = 0f, Vector4? tint = null)
+    internal GpuSection(PreparedSection section, GpuTexture? texture, float alphaCutoff = 0f, Vector4? tint = null, GpuTexture? normalMap = null, Vector2 roughness = default)
     {
+        NormalMap = normalMap;
+        Roughness = roughness;
         AlphaCutoff = alphaCutoff;
         Tint = tint ?? Vector4.One;
         HasOwnColour = tint is not null && texture is null;
@@ -43,6 +64,15 @@ public sealed class GpuSection
 
     /// <summary>The section's own texture (not owned), or null to draw with <see cref="GpuMesh.Texture"/>.</summary>
     public GpuTexture? Texture { get; set; }
+
+    /// <summary>Tangent-space normal map of the section's material (linear RG = X, Y; not owned), or null.</summary>
+    public GpuTexture? NormalMap { get; set; }
+
+    /// <summary>
+    /// Roughness range (min, max) the texture's alpha is scaled into for the sun's highlight (SCUM's opaque master
+    /// shader); (0, 0) = no highlight, the material is lit as plain diffuse.
+    /// </summary>
+    public Vector2 Roughness { get; }
 }
 
 /// <summary>One uploaded level of detail.</summary>
@@ -60,10 +90,16 @@ public sealed class GpuMesh : IDisposable
     private readonly GL _gl;
     private bool _disposed;
 
-    /// <summary>Uploads <paramref name="mesh"/>; sections draw with the texture of their material in <paramref name="materialTextures"/>, else <paramref name="texture"/>.</summary>
+    /// <summary>Key suffix of a material's normal map in the material texture dictionaries: <c>material + "#normal"</c>.</summary>
+    public const string NormalMapSuffix = "#normal";
+
+    /// <summary>
+    /// Uploads <paramref name="mesh"/>; sections draw with the texture of their material in <paramref name="materialTextures"/>, else <paramref name="texture"/>,
+    /// and with the normal map under the material's key plus <see cref="NormalMapSuffix"/>.
+    /// </summary>
     public unsafe GpuMesh(GL gl, int id, PreparedMesh mesh, GpuTexture? texture = null, IReadOnlyDictionary<string, GpuTexture>? materialTextures = null,
         IReadOnlyDictionary<string, float>? materialAlphaCutoffs = null, IReadOnlyDictionary<string, Vector4>? materialTints = null,
-        bool shimmer = false, bool billboard = false)
+        bool shimmer = false, bool billboard = false, IReadOnlyDictionary<string, Vector2>? materialRoughness = null)
     {
         _gl = gl ?? throw new ArgumentNullException(nameof(gl));
         ArgumentNullException.ThrowIfNull(mesh);
@@ -78,7 +114,9 @@ public sealed class GpuMesh : IDisposable
         Lods = mesh.Lods.Select(l => new GpuLod(l.ScreenSize, l.Sections.Select(s =>
             new GpuSection(s, materialTextures is not null && s.Material.Length > 0 && materialTextures.TryGetValue(s.Material, out var t) ? t : null,
                 materialAlphaCutoffs is not null && materialAlphaCutoffs.TryGetValue(s.Material, out var c) ? c : 0f,
-                materialTints is not null && materialTints.TryGetValue(s.Material, out var tint) ? tint : null)).ToArray())).ToArray();
+                materialTints is not null && materialTints.TryGetValue(s.Material, out var tint) ? tint : null,
+                materialTextures is not null && s.Material.Length > 0 && materialTextures.TryGetValue(s.Material + NormalMapSuffix, out var n) ? n : null,
+                materialRoughness is not null && materialRoughness.TryGetValue(s.Material, out var r) ? r : default)).ToArray())).ToArray();
         LodScreenSizes = Lods.Select(l => l.ScreenSize).ToArray();
 
         Vao = gl.GenVertexArray();
@@ -135,6 +173,15 @@ public sealed class GpuMesh : IDisposable
 
     /// <summary>A camera-facing card: the mesh's x/y span the camera's right and up at each instance's origin.</summary>
     public bool Billboard { get; }
+
+    /// <summary>Normal map of sections drawn with <see cref="Texture"/> (a preview part's material; not owned), or null.</summary>
+    public GpuTexture? NormalMap { get; set; }
+
+    /// <summary>Roughness range of sections drawn with <see cref="Texture"/> (see <see cref="GpuSection.Roughness"/>).</summary>
+    public Vector2 Roughness { get; set; }
+
+    /// <summary>Water surface (the level's sea): shaded with waves, the sky's reflection and a sun glint; the tint is the water colour.</summary>
+    public bool Water { get; set; }
 
     /// <summary>Local bounds in the renderer's GL world units.</summary>
     public BoundingBox Bounds { get; }

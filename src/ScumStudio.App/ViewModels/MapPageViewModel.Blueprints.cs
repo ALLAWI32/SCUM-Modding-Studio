@@ -27,9 +27,32 @@ public sealed partial class MapPageViewModel
     /// <summary>Completes when the last Blueprint placement (<see cref="AddBlueprintAsync"/>) finished (tests).</summary>
     public Task<bool> AddCompletion { get; private set; } = Task.FromResult(false);
 
-    /// <summary>The level new objects go to: the first loaded level that is not a landscape tile.</summary>
-    private static LevelDocument NewObjectLevel(PreparedLevelScene scene) =>
-        scene.Documents.FirstOrDefault(d => !d.Name.StartsWith("Landscape_", StringComparison.OrdinalIgnoreCase)) ?? scene.Documents[0];
+    /// <summary>
+    /// The level new objects go to: of the loaded levels that are not landscape tiles or the island's spawn data, the one
+    /// whose objects come nearest to <paramref name="at"/> (the game streams a level in by where its objects are, so a copy
+    /// put into a far level showed only when that one loaded — the owner pasted a building far away and found nothing);
+    /// without a place, the first of them.
+    /// </summary>
+    private static LevelDocument NewObjectLevel(PreparedLevelScene scene, FVector? at = null)
+    {
+        var levels = scene.Documents.Where(d => !d.Name.StartsWith("Landscape_", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(d.PackagePath, Level.Spawns.SpawnPlaces.StaticDataPath, StringComparison.OrdinalIgnoreCase)).ToList();
+        if (levels.Count == 0)
+        {
+            return scene.Documents[0];
+        }
+
+        if (at is not { } p || levels.Count == 1)
+        {
+            return levels[0];
+        }
+
+        return levels.MinBy(d => d.Actors.Where(a => a.Kind != ActorKind.Other)
+            .Select(a => a.WorldTransform.Translation)
+            .Select(t => ((t.X - p.X) * (t.X - p.X)) + ((t.Y - p.Y) * (t.Y - p.Y)))
+            .DefaultIfEmpty(float.MaxValue)
+            .Min())!;
+    }
 
     /// <summary>
     /// Adds the Blueprint <paramref name="classPackage"/> (its package path) where the viewport aims, in the level new objects
@@ -57,8 +80,8 @@ public sealed partial class MapPageViewModel
         }
 
         // Where and in which level are taken now: the camera can move while the source is found and read.
-        var target = NewObjectLevel(scene);
         var at = AimPointProvider?.Invoke() ?? FVector.Zero;
+        var target = NewObjectLevel(scene, at);
         var item = ItemClassOf(catalog, classPackage);
         try
         {

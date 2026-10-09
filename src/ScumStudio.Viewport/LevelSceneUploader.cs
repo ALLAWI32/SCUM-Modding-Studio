@@ -80,7 +80,7 @@ public sealed class LevelScene : IDisposable
         {
             if (!_gpuTextures.ContainsKey(path))
             {
-                var texture = _renderer.CreateTexture(image.Width, image.Height, image.Rgba, image.IsSrgb);
+                var texture = TextureUpload.Create(_renderer, image);
                 _gpuTextures[path] = texture;
                 _textures.Add(texture);
             }
@@ -321,6 +321,7 @@ public sealed class LevelScene : IDisposable
 
     private void Index(SceneNode node)
     {
+        NodesBuilt++;
         if (_nodesById is null)
         {
             return; // built on first use
@@ -497,6 +498,24 @@ public sealed class LevelScene : IDisposable
     public IReadOnlyList<SceneNode> TerrainNodes => _terrainParts.Select(p => p.Node).ToList();
 
     /// <summary>
+    /// For a coarse whole-island backdrop: hides the landscape tiles <paramref name="detailed"/> draws at full resolution,
+    /// so each tile is drawn once, as in the game (both drawn, the coarse one pokes through the detailed one in patches).
+    /// When <paramref name="detailed"/> has a sea, the backdrop's is hidden too: the detailed scene is drawn second, so its
+    /// sea (wide enough for the whole island) comes after all the ground of both and is the one sea of the view. The
+    /// backdrop's, drawn first, was painted over by the detailed seabed ("the water turns into empty blue ground").
+    /// </summary>
+    public void HideTerrainOf(PreparedLevelScene? detailed)
+    {
+        var names = detailed?.Terrain.Select(t => t.LevelName).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var node in TerrainNodes)
+        {
+            node.Visible = names is null || !names.Contains(node.Name[..Math.Max(0, node.Name.IndexOf('/'))]);
+        }
+
+        SeaVisible = detailed?.SeaLevelCm is null;
+    }
+
+    /// <summary>
     /// Replaces the terrain textures (render thread), e.g. with <see cref="LevelScenePreparer.BakeTerrain"/> output for
     /// another <see cref="GroundMode"/>; <paramref name="albedo"/> is index-aligned with <see cref="PreparedLevelScene.Terrain"/>
     /// and null entries draw the plain tint.
@@ -602,7 +621,7 @@ public sealed class LevelScene : IDisposable
         var gpuTextures = new Dictionary<string, GpuTexture>(StringComparer.OrdinalIgnoreCase);
         foreach (var (path, image) in next.Textures)
         {
-            gpuTextures[path] = Cache?.Texture(_renderer, path, image) ?? Own(_renderer.CreateTexture(image.Width, image.Height, image.Rgba, image.IsSrgb));
+            gpuTextures[path] = Cache?.Texture(_renderer, path, image) ?? Own(TextureUpload.Create(_renderer, image));
         }
 
         foreach (var (path, texture) in _gpuTextures)
@@ -960,6 +979,7 @@ public sealed class LevelScene : IDisposable
         if (_seaNode is null && !terrainBounds.IsEmpty && seaLevelCm is { } seaLevel)
         {
             var handle = Own(_renderer.AddMesh(LevelSceneUploader.CreateSeaMesh(terrainBounds, seaLevel, _options.SeaMarginCm), MeshSpace.Unreal));
+            _renderer.Meshes[handle.Id].Water = true;
             _seaNode = Scene.Add(handle, Matrix4x4.Identity, 0, "Sea");
             _seaNode.Tint = _options.SeaColor;
         }
@@ -986,6 +1006,12 @@ public sealed class LevelScene : IDisposable
 
     /// <summary>The group a node of <paramref name="placement"/>'s level hangs in (the root when the level has none).</summary>
     private SceneNode ParentOf(ScenePlacement placement) => _groups.TryGetValue(placement.DocumentIndex, out var group) ? group.Node : Scene.Root;
+
+    /// <summary>
+    /// Counts the nodes added after the scene was built (copies, pins, bent pieces, instances given their own node): a
+    /// viewport lights its selection again when it changes, since new nodes start unlit.
+    /// </summary>
+    public int NodesBuilt { get; private set; }
 
     /// <summary>Distinct mesh handles created (meshes + terrain).</summary>
     public int MeshCount => _handles.Count;
@@ -1343,7 +1369,9 @@ public static class LevelSceneUploader
         }
 
         var prepared = packed ?? Pack(asset);
-        return renderer.AddMesh(prepared, texture, materialTextures, asset.MaterialAlphaCutoffs, asset.MaterialTints, asset.Shimmer, asset.Billboard);
+        var handle = renderer.AddMesh(prepared, texture, materialTextures, asset.MaterialAlphaCutoffs, asset.MaterialTints, asset.Shimmer, asset.Billboard, asset.MaterialRoughness);
+        renderer.Meshes[handle.Id].Water = asset.Water;
+        return handle;
     }
 
     /// <summary>The vertex and index data of every LOD of <paramref name="asset"/> as <see cref="AddMesh"/> sends it (CPU only: safe on a worker thread).</summary>
@@ -1406,7 +1434,7 @@ public static class LevelSceneUploader
             }
             else if (!layerTextures.TryGetValue(path, out layer))
             {
-                layer = renderer.CreateTexture(image.Width, image.Height, image.Rgba, image.IsSrgb);
+                layer = TextureUpload.Create(renderer, image);
                 owned.Add(layer);
                 layerTextures[path] = layer;
             }

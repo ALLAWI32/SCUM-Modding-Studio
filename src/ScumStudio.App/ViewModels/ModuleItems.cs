@@ -110,6 +110,12 @@ public sealed record ModulePart(string Label, string PackagePath, string Descrip
     /// <summary>True for a vehicle's engine torque curve: only the torque of each key is shown, labelled with its rpm.</summary>
     public bool IsTorqueCurve { get; init; }
 
+    /// <summary>True for a vehicle spawn preset's default parts (<see cref="VehicleParts"/> rows; <see cref="PackagePath"/> is the preset).</summary>
+    public bool IsVehicleParts { get; init; }
+
+    /// <summary>True for a weapon's attachment sockets (<see cref="WeaponMounts"/> rows).</summary>
+    public bool IsWeaponMounts { get; init; }
+
     /// <inheritdoc />
     public override string ToString() => Label;
 }
@@ -147,7 +153,7 @@ public sealed partial class TunableRowViewModel : ObservableObject
     public string StockValue => Tunable.Value;
 
     /// <summary>Stock value for display (enum values without their <c>EType::</c> prefix).</summary>
-    public string StockDisplay => Tunable.Kind == TunableKind.Enum && Tunable.Value.IndexOf("::", StringComparison.Ordinal) is var i and > 0
+    public string StockDisplay => Tunable.Kind == TunableKind.Part ? PartLabel(Tunable.Value) : Tunable.Kind == TunableKind.Enum && Tunable.Value.IndexOf("::", StringComparison.Ordinal) is var i and > 0
         ? Tunable.Value[(i + 2)..]
         : Tunable.Value;
 
@@ -160,10 +166,20 @@ public sealed partial class TunableRowViewModel : ObservableObject
     private string _value;
 
     /// <summary>True for bool values (check box).</summary>
-    public bool IsBool => Tunable.Kind == TunableKind.Bool;
+    public bool IsBool => Tunable.Kind is TunableKind.Bool or TunableKind.Mount;
 
     /// <summary>True for enum values (combo box).</summary>
-    public bool IsEnum => Tunable.Kind == TunableKind.Enum && Tunable.CanEdit;
+    public bool IsEnum => Tunable.Kind is TunableKind.Enum or TunableKind.Part && Tunable.CanEdit;
+
+    /// <summary>True for a vehicle part slot (it can be shown on the car in the 3D view).</summary>
+    public bool IsPart => Tunable.Kind == TunableKind.Part;
+
+    /// <summary>Choice text: a part class as its name (<c>Door FrontLeft</c>), empty as "no part", other choices as they are.</summary>
+    public static Avalonia.Data.Converters.IValueConverter ChoiceLabel { get; } =
+        new Avalonia.Data.Converters.FuncValueConverter<string?, string>(c => c is null ? string.Empty : c.StartsWith('/') || c.Length == 0 ? PartLabel(c) : c);
+
+    /// <summary>A part class path as its name, empty as "no part".</summary>
+    public static string PartLabel(string classPath) => classPath.Length == 0 ? Localization.Loc.T("Module.Part.None") : VehicleParts.Label(classPath);
 
     /// <summary>True for values edited in a text box.</summary>
     public bool IsText => !IsBool && !IsEnum;
@@ -209,7 +225,7 @@ public sealed partial class TunableRowViewModel : ObservableObject
         try
         {
             _ = Normalize(kind, text);
-            return kind == TunableKind.Enum && !choices.Contains(text.Trim(), StringComparer.Ordinal) ? Localization.Loc.T("Module.PickListed") : null;
+            return kind is TunableKind.Enum or TunableKind.Part && !choices.Contains(text.Trim(), StringComparer.OrdinalIgnoreCase) ? Localization.Loc.T("Module.PickListed") : null;
         }
         catch (Exception ex) when (ex is FormatException or OverflowException)
         {
@@ -225,10 +241,10 @@ public sealed partial class TunableRowViewModel : ObservableObject
         TunableKind.Double => double.Parse(text.Trim().Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture).ToString("R", CultureInfo.InvariantCulture),
         TunableKind.Int => long.Parse(text.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture).ToString(CultureInfo.InvariantCulture),
         TunableKind.UInt => ulong.Parse(text.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture).ToString(CultureInfo.InvariantCulture),
-        TunableKind.Bool => TunableValue.ParseBool(text) ? "true" : "false",
+        TunableKind.Bool or TunableKind.Mount => TunableValue.ParseBool(text) ? "true" : "false",
         TunableKind.Vector or TunableKind.Rotator => TunableValue.Format(TunableValue.ParseFloats(text, 3)),
         TunableKind.Color => TunableValue.Format(TunableValue.ParseFloats(text, 4)),
-        TunableKind.Enum => text.Trim(),
+        TunableKind.Enum or TunableKind.Part => text.Trim(),
         _ => text,
     };
 

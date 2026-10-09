@@ -232,7 +232,7 @@
                   </Grid>
                 </Border>
 
-                <Grid DockPanel.Dock="Top" Margin="22,4,52,2" ColumnDefinitions="*,120,200" ColumnSpacing="10">
+                <Grid DockPanel.Dock="Top" Margin="22,4,80,2" ColumnDefinitions="*,120,200" ColumnSpacing="10">
                   <TextBlock Grid.Column="0" Text="{Tr Module.Col.Value}" Classes="section" ToolTip.Tip="{Tr Module.Col.Value.Tip}" />
                   <TextBlock Grid.Column="1" Text="{Tr Module.Col.Stock}" Classes="section" ToolTip.Tip="{Tr Module.Col.Stock.Tip}" />
                   <TextBlock Grid.Column="2" Text="{Tr Module.Col.New}" Classes="section" ToolTip.Tip="{Tr Module.Col.New.Tip}" />
@@ -250,7 +250,7 @@
                               <ItemsControl.ItemTemplate>
                                 <DataTemplate x:DataType="vm:TunableRowViewModel">
                                   <Border Classes="valueRow" Classes.pending="{Binding IsPending}">
-                                    <Grid ColumnDefinitions="*,120,200,32" ColumnSpacing="10">
+                                    <Grid ColumnDefinitions="*,120,200,60" ColumnSpacing="10">
                                       <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="7" VerticalAlignment="Center">
                                         <Ellipse Classes="edited" Width="7" Height="7" IsVisible="{Binding IsOverridden}" ToolTip.Tip="{Tr Module.Edited.Tip}" />
                                         <TextBlock Text="{Binding Label}" ToolTip.Tip="{Binding PathText}" TextTrimming="CharacterEllipsis" />
@@ -260,13 +260,25 @@
                                       <Panel Grid.Column="2">
                                         <TextBox Text="{Binding Value}" IsVisible="{Binding IsText}" IsReadOnly="{Binding IsReadOnly}" Classes="mono"
                                                  ToolTip.Tip="{Binding Error}" />
-                                        <CheckBox IsChecked="{Binding BoolValue}" IsVisible="{Binding IsBool}" ToolTip.Tip="{Tr Module.BoolValue.Tip}" />
-                                        <ComboBox ItemsSource="{Binding Choices}" SelectedItem="{Binding Value}" IsVisible="{Binding IsEnum}" HorizontalAlignment="Stretch" ToolTip.Tip="{Tr Module.EnumValue.Tip}" />
+                                        <CheckBox IsChecked="{Binding BoolValue}" IsVisible="{Binding IsBool}" IsEnabled="{Binding !IsReadOnly}" ToolTip.Tip="{Tr Module.BoolValue.Tip}" />
+                                        <ComboBox ItemsSource="{Binding Choices}" SelectedItem="{Binding Value}" IsVisible="{Binding IsEnum}" HorizontalAlignment="Stretch" ToolTip.Tip="{Tr Module.EnumValue.Tip}">
+                                          <ComboBox.ItemTemplate>
+                                            <DataTemplate x:DataType="x:String">
+                                              <TextBlock Text="{Binding Converter={x:Static vm:TunableRowViewModel.ChoiceLabel}}" ToolTip.Tip="{Binding}" TextTrimming="CharacterEllipsis" />
+                                            </DataTemplate>
+                                          </ComboBox.ItemTemplate>
+                                        </ComboBox>
                                       </Panel>
-                                      <Button Grid.Column="3" Classes="ghost square small" ToolTip.Tip="{Tr Module.ResetRow.Tip}"
+                                      <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="4" HorizontalAlignment="Right">
+                                      <Button Classes="ghost square small" IsVisible="{Binding IsPart}" ToolTip.Tip="{Tr Module.ShowOnCar.Tip}"
+                                              Command="{Binding $parent[UserControl].((vm:ModulePageViewModel)DataContext).ShowPartOnCarCommand}" CommandParameter="{Binding}">
+                                        <c:GlyphIcon Kind="Icon.Cube3d" IconSize="13" />
+                                      </Button>
+                                      <Button Classes="ghost square small" ToolTip.Tip="{Tr Module.ResetRow.Tip}"
                                               Command="{Binding $parent[UserControl].((vm:ModulePageViewModel)DataContext).ResetRowCommand}" CommandParameter="{Binding}">
                                         <c:GlyphIcon Kind="Icon.Undo" IconSize="13" />
                                       </Button>
+                                      </StackPanel>
                                     </Grid>
                                   </Border>
                                 </DataTemplate>
@@ -285,7 +297,7 @@
               <Border Margin="6" CornerRadius="{DynamicResource SmallCornerRadius}" ClipToBounds="True" Background="{DynamicResource ViewportBrush}">
                 <Panel>
                   <c:ViewportGrid Background="{DynamicResource ViewportBrush}" AxisXBrush="{DynamicResource AxisXBrush}" AxisYBrush="{DynamicResource AxisYBrush}" IsVisible="{Binding !HasPreview}" />
-                  <c:MeshPreview x:Name="ItemPreview" Model="{Binding Preview}" IsVisible="{Binding HasPreview}" />
+                  <c:MeshPreview x:Name="ItemPreview" Model="{Binding Preview}" HighlightAttachment="{Binding HighlightAttachment}" IsVisible="{Binding HasPreview}" />
                   <ProgressBar IsIndeterminate="True" IsVisible="{Binding IsPreviewLoading}" VerticalAlignment="Top" Margin="8,6" />
                   <!-- The model's name (left) and the mouse hint (right) share the bottom line; the name trims instead of running under the hint. -->
                   <Grid VerticalAlignment="Bottom" Margin="8" ColumnDefinitions="*,Auto" ColumnSpacing="8" IsHitTestVisible="False">

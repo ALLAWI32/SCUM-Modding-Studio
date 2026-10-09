@@ -101,11 +101,18 @@ public sealed class PropertyReader
     /// <summary>
     /// Reads a property block from an arbitrary export payload (e.g. an edited copy). Offsets are relative to the payload.
     /// </summary>
-    public static PropertyBlock ReadPayload(CookedPackage package, byte[] payload, int exportIndex = -1)
+    public static PropertyBlock ReadPayload(CookedPackage package, byte[] payload, int exportIndex = -1) => ReadPayload(package, payload, package.Names, exportIndex);
+
+    /// <summary>
+    /// <see cref="ReadPayload(CookedPackage, byte[], int)"/> against a name table that grew while the package was edited (a
+    /// payload written by the editor may name entries the package's own table does not have yet).
+    /// </summary>
+    public static PropertyBlock ReadPayload(CookedPackage package, byte[] payload, IReadOnlyList<string> names, int exportIndex = -1)
     {
         ArgumentNullException.ThrowIfNull(package);
         ArgumentNullException.ThrowIfNull(payload);
-        var reader = new PropertyReader(package.Names, package.ResolveIndex, payload, 0);
+        ArgumentNullException.ThrowIfNull(names);
+        var reader = new PropertyReader(names, package.ResolveIndex, payload, 0);
         var r = new ByteReader(payload);
         var props = reader.ReadTaggedList(r);
         return new PropertyBlock

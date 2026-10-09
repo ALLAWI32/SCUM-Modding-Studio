@@ -37,6 +37,8 @@ namespace ScumStudio.Level.Editing;
 [JsonDerivedType(typeof(SwaySegmentOp), "swaySegment")]
 [JsonDerivedType(typeof(SetSpawnPointsOp), "setSpawnPoints")]
 [JsonDerivedType(typeof(ReplaceMeshOp), "replaceMesh")]
+[JsonDerivedType(typeof(SetLootOp), "setLoot")]
+[JsonDerivedType(typeof(SetClearGrassOp), "setClearGrass")]
 public abstract record EditOp
 {
     /// <summary>The operation that exactly undoes this one.</summary>
@@ -523,6 +525,13 @@ public sealed record AddStaticMeshActorOp(string Level, string NewName, string S
     /// </summary>
     public string? CollisionProfile { get; init; }
 
+    /// <summary>
+    /// Loot presets of the part it was copied from (a locker, a crate, a cabinet of a building: the component's
+    /// <c>ExamineAssetData</c>), written onto the new mesh so a player can search it like the original; null = only what
+    /// the mesh asset itself carries.
+    /// </summary>
+    public IReadOnlyList<string>? Loot { get; init; }
+
     /// <inheritdoc />
     public override EditOp Inverse() => new RemoveAddedActorOp(Created, this);
 
@@ -646,6 +655,69 @@ public sealed record RemoveAddedActorOp(ActorRef Target, EditOp Original) : Edit
 
     /// <inheritdoc />
     public override string Describe() => $"Remove added {Target}";
+
+    /// <inheritdoc />
+    public override IReadOnlyList<string> GetTouchedLevels() => [Target.Level];
+
+    /// <inheritdoc />
+    public override ActorRef? GetPrimaryTarget() => Target;
+}
+
+/// <summary>
+/// What a player's search of a mesh component gives: its <c>ExamineAssetData</c> entries, one loot pick per preset
+/// (<c>/Game/ConZ_Files/Items/SpawnerPresets2/.../Examine_X.Examine_X_C</c>). Not lootable = no entries (decoration only).
+/// </summary>
+public sealed record LootSetting(bool Lootable, IReadOnlyList<string> Presets)
+{
+    /// <inheritdoc />
+    public bool Equals(LootSetting? other) =>
+        other is not null && Lootable == other.Lootable && Presets.SequenceEqual(other.Presets, StringComparer.OrdinalIgnoreCase);
+
+    /// <inheritdoc />
+    public override int GetHashCode() => HashCode.Combine(Lootable, Presets.Count);
+}
+
+/// <summary>
+/// Sets the loot of a mesh component (the Map's loot editor, and the loot a copied part carries along): the exporter
+/// rewrites the component's <c>AssetUserData</c> with fresh <c>ExamineAssetData</c> objects naming the presets, or an
+/// empty list when it is not lootable.
+/// </summary>
+/// <param name="Target">The actor (pristine or added).</param>
+/// <param name="Component">The mesh component; null = the actor's root.</param>
+/// <param name="Old">The loot before the edit.</param>
+/// <param name="New">The loot after the edit.</param>
+public sealed record SetLootOp(ActorRef Target, string? Component, LootSetting Old, LootSetting New) : EditOp
+{
+    /// <inheritdoc />
+    public override EditOp Inverse() => this with { Old = New, New = Old };
+
+    /// <inheritdoc />
+    public override string Describe() => string.Create(CultureInfo.InvariantCulture,
+        $"Loot of {Target}{(Component is null ? string.Empty : "." + Component)}: {(New.Lootable ? string.Join(", ", New.Presets.Select(p => p[(p.LastIndexOf('.') + 1)..])) : "not lootable")}");
+
+    /// <inheritdoc />
+    public override IReadOnlyList<string> GetTouchedLevels() => [Target.Level];
+
+    /// <inheritdoc />
+    public override ActorRef? GetPrimaryTarget() => Target;
+}
+
+/// <summary>
+/// "Clear grass under it" of a placed or moved actor (a bridge in a meadow): when on, the export zeroes the landscape's
+/// cooked grass densities under the actor's footprint and removes the bushes and grass instances standing there. Not set
+/// (null) = the default: on for an actor the project added, off for a stock actor that was moved.
+/// </summary>
+/// <param name="Target">The actor (pristine or added).</param>
+/// <param name="Old">The setting before the edit (null = the default).</param>
+/// <param name="New">The setting after the edit (null = the default).</param>
+public sealed record SetClearGrassOp(ActorRef Target, bool? Old, bool? New) : EditOp
+{
+    /// <inheritdoc />
+    public override EditOp Inverse() => this with { Old = New, New = Old };
+
+    /// <inheritdoc />
+    public override string Describe() =>
+        $"Grass under {Target}: {New switch { true => "cleared", false => "left to grow", _ => "default" }}";
 
     /// <inheritdoc />
     public override IReadOnlyList<string> GetTouchedLevels() => [Target.Level];

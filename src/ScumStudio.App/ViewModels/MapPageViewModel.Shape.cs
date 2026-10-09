@@ -555,7 +555,7 @@ public sealed partial class MapPageViewModel
             return;
         }
 
-        if (!IsLong(mesh))
+        if (!IsLong(mesh) && !GizmoMath.IsRoadOrBridgePiece(mesh))
         {
             // Owner: houses and churches do not bend like bridges and roads (bending a church froze the app); they tilt,
             // and "Fit to ground" lays them on a slope.

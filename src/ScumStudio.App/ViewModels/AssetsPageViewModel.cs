@@ -26,8 +26,11 @@ public sealed partial class AssetsPageViewModel : PageViewModel, ISearchablePage
     /// <summary>Catalogs up to this many packages get classes resolved while indexing (headers read in parallel).</summary>
     public const int ResolveClassesLimit = 30_000;
 
-    /// <summary>Largest edge of the preview image / mesh textures.</summary>
+    /// <summary>Largest edge of the preview image (a texture asset shown flat).</summary>
     public const int PreviewTextureSize = 1024;
+
+    /// <summary>Largest edge of a 3D preview's textures: the game's full size (they stay block-compressed on the GPU).</summary>
+    public const int MeshPreviewTextureSize = 8192;
 
     /// <summary>Width a tile takes in the grid (120 px picture plus padding, border and gap).</summary>
     public const int TileStride = 142;
@@ -40,17 +43,22 @@ public sealed partial class AssetsPageViewModel : PageViewModel, ISearchablePage
     private Task _detailsTask = Task.CompletedTask;
     private bool _suppressFolderRefresh;
     private readonly Action<string>? _placeMesh;
+    private readonly Action<string>? _makeCraftable;
+
+    /// <summary>True when the selected asset can become a craftable (a static mesh or a Blueprint that does not move on its own).</summary>
+    public bool CanMakeCraftable => _makeCraftable is not null && SelectedItem?.Entry is { } e && Modding.Crafting.RecipeRules.IsAllowedSource(e.PackagePath, e.ClassName);
 
     /// <summary>True when the selected asset is a static mesh or a Blueprint and a Map page can place it.</summary>
     public bool CanPlaceInMap => _placeMesh is not null && AssetDetailsViewModel.IsPlaceable(SelectedItem?.Entry.ClassName);
 
     /// <summary>Creates the page and loads the workspace catalog when one is open.</summary>
-    public AssetsPageViewModel(AppServices services, Action? openSetup = null, Action<string>? placeMesh = null)
+    public AssetsPageViewModel(AppServices services, Action? openSetup = null, Action<string>? placeMesh = null, Action<string>? makeCraftable = null)
         : base("assets", "Assets", "Browse cooked packages, inspect exports and export textures and meshes")
     {
         _services = services;
         _openSetup = openSetup ?? (() => { });
         _placeMesh = placeMesh;
+        _makeCraftable = makeCraftable;
         _isGridView = services.UiState.Current.AssetsGridView;
         _services.Workspace.CatalogChanged += OnCatalogChanged;
         if (_services.Workspace.Catalog is { } catalog)
@@ -177,6 +185,12 @@ public sealed partial class AssetsPageViewModel : PageViewModel, ISearchablePage
             return;
         }
 
+        if (IsObjectsView && _tradersNode is { Count: > 0 } traders && AsksForTraders(text))
+        {
+            ShowCategory(traders);
+            return;
+        }
+
         var scope = SearchScope(index);
         var (matches, total) = await Task.Run(() => Filter(scope, text, MaxListed), cancellationToken).ConfigureAwait(true);
         cancellationToken.ThrowIfCancellationRequested();
@@ -256,6 +270,7 @@ public sealed partial class AssetsPageViewModel : PageViewModel, ISearchablePage
     partial void OnSelectedItemChanged(AssetItemViewModel? value)
     {
         OnPropertyChanged(nameof(CanPlaceInMap));
+        OnPropertyChanged(nameof(CanMakeCraftable));
         _detailsTask = LoadDetailsAsync(value);
     }
 
@@ -509,7 +524,7 @@ public sealed partial class AssetsPageViewModel : PageViewModel, ISearchablePage
             {
                 var model = await Task.Run(() =>
                 {
-                    var loader = new MeshPreviewLoader(catalog, _services.Logger) { TextureSize = PreviewTextureSize };
+                    var loader = new MeshPreviewLoader(catalog, _services.Logger) { TextureSize = MeshPreviewTextureSize, ForGpu = true };
                     return AssetExportService.IsBlueprintClass(className) ? loader.LoadBlueprint(entry.PackagePath) : loader.LoadMesh(entry.ObjectPath);
                 }).ConfigureAwait(true);
                 if (ReferenceEquals(Details, details))
@@ -682,6 +697,16 @@ public sealed partial class AssetsPageViewModel : PageViewModel, ISearchablePage
             await _services.Dialogs.SaveFileAsync(Loc.T("Assets.SaveGltf"), entry.Name + ".gltf", "gltf", "glTF 2.0").ConfigureAwait(true) is { } path)
         {
             await ExportGltfToAsync(path).ConfigureAwait(true);
+        }
+    }
+
+    /// <summary>Adds the selected static mesh or Blueprint to the project's craftables (Craftables page).</summary>
+    [RelayCommand]
+    private void MakeCraftable()
+    {
+        if (SelectedItem?.Entry is { } entry && _makeCraftable is { } make && CanMakeCraftable)
+        {
+            make(entry.PackagePath);
         }
     }
 

@@ -90,6 +90,37 @@ public sealed record RenderSettings
     public float FogDensity { get; init; }
 
     /// <summary>
+    /// How fast the fog thins with height above Y = 0 (sea level), per world unit: the density is
+    /// <see cref="FogDensity"/> × e^(-falloff × y). 0 = the same density at every height.
+    /// </summary>
+    public float FogHeightFalloff { get; init; }
+
+    /// <summary>
+    /// Draw a sky behind the scene (a gradient from <see cref="SkyHorizonColor"/> to <see cref="SkyZenithColor"/> with a
+    /// sun in the key light's direction) instead of <see cref="ClearColor"/>, and fade distant things into that horizon
+    /// haze, brighter toward the sun, instead of <see cref="FogColor"/>.
+    /// </summary>
+    public bool Sky { get; init; }
+
+    /// <summary>Sky colour straight up (linear RGB, before tone mapping).</summary>
+    public Vector3 SkyZenithColor { get; init; } = new(0.07f, 0.15f, 0.45f);
+
+    /// <summary>Sky colour at the horizon (linear RGB, before tone mapping): also the colour distant ground fades to.</summary>
+    public Vector3 SkyHorizonColor { get; init; } = new(0.37f, 0.49f, 0.7f);
+
+    /// <summary>
+    /// Sun shadows (a 2048² shadow map with soft edges) within <see cref="ShadowDistance"/> around the camera. Off by
+    /// default (thumbnails and previews); the Map view and <c>render level</c> turn it on.
+    /// </summary>
+    public bool Shadows { get; init; }
+
+    /// <summary>Half the width of the square the sun's shadows cover, in world units (15 000 = 150 m).</summary>
+    public float ShadowDistance { get; init; } = 15_000f;
+
+    /// <summary>Exposure before an ACES-fit tone curve; 0 = no tone mapping (the default: shaded colours are clipped).</summary>
+    public float Exposure { get; init; }
+
+    /// <summary>
     /// Apply the look overrides a scene carries in <see cref="SceneGraph.Scene.Environment"/> (sky, sun, grid handling of
     /// a level with terrain). Turn off to always draw with these settings as they are.
     /// </summary>
@@ -99,20 +130,23 @@ public sealed record RenderSettings
     public static Vector3 IslandSunDirection { get; } = SunDirection(-27f, 72f);
 
     /// <summary>
-    /// Outdoor preset: sky-blue background, warm sun from <see cref="IslandSunDirection"/>, brighter sky ambient and light
-    /// distance fog, no grid. Level scenes with terrain use it through <see cref="SceneGraph.SceneEnvironment.Outdoor"/>.
+    /// Outdoor preset: a sky with a sun disc, warm sun from <see cref="IslandSunDirection"/>, sky-tinted ambient, height
+    /// haze that fades distant ground into the horizon, ACES tone mapping, no grid. Level scenes with terrain use it through <see cref="SceneGraph.SceneEnvironment.Outdoor"/>.
     /// Sun and sky are strong enough that flat ground receives about 1.3× its albedo: the game's landscape textures are
     /// dark PBR albedos (mean sRGB #39..#60) that UE shows under a far brighter sun with auto exposure.
     /// </summary>
     public static RenderSettings Outdoor { get; } = new()
     {
         ClearColor = new Vector4(0.36f, 0.5f, 0.7f, 1f),
-        SkyColor = new Vector3(0.52f, 0.58f, 0.68f),
-        GroundColor = new Vector3(0.2f, 0.18f, 0.15f),
+        SkyColor = new Vector3(0.46f, 0.55f, 0.72f),
+        GroundColor = new Vector3(0.2f, 0.17f, 0.13f),
         LightDirection = IslandSunDirection,
-        LightColor = new Vector3(1.7f, 1.6f, 1.4f),
+        LightColor = new Vector3(1.8f, 1.6f, 1.3f),
         FogColor = new Vector3(0.5f, 0.6f, 0.74f),
-        FogDensity = 1.2e-7f, // ~20 % haze at 20 km: the whole island stays readable from above
+        FogDensity = 5e-7f, // ~40 % haze 10 km out at sea level; thinner higher up, so the island stays readable from above
+        FogHeightFalloff = 3.3e-6f, // a scale height of 3 km: distant mountains still fade to blue-grey
+        Sky = true,
+        Exposure = 1f,
         ShowGrid = false,
     };
 

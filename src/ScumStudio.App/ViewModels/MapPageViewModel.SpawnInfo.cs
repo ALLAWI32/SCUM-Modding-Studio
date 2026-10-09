@@ -86,6 +86,8 @@ public sealed partial class MapPageViewModel
     {
         var check = ++_spawnInfoCheck;
         SpawnInfo = [];
+        RefreshLootEditor();
+        RefreshGrassOption();
         if (item is null || _services.Workspace.Catalog is not { } catalog)
         {
             return;
@@ -108,6 +110,7 @@ public sealed partial class MapPageViewModel
             markers = SelectedInstanceInfo() is { } part ? [.. part.Component.SpawnMarkers] : item.Actor.Components.SelectMany(c => c.SpawnMarkers).ToList();
         }
 
+        markers.AddRange(LootMarkers()); // a searchable container's presets
         var group = SelectedInstanceInfo() is null && SpawnMarkers.KindOf(item.Actor) == SpawnKind.VehiclePlace ? item.Actor.ClassPath : null;
         if (markers.Count == 0 && group is null)
         {

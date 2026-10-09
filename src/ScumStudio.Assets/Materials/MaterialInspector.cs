@@ -1,6 +1,7 @@
 using System.Numerics;
 using CUE4Parse.UE4.Assets.Exports;
 using CUE4Parse.UE4.Assets.Exports.Material;
+using CUE4Parse.UE4.Assets.Objects;
 using CUE4Parse.UE4.Objects.UObject;
 using ScumStudio.Assets.Catalog;
 
@@ -53,6 +54,7 @@ public sealed class MaterialInspector
         var blend = EBlendMode.BLEND_Opaque;
         var blendKnown = false;
         var splineMeshes = false;
+        var landscapeOutput = false;
         for (var depth = 0; current is not null && depth < MaxDepth; depth++)
         {
             // The first instance that overrides the blend mode decides; otherwise the base material does.
@@ -87,6 +89,7 @@ public sealed class MaterialInspector
             if (current is UMaterial baseMaterial)
             {
                 splineMeshes = baseMaterial.GetOrDefault<bool>("bUsedWithSplineMeshes");
+                landscapeOutput = baseMaterial.TryGetValue(out FStructFallback cached, "CachedExpressionData") && cached.GetOrDefault<bool>("bHasRuntimeVirtualTextureOutput");
                 if (!blendKnown)
                 {
                     blend = baseMaterial.BlendMode;
@@ -125,6 +128,9 @@ public sealed class MaterialInspector
         {
             OpacityMaskClip = maskClip,
             UsedWithSplineMeshes = splineMeshes,
+            NormalTexture = PickNormal(texList),
+            RoughnessRange = Roughness(scalars),
+            WritesLandscapeTexture = landscapeOutput,
             IsTranslucent = blend is EBlendMode.BLEND_Translucent or EBlendMode.BLEND_Additive or EBlendMode.BLEND_Modulate or EBlendMode.BLEND_AlphaComposite,
         };
     }
@@ -171,6 +177,41 @@ public sealed class MaterialInspector
         }
 
         return withValue.FirstOrDefault(t => LooksLikeDiffuse(t.TexturePath) && !IsOverlay(t.Name))?.TexturePath;
+    }
+
+    /// <summary>
+    /// Picks the object's own normal map: a parameter named <c>Normal</c> (or <c>Normal Map</c>, <c>NormalMap</c>), else
+    /// one whose name contains "Normal" but is no detail, blend or overlay layer; flat dummies do not count.
+    /// </summary>
+    public static string? PickNormal(IReadOnlyList<TextureParameter> textures)
+    {
+        var real = textures.Where(t => t.TexturePath.Length > 0 && !t.TexturePath.Contains("Dummy", StringComparison.OrdinalIgnoreCase)
+                                       && !t.TexturePath.Contains("FlatNormal", StringComparison.OrdinalIgnoreCase) && !IsEnginePlaceholder(t.TexturePath)).ToList();
+        foreach (var name in (string[])["Normal", "Normal Map", "NormalMap", "Base Normal", "Base Material Normal"])
+        {
+            if (real.FirstOrDefault(t => string.Equals(t.Name, name, StringComparison.OrdinalIgnoreCase)) is { } exact)
+            {
+                return exact.TexturePath;
+            }
+        }
+
+        return real.FirstOrDefault(t => t.Name.Contains("Normal", StringComparison.OrdinalIgnoreCase) && !IsOverlay(t.Name)
+                                        && !t.Name.Contains("Detail", StringComparison.OrdinalIgnoreCase) && !t.Name.Contains("Blend", StringComparison.OrdinalIgnoreCase))?.TexturePath;
+    }
+
+    private static System.Numerics.Vector2? Roughness(Dictionary<string, ScalarParameter> scalars)
+    {
+        foreach (var prefix in (string[])["Base Material Roughness", "Roughness"])
+        {
+            var hasMin = scalars.TryGetValue(prefix + " Min", out var min);
+            var hasMax = scalars.TryGetValue(prefix + " Max", out var max);
+            if (hasMin || hasMax)
+            {
+                return new System.Numerics.Vector2(hasMin ? Math.Clamp(min!.Value, 0f, 1f) : 0f, hasMax ? Math.Clamp(max!.Value, 0f, 1f) : 1f);
+            }
+        }
+
+        return null;
     }
 
     /// <summary>Layers painted over the base (moss, dirt, snow, puddles): never the object's own colour.</summary>

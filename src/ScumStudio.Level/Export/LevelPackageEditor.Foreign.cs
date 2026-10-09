@@ -33,6 +33,13 @@ public sealed record ForeignActorCopy(CookedPackage Source, string SourceActor, 
     /// its own objects, never the source's trade post.
     /// </summary>
     public string? AssignedTradePost { get; init; }
+
+    /// <summary>
+    /// For a guarded zone manager made for pasted sentries (see <c>LevelPackageEditor.Sentries.cs</c>): the sentry spawners
+    /// (actor names in the edited level, created before it) its <c>_sentrySpawners</c> lists instead of the source's. The
+    /// copy takes only its own objects, never the source level's spawners.
+    /// </summary>
+    public IReadOnlyList<string>? SentrySpawners { get; init; }
 }
 
 /// <summary>
@@ -123,7 +130,8 @@ public static partial class LevelPackageEditor
         public List<int> Copy(int sourceIndex, ForeignActorCopy copy)
         {
             _renames = copy.Trade?.Renames ?? [];
-            var members = copy.Trade is null && copy.AssignedTradePost is null ? CollectMembersWithChildActors(sourceIndex) : CollectMembers(source, sourceIndex);
+            var ownOnly = copy.Trade is not null || copy.AssignedTradePost is not null || copy.SentrySpawners is not null;
+            var members = ownOnly ? CollectMembers(source, sourceIndex) : CollectMembersWithChildActors(sourceIndex);
             var payloads = new byte[members.Count][];
             var blocks = new PropertyBlock[members.Count];
             for (var k = 0; k < members.Count; k++)
@@ -179,6 +187,19 @@ public static partial class LevelPackageEditor
                 if (k == 0 && copy.Trade is { } trade)
                 {
                     payload = ApplyTrade(payload, blocks[k], trade, copy.NewName);
+                }
+
+                if (k == 0 && copy.SentrySpawners is { } spawners)
+                {
+                    // The array goes last (it changes the payload's length; offsets come from the source block).
+                    if (blocks[k].Find(SentrySpawnersProperty) is { Value: ArrayValue } list)
+                    {
+                        payload = WriteObjectArray(payload, list, spawners.Select(s => FindLevelActor(exports, names, targetLevelPackageIndex, s)).Where(i => i > 0).ToList());
+                    }
+                    else
+                    {
+                        warnings.Add($"'{copy.NewName}': {copy.SourceActor} has no {SentrySpawnersProperty}; its sentries will not spawn.");
+                    }
                 }
 
                 if (k == 0 && copy.AssignedTradePost is { } post)
@@ -264,7 +285,7 @@ public static partial class LevelPackageEditor
                 warnings.Add($"'{copy.NewName}': {copy.SourceActor} spawns no item, so {copy.Item} was not set.");
             }
 
-            if (_dropped.Count > 0 && copy.Trade is null && copy.AssignedTradePost is null)
+            if (_dropped.Count > 0 && !ownOnly)
             {
                 warnings.Add($"'{copy.NewName}': references to {string.Join(", ", _dropped)} were cleared (those objects are not part of the copy).");
             }

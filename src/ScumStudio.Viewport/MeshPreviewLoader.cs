@@ -694,9 +694,10 @@ public sealed class MeshPreviewLoader
             _materials[materialPath] = material;
         }
 
+        var scale = material?.BaseColorScale is { } s ? new Vector4(s, 1f) : (Vector4?)null; // SCUM's masters: x tint x brightness
         if (material?.BaseColorTexture is { } texturePath && Decoded(texturePath, () => DecodeTexture(texturePath)))
         {
-            return (texturePath, null, material.OpacityMaskClip ?? 0f);
+            return (texturePath, material.IsTranslucent ? null : scale, material.OpacityMaskClip ?? 0f);
         }
 
         if (material?.Textures.FirstOrDefault(IsCoverage) is { } coverage && Decoded(coverage.TexturePath + MaskSuffix, () => CoverageMask(coverage.TexturePath)))
@@ -704,7 +705,7 @@ public sealed class MeshPreviewLoader
             return (coverage.TexturePath + MaskSuffix, GroomTint, 0.5f);
         }
 
-        return (null, material?.TintColor is { } tint && tint.W > 0f ? tint with { W = 1f } : Untextured, 0f);
+        return (null, material?.SurfaceColor ?? Untextured, 0f);
     }
 
     /// <summary>The material's normal map (decoded once per path) and, for an opaque one, its roughness range.</summary>

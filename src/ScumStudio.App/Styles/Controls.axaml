@@ -451,6 +451,28 @@
     <Setter Property="Padding" Value="8,2" />
     <Setter Property="FontSize" Value="12" />
   </Style>
+  <!-- Tiles (Assets page, Craftables gallery): a square picture with the name under it; the selected one gets the accent frame. -->
+  <Style Selector="Button.tile">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderBrush" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="Padding" Value="6" />
+    <Setter Property="Margin" Value="0,0,8,8" />
+    <Setter Property="MinHeight" Value="0" />
+    <Setter Property="CornerRadius" Value="{DynamicResource ControlCornerRadius}" />
+  </Style>
+  <Style Selector="Button.tile:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource Surface2Brush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource StrokeBrush}" />
+  </Style>
+  <Style Selector="Button.tile.selected /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource AccentSoftBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+  </Style>
+  <Style Selector="Button.tile.selected:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource AccentSoftBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+  </Style>
   <!-- Accent swatch: a 28 px square chip; the selected one gets a bone frame. -->
   <Style Selector="Button.swatch">
     <Setter Property="Width" Value="28" />

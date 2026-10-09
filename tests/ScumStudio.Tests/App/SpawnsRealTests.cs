@@ -1,4 +1,5 @@
 using Avalonia.Headless.XUnit;
+using ScumStudio.App.Localization;
 using ScumStudio.App.Services;
 using ScumStudio.App.ViewModels;
 using ScumStudio.Core.Abstractions;
@@ -77,6 +78,37 @@ public sealed class SpawnsRealTests
             window.Close();
             vm.Dispose();
         }
+    }
+
+    /// <summary>
+    /// igor8802 (Discord): "It would be possible to assign NPCs instead of zombies." Most threat zones already choose
+    /// between a zombie encounter and an armed-NPC encounter by weight (Village 75 / 25): the sliders must say which is
+    /// which, so a zombie weight of 0 spawns NPCs instead (they read "Group 1", "Group 2").
+    /// </summary>
+    [Fact]
+    public async Task ZoneGroupsSayWhetherTheySpawnZombiesOrArmedNpcs()
+    {
+        if (Environment.GetEnvironmentVariable("SCUM_PAKS") is not { Length: > 0 } paks || !Directory.Exists(paks))
+        {
+            return; // not asked for
+        }
+
+        using var ctx = AppTestContext.Create();
+        ctx.Services.Keys.Set(AesKeyText.FromEnvironmentOrStore()!);
+        ctx.Services.UpdateSettings(s => s with { GamePaksFolder = paks });
+        await ctx.Services.Workspace.ConnectAsync(ProgressSink.Null);
+        using var spawns = new SpawnsPageViewModel(ctx.Services);
+        spawns.IsZombiesTab = true;
+        spawns.SelectedEntry = spawns.Entries.First(e => e.PackagePath.EndsWith("/MTZ_Settlement_Village", StringComparison.Ordinal));
+        for (var i = 0; i < 300 && spawns.DetailCards.Count == 0; i++)
+        {
+            await Task.Delay(100);
+        }
+
+        var groups = spawns.DetailCards.Single(c => c.Title == Loc.T("Spawns.Card.What")).Rows.Cast<SpawnSliderViewModel>().ToList();
+        Assert.Equal([Loc.T("Spawns.Encounter.Zombies"), Loc.T("Spawns.Encounter.Npcs")], groups.Select(g => g.Label));
+        Assert.Equal([75d, 25d], groups.Select(g => g.Value));
+        Assert.EndsWith("MTZ_Settlement_Village_NPC_Encounter_C", groups[1].Tip, StringComparison.Ordinal);
     }
 
     // The server's settings, copied into the test folder (never the real server's file) next to an empty Paks folder

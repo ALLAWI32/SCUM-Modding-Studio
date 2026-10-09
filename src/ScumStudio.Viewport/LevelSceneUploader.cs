@@ -205,12 +205,6 @@ public sealed class LevelScene : IDisposable
     private readonly Dictionary<uint, (List<(SceneNode Node, MeshHandle Own)> Nodes, string Mesh)> _swappedActors = [];
     private readonly Dictionary<InstanceKey, (List<(SceneNode Node, MeshHandle Own)> Nodes, string Mesh)> _swappedParts = [];
 
-    /// <summary>Actors drawn with another mesh (see <see cref="SetActorMesh"/>).</summary>
-    public IReadOnlyCollection<uint> SwappedActors => _swappedActors.Keys;
-
-    /// <summary>Parts drawn with another mesh (see <see cref="SetPartMesh"/>).</summary>
-    public IReadOnlyCollection<InstanceKey> SwappedParts => _swappedParts.Keys;
-
     /// <summary>
     /// Draws the root mesh of the actor <paramref name="selectableId"/> as <paramref name="meshPath"/> (the Replace tool;
     /// a mesh added with <see cref="AddMesh"/> or prepared with the scene), null as its own again. The node keeps its id
@@ -222,6 +216,37 @@ public sealed class LevelScene : IDisposable
     /// <summary>Draws the part (a stored component of a Blueprint building) <paramref name="key"/> as <paramref name="meshPath"/>, null as its own again.</summary>
     public void SetPartMesh(InstanceKey key, string? meshPath) =>
         Swap(_swappedParts, key, meshPath, () => InstanceNodes().GetValueOrDefault(key)?.Where(n => n.Mesh is not null).ToList() ?? [], null);
+
+    /// <summary>
+    /// Draws the actors of <paramref name="actors"/> and the parts of <paramref name="parts"/> with the mesh each is
+    /// replaced with (the Replace tool; a road piece's is drawn by <see cref="SetSegmentBend"/>), and every other swapped
+    /// one as its own again. A mesh not uploaded yet is swapped in by the next call once it is.
+    /// </summary>
+    public void SetMeshes(IReadOnlyDictionary<uint, string>? actors, IReadOnlyDictionary<InstanceKey, string>? parts)
+    {
+        foreach (var id in _swappedActors.Keys.Where(id => actors is null || !actors.ContainsKey(id)).ToList())
+        {
+            SetActorMesh(id, null);
+        }
+
+        foreach (var (id, mesh) in actors ?? new Dictionary<uint, string>())
+        {
+            SetActorMesh(id, mesh);
+        }
+
+        foreach (var key in _swappedParts.Keys.Where(k => parts is null || !parts.ContainsKey(k)).ToList())
+        {
+            SetPartMesh(key, null);
+        }
+
+        foreach (var (key, mesh) in parts ?? new Dictionary<InstanceKey, string>())
+        {
+            if (key.InstanceIndex == InstanceKey.Part)
+            {
+                SetPartMesh(key, mesh);
+            }
+        }
+    }
 
     private void Swap<TKey>(Dictionary<TKey, (List<(SceneNode Node, MeshHandle Own)> Nodes, string Mesh)> swaps, TKey key, string? meshPath, Func<List<SceneNode>> nodesOf, Action? unbend)
         where TKey : notnull
@@ -1421,6 +1446,7 @@ public static class LevelSceneUploader
         var weightTexture = renderer.CreateTexture(n, n, weights, srgb: false, TextureWrap.ClampToEdge);
         owned.Add(weightTexture);
         var gpu = new GpuTexture?[4];
+        var normals = new GpuTexture?[4];
         var means = new Vector3[4];
         var tiling = new float[4];
         for (var k = 0; k < top.Count; k++)
@@ -1440,11 +1466,25 @@ public static class LevelSceneUploader
             }
 
             gpu[k] = layer;
+            if (top[k].Style.NhrTexture is { } nhrPath && images.Images.TryGetValue(nhrPath, out var nhrImage))
+            {
+                if (cache is not null)
+                {
+                    normals[k] = cache.Texture(renderer, nhrPath, nhrImage);
+                }
+                else if (!layerTextures.TryGetValue(nhrPath, out normals[k]))
+                {
+                    normals[k] = TextureUpload.Create(renderer, nhrImage);
+                    owned.Add(normals[k]!);
+                    layerTextures[nhrPath] = normals[k]!;
+                }
+            }
+
             means[k] = LayerMeans.GetValue(image, MeanColour).Value;
             tiling[k] = 1f / top[k].Style.TilingCm;
         }
 
-        return new TerrainDetailTextures(weightTexture, gpu, new Vector4(tiling[0], tiling[1], tiling[2], tiling[3]), means);
+        return new TerrainDetailTextures(weightTexture, gpu, new Vector4(tiling[0], tiling[1], tiling[2], tiling[3]), means, normals);
 
         static StrongBox<Vector3> MeanColour(TextureImage image)
         {

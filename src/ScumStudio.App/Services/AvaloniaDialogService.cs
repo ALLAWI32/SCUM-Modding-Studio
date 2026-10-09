@@ -65,7 +65,7 @@ public sealed class AvaloniaDialogService : IDialogService
             Title = title,
             AllowMultiple = false,
             SuggestedStartLocation = start,
-            FileTypeFilter = [new FilePickerFileType(filterName) { Patterns = ["*." + extension] }],
+            FileTypeFilter = [new FilePickerFileType(filterName) { Patterns = extension.Split(';').Select(e => "*." + e).ToList() }],
         }).ConfigureAwait(true);
         return files.Count > 0 ? files[0].TryGetLocalPath() : null;
     }

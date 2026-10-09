@@ -3,6 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
+using Avalonia.Threading;
 using Avalonia.VisualTree;
 using ScumStudio.App.ViewModels;
 using ScumStudio.Core.Mathematics;
@@ -13,6 +14,8 @@ namespace ScumStudio.App.Views.Pages;
 public partial class MapPageView : UserControl
 {
     private MapPageViewModel? _viewModel;
+    private DispatcherTimer? _paintTimer; // timer mode: plants one object a tick while the brush button is held
+    private FVector _paintAt;
     private bool _maximized;
     private readonly Avalonia.Threading.DispatcherTimer _worldTimer;
     private int _ticks;
@@ -29,6 +32,21 @@ public partial class MapPageView : UserControl
         {
             if (_viewModel is { BrushPaint: true } painting)
             {
+                if (painting.PaintTimed)
+                {
+                    // Timer mode: the brush only says where it is; a tick plants one object there.
+                    _paintAt = stroke.To;
+                    if (_paintTimer is null)
+                    {
+                        painting.PaintOneAt(_paintAt);
+                        _paintTimer = new DispatcherTimer(TimeSpan.FromSeconds(Math.Max(0.05, painting.PaintEvery)), DispatcherPriority.Input,
+                            (_, _) => _viewModel?.PaintOneAt(_paintAt));
+                        _paintTimer.Start();
+                    }
+
+                    return;
+                }
+
                 painting.PaintAt(stroke.To, stroke.From);
             }
             else
@@ -36,7 +54,12 @@ public partial class MapPageView : UserControl
                 _viewModel?.BrushAt(stroke.To, stroke.From);
             }
         };
-        Viewport3d.BrushStrokeEnded += (_, _) => _viewModel?.EndPaintStroke();
+        Viewport3d.BrushStrokeEnded += (_, _) =>
+        {
+            _paintTimer?.Stop();
+            _paintTimer = null;
+            _viewModel?.EndPaintStroke();
+        };
         // The Replacer's cards are filled when the menu opens (the selection changes far more often); while a menu is open
         // the first pictures of its lists are made on workers, closing it lets them go (the disk cache keeps them).
         var replace = (Flyout)ReplaceButton.Flyout!;

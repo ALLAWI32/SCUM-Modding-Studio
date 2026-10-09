@@ -5,6 +5,7 @@ using ScumStudio.Core.Mathematics;
 using ScumStudio.Level.Editing;
 using ScumStudio.Level.Export;
 using ScumStudio.Level.Model;
+using ScumStudio.Level.Spawns;
 
 namespace ScumStudio.Tests.Level;
 
@@ -29,6 +30,51 @@ public sealed class GrassClearingTests
         Assert.False(GrassClearing.Covers(polygons, new Vector2(1000, 215)));
         Assert.Equal(4, p.Length); // an upright box grown by a square stays a box
         Assert.Empty(GrassClearing.Footprints(actor, _ => null));
+    }
+
+    /// <summary>
+    /// Owner (2026-10-09): "the rocks I build: nothing may spawn inside them". A 4 x 1 m, 3 m high rock on the ground at
+    /// (1000, 0): the stock vehicle and zombie points inside it go, the ones beside it, far below it or already deleted stay,
+    /// and so do threat zones (areas) and a point the project moved out of it.
+    /// </summary>
+    [Fact]
+    public void SpawnPointsInsideAPlacedObjectAreRemoved()
+    {
+        var rock = new BoundingBox(new Vector3(-200, -50, -30), new Vector3(200, 50, 270));
+        var c = new ComponentRecord(1, "Rock", "StaticMeshComponent", true, null, FTransform.Identity,
+            new FTransform(FRotator.Zero, new FVector(1000, 0, 0), FVector.One), "/Game/Rock.Rock", []);
+        var actor = new ActorRecord(0, "Rock_1", "/Script/Engine.StaticMeshActor", 1, [c], c.WorldTransform, ActorKind.StaticMeshActor, "/Game/Rock.Rock", []);
+        var volumes = GrassClearing.Volumes(actor, _ => rock);
+        var volume = Assert.Single(volumes);
+        Assert.Equal((-30f, 270f), (volume.Bottom, volume.Top));
+
+        static SpawnPlace At(SpawnPlaceKind kind, int index, float x, float z) => new(kind, index, new FTransform(FRotator.Zero, new FVector(x, 0, z), FVector.One), "Default");
+        var places = new[]
+        {
+            At(SpawnPlaceKind.Vehicle, 0, 1000, 0),        // inside: goes
+            At(SpawnPlaceKind.Character, 1, 1150, -60),    // inside, just under its bottom (on the ground): goes
+            At(SpawnPlaceKind.TaggedCharacter, 2, 900, 100), // inside: goes
+            At(SpawnPlaceKind.Character, 3, 1300, 0),      // beside it: stays
+            At(SpawnPlaceKind.Vehicle, 4, 1000, -500),     // far below it (a road under a bridge): stays
+            At(SpawnPlaceKind.Zone, 5, 1000, 0),           // an area, not a point: stays
+            At(SpawnPlaceKind.Vehicle, 6, 1000, 0),        // already deleted by the user
+            At(SpawnPlaceKind.Character, 7, 1000, 0),      // moved out of it by the user: stays where it went
+        };
+        var request = new SpawnPlacesEditRequest
+        {
+            Deleted = [(SpawnPlaceKind.Vehicle, 6)],
+            Moved = new Dictionary<(SpawnPlaceKind, int), TransformValue> { [(SpawnPlaceKind.Character, 7)] = new(new FVector(5000, 0, 0), FRotator.Zero, FVector.One) },
+        };
+
+        var blocked = SpawnPlacesEditor.Block(request, places, volumes, out var count);
+
+        Assert.Equal(3, count);
+        Assert.Equal(
+            new[] { (SpawnPlaceKind.Vehicle, 0), (SpawnPlaceKind.Character, 1), (SpawnPlaceKind.TaggedCharacter, 2), (SpawnPlaceKind.Vehicle, 6) }.OrderBy(k => k.ToString()),
+            blocked.Deleted.OrderBy(k => k.ToString()));
+        Assert.True(blocked.Moved.ContainsKey((SpawnPlaceKind.Character, 7)));
+        Assert.Same(request, SpawnPlacesEditor.Block(request, places, [], out var none));
+        Assert.Equal(0, none);
     }
 
     [Fact]

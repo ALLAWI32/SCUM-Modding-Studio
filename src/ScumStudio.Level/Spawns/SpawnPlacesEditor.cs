@@ -90,6 +90,40 @@ public static class SpawnPlacesEditor
         return new SpawnPlacesEditRequest { Deleted = deleted, Moved = moved, Added = added };
     }
 
+    /// <summary>
+    /// <paramref name="request"/> with every stock vehicle and zombie / NPC spawn point that stands inside one of
+    /// <paramref name="volumes"/> (where it stands after the request's moves) removed too (owner: "nothing may spawn inside
+    /// the rocks I build"). Threat zones and hunting areas are areas, not points, and stay; so do the places the project
+    /// added (the user put them there). <paramref name="blocked"/> counts the removed points.
+    /// </summary>
+    public static SpawnPlacesEditRequest Block(SpawnPlacesEditRequest request, IReadOnlyList<SpawnPlace> places, IReadOnlyList<Export.GrassClearing.Volume> volumes, out int blocked)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(places);
+        ArgumentNullException.ThrowIfNull(volumes);
+        var deleted = request.Deleted.ToHashSet();
+        var moved = new Dictionary<(SpawnPlaceKind, int), TransformValue>(request.Moved);
+        blocked = 0;
+        foreach (var place in places.Where(p => p.Kind is SpawnPlaceKind.Vehicle or SpawnPlaceKind.Character or SpawnPlaceKind.TaggedCharacter))
+        {
+            var key = (place.Kind, place.Index);
+            if (deleted.Contains(key))
+            {
+                continue;
+            }
+
+            var at = moved.TryGetValue(key, out var to) ? to.Location : place.Transform.Translation;
+            if (Export.GrassClearing.Inside(volumes, at))
+            {
+                deleted.Add(key);
+                moved.Remove(key);
+                blocked++;
+            }
+        }
+
+        return blocked == 0 ? request : request with { Deleted = deleted, Moved = moved };
+    }
+
     /// <summary>Applies <paramref name="request"/> to the static data <paramref name="package"/>.</summary>
     public static (PackageBytes Bytes, SpawnPlacesReport Report) Apply(CookedPackage package, SpawnPlacesEditRequest request)
     {

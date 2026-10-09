@@ -40,7 +40,8 @@ public static class ModExportService
             return Localization.Loc.T("Export.OpenProjectFirst");
         }
 
-        if (project.State.IsEmpty && CraftablesFile.Load(project.DirectoryPath).Items.Count == 0)
+        // A craftables file, even an emptied one, is something to export: the export removes the old Craftables pak.
+        if (project.State.IsEmpty && !File.Exists(Path.Combine(project.DirectoryPath, CraftablesFile.FileName)))
         {
             return Localization.Loc.T("Export.NothingYet");
         }
@@ -53,7 +54,11 @@ public static class ModExportService
         return null;
     }
 
-    /// <summary>Exports the client pak and optionally the server pak; returns one result per cook.</summary>
+    /// <summary>
+    /// Exports the client pak and optionally the server pak; returns one result per cook. With nothing to build (a
+    /// craftables-only project whose craftables were all removed, or left out by the unticked box) it only removes the
+    /// Craftables pak an earlier export left in the output folder and returns no result.
+    /// </summary>
     /// <exception cref="InvalidOperationException">No catalog, no edits, or the server folder is missing.</exception>
     public static async Task<IReadOnlyList<ExportResult>> ExportAsync(
         AppServices services, ModExportRequest request, IProgressSink progress, CancellationToken cancellationToken = default)
@@ -67,6 +72,19 @@ public static class ModExportService
         }
 
         var catalog = services.Workspace.Catalog!;
+        var craftables = request.IncludeCraftables ? CraftablesFile.Load(request.Project.DirectoryPath) : new CraftablesFile();
+        var modName = request.ModName ?? request.Project.Manifest.Name;
+        if (request.Project.State.IsEmpty && craftables.Items.Count == 0)
+        {
+            var removed = new[] { ProjectSourceRole.Client, ProjectSourceRole.Server }
+                .SelectMany(role => CraftablesExporter.RemoveStale(Path.Combine(Path.GetFullPath(request.OutputFolder), ProjectExporter.RoleFolder(role)), modName, request.PakChunkIndex))
+                .ToList();
+            services.Logger.LogInformation("Nothing to build for {Name}; removed {Count} old Craftables file(s).", modName, removed.Count);
+            services.Notifications.Info(Localization.Loc.T("Projects.Exported"), removed.Count > 0
+                ? Localization.Loc.F("Export.CraftablesRemoved", string.Join(", ", removed.Select(Path.GetFileName)))
+                : Localization.Loc.T("Export.NothingYet"));
+            return [];
+        }
 
         // Collision check: pieces the game's logs say got no collision since the last export are exported straight.
         var (straight, found) = CollisionDoctor.Check(request.Project, CollisionDoctor.GameLogs(services.Settings.Load().ServerPaksFolder));
@@ -91,8 +109,6 @@ public static class ModExportService
         };
         var exporter = new ProjectExporter(services.Logger);
         var results = new List<ExportResult>(4);
-        var craftables = request.IncludeCraftables ? CraftablesFile.Load(request.Project.DirectoryPath) : new CraftablesFile();
-        var modName = request.ModName ?? request.Project.Manifest.Name;
 
         // The project's pak (levels, vehicles, items), then the Craftables pak on top of its registry.
         async Task ExportRole(AssetCatalog source, ProjectSourceRole role)
@@ -104,14 +120,16 @@ public static class ModExportService
                 results.Add(main);
             }
 
+            // Without craftables (none, or unticked) this removes the Craftables pak an earlier export left there.
             if (craftables.Items.Count > 0)
             {
                 progress.Report(Localization.Loc.T("Export.Craftables"), 0, 0);
-                if (await CraftablesExporter.ExportAsync(craftables, modName, source, options, role, CraftablesExporter.StagedRegistry(main),
-                        services.Logger, cancellationToken).ConfigureAwait(false) is { } crafted)
-                {
-                    results.Add(crafted);
-                }
+            }
+
+            if (await CraftablesExporter.ExportAsync(craftables, modName, source, options, role, CraftablesExporter.StagedRegistry(main),
+                    services.Logger, cancellationToken).ConfigureAwait(false) is { } crafted)
+            {
+                results.Add(crafted);
             }
         }
 
@@ -235,6 +253,15 @@ public static class ModExportService
 
                 installed.Add(copy);
             }
+        }
+
+        // The server mods folder loses a Craftables pak copied by an earlier export when this one built none (none at all:
+        // nothing was left to build).
+        var serverMods = services.Settings.Load().ServerModsOutputFolder;
+        if (!string.IsNullOrWhiteSpace(serverMods) && Directory.Exists(serverMods) && (results.Count == 0 || results.Any(r => r.Role == ProjectSourceRole.Server))
+            && !results.Any(r => r.Role == ProjectSourceRole.Server && r.ModName == ProjectExporter.SanitizeModName(project.Manifest.Name) + CraftablesExporter.Suffix))
+        {
+            CraftablesExporter.RemoveStale(serverMods, project.Manifest.Name, request.PakChunkIndex);
         }
 
         return (results, installed);

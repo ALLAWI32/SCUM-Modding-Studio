@@ -264,6 +264,6 @@ public sealed partial class MapPageViewModel
     /// <summary>The placements of one actor of <paramref name="document"/> (its meshes and spawn pins), as its level draws them.</summary>
     private IReadOnlyList<ScenePlacement> PlacementsOf(LevelDocument document, string actorName) =>
         document.FindActor(actorName) is { } actor
-            ? LevelScenePreparer.CollectPlacements(document, 0, new LevelSceneOptions { Filter = actor.Name }, _prepareCache.SpawnModels).Where(p => ReferenceEquals(p.Actor, actor)).ToList()
+            ? LevelScenePreparer.CollectPlacements(document, 0, new LevelSceneOptions { Filter = actor.Name, SpawnModels = SpawnModelsShown }, SpawnModelsShown ? _prepareCache.SpawnModels : null).Where(p => ReferenceEquals(p.Actor, actor)).ToList()
             : [];
 }

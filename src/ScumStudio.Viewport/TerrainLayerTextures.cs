@@ -13,15 +13,22 @@ public sealed class TerrainLayerTextures
 {
     private readonly Dictionary<string, LinearMipChain> _chains;
 
-    /// <summary>Builds the mip chains of <paramref name="images"/> (keyed by the catalog's texture path).</summary>
-    public TerrainLayerTextures(IReadOnlyDictionary<string, TextureImage> images)
+    /// <summary>
+    /// Builds the mip chains of <paramref name="images"/> (keyed by the catalog's texture path), or only of those among
+    /// <paramref name="tiled"/> (the colour textures; the layers' normal maps ride along in <see cref="Images"/> for the viewport).
+    /// </summary>
+    public TerrainLayerTextures(IReadOnlyDictionary<string, TextureImage> images, IEnumerable<string>? tiled = null)
     {
         ArgumentNullException.ThrowIfNull(images);
         Images = images;
         _chains = new Dictionary<string, LinearMipChain>(StringComparer.OrdinalIgnoreCase);
+        var only = tiled?.ToHashSet(StringComparer.OrdinalIgnoreCase);
         foreach (var (path, image) in images)
         {
-            _chains[path] = new LinearMipChain(image);
+            if (only is null || only.Contains(path))
+            {
+                _chains[path] = new LinearMipChain(image);
+            }
         }
     }
 

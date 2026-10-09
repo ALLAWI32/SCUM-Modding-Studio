@@ -143,6 +143,27 @@ public sealed partial class EditState
     public TransformValue? GetInstanceOverride(InstanceRef instance) =>
         _instanceTransforms.TryGetValue(instance, out var o) ? o.Current : null;
 
+    /// <summary>The transform an edit puts something at, or null for an edit that places nothing.</summary>
+    private static TransformValue? NewTransform(EditOp op) => op switch
+    {
+        SetTransformOp s => s.New,
+        SetInstanceTransformOp i => i.New,
+        AddInstanceOp a => a.Transform,
+        DuplicateActorOp d => d.Transform,
+        AddStaticMeshActorOp s => s.Transform,
+        AddBlueprintActorOp b => b.Transform,
+        _ => null,
+    };
+
+    /// <summary>True when every value of <paramref name="t"/> is a finite number and the place is within <see cref="MaxCoordinate"/>.</summary>
+    public static bool IsSane(TransformValue t)
+    {
+        static bool Finite(float v) => float.IsFinite(v);
+        var (l, r, s) = (t.Location, t.Rotation, t.Scale);
+        return Finite(l.X) && Finite(l.Y) && Finite(l.Z) && Finite(r.Pitch) && Finite(r.Yaw) && Finite(r.Roll) && Finite(s.X) && Finite(s.Y) && Finite(s.Z)
+               && MathF.Abs(l.X) <= MaxCoordinate && MathF.Abs(l.Y) <= MaxCoordinate && MathF.Abs(l.Z) <= MaxCoordinate;
+    }
+
     /// <summary>
     /// The effective root transform of an added actor (its creation transform or a later override), or null when the
     /// actor was not added.
@@ -163,10 +184,20 @@ public sealed partial class EditState
         };
     }
 
+    /// <summary>How far from the island's centre (cm, on any axis) an edit may put something: 100 km, many times the map.</summary>
+    public const float MaxCoordinate = 10_000_000f;
+
     /// <summary>Returns why <paramref name="op"/> cannot be applied to the current state, or null when it can.</summary>
     public string? Validate(EditOp op)
     {
         ArgumentNullException.ThrowIfNull(op);
+        if (NewTransform(op) is { } placed && !IsSane(placed))
+        {
+            // Discord (seviscache): 175 x "Function does not accept floating point Not-a-Number values" after a drag flung
+            // an object to the far side of the map; such a value must never reach the journal or the exported level.
+            return $"{op.Describe()}: the position, turn or scale is not a usable number ({placed}).";
+        }
+
         switch (op)
         {
             case DeleteActorOp d:

@@ -237,6 +237,7 @@ public static partial class LevelPackageEditor
         var (addedIndices, addedActors) = CopyActors(package, levelIndex, request.Copies, exports, data, imports, names, wide, addedNames, preload, warnings);
         addedIndices.AddRange(AddStaticMeshActors(package, levelIndex, request.StaticMeshAdds, exports, data, imports, names, wide, addedNames, preload, addedActors, warnings));
         addedIndices.AddRange(ImportActors(package, levelIndex, request.ForeignCopies, exports, data, imports, names, wide, addedNames, preload, addedActors, warnings));
+        addedIndices.AddRange(JoinSentrySpawners(package, levelIndex, request, exports, data, imports, names, wide, addedNames, preload, addedActors, warnings));
         RegisterActorsWithLevel(package, levelIndex, exports, preload, addedIndices);
 
         var actors = RemoveActors(package, levelIndex, request.DeleteActors, addedIndices, warnings);

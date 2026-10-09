@@ -2,6 +2,8 @@ using ScumStudio.App.Services;
 using ScumStudio.App.ViewModels;
 using ScumStudio.Core.Abstractions;
 using ScumStudio.Level.Editing;
+using ScumStudio.Level.Export;
+using ScumStudio.Modding.Crafting;
 using ScumStudio.Pak.Inspection;
 using ScumStudio.Tests.Level;
 
@@ -89,5 +91,39 @@ public sealed class ProjectsExportTests
         File.WriteAllBytes(Path.Combine(cook, "pakchunk0-WindowsServer.pak"), [1]);
         Assert.True(ModExportService.IsServerPaksFolder(cook));
     }
-}
 
+    /// <summary>
+    /// Review of craft-1: a craftables-only project whose craftables were all removed can still be exported, and that export
+    /// removes the old Craftables pak; unticking the Craftables box in such a project removes it too instead of crashing.
+    /// </summary>
+    [Fact]
+    public async Task AnEmptiedCraftablesProjectRemovesTheOldCraftablesPak()
+    {
+        using var ctx = AppTestContext.Create();
+        var game = ctx.Combine("game");
+        SyntheticLevels.WriteContent(game, withBlueprintPackage: true);
+        await ctx.Services.Workspace.OpenLooseAsync(game, ProgressSink.Null);
+        var project = await ctx.Services.Projects.CreateAsync(ctx.Combine("projects"), "Crafts");
+        var output = ctx.Combine("out");
+        var client = Directory.CreateDirectory(Path.Combine(output, "Client")).FullName;
+        var old = Path.Combine(client, CraftablesExporter.PakFileName("Crafts", ProjectExporter.DefaultPakChunkIndex));
+        Assert.NotNull(ModExportService.Blocker(ctx.Services, project)); // a new project has nothing to export
+
+        // Unticked with craftables: nothing is built, the old pak goes, no crash.
+        var file = new CraftablesFile { Items = [new Craftable { Name = "Oak Table", Source = "/Game/A/SM_T", Mesh = "/Game/A/SM_T" }] };
+        file.Save(project.DirectoryPath);
+        File.WriteAllText(old, "old");
+        var request = new ModExportRequest(project, output, null, false) { IncludeCraftables = false };
+        Assert.Null(ModExportService.Blocker(ctx.Services, project));
+        Assert.Empty(await ModExportService.ExportAsync(ctx.Services, request, ProgressSink.Null));
+        Assert.False(File.Exists(old));
+
+        // Every craftable removed (the page saves the emptied list): still exportable, and the export removes the pak.
+        new CraftablesFile().Save(project.DirectoryPath);
+        File.WriteAllText(old, "old");
+        Assert.Null(ModExportService.Blocker(ctx.Services, project));
+        Assert.Empty(await ModExportService.ExportAsync(ctx.Services, request with { IncludeCraftables = true }, ProgressSink.Null));
+        Assert.False(File.Exists(old));
+        Assert.Contains(ctx.Services.Notifications.Toasts, t => (t.Message ?? string.Empty).Contains(Path.GetFileName(old), StringComparison.Ordinal));
+    }
+}

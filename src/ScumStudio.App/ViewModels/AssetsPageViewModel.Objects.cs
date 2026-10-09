@@ -51,8 +51,8 @@ public sealed partial class ObjectCategoryNode : ViewModelBase
 public sealed partial class AssetsPageViewModel
 {
     // Things a player picks up and carries vs. things that stay where the map has them.
-    private static readonly string[] PickUpRoots = ["weapons", "attachments", "ammo", "explosives", "items"];
-    private static readonly string[] WorldRoots = ["buildings", "furniture", "exterior", "basebuilding", "nature", "wrecks", "vehicles", "roads", "water", "characters"];
+    internal static readonly string[] PickUpRoots = ["weapons", "attachments", "ammo", "explosives", "items"];
+    internal static readonly string[] WorldRoots = ["buildings", "furniture", "exterior", "basebuilding", "nature", "wrecks", "vehicles", "roads", "water", "characters"];
 
     private List<(DumpPackage Package, PackageEntry Entry)> _objects = [];
     private ObjectCategoryNode? _tradersNode;
@@ -93,26 +93,13 @@ public sealed partial class AssetsPageViewModel
             .Select(p => (p, byPath[p.PackagePath] is { ClassName: null } e ? e with { ClassName = p.ClassName } : byPath[p.PackagePath]))
             .ToList();
 
-        var counts = new Dictionary<string, int>(StringComparer.Ordinal);
-        foreach (var (package, _) in _objects)
-        {
-            for (var id = package.Node; id.Length > 0; id = id.LastIndexOf('.') is var dot and > 0 ? id[..dot] : string.Empty)
-            {
-                counts[id] = counts.GetValueOrDefault(id) + 1;
-            }
-        }
-
-        var roots = AssetDumper.Tree.ToDictionary(n => n.Id, StringComparer.Ordinal);
-        var world = Group(Loc.T("Assets.Group.World"), WorldRoots);
+        var packages = _objects.Select(o => o.Package).ToList();
+        var world = CategoryGroup(Loc.T("Assets.Group.World"), WorldRoots, packages);
+        var pickUp = CategoryGroup(Loc.T("Assets.Group.PickUp"), PickUpRoots, packages);
         // The game's traders first: "Place in map" puts a whole working trader (trade post, NPC, economy) there.
         _tradersNode = new ObjectCategoryNode(Loc.T("Assets.Group.Traders"), [], [], _objects.Count(o => IsTraderNpc(o.Package))) { Match = IsTraderNpc };
-        ObjectRoots = _tradersNode.Count > 0
-            ? [_tradersNode, Sets(), Group(Loc.T("Assets.Group.PickUp"), PickUpRoots), world]
-            : [Sets(), Group(Loc.T("Assets.Group.PickUp"), PickUpRoots), world];
+        ObjectRoots = _tradersNode.Count > 0 ? [_tradersNode, Sets(), pickUp, world] : [Sets(), pickUp, world];
         SelectedCategory = world;
-
-        ObjectCategoryNode Node(DumpNode n) =>
-            new(n.Title, [n.Id], n.Children.Select(Node).Where(c => c.Count > 0).ToList(), counts.GetValueOrDefault(n.Id));
 
         // Every kind of wall, road and bridge in one place, wherever the catalogue filed it (owner request).
         ObjectCategoryNode Sets()
@@ -123,12 +110,29 @@ public sealed partial class AssetsPageViewModel
                 .ToList();
             return new ObjectCategoryNode(Loc.T("Assets.Group.Sets"), [], children, children.Sum(c => c.Count)) { IsExpanded = true };
         }
+    }
 
-        ObjectCategoryNode Group(string title, string[] ids)
+    /// <summary>
+    /// A group of the catalogue's top categories <paramref name="ids"/> holding the sub-categories that have any of
+    /// <paramref name="packages"/>, with their counts (the Objects view here, the gallery of the Craftables page).
+    /// </summary>
+    internal static ObjectCategoryNode CategoryGroup(string title, IReadOnlyList<string> ids, IEnumerable<DumpPackage> packages)
+    {
+        var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var package in packages)
         {
-            var children = ids.Where(roots.ContainsKey).Select(id => Node(roots[id])).Where(c => c.Count > 0).ToList();
-            return new ObjectCategoryNode(title, ids, children, children.Sum(c => c.Count)) { IsExpanded = true };
+            for (var id = package.Node; id.Length > 0; id = id.LastIndexOf('.') is var dot and > 0 ? id[..dot] : string.Empty)
+            {
+                counts[id] = counts.GetValueOrDefault(id) + 1;
+            }
         }
+
+        var roots = AssetDumper.Tree.ToDictionary(n => n.Id, StringComparer.Ordinal);
+        var children = ids.Where(roots.ContainsKey).Select(id => Node(roots[id])).Where(c => c.Count > 0).ToList();
+        return new ObjectCategoryNode(title, ids, children, children.Sum(c => c.Count)) { IsExpanded = true };
+
+        ObjectCategoryNode Node(DumpNode n) =>
+            new(n.Title, [n.Id], n.Children.Select(Node).Where(c => c.Count > 0).ToList(), counts.GetValueOrDefault(n.Id));
     }
 
     // ponytail: name keywords; distant LODs, terrain layers and effects are left out. Extend the lists when a kind is missed.

@@ -30,6 +30,12 @@ public sealed record LevelSceneOptions
     /// <summary>Largest texture edge in pixels; 0 disables base colour textures.</summary>
     public int TextureSize { get; init; } = 512;
 
+    /// <summary>
+    /// Draw a spawn place as the object that spawns there (<see cref="ScumStudio.Viewport.SpawnModels"/>), glinting; false:
+    /// its simple marker shape, still (the view need not keep drawing for a glint).
+    /// </summary>
+    public bool SpawnModels { get; init; } = true;
+
     /// <summary>Include instanced static mesh (ISM/HISM) instances.</summary>
     public bool IncludeInstances { get; init; } = true;
 
@@ -277,7 +283,10 @@ public sealed record PreparedMeshAsset(string MeshPath, MeshData Mesh, string? T
     /// <summary>Masked materials (leaves, grass, chain-link): material path → opacity clip value applied to the texture's alpha.</summary>
     public IReadOnlyDictionary<string, float> MaterialAlphaCutoffs { get; init; } = new Dictionary<string, float>(StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>Materials without a texture (glass, painted plastic, rubber): material path → their colour (linear RGBA).</summary>
+    /// <summary>
+    /// Materials without a texture (glass, painted plastic, rubber): material path → their colour (linear RGBA); textured
+    /// ones whose master shader darkens or tints the texture (<c>MaterialInfo.BaseColorScale</c>): the colour multiplied into it.
+    /// </summary>
     public IReadOnlyDictionary<string, Vector4> MaterialTints { get; init; } = new Dictionary<string, Vector4>(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
@@ -305,7 +314,10 @@ public sealed record PreparedMeshAsset(string MeshPath, MeshData Mesh, string? T
     public bool Water { get; init; }
 }
 
-/// <summary>What a material contributes to the viewport: its base-colour texture (or colour without one) and, when masked, the alpha clip value.</summary>
+/// <summary>
+/// What a material contributes to the viewport: its base-colour texture and the colour multiplied into it (white = as is), or
+/// its colour without one, and, when masked, the alpha clip value.
+/// </summary>
 internal readonly record struct MaterialLook(string? Texture, float AlphaCutoff, Vector4 Tint, string? Normal = null, Vector2 Roughness = default);
 
 /// <summary>A terrain component ready for upload (positions already in UE world centimetres).</summary>
@@ -668,7 +680,7 @@ public sealed class LevelScenePreparer
             throw new ArgumentException($"{slots.Count} slots for {documents.Count} documents.", nameof(options));
         }
 
-        var models = cache is null ? _models ??= new SpawnModels(_catalog, _logger) : cache.ModelsFor(_catalog, _logger);
+        var models = !options.SpawnModels ? null : cache is null ? _models ??= new SpawnModels(_catalog, _logger) : cache.ModelsFor(_catalog, _logger);
         var requested = new List<ScenePlacement>();
         for (var i = 0; i < documents.Count; i++)
         {
@@ -717,7 +729,8 @@ public sealed class LevelScenePreparer
             }
             else if (SpawnMarkers.AssetFor(meshPath) is { } marker)
             {
-                (asset, reason) = (marker, string.Empty);
+                // Simple shapes (models off, Settings) stand still: no glint, so the view stops drawing while nothing moves.
+                (asset, reason) = (options.SpawnModels ? marker : marker with { Shimmer = false }, string.Empty);
             }
             else
             {
@@ -930,8 +943,8 @@ public sealed class LevelScenePreparer
         TerrainLayerTextures? textures = null;
         if (options.ResolveLayerTextures && options.Ground == GroundMode.Realistic)
         {
-            var set = catalog.LoadTextures(_catalog);
-            textures = set.Images.Count > 0 ? new TerrainLayerTextures(set.Images) : null;
+            var set = catalog.LoadTextures(_catalog, 512); // the close-up ground's tiles: 2.3 cm a texel at 256 looked soft at a few metres
+            textures = set.Images.Count > 0 ? new TerrainLayerTextures(set.Images, catalog.DiffuseTexturePaths) : null; // the bake tiles the colours only
             catalog = catalog.WithTextureColors(set);
             missingTextures = set.Missing;
         }
@@ -1397,7 +1410,7 @@ public sealed class LevelScenePreparer
     /// Resolves the base colour texture of every material slot into <paramref name="result"/> (material path → texture
     /// path); each material is inspected once per <paramref name="materials"/> cache and each texture decoded once per path.
     /// Masked materials add their clip value to <paramref name="alphaCutoffs"/>; untextured or translucent ones their colour to
-    /// <paramref name="tints"/>.
+    /// <paramref name="tints"/>, textured ones their master shader's colour scale (<see cref="MaterialInfo.BaseColorScale"/>).
     /// </summary>
     private void FindMaterialTextures(IEnumerable<string> materialPaths, int maxSize, Dictionary<string, TextureImage> textures, Dictionary<string, MaterialLook> materials,
         Dictionary<string, string> result, Dictionary<string, float> alphaCutoffs, Dictionary<string, Vector4> tints, Prefetch? prefetch = null,
@@ -1421,9 +1434,9 @@ public sealed class LevelScenePreparer
                 {
                     var material = Inspect(slot.MaterialPath, prefetch);
                     clip = material.OpacityMaskClip ?? 0f;
-                    if (material.TintColor is { W: > 0f } colour)
+                    if (material.SurfaceColor is { } colour)
                     {
-                        tint = colour with { W = 1f };
+                        tint = colour; // SCUM's master shaders: base colour x tint x brightness
                     }
 
                     if (material.IsTranslucent)
@@ -1442,6 +1455,13 @@ public sealed class LevelScenePreparer
 
                         texturePath = path;
                         normalPath = DecodeNormal(material, maxSize, textures, prefetch);
+
+                        // A textured opaque material multiplies its texture by the master's colour scale only, never by a
+                        // guessed colour parameter (the hangar roof's white panels are drawn at brightness 0.2 in game).
+                        if (!material.IsTranslucent)
+                        {
+                            tint = material.BaseColorScale is { } textureScale ? new Vector4(textureScale, 1f) : Vector4.One;
+                        }
 
                         // Opaque only: a masked or translucent material's alpha is its coverage, not its roughness.
                         range = clip == 0f && !material.IsTranslucent && material.RoughnessRange is { } r ? r : Vector2.Zero;
@@ -1466,7 +1486,7 @@ public sealed class LevelScenePreparer
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
                     _logger.LogDebug("Material {Material}: texture {Texture} could not be decoded again ({Message}).", slot.MaterialPath, kept, ex.Message);
-                    look = look with { Texture = null };
+                    look = look with { Texture = null, Tint = look.Tint * Untextured }; // mid grey through the texture's colour scale
                 }
             }
 
@@ -1502,9 +1522,9 @@ public sealed class LevelScenePreparer
                     alphaCutoffs[slot.MaterialPath] = look.AlphaCutoff; // masked: the texture's alpha cuts the leaves out
                 }
             }
-            if (look.Texture is null || look.Tint.W < 1f)
+            if (look.Texture is null || look.Tint != Vector4.One)
             {
-                tints[slot.MaterialPath] = look.Tint; // no texture: draw the material's own colour, not white
+                tints[slot.MaterialPath] = look.Tint; // no texture: the material's own colour, not white; else multiplied into the texture
             }
         }
     }

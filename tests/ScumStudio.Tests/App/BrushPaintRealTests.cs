@@ -189,6 +189,35 @@ public sealed class BrushPaintRealTests
         var again = watch.Elapsed.TotalMilliseconds;
         map.EndPaintStroke();
         _output.WriteLine($"second stroke's first dab {again:0.0} ms");
+
+        // Timer mode (owner: "a timer: every so many seconds it adds a tree where the brush is"): the brush held still, each
+        // tick plants one object inside the circle, the spacing still kept; the stroke is one History row.
+        var still = best.At with { Y = best.At.Y - 3_000f };
+        still = still with { Z = scene.HeightField!.SampleHeight(still.X, still.Y) ?? still.Z };
+        rows = ctx.Services.Projects.History.Count;
+        for (var tick = 0; tick < 6; tick++)
+        {
+            map.PaintOneAt(still);
+        }
+
+        map.EndPaintStroke();
+        Assert.Equal(rows + 1, ctx.Services.Projects.History.Count);
+        var timed = Assert.IsType<BatchOp>(project.Journal.Applied[^1].Op).Ops.Select(o => Assert.IsType<AddInstanceOp>(o)).ToList();
+        Assert.InRange(timed.Count, 4, 6);
+        var ticks = timed.Select(add =>
+        {
+            var holder = map.AllActors.Single(a => !a.IsAdded && ActorRef.Comparer.Equals(a.Reference, add.Target.ActorRef));
+            return map.InstanceTransforms[InstanceKey.Of(holder.SelectableId, add.Target.Component, add.Target.Index)].Translation;
+        }).ToList();
+        _output.WriteLine($"timer: {timed.Count} objects in 6 ticks at {string.Join(", ", ticks.Select(t => $"({t.X - still.X:0}, {t.Y - still.Y:0})"))} cm from the brush");
+        Assert.All(ticks, t => Assert.True(Flat(t, still) <= 1_500f + 1f, $"{t} is {Flat(t, still):0} cm from the brush"));
+        for (var i = 0; i < ticks.Count; i++)
+        {
+            for (var j = i + 1; j < ticks.Count; j++)
+            {
+                Assert.True(Flat(ticks[i], ticks[j]) >= Spacing - 1f, $"{ticks[i]} and {ticks[j]} are {Flat(ticks[i], ticks[j]):0} cm apart");
+            }
+        }
     }
 
     /// <summary>

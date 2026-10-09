@@ -57,6 +57,10 @@
             <ComboBox x:Name="QualityPicker" ItemsSource="{Binding RenderQualities}" SelectedItem="{Binding RenderQuality}" MinWidth="220"
                       ToolTip.Tip="{Tr Settings.Quality.Tip}" />
           </StackPanel>
+          <!-- Discord feature request: lighter view switches, apart from the quality presets -->
+          <CheckBox x:Name="SpawnModelsBox" IsChecked="{Binding SpawnModels}" Content="{Tr Settings.SpawnModels}" ToolTip.Tip="{Tr Settings.SpawnModels.Tip}" />
+          <CheckBox x:Name="AnimateWaterBox" IsChecked="{Binding AnimateWater}" Content="{Tr Settings.AnimateWater}" ToolTip.Tip="{Tr Settings.AnimateWater.Tip}" />
+          <CheckBox x:Name="LightingBox" IsChecked="{Binding Lighting}" Content="{Tr Settings.Lighting}" ToolTip.Tip="{Tr Settings.Lighting.Tip}" />
           <CheckBox x:Name="ReopenLastProject" IsChecked="{Binding ReopenLastProject}" Content="{Tr Settings.ReopenLast}" ToolTip.Tip="{Tr Settings.ReopenLast.Tip}" />
           <CheckBox x:Name="ClearGrassUnderNew" IsChecked="{Binding ClearGrassUnderNew}" Content="{Tr Settings.ClearGrass}" ToolTip.Tip="{Tr Settings.ClearGrass.Tip}" />
           <!-- Owner: the toolbar button for this was pointless; the choice lives here now -->

@@ -78,6 +78,7 @@ public sealed class AssetItemViewModel : ThumbnailItem
 {
     private readonly Func<AssetItemViewModel, CancellationToken, Task<Bitmap?>>? _thumbnails;
     private bool _isSelected;
+    private bool _isAdded;
 
     /// <summary>Wraps <paramref name="entry"/>; <paramref name="thumbnails"/> makes the small picture of a tile on screen.</summary>
     public AssetItemViewModel(PackageEntry entry, Func<AssetItemViewModel, CancellationToken, Task<Bitmap?>>? thumbnails = null)
@@ -110,6 +111,13 @@ public sealed class AssetItemViewModel : ThumbnailItem
     {
         get => _isSelected;
         set => SetProperty(ref _isSelected, value);
+    }
+
+    /// <summary>True when the package is already one of the project's craftables (the Craftables page's gallery).</summary>
+    public bool IsAdded
+    {
+        get => _isAdded;
+        set => SetProperty(ref _isAdded, value);
     }
 
     /// <summary>Records the main class read from the package header (large pak sets do not resolve classes while indexing).</summary>

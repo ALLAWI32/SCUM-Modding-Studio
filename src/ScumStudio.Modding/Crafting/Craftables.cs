@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
@@ -15,6 +17,12 @@ public enum CraftKind
 
     /// <summary>A power object: an item that gives electricity inside a radius (template: the electricity generator).</summary>
     Power,
+
+    /// <summary>
+    /// An inventory item of the game (weapon, tool, food, ammunition, clothing …) made by a new item recipe (template: a
+    /// stock item recipe of the same kind of item, for its crafting menu category).
+    /// </summary>
+    Item,
 }
 
 /// <summary>The main material of a craftable; picks the ingredients of its suggested recipe.</summary>
@@ -64,6 +72,12 @@ public sealed record Craftable
     /// <summary>The static mesh it shows (package path; the Blueprint's mesh for a Blueprint source).</summary>
     public required string Mesh { get; init; }
 
+    /// <summary>
+    /// For a model imported from a 3D file (Level <c>UeCook</c>): its cooked files, relative to the project folder
+    /// (<c>imports/&lt;Token&gt;</c>); the Craftables pak carries them. Null for the game's own meshes.
+    /// </summary>
+    public string? Imported { get; init; }
+
     /// <summary>What it becomes.</summary>
     public CraftKind Kind { get; init; }
 
@@ -85,7 +99,7 @@ public sealed record Craftable
     /// <summary>Power settings (used when <see cref="Kind"/> is <see cref="CraftKind.Power"/>).</summary>
     public PowerSettings Power { get; init; } = new();
 
-    /// <summary>The token of its new assets: <c>SS_</c> + the name in letters, digits and '_'.</summary>
+    /// <summary>The token of its new assets (<see cref="CraftablesFile.TokenOf"/>).</summary>
     [JsonIgnore]
     public string Token => CraftablesFile.TokenOf(Name);
 }
@@ -106,11 +120,15 @@ public sealed record CraftablesFile
     /// <summary>The craftables, in list order.</summary>
     public IReadOnlyList<Craftable> Items { get; init; } = [];
 
+    /// <summary>The project folder it was loaded from (where <see cref="Craftable.Imported"/> folders are), or null.</summary>
+    [JsonIgnore]
+    public string? ProjectDirectory { get; init; }
+
     /// <summary>The file of <paramref name="projectDirectory"/>, or an empty list when there is none.</summary>
     public static CraftablesFile Load(string projectDirectory)
     {
         var path = Path.Combine(projectDirectory, FileName);
-        return File.Exists(path) ? Parse(File.ReadAllText(path)) : new CraftablesFile();
+        return (File.Exists(path) ? Parse(File.ReadAllText(path)) : new CraftablesFile()) with { ProjectDirectory = projectDirectory };
     }
 
     /// <summary>Reads the JSON text of the file.</summary>
@@ -119,22 +137,32 @@ public sealed record CraftablesFile
     /// <summary>The JSON text of the file.</summary>
     public string ToJson() => JsonSerializer.Serialize(this, Json);
 
-    /// <summary>Writes the file into <paramref name="projectDirectory"/> (deletes it when the list is empty).</summary>
-    public void Save(string projectDirectory)
+    /// <summary>
+    /// Writes the file into <paramref name="projectDirectory"/>; an emptied list is kept too, so the next export still runs
+    /// and removes the Craftables pak an earlier one left.
+    /// </summary>
+    public void Save(string projectDirectory) => File.WriteAllText(Path.Combine(projectDirectory, FileName), ToJson());
+
+    /// <summary>
+    /// The asset names of a craftable: <c>SS_</c> + the Latin letters and digits of <paramref name="name"/> (other runs as
+    /// '_'), the token every earlier export gave it whenever that is a valid asset name (objects players placed are saved by
+    /// class path: a new token would make them vanish). Only a name whose token was not valid (no Latin letter at all, as
+    /// in an Arabic name, or more than 61 of them) gets at most 40 of them and the first 8 hex digits of its SHA-256, so two
+    /// Arabic names never share a token and an export keeps the same one.
+    /// </summary>
+    public static string TokenOf(string name)
     {
-        var path = Path.Combine(projectDirectory, FileName);
-        if (Items.Count == 0)
+        var trimmed = name.Trim();
+        var latin = Regex.Replace(trimmed, "[^A-Za-z0-9]+", "_", RegexOptions.CultureInvariant).Trim('_');
+        if (latin.Length is > 0 and <= 61)
         {
-            File.Delete(path);
-            return;
+            return "SS_" + latin;
         }
 
-        File.WriteAllText(path, ToJson());
+        latin = latin[..Math.Min(latin.Length, 40)].TrimEnd('_');
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(trimmed)))[..8];
+        return latin.Length > 0 ? $"SS_{latin}_{hash}" : "SS_" + hash;
     }
-
-    /// <summary><c>SS_</c> + <paramref name="name"/> with every other character as '_' (asset names of the craftable).</summary>
-    public static string TokenOf(string name) =>
-        "SS_" + Regex.Replace(name.Trim(), "[^A-Za-z0-9]+", "_", RegexOptions.CultureInvariant).Trim('_');
 }
 
 /// <summary>
@@ -184,8 +212,8 @@ public static class RecipeRules
         [
             (CraftMaterial.Brick, ["brick"]),
             (CraftMaterial.Cement, ["concrete", "cement"]),
-            (CraftMaterial.Fabric, ["fabric", "cloth", "leather", "sofa", "couch", "mattress", "curtain", "rug", "carpet", "pillow", "bed_"]),
-            (CraftMaterial.Metal, ["metal", "steel", "iron", "rust", "alumin", "chrome", "pipe", "container", "generator", "solar", "pole", "pump", "locker"]),
+            (CraftMaterial.Fabric, ["fabric", "cloth", "leather", "sofa", "couch", "mattress", "curtain", "rug", "carpet", "pillow", "bed_", "clothes"]),
+            (CraftMaterial.Metal, ["metal", "steel", "iron", "rust", "alumin", "chrome", "pipe", "container", "generator", "solar", "pole", "pump", "locker", "weapon", "ammunition"]),
             (CraftMaterial.Stone, ["stone", "rock", "marble", "granite", "boulder"]),
             (CraftMaterial.Wood, ["wood", "plank", "log", "timber", "oak", "pine", "tree", "crate"]),
         ];

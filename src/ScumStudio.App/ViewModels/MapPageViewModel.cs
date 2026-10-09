@@ -74,7 +74,9 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
         _rotationSnap = ui.RotationSnapDegrees;
         _orientation = services.UiState.Current.GizmoAxes;
         _renderQuality = ui.RenderQuality;
+        (_spawnModelsShown, _animateWater, _lighting) = (ui.SpawnModels, ui.AnimateWater, ui.Lighting);
         _showSpawns = services.UiState.Current.ShowSpawnPoints;
+        _timeOfDay = Math.Clamp(services.UiState.Current.TimeOfDay, 0, 24);
         _pickParts = services.UiState.Current.PickParts;
         _services = services;
         _openSetup = openSetup ?? (() => { });
@@ -624,6 +626,7 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
                     LandscapeStep = Math.Max(1, landscapeStep),
                     SeaPlane = seaPlane ? null : false,
                     DocumentSlots = LevelScenePreparer.SlotsAfter(documents, shown),
+                    SpawnModels = SpawnModelsShown,
                 };
                 var progress = new Progress<(int Done, int Total, string Item)>(p =>
                     LoadStatus = Localization.Loc.F("Map.Preparing", p.Done + 1, p.Total, p.Item[(p.Item.LastIndexOf('/') + 1)..]));
@@ -2068,6 +2071,11 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
         }
 
         var (results, installed) = export;
+        if (results.Count == 0)
+        {
+            return; // nothing was left to build (the export said what it removed)
+        }
+
         var client = results[0];
         var summary = string.Create(CultureInfo.CurrentCulture,
             $"{client.PakPath}{(installed.Count > 0 ? Localization.Loc.F("Map.ServerPakCopied", Path.GetDirectoryName(installed[0])) : string.Empty)}");

@@ -161,6 +161,44 @@ public sealed class CrossLevelPasteRealTests
         }
     }
 
+    /// <summary>
+    /// Owner (2026-10-09): "a copied building's doors sometimes don't open or close". A hangar and its door (a child actor
+    /// stored in the level) copied together: the paste copies the hangar only, whose copy brings its own stored door; a
+    /// second copy of the door would stand on the same spot, and the game tells doors apart by where they stand.
+    /// </summary>
+    [Fact]
+    public async Task ABuildingCopiedWithItsDoorIsPastedWithOneDoor()
+    {
+        if (Environment.GetEnvironmentVariable("SCUM_PAKS") is not { Length: > 0 } paks || !Directory.Exists(paks))
+        {
+            return;
+        }
+
+        const string Airfield = "/Game/ConZ_Files/Maps/The_Island/A_4_Airfield";
+        using var ctx = AppTestContext.Create();
+        ctx.Services.Keys.Set(AesKeyText.FromEnvironmentOrStore()!);
+        ctx.Services.UpdateSettings(s => s with { GamePaksFolder = paks });
+        await ctx.Services.Workspace.ConnectAsync(ProgressSink.Null);
+        using var map = new MapPageViewModel(ctx.Services);
+        await map.LoadCompletion;
+        await ctx.Services.Projects.CreateAsync(ctx.Combine("projects"), "Doors");
+        var project = ctx.Services.Projects.Current!;
+        await map.LoadLevelsAsync([Airfield]);
+        var door = map.AllActors.First(a => !a.IsAdded && a.Actor.ParentComponent is not null && a.Name.Contains("Door", StringComparison.Ordinal));
+        var building = map.AllActors.Single(a => !a.IsAdded && a.Level == door.Level && a.Actor.Components.Any(c => c.ExportIndex == door.Actor.ParentComponent));
+        map.SelectedActor = building;
+        map.ToggleGroup(door.SelectableId, null);
+        Assert.True(map.HasGroup);
+        map.CopySelectedCommand.Execute(null);
+        map.AimPointProvider = () => building.Actor.WorldTransform.Translation + new FVector(10_000f, 0f, 0f);
+        map.SelectedActor = null;
+        map.PasteCommand.Execute(null);
+        var batch = project.Journal.Applied[^1].Op;
+        var ops = batch is BatchOp many ? many.Ops : [batch];
+        Assert.Single(ops);
+        Assert.Contains(building.Name, ops[0].Describe(), StringComparison.Ordinal);
+    }
+
     /// <summary>The clone with its drawn parts (the source level is read on a worker after the paste).</summary>
     private static async Task<ActorClone> DrawnCloneAsync(MapPageViewModel map, string name)
     {

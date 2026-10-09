@@ -167,7 +167,7 @@ public sealed partial class MapPageViewModel
                 actor = SpawnPointArrays.WithPoints(actor, component, points);
             }
 
-            pins[item.SelectableId] = LevelScenePreparer.PinPlacements(actor, item.SelectableId, scene.SlotOf(index), models: _prepareCache.SpawnModels).Where(p => p.SpawnPoint is not null).ToList();
+            pins[item.SelectableId] = LevelScenePreparer.PinPlacements(actor, item.SelectableId, scene.SlotOf(index), models: SpawnModelsShown ? _prepareCache.SpawnModels : null).Where(p => p.SpawnPoint is not null).ToList();
         }
 
         return pins;

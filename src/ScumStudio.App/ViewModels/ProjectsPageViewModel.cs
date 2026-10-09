@@ -533,9 +533,9 @@ public sealed partial class ProjectsPageViewModel : PageViewModel, IDisposable
         var request = new ModExportRequest(project, folder, string.IsNullOrWhiteSpace(ExportModName) ? null : ExportModName.Trim(), ExportServer) { IncludeCraftables = ExportCraftables };
         var (ok, results) = await _services.Operations.RunAsync(Loc.F("Projects.Exporting", project.Manifest.Name),
             (progress, ct) => ModExportService.ExportAsync(_services, request, progress, ct)).ConfigureAwait(true);
-        if (!ok || results is null)
+        if (!ok || results is not { Count: > 0 })
         {
-            return;
+            return; // nothing was left to build (the export said what it removed)
         }
 
         LastExport = results;

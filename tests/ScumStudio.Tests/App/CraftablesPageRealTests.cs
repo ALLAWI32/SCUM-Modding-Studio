@@ -17,6 +17,43 @@ public sealed class CraftablesPageRealTests
 {
     private const string Table = "/Game/ConZ_Files/Models/Objects/Indoor/Armory/Table/SM_Table_01";
     private const string Chair = "/Game/ConZ_Files/BaseBuilding/BaseElements/AsianDecorPack/BP_Chair_Asian";
+    private const string Rifle = "/Game/ConZ_Files/Items/Weapons/Ranged_Weapons/Weapon_AK47";
+
+    /// <summary>The page's search offers an item of the game (a weapon) and adds it as an Item craftable with its 3D picture.</summary>
+    [Avalonia.Headless.XUnit.AvaloniaFact]
+    public async Task TheSearchAddsAnItemOfTheGame()
+    {
+        if (Environment.GetEnvironmentVariable("SCUM_PAKS") is not { Length: > 0 } paks || !Directory.Exists(paks))
+        {
+            return; // not asked for
+        }
+
+        using var ctx = AppTestContext.Create(inline: false);
+        ctx.Services.Keys.Set(AesKeyText.FromEnvironmentOrStore()!);
+        ctx.Services.UpdateSettings(s => s with { GamePaksFolder = paks });
+        var (window, vm) = HeadlessUi.ShowMainWindow(ctx.Services, 1600, 900);
+        try
+        {
+            await ctx.Services.Workspace.ConnectAsync(ProgressSink.Null);
+            await ctx.Services.Projects.CreateAsync(ctx.Combine("projects"), "Crafty");
+            Assert.True(HeadlessUi.PumpUntil(() => ctx.Services.Projects.Current is not null, TimeSpan.FromSeconds(30)));
+            var page = Assert.IsType<CraftablesPageViewModel>(vm.NavigateTo("craftables"));
+            page.AddQuery = "Weapon_AK47";
+            Assert.True(HeadlessUi.PumpUntil(() => page.AddResults.Any(r => r.PackagePath == Rifle), TimeSpan.FromMinutes(3)), "the search found no rifle");
+            var hit = page.AddResults.First(r => r.PackagePath == Rifle);
+            Assert.Equal("Item", hit.ClassName);
+            Assert.DoesNotContain(page.AddResults, r => r.Name.EndsWith("_ES", StringComparison.Ordinal));
+            await page.AddSourceCommand.ExecuteAsync(hit);
+            var rifle = Assert.Single(page.Items);
+            Assert.Equal(CraftKind.Item, rifle.Kind);
+            Assert.Equal([CraftKind.Item], rifle.Kinds);
+            Assert.True(HeadlessUi.PumpUntil(() => rifle.Thumbnail is not null, TimeSpan.FromSeconds(90)), "no 3D picture of the rifle");
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
 
     [Avalonia.Headless.XUnit.AvaloniaFact]
     public async Task CraftablesAreAddedEditedAndExported()
@@ -93,5 +130,29 @@ public sealed class CraftablesPageRealTests
         {
             window.Close();
         }
+    }
+
+    /// <summary>
+    /// Review of the gallery: with nothing selected the "Add from the game" tab clicked again keeps the gallery (no empty
+    /// right panel), and a click on the craftable already selected shows it again.
+    /// </summary>
+    [Fact]
+    public void TheGalleryNeverLeavesAnEmptyPanel()
+    {
+        using var ctx = AppTestContext.Create();
+        using var page = new CraftablesPageViewModel(ctx.Services);
+        Assert.True(page.IsGalleryOpen);
+        page.IsGalleryOpen = false;
+        Assert.True(page.IsGalleryOpen);
+        page.ShowSelected();
+        Assert.True(page.IsGalleryOpen);
+
+        var row = new CraftableRowViewModel(new Craftable { Name = "Oak Table", Source = Table, Mesh = Table }, _ => { }, (_, _) => Task.FromResult<Avalonia.Media.Imaging.Bitmap?>(null));
+        page.Items.Add(row);
+        page.SelectedItem = row;
+        Assert.False(page.IsGalleryOpen);
+        page.IsGalleryOpen = true;
+        page.ShowSelected();
+        Assert.False(page.IsGalleryOpen);
     }
 }

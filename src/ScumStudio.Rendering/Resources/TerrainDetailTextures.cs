@@ -12,4 +12,6 @@ namespace ScumStudio.Rendering.Resources;
 /// <param name="Layers">The four layers' diffuse textures (sRGB, repeating); null entries are unused.</param>
 /// <param name="InvTilingCm">1 / each layer's repeat size in cm (0 = unused).</param>
 /// <param name="Means">Each layer texture's average linear colour.</param>
-public sealed record TerrainDetailTextures(GpuTexture Weights, IReadOnlyList<GpuTexture?> Layers, Vector4 InvTilingCm, IReadOnlyList<Vector3> Means);
+/// <param name="Normals">Each layer's NHR texture (linear: normal X, Y, height, roughness), null entries without one.</param>
+public sealed record TerrainDetailTextures(GpuTexture Weights, IReadOnlyList<GpuTexture?> Layers, Vector4 InvTilingCm, IReadOnlyList<Vector3> Means,
+    IReadOnlyList<GpuTexture?>? Normals = null);

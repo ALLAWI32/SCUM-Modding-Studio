@@ -100,6 +100,7 @@ internal static class ShaderSources
         uniform sampler2DShadow uShadowMap;
         uniform float uShadowTexel;
         uniform int uShimmer;
+        uniform int uUnlit;
         uniform int uTerrainDetail;
         uniform sampler2D uWeights;
         uniform sampler2D uLayer0;
@@ -111,6 +112,11 @@ internal static class ShaderSources
         uniform vec3 uLayerMean1;
         uniform vec3 uLayerMean2;
         uniform vec3 uLayerMean3;
+        uniform sampler2D uLayerNhr0;
+        uniform sampler2D uLayerNhr1;
+        uniform sampler2D uLayerNhr2;
+        uniform sampler2D uLayerNhr3;
+        uniform vec4 uLayerHasNhr;
 
         layout(location = 0) out vec4 oColor;
         """ + "\n" + Atmosphere + "\n" + """
@@ -157,6 +163,13 @@ internal static class ShaderSources
             return normalize((t * xy.x + b * xy.y) * scale + n * z);
         }
 
+        // A layer texture sampled about nine times larger, as a brightness factor around 1 (hue kept): breaks up its repeat.
+        float Macro(vec3 large, vec3 mean)
+        {
+            const vec3 luma = vec3(0.2126, 0.7152, 0.0722);
+            return mix(1.0, dot(large, luma) / max(dot(mean, luma), 0.01), 0.6);
+        }
+
         void main()
         {
             // Derivatives first, while every pixel of the quad is still running (masked texels are discarded below).
@@ -165,11 +178,12 @@ internal static class ShaderSources
             vec2 duvx = dFdx(vUv);
             vec2 duvy = dFdy(vUv);
             vec4 albedo = vTint * uSectionTint; // node tint x material colour
+            vec2 groundBump = vec2(0.0); // terrain: the paint layers' normal maps (tangent X, Y along world X, Z)
             float paintMask = 1.0;
             if (uHasTexture != 0)
             {
                 vec4 texel = texture(uTexture, vUv);
-                albedo *= texel;
+                albedo = vTint * vec4(min(uSectionTint.rgb * texel.rgb, vec3(1.0)), uSectionTint.a * texel.a); // UE clamps base colour to 1
                 paintMask = texel.a; // shiny paint: the texture's alpha says where the paint is
                 // Masked material: leaves and grass are cut out of their cards. Far mips average the leaves with the gaps
                 // between them, so alpha is sharpened with the mip level and a distant forest keeps its leaves.
@@ -180,22 +194,56 @@ internal static class ShaderSources
 
                 if (uTerrainDetail != 0)
                 {
-                    // Ground up close: the paint layers' own textures, tiled in world space, sharpen the baked colour.
-                    float fade = 1.0 - smoothstep(4000.0, 16000.0, length(uCameraPosition - vWorld));
+                    // Ground up close: the paint layers' own textures, tiled in world space, sharpen the baked colour. Each
+                    // is also sampled about nine times larger, which breaks up the repeat of its tile, and its normal map
+                    // (NHR: normal X, Y, height, roughness) gives pebbles, needles and ruts their relief in the light.
+                    float fade = 1.0 - smoothstep(6000.0, 30000.0, length(uCameraPosition - vWorld));
                     if (fade > 0.0)
                     {
                         vec4 w = texture(uWeights, vUv);
                         vec2 ue = vec2(vWorld.x, vWorld.z);
                         vec3 detail = vec3(0.0);
                         vec3 mean = vec3(0.0);
-                        if (uLayerTiling.x > 0.0) { detail += w.x * texture(uLayer0, ue * uLayerTiling.x).rgb; mean += w.x * uLayerMean0; }
-                        if (uLayerTiling.y > 0.0) { detail += w.y * texture(uLayer1, ue * uLayerTiling.y).rgb; mean += w.y * uLayerMean1; }
-                        if (uLayerTiling.z > 0.0) { detail += w.z * texture(uLayer2, ue * uLayerTiling.z).rgb; mean += w.z * uLayerMean2; }
-                        if (uLayerTiling.w > 0.0) { detail += w.w * texture(uLayer3, ue * uLayerTiling.w).rgb; mean += w.w * uLayerMean3; }
+                        vec2 bump = vec2(0.0);
+                        const float macro = 0.113;
+                        if (uLayerTiling.x > 0.0)
+                        {
+                            vec2 t = ue * uLayerTiling.x;
+                            detail += w.x * texture(uLayer0, t).rgb * Macro(texture(uLayer0, t.yx * macro).rgb, uLayerMean0);
+                            mean += w.x * uLayerMean0;
+                            bump += w.x * uLayerHasNhr.x * (texture(uLayerNhr0, t).rg * 2.0 - 1.0);
+                        }
+
+                        if (uLayerTiling.y > 0.0)
+                        {
+                            vec2 t = ue * uLayerTiling.y;
+                            detail += w.y * texture(uLayer1, t).rgb * Macro(texture(uLayer1, t.yx * macro).rgb, uLayerMean1);
+                            mean += w.y * uLayerMean1;
+                            bump += w.y * uLayerHasNhr.y * (texture(uLayerNhr1, t).rg * 2.0 - 1.0);
+                        }
+
+                        if (uLayerTiling.z > 0.0)
+                        {
+                            vec2 t = ue * uLayerTiling.z;
+                            detail += w.z * texture(uLayer2, t).rgb * Macro(texture(uLayer2, t.yx * macro).rgb, uLayerMean2);
+                            mean += w.z * uLayerMean2;
+                            bump += w.z * uLayerHasNhr.z * (texture(uLayerNhr2, t).rg * 2.0 - 1.0);
+                        }
+
+                        if (uLayerTiling.w > 0.0)
+                        {
+                            vec2 t = ue * uLayerTiling.w;
+                            detail += w.w * texture(uLayer3, t).rgb * Macro(texture(uLayer3, t.yx * macro).rgb, uLayerMean3);
+                            mean += w.w * uLayerMean3;
+                            bump += w.w * uLayerHasNhr.w * (texture(uLayerNhr3, t).rg * 2.0 - 1.0);
+                        }
+
+                        float covered = dot(w, vec4(1.0));
                         if (dot(mean, vec3(1.0)) > 0.01)
                         {
-                            vec3 ratio = clamp(detail / max(mean, vec3(0.01)), 0.35, 2.4);
+                            vec3 ratio = clamp(detail / max(mean, vec3(0.01)), 0.3, 2.6);
                             albedo.rgb *= mix(vec3(1.0), ratio, fade);
+                            groundBump = bump / max(covered, 1e-3) * fade;
                         }
                     }
                 }
@@ -219,6 +267,14 @@ internal static class ShaderSources
             if (uHasNormalMap != 0 && uHasTexture != 0)
             {
                 n = perturbNormal(n, dpx, dpy, duvx, duvy, texture(uNormalMap, vUv).rg * 2.0 - 1.0);
+            }
+
+            if (dot(groundBump, groundBump) > 0.0)
+            {
+                // The ground's tangent frame is the world's X and Z laid onto the surface (UE's world-aligned layer UVs).
+                vec3 t = normalize(vec3(1.0, 0.0, 0.0) - n * n.x);
+                vec3 b = normalize(vec3(0.0, 0.0, 1.0) - n * n.z);
+                n = normalize(t * groundBump.x + b * groundBump.y + n * sqrt(max(1.0 - dot(groundBump, groundBump), 0.0)));
             }
 
             vec3 hemi = mix(uGroundColor, uSkyColor, n.y * 0.5 + 0.5);
@@ -276,7 +332,7 @@ internal static class ShaderSources
                     vec3 ground = inverseToneMap(decodeOutput(texelFetch(uSceneColor, pixel, 0).rgb));
                     below = ground * transmit + deep * (1.0 - transmit);
                     float shore = 1.0 - smoothstep(0.0, 70.0, thickness * abs(toCamera.y));
-                    float lace = 0.55 + 0.45 * sin(dot(vWorld.xz, vec2(0.031, 0.017)) + uTime * 1.3) * sin(dot(vWorld.xz, vec2(-0.013, 0.029)) - uTime);
+                    float lace = 0.55 + 0.45 * sin(dot(vWorld.xz, vec2(0.031, 0.017)) + uWaterTime * 1.3) * sin(dot(vWorld.xz, vec2(-0.013, 0.029)) - uWaterTime);
                     below = mix(below, (uSkyColor + sunlight) * 0.9, shore * lace * 0.7);
                     alpha = 1.0;
                 }
@@ -308,7 +364,8 @@ internal static class ShaderSources
                 lit /= max(1.0, max(lit.r, max(lit.g, lit.b)));
             }
 
-            lit = toneMap(applyAtmosphere(lit, vWorld));
+            // Lighting off (Settings): each surface in its own colour, no sun, shade, haze or tone curve.
+            lit = uUnlit != 0 ? albedo.rgb : toneMap(applyAtmosphere(lit, vWorld));
             if ((vFlags & 1u) != 0u)
             {
                 // After tone mapping, so the selection keeps the UI accent whatever the light.
@@ -338,6 +395,8 @@ internal static class ShaderSources
         uniform vec3 uSkyHorizon;
         uniform float uExposure;
         uniform float uTime;
+        uniform float uWaterTime;
+        uniform float uStars;
 
         vec3 linearToSrgb(vec3 c)
         {
@@ -401,7 +460,16 @@ internal static class ShaderSources
             c += sunGlow(v) * (1.0 - 0.6 * up);
             if (disc)
             {
+                // The sun's disc, or by night (the key light is then the moon) the moon's.
                 c += uLightColor * 14.0 * smoothstep(0.99985, 0.99993, dot(v, -uLightDirection));
+                if (uStars > 0.0 && v.y > 0.0)
+                {
+                    // Stars: one in a few hundred cells of a fine grid over the sky, each with its own brightness.
+                    vec3 cell = floor(v * 300.0);
+                    float h = fract(sin(dot(cell, vec3(127.1, 311.7, 74.7))) * 43758.5453);
+                    float b = fract(h * 97.31);
+                    c += vec3(0.8, 0.85, 1.0) * (step(0.9975, h) * (0.3 + 1.7 * b) * uStars * smoothstep(0.0, 0.15, v.y));
+                }
             }
 
             return c;
@@ -450,7 +518,7 @@ internal static class ShaderSources
                 vec2 dir = vec2(cos(a), sin(a));
                 float wavelength = 40000.0 * pow(0.45, float(i));
                 float k = 6.2831853 / wavelength;
-                g += dir * (0.03 * (1.0 - smoothstep(0.08, 0.35, footprint / wavelength))) * cos(dot(dir, p) * k - sqrt(981.0 * k) * uTime + float(i));
+                g += dir * (0.03 * (1.0 - smoothstep(0.08, 0.35, footprint / wavelength))) * cos(dot(dir, p) * k - sqrt(981.0 * k) * uWaterTime + float(i));
             }
 
             for (int i = 0; i < 10; i++)
@@ -460,7 +528,7 @@ internal static class ShaderSources
                 float wavelength = 3000.0 * pow(0.72, float(i));
                 float k = 6.2831853 / wavelength;
                 float fade = 1.0 - smoothstep(0.08, 0.35, footprint / wavelength);
-                g += dir * (0.035 * swell * fade) * cos(dot(dir, p) * k - sqrt(981.0 * k) * uTime + float(i) * 1.7);
+                g += dir * (0.035 * swell * fade) * cos(dot(dir, p) * k - sqrt(981.0 * k) * uWaterTime + float(i) * 1.7);
                 lost += (1.0 - fade) * 0.1;
             }
 

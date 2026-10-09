@@ -59,12 +59,13 @@ internal sealed partial class RenderCommands
             "Baked ground texture size per terrain component in realistic mode (0 = 1024 when the layer textures are in the source, else one texel per height sample).");
         var target = new Option<string?>("--target", "Orbit this UE point 'X,Y,Z' (cm) instead of the scene centre (use with --dist for close-ups).");
         var island = new Option<bool>("--island", "Also draw the whole island's terrain behind the levels, as the app's whole-island mode does (all landscape tiles, coarse).");
+        var hour = new Option<float?>("--hour", "Time of day 0-24 for outdoor scenes (SCUM's clock: sunrise 06:00, sunset 21:00; 13.5 = the island's own sun, the default look; the night is the game's moonlit night).");
         var noShadows = new Option<bool>("--no-shadows", "Do not draw sun shadows (the Map view draws them except on the Performance quality).");
         var spawnPlaces = new Option<bool>("--spawn-places", "Also draw the island's spawn places around the levels (vehicle and zombie spawn points, threat zones, hunting areas), as the app's Spawns switch does.");
         var command = new Command("level", "Render whole cooked sublevels (all placed static meshes, plus terrain for landscape tiles) to PNG.")
         {
             source, sublevel, aes, output, size, yaw, pitch, dist, lod, lods, viewDistance, cullPixels, noTexture, textureSize, noInstances, noLandscape, landscapeStep, filter, noGrid, frames,
-            ground, sea, noSea, groundTexture, target, island, spawnPlaces, noShadows,
+            ground, sea, noSea, groundTexture, target, island, spawnPlaces, noShadows, hour,
         };
         command.SetHandler(async (InvocationContext ctx) =>
         {
@@ -157,7 +158,7 @@ internal sealed partial class RenderCommands
                 }
 
                 // All GL work happens synchronously on this thread; the PNG is written after the context is released.
-                var culling = new RenderSettings { ViewDistanceScale = parse.GetValueForOption(viewDistance), CullPixelSize = parse.GetValueForOption(cullPixels), Shadows = !parse.GetValueForOption(noShadows) };
+                var culling = new RenderSettings { ViewDistanceScale = parse.GetValueForOption(viewDistance), CullPixelSize = parse.GetValueForOption(cullPixels), Shadows = !parse.GetValueForOption(noShadows), TimeOfDay = parse.GetValueForOption(hour) };
                 PreparedLevelScene? backdrop = null;
                 if (parse.GetValueForOption(island))
                 {
@@ -212,7 +213,7 @@ internal sealed partial class RenderCommands
             using var renderer = new SceneRenderer(context);
             if (culling is not null)
             {
-                renderer.Settings = renderer.Settings with { ViewDistanceScale = culling.ViewDistanceScale, CullPixelSize = culling.CullPixelSize, Shadows = culling.Shadows };
+                renderer.Settings = renderer.Settings with { ViewDistanceScale = culling.ViewDistanceScale, CullPixelSize = culling.CullPixelSize, Shadows = culling.Shadows, TimeOfDay = culling.TimeOfDay };
             }
 
             var clock = Stopwatch.StartNew();

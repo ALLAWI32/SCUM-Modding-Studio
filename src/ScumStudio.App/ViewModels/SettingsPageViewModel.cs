@@ -201,6 +201,7 @@ public sealed partial class SettingsPageViewModel : PageViewModel, IDisposable
             SelectedLanguage = Loc.Languages.FirstOrDefault(l => l.Code == s.Ui.Language) ?? Loc.Languages[0];
             RenderQuality = s.Ui.RenderQuality;
             ClearGrassUnderNew = s.Ui.ClearGrassUnderNewObjects;
+            (SpawnModels, AnimateWater, Lighting) = (s.Ui.SpawnModels, s.Ui.AnimateWater, s.Ui.Lighting);
             McpEnabled = s.Mcp.Enabled;
             McpPort = s.Mcp.Port.ToString(System.Globalization.CultureInfo.InvariantCulture);
         }
@@ -292,6 +293,42 @@ public sealed partial class SettingsPageViewModel : PageViewModel, IDisposable
         if (!_reloading)
         {
             _services.UpdateSettings(s => s with { Ui = s.Ui with { ClearGrassUnderNewObjects = value } });
+        }
+    }
+
+    /// <summary>Spawn places drawn as the objects that spawn there; off: simple shapes (Discord feature request: lighter).</summary>
+    [ObservableProperty]
+    private bool _spawnModels = true;
+
+    /// <summary>The sea's waves move in the 3D view.</summary>
+    [ObservableProperty]
+    private bool _animateWater = true;
+
+    /// <summary>The 3D view is lit and shaded.</summary>
+    [ObservableProperty]
+    private bool _lighting = true;
+
+    partial void OnSpawnModelsChanged(bool value)
+    {
+        if (!_reloading)
+        {
+            _services.UpdateSettings(s => s with { Ui = s.Ui with { SpawnModels = value } });
+        }
+    }
+
+    partial void OnAnimateWaterChanged(bool value)
+    {
+        if (!_reloading)
+        {
+            _services.UpdateSettings(s => s with { Ui = s.Ui with { AnimateWater = value } });
+        }
+    }
+
+    partial void OnLightingChanged(bool value)
+    {
+        if (!_reloading)
+        {
+            _services.UpdateSettings(s => s with { Ui = s.Ui with { Lighting = value } });
         }
     }
 

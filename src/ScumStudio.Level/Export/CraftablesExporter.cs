@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using ScumStudio.Assets.Catalog;
+using ScumStudio.Level.Import;
 using ScumStudio.Level.Projects;
 using ScumStudio.Modding;
 using ScumStudio.Modding.Crafting;
@@ -25,7 +26,8 @@ public static class CraftablesExporter
 
     /// <summary>
     /// Builds and packs <paramref name="craftables"/> for one cook. <paramref name="baseRegistry"/> is the project pak's
-    /// registry of the same export (null: the source's own). Returns null when the list is empty.
+    /// registry of the same export (null: the source's own). Returns null when the list is empty, after deleting the
+    /// Craftables pak an earlier export left in the role folder (<see cref="RemoveStale"/>).
     /// </summary>
     public static async Task<ExportResult?> ExportAsync(
         CraftablesFile craftables, string modName, AssetCatalog catalog, ExportOptions options, ProjectSourceRole role,
@@ -35,13 +37,18 @@ public static class CraftablesExporter
         ArgumentNullException.ThrowIfNull(catalog);
         ArgumentNullException.ThrowIfNull(options);
         logger ??= NullLogger.Instance;
+        var name = ProjectExporter.SanitizeModName(modName) + Suffix;
+        var roleDirectory = Path.Combine(Path.GetFullPath(options.OutputDirectory), ProjectExporter.RoleFolder(role));
         if (craftables.Items.Count == 0)
         {
+            foreach (var removed in RemoveStale(roleDirectory, modName, options.PakChunkIndex))
+            {
+                logger.LogInformation("Craftables: removed {File} (the project has no craftables now).", removed);
+            }
+
             return null;
         }
 
-        var name = ProjectExporter.SanitizeModName(modName) + Suffix;
-        var roleDirectory = Path.Combine(Path.GetFullPath(options.OutputDirectory), ProjectExporter.RoleFolder(role));
         var staging = Path.Combine(roleDirectory, StagingFolderName);
         if (Directory.Exists(staging))
         {
@@ -49,11 +56,39 @@ public static class CraftablesExporter
         }
 
         Directory.CreateDirectory(staging);
-        var plan = CraftablesPlanner.Plan(catalog, craftables.Items);
-        var warnings = new List<string>(plan.Warnings);
+
+        var warnings = new List<string>();
+        var items = new List<Craftable>();
+        string? ImportedFolder(Craftable c) => c.Imported is null || craftables.ProjectDirectory is null ? null : Path.Combine(craftables.ProjectDirectory, c.Imported);
+        foreach (var craftable in craftables.Items)
+        {
+            if (craftable.Imported is not null && !Directory.Exists(ImportedFolder(craftable)))
+            {
+                warnings.Add($"{craftable.Name}: left out (its imported model {craftable.Imported} is not in the project folder).");
+                continue;
+            }
+
+            items.Add(craftable);
+        }
+
+        var plan = CraftablesPlanner.Plan(catalog, items);
+        warnings.AddRange(plan.Warnings);
         var built = AssetModBuilder.Build(catalog, plan.Request with { BaseRegistry = baseRegistry });
         warnings.AddRange(built.Warnings);
         var assets = new List<ExportedAsset>();
+
+        // Models imported from 3D files (UeCook) of the planned craftables: their cooked mesh, materials and textures ship
+        // at their own paths (a craftable left out ships nothing).
+        var planned = plan.Entries.Select(e => e.Name).ToHashSet(StringComparer.Ordinal);
+        foreach (var folder in items.Where(c => planned.Contains(c.Name)).Select(ImportedFolder).OfType<string>())
+        {
+            UeCook.CopyTree(folder, staging);
+            foreach (var file in Directory.EnumerateFiles(folder, "*", SearchOption.AllDirectories).Where(AssetPaths.IsPackageFile))
+            {
+                var virtualPath = Path.GetRelativePath(folder, file).Replace('\\', '/');
+                assets.Add(new ExportedAsset(AssetPaths.ToPackagePath(virtualPath, catalog.ProjectName), virtualPath, IsClone: false));
+            }
+        }
         foreach (var package in built.Packages)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -88,7 +123,7 @@ public static class CraftablesExporter
         string? sigPath = null;
         if (options.WritePak)
         {
-            pakPath = Path.Combine(roleDirectory, ProjectExporter.PakFileName(name, options.PakChunkIndex + 1));
+            pakPath = Path.Combine(roleDirectory, PakFileName(modName, options.PakChunkIndex));
             var writer = new PakWriter(new PakWriterOptions { Compression = options.Compression, IncludeAssetRegistry = built.AssetRegistry is not null }, logger);
             await writer.WriteFromDirectoryAsync(staging, pakPath, null, cancellationToken).ConfigureAwait(false);
             var sigSource = options.StockSigPath ?? ProjectExporter.FindStockSig(catalog);
@@ -117,6 +152,23 @@ public static class CraftablesExporter
             AssetValues = built.Applied,
             Warnings = warnings,
         };
+    }
+
+    /// <summary>File name of the Craftables pak of <paramref name="modName"/> next to the project's pak of chunk <paramref name="pakChunkIndex"/>.</summary>
+    public static string PakFileName(string modName, int pakChunkIndex) =>
+        ProjectExporter.PakFileName(ProjectExporter.SanitizeModName(modName) + Suffix, pakChunkIndex + 1);
+
+    /// <summary>
+    /// Deletes the Craftables pak (and its .sig) of <paramref name="modName"/> from <paramref name="directory"/>: left from an
+    /// export with craftables, the game would still load its recipes, and as the highest pak its old registry would hide the
+    /// project pak's new records. Returns the deleted files.
+    /// </summary>
+    public static IReadOnlyList<string> RemoveStale(string directory, string modName, int pakChunkIndex)
+    {
+        var pak = Path.Combine(directory, PakFileName(modName, pakChunkIndex));
+        var removed = new[] { pak, SigCopier.GetSigPath(pak) }.Where(File.Exists).ToList();
+        removed.ForEach(File.Delete);
+        return removed;
     }
 
     /// <summary>The registry the project's own pak staged in <paramref name="result"/>, or null.</summary>

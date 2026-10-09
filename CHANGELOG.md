@@ -5,6 +5,85 @@ project uses [semantic versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.1.0] - 2026-10-09
+
+### New in this release
+- **Import 3D model on the Craftables page** (owner: "a list where I can add external files, for example 3D tables, or a
+  new weapon added as an external mod"): pick an FBX or OBJ file and the installed Unreal Engine 4.27 imports it as one
+  mesh (pivot at the bottom centre, walk-in collision, textures up to 2048), cooks it for SCUM and adds it as a
+  craftable; the Craftables pak carries the mesh, its materials and textures. The first import compiles shaders and
+  takes several minutes; Cancel closes the engine. glTF is not taken yet (convert it to FBX).
+- **Time of day in the Map**: a Time slider in the Map toolbar moves the sun across the sky on SCUM's clock (sunrise
+  06:00, sunset 21:00): golden light and an orange sky at dawn and dusk, shadows, haze and the water's reflections
+  following along. The night is the game's own (owner: "the night exactly like the game's"): its moon (0.5 lux, the
+  game's blue-white tint), its night light (0.05 lux), its auto exposure limits and its lift of dark tones, so a moonlit
+  night shows the ground at about a tenth of the day, as in game. It is kept for the next start; 13:30 is the island's
+  usual look.
+- **Ground closer to the game**: up close the ground now uses the relief of its paint layers (pebbles, needles, ruts catch
+  the light), sharper layer textures, less visible tile repeats, and the detail reaches 300 m instead of 160 m.
+- **Plant on a timer** (owner: "a timer: every so many seconds it adds a tree where the brush is"): Brush › Plant has a
+  Timer switch and an interval (0.05–3 s). While you hold the button, one object is planted every interval at a free
+  spot inside the circle, moving or not; the spacing still applies and the stroke is one Ctrl+Z.
+- **Lighter 3D view switches** (Discord feature request, separate from the quality presets): Settings has three new
+  switches. *Spawn places as 3D models*: off shows the simple marker shapes again, which stand still, so the view stops
+  redrawing while nothing moves (the models glint and kept it drawing 25 times a second). *Animated sea*: off keeps the
+  water still. *Lighting*: off draws every surface in its own colour without sun, shade or the shadow pass.
+- **NPCs instead of zombies** (igor8802: "assign NPCs instead of zombies"): in Spawns › Zombies the groups of a threat
+  zone now say what they spawn (Zombies, Armed NPCs, Animals, Drones) instead of "Group 1", "Group 2". Most zones pick
+  between a zombie group and an armed-NPC group (drifters, guards; a village is 75 / 25): set Zombies to 0 and the zone
+  spawns armed NPCs instead. The hover text names the game's encounter class.
+- **Any item of the game as a craftable** (owner: "every item inside the game we can add … so you can craft something in
+  exchange for some things"): the Craftables search (and Make craftable on the Assets page) now offers the game's items
+  too, weapons, ammunition, tools, food, clothes and DLC items, with their 3D picture. An item gets a new item recipe
+  with your ingredients that makes the game's own item, in the crafting menu section of its kind (firearms, melee,
+  ammunition, clothes, tools …). An item of another mod works once that mod is imported into the project.
+- **Craftables: Add from the game** (owner: "I want every item in the game shown in 3D like the Assets page, so you can
+  craft it for a recipe... and the list is empty, why?"): the list only holds what you made craftable, and nothing showed
+  what can be added. The Craftables page now shows a gallery whenever nothing is selected (and on its "Add from the game"
+  tab): every world object (In the world) and every inventory item (Can pick up: weapons, tools, food, clothes, ammo,
+  vehicle parts) in the Assets page's categories and 3D pictures, a search, and the imported mods, DLC packs and newer
+  game files the catalogue does not know in a group of their own. Click a picture to make it craftable (its recipe
+  opens); ones already added are marked and open their recipe.
+
+### Fixes
+- **Craftables**: removing every craftable (or unticking the Craftables mod) now also deletes the old Craftables pak from
+  the export folder and the server mods folder, whose old registry hid the project pak's new vehicles and items; a
+  mistyped ingredient is left out of the recipe with a warning instead of naming a tag that does not exist; two stations
+  with the same name no longer stop the export; names in Arabic or other scripts no longer all become the same asset
+  name.
+- **Craftables review**: buildings, rivers and the player with an `_ES` twin no longer become broken item craftables;
+  spears, the chainsaw, the tomahawk and charms get their own crafting menu section; an emptied craftables-only project
+  exports again (it removes the old pak); Unreal Engine stops when the app closes or the import is cancelled.
+- **Doors of a copied building open and close every time** (owner: "sometimes they work, sometimes not"): copying a
+  building together with its doors (a multi-selection, a brush sweep, select all of a kind) also copied each door, so
+  two doors stood on the same spot; the game tells doors apart by where they stand. The building's copy brings its own
+  doors, and doors whose building is copied in the same set are no longer copied a second time.
+- **Replace shows the new model at once** (Discord: "the model does not change visually when replaced"): a building's
+  part or a mesh actor replaced in place kept its old model in the 3D view, although the edit was recorded and exported.
+  The view now draws the new mesh right away, and Ctrl+Z / Ctrl+Y switch it back and forth.
+- **Copied sentry robots spawn** (igor8802: "When duplicating robots, the robots do not appear"): the game spawns a sentry
+  only from a spawner its level's guarded zone manager lists, and a copy was listed nowhere. A duplicated or pasted
+  sentry spawner now joins that list; pasted into a level without sentries it brings a manager of its own.
+- **Nothing spawns inside what you build** (owner: "the rocks I build: no NPC or zombie may spawn inside them"): the
+  "Clear grass under it" option of a placed object (on by default for added objects) is now "Clear grass and spawns
+  under it": the exported mod also removes the game's vehicle and zombie/NPC spawn points that stand inside the object
+  (inside it, not under it: the points on a road under a bridge stay). The game builds its walking map for zombies and
+  NPCs while it runs, so a placed object with collision is already walked around. Removing the object brings both back.
+- **No more "Function does not accept floating point Not-a-Number values" errors** (Discord, seviscache: 175 of them
+  after moving and duplicating objects to the far side of the map): dragging an arrow while looking almost along it
+  flung the object tens of kilometres away, and from there every mouse move failed. The drag now holds still until the
+  mouse turns back, the view ignores a point it cannot place on screen, and no edit can put an object at an impossible
+  place (not a number, or more than 100 km out), so such a value never reaches the project or the mod.
+- **The sun and moon no longer jump when you turn the view** (Discord, seviscache: "the sun attempts to reposition itself,
+  creating the effect of jumping"): the sky worked out each pixel's direction through the camera's whole view, including
+  its position kilometres out on the island and the 30 km view distance, and the rounding moved the sun's disc by up to
+  0.15° as the view turned (the disc is about 1° wide). It now uses the camera's turn alone: 0.00002°.
+- **Hangars and buildings in their real colours** (owner: "the textures are very bad, white; give me the real colour"):
+  the Map and the 3D previews drew SCUM's building textures as they are, while the game darkens or tints each one
+  (its material's brightness and tint). The airfield hangars' near-white roof panels are drawn at a fifth of their
+  brightness in game: they are now grey metal like the game's own far view of them, and roofs, trims and floors elsewhere
+  (the C_3 church's red roof, for one) no longer come out too light.
+
 ## [3.0.0] - 2026-10-09
 
 ### New in this release

@@ -153,6 +153,34 @@ public sealed class SpawnModelsRealTests
 {
     private const string Maps = "/Game/ConZ_Files/Maps/The_Island/";
 
+    /// <summary>
+    /// Discord feature request: "toggle between the old simple shapes of spawned objects and zombies/NPCs and the 3D
+    /// models". With the models off the same pins are there, as simple markers, and nothing glints (the view stops redrawing).
+    /// </summary>
+    [Fact]
+    public void SpawnModelsOffDrawsTheSamePinsAsSimpleShapes()
+    {
+        using var catalog = SpawnPartsRealTests.Open();
+        if (catalog is null)
+        {
+            return; // not asked for
+        }
+
+        var reader = new Cue4ParseLevelReader(catalog);
+        var outpost = LevelDocument.Load(reader, Maps + "A_0_Outpost");
+        var places = SpawnPlaces.Over(SpawnPlaces.ReadFrom(catalog), [SpawnPlaces.AreaAround([outpost], 5_000f)!.Value])!;
+        var preparer = new LevelScenePreparer(catalog);
+        var models = preparer.Prepare([outpost, places], new LevelSceneOptions { TextureSize = 0, IncludeLandscape = false });
+        var shapes = preparer.Prepare([outpost, places], new LevelSceneOptions { TextureSize = 0, IncludeLandscape = false, SpawnModels = false });
+
+        static List<uint> Pins(PreparedLevelScene scene) => scene.Placements.Where(p => SpawnMarkers.IsMarker(p.MeshPath)).Select(p => p.SelectableId).Distinct().Order().ToList();
+        Assert.NotEmpty(Pins(shapes));
+        Assert.Equal(Pins(models), Pins(shapes));
+        Assert.Contains(models.Meshes.Values, m => m.Shimmer);
+        Assert.DoesNotContain(shapes.Meshes.Values, m => m.Shimmer);
+        Assert.All(shapes.Placements.Where(p => SpawnMarkers.IsMarker(p.MeshPath)), p => Assert.Null(SpawnMarkers.ModelOf(p.MeshPath)));
+    }
+
     [GlFact]
     public async Task SpawnPlacesShowTheirObjectsAsTranslucentModelsThatPickLikeThePins()
     {

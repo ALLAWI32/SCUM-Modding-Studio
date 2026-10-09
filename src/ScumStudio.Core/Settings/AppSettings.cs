@@ -196,6 +196,18 @@ public sealed record UiPreferences
 
     /// <summary>New objects (added, pasted, copied, extended, replaced, painted) clear the grass under them in the exported mod.</summary>
     public bool ClearGrassUnderNewObjects { get; init; } = true;
+
+    /// <summary>
+    /// Show a spawn place as the object that spawns there (a car, a zombie, a sentry; they glint, so the view keeps
+    /// drawing); off: as a simple marker shape, lighter on the PC (Discord feature request).
+    /// </summary>
+    public bool SpawnModels { get; init; } = true;
+
+    /// <summary>Animate the sea's waves in the 3D view; off: still water.</summary>
+    public bool AnimateWater { get; init; } = true;
+
+    /// <summary>Light and shade the 3D view (sun, sky light, shadows, reflections); off: every surface in its own colour, no shadow pass.</summary>
+    public bool Lighting { get; init; } = true;
 }
 
 /// <summary>3D view quality presets (faster on weaker PCs, more detail on strong ones).</summary>

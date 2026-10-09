@@ -136,7 +136,7 @@ public sealed class ReplaceRealTests
     }
 
     /// <summary>The mesh and scale a component of a written level has (parsed from the staged .umap/.uexp).</summary>
-    private static (string Mesh, FVector Scale) Written(ExportResult result, string level, string actor, string component)
+    internal static (string Mesh, FVector Scale) Written(ExportResult result, string level, string actor, string component)
     {
         var exported = result.Levels.Single(l => string.Equals(l.PackagePath, level, StringComparison.OrdinalIgnoreCase));
         var file = Path.Combine([result.StagingDirectory, .. exported.VirtualPath.Split('/', StringSplitOptions.RemoveEmptyEntries)]);

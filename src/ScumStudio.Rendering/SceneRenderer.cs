@@ -192,11 +192,16 @@ public sealed class SceneRenderer : IDisposable
         {
             (i < detail.Layers.Count && detail.Layers[i] is { } layer ? layer : _white).Bind(2 + i);
             _meshProgram.Set("uLayerMean" + i, i < detail.Means.Count ? detail.Means[i] : Vector3.Zero);
+            (detail.Normals is { } normals && i < normals.Count && normals[i] is { } nhr ? nhr : _white).Bind(8 + i);
         }
+
+        _meshProgram.Set("uLayerHasNhr", new Vector4(HasNhr(0), HasNhr(1), HasNhr(2), HasNhr(3)));
+        float HasNhr(int i) => detail.Normals is { } list && i < list.Count && list[i] is not null ? 1f : 0f;
 
         _meshProgram.Set("uLayerTiling", detail.InvTilingCm);
         _meshProgram.Set("uTerrainDetail", 1);
     }
+
 
     /// <summary>Deletes an uploaded mesh. Nodes still referencing it are skipped when drawing.</summary>
     public bool RemoveMesh(MeshHandle handle)
@@ -232,7 +237,7 @@ public sealed class SceneRenderer : IDisposable
 
         var aspect = target.AspectRatio;
         var s = EffectiveSettings(scene);
-        ShadowFrame? shadow = s.Shadows ? ShadowView(s, camera) : null;
+        ShadowFrame? shadow = s.Shadows && s.Lighting ? ShadowView(s, camera) : null;
         PrepareFrame(scene, camera, aspect, target.Height, out var culled, out var instances, shadow?.Bounds);
         var reverseZ = UsesReverseZ;
         var viewProj = camera.ViewMatrix * (reverseZ ? camera.GetReverseZProjection(aspect) : camera.GetProjection(aspect));
@@ -261,6 +266,8 @@ public sealed class SceneRenderer : IDisposable
         _meshProgram.Set("uBillboard", 0);
         _meshProgram.Set("uShimmer", 0);
         _meshProgram.Set("uTime", Time);
+        _meshProgram.Set("uWaterTime", s.AnimateWater ? Time : 0f);
+        _meshProgram.Set("uUnlit", s.Lighting ? 0 : 1);
         _meshProgram.Set("uFogColor", s.FogColor);
         _meshProgram.Set("uFogDensity", MathF.Max(0f, s.FogDensity));
         SetAtmosphere(_meshProgram, s);
@@ -289,6 +296,10 @@ public sealed class SceneRenderer : IDisposable
         _meshProgram.Set("uLayer1", 3);
         _meshProgram.Set("uLayer2", 4);
         _meshProgram.Set("uLayer3", 5);
+        for (var i = 0; i < 4; i++)
+        {
+            _meshProgram.Set("uLayerNhr" + i, 8 + i);
+        }
         TerrainDetailTextures? boundDetail = null;
 
         var drawCalls = 0;
@@ -368,7 +379,7 @@ public sealed class SceneRenderer : IDisposable
 
         GpuTexture.UnbindSampler(_gl);
         GpuTexture.UnbindSampler(_gl, NormalUnit);
-        for (var unit = 1; unit <= 5; unit++)
+        for (var unit = 1; unit <= 11; unit++)
         {
             GpuTexture.UnbindSampler(_gl, unit);
         }
@@ -478,7 +489,8 @@ public sealed class SceneRenderer : IDisposable
     public RenderSettings EffectiveSettings(Scene scene)
     {
         ArgumentNullException.ThrowIfNull(scene);
-        return Settings.UseSceneEnvironment && scene.Environment is { } environment ? environment.ApplyTo(Settings) : Settings;
+        var s = Settings.UseSceneEnvironment && scene.Environment is { } environment ? environment.ApplyTo(Settings) : Settings;
+        return s.Sky && s.TimeOfDay is { } hour ? s.AtHour(hour) : s;
     }
 
     /// <summary>True when every instance of the batch has a tint alpha below 1 (drawn blended, after opaque geometry).</summary>
@@ -983,6 +995,7 @@ public sealed class SceneRenderer : IDisposable
         program.Set("uLightColor", s.LightColor);
         program.Set("uFogFalloff", MathF.Max(0f, s.FogHeightFalloff));
         program.Set("uSky", s.Sky ? 1 : 0);
+        program.Set("uStars", s.Stars);
         program.Set("uSkyZenith", s.SkyZenithColor);
         program.Set("uSkyHorizon", s.SkyHorizonColor);
         program.Set("uExposure", MathF.Max(0f, s.Exposure));
@@ -1138,7 +1151,7 @@ public sealed class SceneRenderer : IDisposable
     /// <summary>Full-screen sky where the depth buffer is still clear (after the opaque pass, so covered pixels cost nothing).</summary>
     private void DrawSky(RenderSettings s, FlyCamera camera, float aspect, bool reverseZ)
     {
-        Matrix4x4.Invert(camera.GetViewProjection(aspect), out var invGl);
+        var invGl = SkyUnprojection(camera, aspect);
         _gl.DepthMask(false);
         _gl.Disable(EnableCap.CullFace);
         _gl.DepthFunc(reverseZ ? DepthFunction.Gequal : DepthFunction.Lequal);
@@ -1151,6 +1164,18 @@ public sealed class SceneRenderer : IDisposable
         _gl.BindVertexArray(0);
         _gl.DepthFunc(reverseZ ? DepthFunction.Greater : DepthFunction.Less);
         _gl.DepthMask(true);
+    }
+
+    /// <summary>
+    /// Inverse view-projection the sky unprojects its view directions with: the camera's turn only, at the origin, through a
+    /// short frustum. The full one carries the camera's position (kilometres out on the island) and the 30 km far plane
+    /// into float maths whose rounding moved the sun's and moon's disc as the view turned (Discord: "the sun jumps").
+    /// </summary>
+    internal static Matrix4x4 SkyUnprojection(FlyCamera camera, float aspect)
+    {
+        var view = Matrix4x4.CreateLookTo(Vector3.Zero, camera.Forward, camera.Up);
+        Matrix4x4.Invert(view * UeToGl.CreatePerspectiveGl(camera.FieldOfView * UeMath.DegreesToRadians, aspect, 1f, 100f), out var inverse);
+        return inverse;
     }
 
     private void BeginDepthState(bool reverseZ)

@@ -130,6 +130,7 @@ public sealed class MaterialInspector
             UsedWithSplineMeshes = splineMeshes,
             NormalTexture = PickNormal(texList),
             RoughnessRange = Roughness(scalars),
+            BaseColorScale = ColorScale(scalars, vectors),
             WritesLandscapeTexture = landscapeOutput,
             IsTranslucent = blend is EBlendMode.BLEND_Translucent or EBlendMode.BLEND_Additive or EBlendMode.BLEND_Modulate or EBlendMode.BLEND_AlphaComposite,
         };
@@ -212,6 +213,23 @@ public sealed class MaterialInspector
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// <c>Base Material Tint</c> x <c>Base Material Brightness</c> of SCUM's opaque master shaders, or null when neither is set.
+    /// Their contrast and saturation work per texel and are not applied.
+    /// </summary>
+    private static Vector3? ColorScale(Dictionary<string, ScalarParameter> scalars, Dictionary<string, VectorParameter> vectors)
+    {
+        var hasBrightness = scalars.TryGetValue("Base Material Brightness", out var brightness);
+        var hasTint = vectors.TryGetValue("Base Material Tint", out var tint);
+        if (!hasBrightness && !hasTint)
+        {
+            return null;
+        }
+
+        var rgb = hasTint ? new Vector3(tint!.Value.X, tint.Value.Y, tint.Value.Z) : Vector3.One;
+        return Vector3.Max(rgb * (hasBrightness ? brightness!.Value : 1f), Vector3.Zero);
     }
 
     /// <summary>Layers painted over the base (moss, dirt, snow, puddles): never the object's own colour.</summary>

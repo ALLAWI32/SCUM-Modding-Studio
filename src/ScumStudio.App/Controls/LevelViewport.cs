@@ -136,6 +136,16 @@ public sealed partial class LevelViewport : OpenGlControlBase
     public static readonly StyledProperty<RenderQuality> QualityProperty =
         AvaloniaProperty.Register<LevelViewport, RenderQuality>(nameof(Quality), RenderQuality.Balanced);
 
+    /// <summary>Time of day in hours (0-24) for outdoor scenes: the sun, sky and light (<see cref="RenderSettings.AtHour"/>).</summary>
+    public static readonly StyledProperty<double> TimeOfDayProperty =
+        AvaloniaProperty.Register<LevelViewport, double>(nameof(TimeOfDay), 13.5);
+
+    /// <summary>Light and shade the scene (<see cref="RenderSettings.Lighting"/>); off: flat colours, no shadow pass.</summary>
+    public static readonly StyledProperty<bool> LightingProperty = AvaloniaProperty.Register<LevelViewport, bool>(nameof(Lighting), true);
+
+    /// <summary>Move the sea's waves (<see cref="RenderSettings.AnimateWater"/>); off: still water.</summary>
+    public static readonly StyledProperty<bool> AnimateWaterProperty = AvaloniaProperty.Register<LevelViewport, bool>(nameof(AnimateWater), true);
+
     /// <summary>Auto-snap: a dragged object jumps flush against (or in line with) a neighbour that comes within 30 cm.</summary>
     public static readonly StyledProperty<bool> AutoSnapProperty =
         AvaloniaProperty.Register<LevelViewport, bool>(nameof(AutoSnap), defaultValue: true);
@@ -295,6 +305,9 @@ public sealed partial class LevelViewport : OpenGlControlBase
         ReplacedMeshesProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.MarkDirty(ref c._bendsDirty));
         PartMeshesProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.MarkDirty(ref c._bendsDirty));
         ShapeHandlesProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.RequestNextFrameRendering());
+        TimeOfDayProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.RequestNextFrameRendering());
+        LightingProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.RequestNextFrameRendering());
+        AnimateWaterProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.RequestNextFrameRendering());
         ScaleHandlesProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.RequestNextFrameRendering());
         LegHandleProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.RequestNextFrameRendering());
         SelectedRootWorldProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.RequestNextFrameRendering());
@@ -527,6 +540,27 @@ public sealed partial class LevelViewport : OpenGlControlBase
     {
         get => GetValue(QualityProperty);
         set => SetValue(QualityProperty, value);
+    }
+
+    /// <inheritdoc cref="LightingProperty" />
+    public bool Lighting
+    {
+        get => GetValue(LightingProperty);
+        set => SetValue(LightingProperty, value);
+    }
+
+    /// <inheritdoc cref="AnimateWaterProperty" />
+    public bool AnimateWater
+    {
+        get => GetValue(AnimateWaterProperty);
+        set => SetValue(AnimateWaterProperty, value);
+    }
+
+    /// <inheritdoc cref="TimeOfDayProperty" />
+    public double TimeOfDay
+    {
+        get => GetValue(TimeOfDayProperty);
+        set => SetValue(TimeOfDayProperty, value);
     }
 
     /// <inheritdoc cref="AutoSnapProperty" />
@@ -917,12 +951,16 @@ public sealed partial class LevelViewport : OpenGlControlBase
         _target.Resize(w, h);
         var quality = RenderQualityProfile.For(Quality);
         var shadows = Quality != RenderQuality.Performance; // sun shadows cost a second geometry pass near the camera
+        var hour = (float)TimeOfDay;
+        var (lighting, water) = (Lighting, AnimateWater);
         if (_renderer.Settings.ObjectDrawDistance != quality.ObjectDistanceCm || _renderer.Settings.LodBias != quality.LodBias
-            || _renderer.Settings.CullPixelSize != quality.CullPixels || _renderer.Settings.Shadows != shadows)
+            || _renderer.Settings.CullPixelSize != quality.CullPixels || _renderer.Settings.Shadows != shadows || _renderer.Settings.TimeOfDay != hour
+            || _renderer.Settings.Lighting != lighting || _renderer.Settings.AnimateWater != water)
         {
             _renderer.Settings = _renderer.Settings with
             {
-                ObjectDrawDistance = quality.ObjectDistanceCm, LodBias = quality.LodBias, CullPixelSize = quality.CullPixels, Shadows = shadows,
+                ObjectDrawDistance = quality.ObjectDistanceCm, LodBias = quality.LodBias, CullPixelSize = quality.CullPixels, Shadows = shadows, TimeOfDay = hour,
+                Lighting = lighting, AnimateWater = water,
             };
         }
 
@@ -1084,31 +1122,8 @@ public sealed partial class LevelViewport : OpenGlControlBase
                 _bendsDirty = false;
 
                 // Replaced meshes first: a bend is built over the mesh the node shows.
-                var replaced = ReplacedMeshes;
-                foreach (var id in level.SwappedActors.Where(id => replaced is null || !replaced.ContainsKey(id)).ToList())
-                {
-                    level.SetActorMesh(id, null);
-                }
-
-                foreach (var (id, mesh) in replaced ?? new Dictionary<uint, string>())
-                {
-                    level.SetActorMesh(id, mesh);
-                }
-
                 var parts = PartMeshes;
-                foreach (var key in level.SwappedParts.Where(k => parts is null || !parts.ContainsKey(k)).ToList())
-                {
-                    level.SetPartMesh(key, null);
-                }
-
-                foreach (var (key, mesh) in parts ?? new Dictionary<InstanceKey, string>())
-                {
-                    if (key.InstanceIndex == InstanceKey.Part)
-                    {
-                        level.SetPartMesh(key, mesh);
-                    }
-                }
-
+                level.SetMeshes(ReplacedMeshes, parts);
                 var bends = Bends;
                 foreach (var id in level.BentIds.Where(id => bends is null || !bends.ContainsKey(id)).ToList())
                 {
@@ -2352,7 +2367,8 @@ public sealed partial class LevelViewport : OpenGlControlBase
         }
 
         var scaling = RenderScaling();
-        return new Point(((clip.X / clip.W) * 0.5 + 0.5) * w / scaling, (0.5 - ((clip.Y / clip.W) * 0.5)) * h / scaling);
+        var (x, y) = (((clip.X / clip.W) * 0.5 + 0.5) * w / scaling, (0.5 - ((clip.Y / clip.W) * 0.5)) * h / scaling);
+        return double.IsFinite(x) && double.IsFinite(y) ? new Point(x, y) : null; // NaN in, nothing to point at
     }
 
     private static double DistanceToSegment(Point p, Point a, Point b)

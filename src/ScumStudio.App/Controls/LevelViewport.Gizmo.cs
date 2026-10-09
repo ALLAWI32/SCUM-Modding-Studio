@@ -189,7 +189,7 @@ public sealed partial class LevelViewport
             if (closed)
             {
                 var cross = ((b.X - a.X) * (p.Y - a.Y)) - ((b.Y - a.Y) * (p.X - a.X));
-                var s = Math.Sign(cross);
+                var s = double.IsNaN(cross) ? 0 : Math.Sign(cross); // Math.Sign throws on NaN
                 if (s != 0 && sign != 0 && s != sign)
                 {
                     inside = false;

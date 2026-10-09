@@ -332,6 +332,11 @@ public sealed partial class MapPageViewModel
         {
             foreach (var copied in members)
             {
+                if (SpawnedByAnother(copied, members))
+                {
+                    continue; // the copy of its building brings its own (owner: "copied buildings' doors sometimes don't open")
+                }
+
                 var member = copied.Member;
                 var item = ActorOf(member.Actor) ?? copied.Item; // the record taken at Copy when its level streamed out since
                 var level = into ?? item.Level;
@@ -945,6 +950,17 @@ public sealed partial class MapPageViewModel
     /// One copied member, on its own: the object as it was read (kept when its level streams out), where it stood, and for
     /// one tree or rock its mesh and collision profile.
     /// </summary>
+    /// <summary>
+    /// True for a door (or other child actor stored in the level) whose building is copied in the same set: the building's
+    /// copy brings its own stored doors, so a second copy would stand in the same place. The game knows a door by where it
+    /// stands, so two doors there worked only sometimes.
+    /// </summary>
+    private static bool SpawnedByAnother(CopiedMember copied, IReadOnlyList<CopiedMember> members) =>
+        copied.Member.Component is null && copied.Item.Actor.ParentComponent is { } spawner
+        && members.Any(o => o.Member.Component is null && !ReferenceEquals(o.Item, copied.Item)
+                            && string.Equals(o.Item.Level.PackagePath, copied.Item.Level.PackagePath, StringComparison.OrdinalIgnoreCase)
+                            && o.Item.Actor.Components.Any(c => c.ExportIndex == spawner));
+
     private sealed record CopiedMember(GroupMember Member, ActorItemViewModel Item, FTransform World, string? Mesh, string? Collision)
     {
         /// <summary>The loot presets a searchable part carries onto its copy (see <c>LootOf</c>).</summary>

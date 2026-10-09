@@ -210,4 +210,22 @@ public sealed class EditStateTests
         Assert.Equal(incremental.Describe(), EditState.Replay(ops).Describe());
         Assert.Equal(new FVector(0.1f, 0.2f, 0.3f), incremental.GetTransformOverride(House)!.Value.Location);
     }
+
+    /// <summary>
+    /// Discord (seviscache): 175 x "Function does not accept floating point Not-a-Number values" once a drag had flung an
+    /// object to the far side of the map. An edit that would put something at a NaN, an infinite or an off-map value is refused.
+    /// </summary>
+    [Fact]
+    public void AnEditToANaNOrOffMapPlaceIsRefused()
+    {
+        var state = new EditState();
+        var nan = new TransformValue(new FVector(float.NaN, 0, 0), FRotator.Zero, FVector.One);
+        var far = TransformValue.At(1e11f, 0, 0);
+        var turned = new TransformValue(FVector.Zero, new FRotator(0, float.PositiveInfinity, 0), FVector.One);
+        Assert.NotNull(state.Validate(new SetTransformOp(House, TransformValue.Identity, nan)));
+        Assert.NotNull(state.Validate(new DuplicateActorOp(House, "Copy_1", far)));
+        Assert.NotNull(state.Validate(new SetInstanceTransformOp(Pebble, TransformValue.Identity, turned)));
+        Assert.NotNull(state.Validate(new BatchOp("move", [new SetTransformOp(House, TransformValue.Identity, Somewhere), new SetTransformOp(Crate, TransformValue.Identity, nan)])));
+        Assert.Null(state.Validate(new SetTransformOp(House, TransformValue.Identity, TransformValue.At(-262870, -27545, 36663))));
+    }
 }

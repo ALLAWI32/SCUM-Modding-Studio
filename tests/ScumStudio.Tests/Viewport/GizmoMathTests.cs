@@ -357,4 +357,18 @@ public sealed class GizmoMathTests
         var trader = new BoundingBox(new Vector3(-70, -19, 0), new Vector3(70, 19, 180));
         Assert.Equal((new FVector(0, 0, 90), false), GizmoMath.PivotLocal(trader, root, SpawnMarkers.MeshKey(SpawnKind.Trader, "/Game/NPC/SK_Mechanic.SK_Mechanic"), UeToGl.Point(eye), Look(eye, FVector.Zero)));
     }
+
+    /// <summary>
+    /// A mouse ray running almost along the dragged arrow meets it kilometres away: the drag must hold still, not fling the
+    /// object off the map (Discord: NaN errors after objects ended up on the far side of the map).
+    /// </summary>
+    [Fact]
+    public void ARayAlmostAlongTheArrowDoesNotFlingTheObject()
+    {
+        // A camera 100 m above the arrow looking 0.09 degrees below it: the ray meets the arrow's line 67 km away.
+        var almostAlong = Vector3.Normalize(new Vector3(1f, -0.0015f, 0f));
+        Assert.False(GizmoMath.TryClosestParameter(new Vector3(0, 10_000, 0), almostAlong, Vector3.Zero, Vector3.UnitX, out var t, out _));
+        Assert.Equal(0f, t);
+        Assert.False(GizmoMath.TryHitPlane(new Vector3(0, 100, 0), Vector3.Normalize(new Vector3(1f, -0.11f, 0f)), new Vector3(0, -1e7f, 0), Vector3.UnitY, out _));
+    }
 }

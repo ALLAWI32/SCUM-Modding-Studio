@@ -83,6 +83,9 @@ public enum GizmoKind
 /// </summary>
 public static class GizmoMath
 {
+    /// <summary>The farthest a drag follows the mouse (cm along the view ray or the arrow): beyond the view distance.</summary>
+    public const float MaxReach = 4_000_000f;
+
     /// <summary>Handle length in GL units (cm) for a camera this far from the gizmo origin: constant on screen, never tiny.</summary>
     public static float HandleLength(float cameraDistance) => MathF.Max(50f, cameraDistance * 0.15f);
 
@@ -179,7 +182,8 @@ public static class GizmoMath
 
     /// <summary>
     /// Parameter of the point on the line <c>lineOrigin + t · lineDirection</c> that is closest to the ray (the ray is
-    /// clamped to start at its origin), and the distance between those two points. False when ray and line are parallel.
+    /// clamped to start at its origin), and the distance between those two points. False when ray and line are (nearly)
+    /// parallel, so that they meet farther than <see cref="MaxReach"/>.
     /// </summary>
     public static bool TryClosestParameter(Vector3 rayOrigin, Vector3 rayDirection, Vector3 lineOrigin, Vector3 lineDirection, out float t, out float distance)
     {
@@ -207,6 +211,14 @@ public static class GizmoMath
         else
         {
             t = (b * d0 - e) / denominator;
+        }
+
+        if (rayParameter > MaxReach || MathF.Abs(t) > MaxReach || !float.IsFinite(t))
+        {
+            // A ray nearly along the line meets it kilometres away: following it would fling the object off the map
+            // (Discord: errors after objects ended up on the far side of the map). Hold still until the mouse turns back.
+            t = 0f;
+            return false;
         }
 
         var onRay = rayOrigin + d * rayParameter;
@@ -405,7 +417,7 @@ public static class GizmoMath
         }
 
         var t = Vector3.Dot(planeOrigin - rayOrigin, normal) / denominator;
-        if (t < 0f)
+        if (t < 0f || t > MaxReach)
         {
             return false;
         }

@@ -50,16 +50,29 @@ public static class GrassClearing
                    || mesh.Contains("/Plants/", StringComparison.OrdinalIgnoreCase) || mesh.Contains("/Flowers/", StringComparison.OrdinalIgnoreCase));
     }
 
+    /// <summary>A footprint and the heights it spans (world cm): what stands in it stands inside the object.</summary>
+    /// <param name="Outline">Convex outline in world X/Y.</param>
+    /// <param name="Bottom">Lowest point of the piece.</param>
+    /// <param name="Top">Highest point of the piece.</param>
+    public readonly record struct Volume(Vector2[] Outline, float Bottom, float Top);
+
+    /// <summary>How far (cm) below an object's lowest point a spawn point still counts as inside it (points sit on the ground).</summary>
+    public const float GroundToleranceCm = 50f;
+
     /// <summary>
     /// The ground footprint of <paramref name="actor"/> in world X/Y as convex polygons grown by <paramref name="margin"/>
     /// cm: one per visible mesh component (its bounds' outline), one per instance, and for a bent spline piece one per
     /// sixteenth of its length (the bent outline). Components whose mesh <paramref name="bounds"/> does not know are left out.
     /// </summary>
-    public static List<Vector2[]> Footprints(ActorRecord actor, Func<string, BoundingBox?> bounds, float margin = MarginCm)
+    public static List<Vector2[]> Footprints(ActorRecord actor, Func<string, BoundingBox?> bounds, float margin = MarginCm) =>
+        Volumes(actor, bounds, margin).Select(v => v.Outline).ToList();
+
+    /// <summary>The pieces of <see cref="Footprints"/> with the heights each spans.</summary>
+    public static List<Volume> Volumes(ActorRecord actor, Func<string, BoundingBox?> bounds, float margin = MarginCm)
     {
         ArgumentNullException.ThrowIfNull(actor);
         ArgumentNullException.ThrowIfNull(bounds);
-        var result = new List<Vector2[]>();
+        var result = new List<Volume>();
         foreach (var c in actor.Components.Where(c => c.IsSceneComponent && c.IsVisible && c.StaticMeshPath is not null && !HelperMeshes.IsHelper(actor, c)))
         {
             if (bounds(c.StaticMeshPath!) is not { IsEmpty: false } b)
@@ -69,33 +82,46 @@ public static class GrassClearing
 
             if (c.IsInstanced)
             {
-                result.AddRange(c.Instances.Select(i => Grow(Hull(Corners(b).Select(p => Xy(c.WorldTransform.TransformPosition(i.TransformPosition(p))))), margin)));
+                result.AddRange(c.Instances.Select(i => Piece(Corners(b).Select(p => c.WorldTransform.TransformPosition(i.TransformPosition(p))), margin)));
             }
             else if (c.SplineMesh is { } spline)
             {
                 var k = spline.ForwardAxis switch { SplineMeshAxis.Y => 1, SplineMeshAxis.Z => 2, _ => 0 };
                 var (from, to) = (Get(b.Min, k), Get(b.Max, k));
-                List<Vector2> Slice(int i)
+                List<FVector> Slice(int i)
                 {
                     var slice = SplineMeshDeformer.CalcSliceTransform(spline, b, from + ((to - from) * i / 16f));
-                    return Corners(b).Select(p => Xy(c.WorldTransform.TransformPosition(slice.TransformPosition(Set(p, k))))).ToList();
+                    return Corners(b).Select(p => c.WorldTransform.TransformPosition(slice.TransformPosition(Set(p, k)))).ToList();
                 }
 
                 var previous = Slice(0);
                 for (var i = 1; i <= 16; i++)
                 {
                     var next = Slice(i);
-                    result.Add(Grow(Hull(previous.Concat(next)), margin));
+                    result.Add(Piece(previous.Concat(next), margin));
                     previous = next;
                 }
             }
             else
             {
-                result.Add(Grow(Hull(Corners(b).Select(p => Xy(c.WorldTransform.TransformPosition(p)))), margin));
+                result.Add(Piece(Corners(b).Select(p => c.WorldTransform.TransformPosition(p)), margin));
             }
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// True when <paramref name="point"/> stands inside one of <paramref name="volumes"/>: within its outline, between its
+    /// top and <see cref="GroundToleranceCm"/> below its bottom.
+    /// </summary>
+    public static bool Inside(IEnumerable<Volume> volumes, FVector point) =>
+        volumes.Any(v => point.Z <= v.Top && point.Z >= v.Bottom - GroundToleranceCm && Contains(v.Outline, Xy(point)));
+
+    private static Volume Piece(IEnumerable<FVector> corners, float margin)
+    {
+        var points = corners.ToList();
+        return new Volume(Grow(Hull(points.Select(Xy)), margin), points.Min(p => p.Z), points.Max(p => p.Z));
     }
 
     /// <summary>True when <paramref name="point"/> lies inside any of <paramref name="polygons"/>.</summary>

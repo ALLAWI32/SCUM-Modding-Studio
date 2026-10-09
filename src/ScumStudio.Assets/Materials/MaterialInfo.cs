@@ -75,6 +75,33 @@ public sealed record MaterialInfo(
     public System.Numerics.Vector2? RoughnessRange { get; init; }
 
     /// <summary>
+    /// Linear RGB that SCUM's opaque master shaders multiply the base colour by: <c>Base Material Tint</c> x
+    /// <c>Base Material Brightness</c> (both 1 in the masters). Null when the material sets neither. The hangar roof's
+    /// near-white aluminium panels are drawn at brightness 0.2 in game, as dark as the game's own baked atlas of it.
+    /// </summary>
+    public Vector3? BaseColorScale { get; init; }
+
+    /// <summary>
+    /// Colour of a surface drawn without a texture (alpha 1): <see cref="TintColor"/> through <see cref="BaseColorScale"/>,
+    /// white through the scale without a colour of its own, and the scale alone when the colour picked is the master's
+    /// <c>Base Material Tint</c> itself (already in the scale). Null with neither.
+    /// </summary>
+    public Vector4? SurfaceColor
+    {
+        get
+        {
+            var colour = TintColor is { W: > 0f } tint ? new Vector3(tint.X, tint.Y, tint.Z) : (Vector3?)null;
+            if (BaseColorScale is not { } scale)
+            {
+                return colour is { } c ? new Vector4(c, 1f) : null;
+            }
+
+            var masterTint = Vectors.FirstOrDefault(v => v.Name == "Base Material Tint");
+            return new Vector4(colour is { } own && (masterTint is null || masterTint.Value != TintColor) ? own * scale : scale, 1f);
+        }
+    }
+
+    /// <summary>
     /// True when the base material can draw into a runtime virtual texture (<c>CachedExpressionData.bHasRuntimeVirtualTextureOutput</c>).
     /// Most SCUM masters can (buildings, rocks, roads); the game asks only its road pieces to, see <c>BendMesh.DrawsIntoLandscape</c>.
     /// </summary>

@@ -95,6 +95,11 @@
             <Button Classes="ghost" Padding="8,4" x:Name="PopOutButton" Content="{Tr Map.PopOut}" Click="OnPopOutClick" ToolTip.Tip="{Tr Map.PopOut.Tip}" />
             <ComboBox x:Name="QualityBox" ItemsSource="{Binding RenderQualities}" SelectedItem="{Binding RenderQuality}" MinWidth="118" VerticalAlignment="Center"
                       IsVisible="{Binding HasView}" ToolTip.Tip="{Tr Map.Quality.Tip}" />
+            <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center" IsVisible="{Binding HasView}" ToolTip.Tip="{Tr Map.TimeOfDay.Tip}">
+              <TextBlock Text="{Tr Map.TimeOfDay}" VerticalAlignment="Center" Classes="muted" />
+              <Slider x:Name="TimeOfDaySlider" Minimum="0" Maximum="24" SmallChange="0.25" LargeChange="1" Width="120" VerticalAlignment="Center" Value="{Binding TimeOfDay}" ToolTip.Tip="{Tr Map.TimeOfDay.Tip}" />
+              <TextBlock Text="{Binding TimeOfDayText}" VerticalAlignment="Center" MinWidth="38" />
+            </StackPanel>
             <Border Classes="vsep" IsVisible="{Binding HasView}" />
             <ToggleButton Classes="ghost" Padding="8,4" x:Name="SpawnsButton" IsChecked="{Binding ShowSpawns}" IsVisible="{Binding HasView}" ToolTip.Tip="{Tr Map.Spawns.Tip}">
               <StackPanel Orientation="Horizontal" Spacing="5">
@@ -568,11 +573,11 @@
         <Border Grid.Row="0" Classes="panel" x:Name="Viewport">
           <Panel x:Name="ViewportContent">
             <c:ViewportGrid Background="{DynamicResource ViewportBrush}" AxisXBrush="{DynamicResource AxisXBrush}" AxisYBrush="{DynamicResource AxisYBrush}" IsVisible="{Binding !HasView}" />
-            <c:LevelViewport x:Name="Viewport3d" Scene="{Binding PreparedScene}" PickParts="{Binding PickParts}" BrushMode="{Binding BrushSelect}" BrushRadius="{Binding BrushRadius}" SelectedId="{Binding SelectedActorId, Mode=TwoWay}" SelectedInstance="{Binding SelectedInstanceKey, Mode=TwoWay}" SelectionHoldUntil="{Binding SelectionHoldUntil}" Backdrop="{Binding WorldBackdrop}" KeepCamera="{Binding IsWorldMode}" Quality="{Binding RenderQuality}" KindIds="{Binding KindSelectionIds}" KindInstances="{Binding KindSelectionInstances}" InstanceTransforms="{Binding InstanceTransforms}"
+            <c:LevelViewport x:Name="Viewport3d" Scene="{Binding PreparedScene}" PickParts="{Binding PickParts}" BrushMode="{Binding BrushSelect}" BrushRadius="{Binding BrushRadius}" SelectedId="{Binding SelectedActorId, Mode=TwoWay}" SelectedInstance="{Binding SelectedInstanceKey, Mode=TwoWay}" SelectionHoldUntil="{Binding SelectionHoldUntil}" Backdrop="{Binding WorldBackdrop}" KeepCamera="{Binding IsWorldMode}" Quality="{Binding RenderQuality}" TimeOfDay="{Binding TimeOfDay}" Lighting="{Binding Lighting}" AnimateWater="{Binding AnimateWater}" KindIds="{Binding KindSelectionIds}" KindInstances="{Binding KindSelectionInstances}" InstanceTransforms="{Binding InstanceTransforms}"
                              HiddenIds="{Binding HiddenActorIds}" HiddenInstances="{Binding HiddenInstanceKeys}" HiddenPinKinds="{Binding HiddenPinKinds}" PinOverrides="{Binding PinOverrides}"
                              ActorTransforms="{Binding ActorTransforms}" Clones="{Binding Clones}" Orientation="{Binding Orientation}" CanScale="{Binding GizmoCanScale}"
                              SelectedRootWorld="{Binding SelectedRootWorld}" TranslationSnap="{Binding TranslationSnap}" RotationSnap="{Binding RotationSnap}"
-                             ExtraMeshes="{Binding ExtraMeshes}" Bends="{Binding Bends}" SegmentBends="{Binding SegmentBends}" ShapeHandles="{Binding ShapeHandles}" ScaleHandles="{Binding ScaleHandles}" LegHandle="{Binding LegHandle}" GroupWorlds="{Binding GroupWorlds}" IsVisible="{Binding HasView}" />
+                             ExtraMeshes="{Binding ExtraMeshes}" ReplacedMeshes="{Binding ReplacedMeshes}" PartMeshes="{Binding PartMeshes}" Bends="{Binding Bends}" SegmentBends="{Binding SegmentBends}" ShapeHandles="{Binding ShapeHandles}" ScaleHandles="{Binding ScaleHandles}" LegHandle="{Binding LegHandle}" GroupWorlds="{Binding GroupWorlds}" IsVisible="{Binding HasView}" />
             <!-- gizmo drag: the live value next to the cursor -->
             <Border Classes="hud" IsHitTestVisible="False" HorizontalAlignment="Left" VerticalAlignment="Top"
                     Margin="{Binding #Viewport3d.DragLabelMargin}" IsVisible="{Binding #Viewport3d.IsDragLabelVisible}">
@@ -685,6 +690,11 @@
                   <Slider x:Name="PaintSpacingMaxSlider" Width="80" Minimum="1" Maximum="20" SmallChange="0.5" LargeChange="1"
                           Value="{Binding PaintSpacingMax}" VerticalAlignment="Center" ToolTip.Tip="{Tr Map.Paint.SpacingMax.Tip}" />
                   <TextBlock Text="{Binding PaintSpacingText}" Classes="caption mono" VerticalAlignment="Center" MinWidth="52" />
+                  <ToggleButton Classes="ghost" Padding="8,4" x:Name="PaintTimerButton" Content="{Tr Map.Paint.Timer}" IsChecked="{Binding PaintTimed}"
+                                VerticalAlignment="Center" ToolTip.Tip="{Tr Map.Paint.Timer.Tip}" />
+                  <Slider x:Name="PaintEverySlider" Width="80" Minimum="0.05" Maximum="3" SmallChange="0.05" LargeChange="0.25"
+                          Value="{Binding PaintEvery}" IsVisible="{Binding PaintTimed}" VerticalAlignment="Center" ToolTip.Tip="{Tr Map.Paint.Every.Tip}" />
+                  <TextBlock Text="{Binding PaintEveryText}" IsVisible="{Binding PaintTimed}" Classes="caption mono" VerticalAlignment="Center" MinWidth="40" />
                 </StackPanel>
               </WrapPanel>
             </Border>

@@ -66,6 +66,21 @@ public sealed partial class MapPageViewModel
     [NotifyPropertyChangedFor(nameof(PaintSpacingText))]
     private double _paintSpacingMax = 3;
 
+    /// <summary>
+    /// Timer mode (owner: "a timer: every so many seconds it adds a tree where the brush is, wherever I move it"): while the
+    /// button is held, <see cref="PaintOneAt"/> plants one object every <see cref="PaintEvery"/> seconds, moving or not.
+    /// </summary>
+    [ObservableProperty]
+    private bool _paintTimed;
+
+    /// <summary>Seconds between two objects in timer mode.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(PaintEveryText))]
+    private double _paintEvery = 0.5;
+
+    /// <summary>The timer's interval as text ("0.5 s").</summary>
+    public string PaintEveryText => string.Create(CultureInfo.CurrentCulture, $"{PaintEvery:0.##} s");
+
     /// <summary>Plants come a little bigger or smaller (0.9–1.15; buildings and Blueprints always 1).</summary>
     [ObservableProperty]
     private bool _paintRandomSize = true;
@@ -338,6 +353,41 @@ public sealed partial class MapPageViewModel
         if (stroke.Planted > before)
         {
             ShowPaintPreview(stroke);
+        }
+    }
+
+    /// <summary>
+    /// One tick of the timer mode: one object at a random free spot inside the circle at <paramref name="centre"/> (the
+    /// spacing still applies; nothing when the circle is full). It joins the open stroke, journaled by <see cref="EndPaintStroke"/>.
+    /// </summary>
+    public void PaintOneAt(FVector centre)
+    {
+        if (_stroke is { } open && !ReferenceEquals(open.Scene, PreparedScene))
+        {
+            EndPaintStroke(); // the loaded levels changed under the stroke
+        }
+
+        var stroke = _stroke ??= BeginPaintStroke(centre);
+        if (stroke.Kinds.Count == 0)
+        {
+            return;
+        }
+
+        var radius = (float)BrushRadius * 100f;
+        var c = new Vector2(centre.X, centre.Y);
+        GatherPaintObstacles(stroke, c - new Vector2(radius + stroke.Spacing), c + new Vector2(radius + stroke.Spacing));
+        LoadSupports(stroke, c - new Vector2(radius), c + new Vector2(radius));
+        for (var attempt = 0; attempt < 24; attempt++)
+        {
+            var h = Mix(stroke.Seed ^ ((ulong)++stroke.Ticks * 0x9E3779B97F4A7C15UL));
+            var at = c + (new Vector2(MathF.Cos(Unit(h, 0) * MathF.Tau), MathF.Sin(Unit(h, 0) * MathF.Tau)) * (radius * MathF.Sqrt(Unit(h, 1))));
+            var keep = stroke.LeastSpacing + ((stroke.Spacing - stroke.LeastSpacing) * Unit(h, 7));
+            if (!TooClose(stroke, at, centre.Z, keep))
+            {
+                Plant(stroke, at, centre.Z, h);
+                ShowPaintPreview(stroke);
+                return;
+            }
         }
     }
 
@@ -799,6 +849,9 @@ public sealed partial class MapPageViewModel
 
         /// <summary>The smallest distance of the range (cm); <see cref="Spacing"/> is the largest.</summary>
         public float LeastSpacing { get; init; }
+
+        /// <summary>Timer ticks so far (each draws new random spots).</summary>
+        public long Ticks { get; set; }
 
         public HashSet<(int X, int Y)> Tried { get; } = [];
 

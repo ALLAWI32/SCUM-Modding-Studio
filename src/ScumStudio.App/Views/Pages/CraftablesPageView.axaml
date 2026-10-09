@@ -2,6 +2,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:ScumStudio.App.ViewModels"
              xmlns:c="using:ScumStudio.App.Controls"
+             xmlns:conv="using:ScumStudio.App.Converters"
              x:Class="ScumStudio.App.Views.Pages.CraftablesPageView"
              x:DataType="vm:CraftablesPageViewModel">
   <UserControl.Styles>
@@ -37,6 +38,14 @@
         </StackPanel>
         <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
           <TextBlock Text="{Tr Craftables.NoProject}" Classes="caption" VerticalAlignment="Center" IsVisible="{Binding !HasProject}" />
+          <Border Classes="segmented" VerticalAlignment="Center">
+            <StackPanel Orientation="Horizontal">
+              <ToggleButton x:Name="CraftRecipeTab" IsChecked="{Binding !IsGalleryOpen}" IsEnabled="{Binding HasSelection}" Content="{Tr Craftables.Recipe}"
+                            ToolTip.Tip="{Tr Craftables.Recipe.Tip}" />
+              <ToggleButton x:Name="CraftGalleryTab" IsChecked="{Binding IsGalleryOpen}" Content="{Tr Craftables.Gallery}"
+                            ToolTip.Tip="{Tr Craftables.Gallery.Tip}" />
+            </StackPanel>
+          </Border>
           <Button x:Name="CraftUndoButton" Classes="ghost" Command="{Binding UndoCommand}" Content="{Tr Craftables.Undo}" ToolTip.Tip="{Tr Craftables.Undo.Tip}" />
         </StackPanel>
       </Grid>
@@ -75,6 +84,14 @@
                   </DataTemplate>
                 </ListBox.ItemTemplate>
               </ListBox>
+              <!-- External 3D files (FBX, OBJ) cooked by Unreal Engine 4.27; the status bar shows the engine's progress. -->
+              <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
+                <Button x:Name="CraftImportButton" Grid.Column="0" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Content="{Tr Craftables.Import}"
+                        ToolTip.Tip="{Tr Craftables.Import.Tip}" Command="{Binding ImportModelCommand}" />
+                <Button x:Name="CraftImportCancel" Grid.Column="1" Classes="ghost" Content="{Tr Craftables.Import.Cancel}" ToolTip.Tip="{Tr Craftables.Import.Cancel.Tip}"
+                        Command="{Binding CancelImportCommand}" IsVisible="{Binding IsImporting}" />
+              </Grid>
+              <ProgressBar IsIndeterminate="True" Height="4" MinHeight="4" IsVisible="{Binding IsImporting}" />
             </StackPanel>
             <TextBlock DockPanel.Dock="Bottom" Classes="caption wrap" Text="{Tr Craftables.Note}" Margin="2,8,0,0" />
             <ListBox x:Name="CraftList" Classes="plain" ItemsSource="{Binding Items}" SelectedItem="{Binding SelectedItem}">
@@ -99,11 +116,76 @@
           </DockPanel>
         </Border>
 
-        <!-- The selected craftable -->
+        <!-- The selected craftable, or the gallery of everything the game has (always while none is selected) -->
         <Border Grid.Column="1" Classes="panel">
           <Panel>
-            <TextBlock Classes="muted wrap" Margin="16" Text="{Tr Craftables.SelectOne}" IsVisible="{Binding !HasSelection}" />
-            <ScrollViewer IsVisible="{Binding HasSelection}">
+            <!-- Gallery: the Assets page's categories and tiles (rows virtualized, pictures made for the tiles on screen) -->
+            <Grid ColumnDefinitions="260,*" Margin="4,6,0,0" DataContext="{Binding Gallery}" x:DataType="vm:CraftGalleryViewModel"
+                  IsVisible="{Binding $parent[UserControl].((vm:CraftablesPageViewModel)DataContext).IsGalleryOpen}">
+              <TreeView Grid.Column="0" x:Name="CraftGalleryTree" ItemsSource="{Binding Roots}" SelectedItem="{Binding SelectedCategory}" Margin="4">
+                <TreeView.Styles>
+                  <Style Selector="TreeViewItem" x:DataType="vm:ObjectCategoryNode">
+                    <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}" />
+                  </Style>
+                </TreeView.Styles>
+                <TreeView.ItemTemplate>
+                  <TreeDataTemplate x:DataType="vm:ObjectCategoryNode" ItemsSource="{Binding Children}">
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                      <TextBlock Grid.Column="0" Text="{Binding Title}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Title}" />
+                      <TextBlock Grid.Column="1" Text="{Binding CountText}" Classes="caption" VerticalAlignment="Center" Margin="0,0,6,0" />
+                    </Grid>
+                  </TreeDataTemplate>
+                </TreeView.ItemTemplate>
+              </TreeView>
+              <DockPanel Grid.Column="1" Margin="8,8,0,0">
+                <StackPanel DockPanel.Dock="Top" Spacing="6" Margin="0,0,10,8">
+                  <TextBox x:Name="CraftGallerySearch" Classes="search" Text="{Binding Query}" Watermark="{Tr Craftables.Gallery.Search}" ToolTip.Tip="{Tr Assets.Filter.Tip}" />
+                  <TextBlock Text="{Tr Craftables.Gallery.Hint}" Classes="caption wrap" />
+                  <TextBlock Text="{Binding ResultText}" Classes="muted" />
+                  <ProgressBar IsIndeterminate="True" IsVisible="{Binding IsLoading}" />
+                </StackPanel>
+                <ScrollViewer x:Name="CraftGalleryScroll" HorizontalScrollBarVisibility="Disabled">
+                  <ItemsControl x:Name="CraftGalleryGrid" ItemsSource="{Binding Rows}">
+                    <ItemsControl.ItemsPanel>
+                      <ItemsPanelTemplate><VirtualizingStackPanel /></ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="vm:AssetTileRow">
+                        <ItemsControl ItemsSource="{Binding Tiles}">
+                          <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate><StackPanel Orientation="Horizontal" /></ItemsPanelTemplate>
+                          </ItemsControl.ItemsPanel>
+                          <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:AssetItemViewModel">
+                              <Button Classes="tile" Classes.selected="{Binding IsAdded}" ToolTip.Tip="{Binding Entry.PackagePath}"
+                                      Command="{Binding $parent[UserControl].((vm:CraftablesPageViewModel)DataContext).Gallery.AddCommand}" CommandParameter="{Binding}">
+                                <StackPanel Width="120" Spacing="5">
+                                  <Border Height="120" CornerRadius="{DynamicResource SmallCornerRadius}" Background="{DynamicResource ViewportBrush}" ClipToBounds="True">
+                                    <Panel>
+                                      <c:GlyphIcon Kind="{Binding IconKey}" IconSize="30" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                   Foreground="{Binding Tint, Converter={x:Static conv:HexBrushConverter.Instance}}"
+                                                   IsVisible="{Binding Thumbnail, Converter={x:Static ObjectConverters.IsNull}}" />
+                                      <c:ThumbnailImage Source="{Binding Thumbnail}" Stretch="Uniform" Margin="2" />
+                                      <Border Classes="badge accent" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="4" IsVisible="{Binding IsAdded}">
+                                        <TextBlock Text="{Tr Craftables.Gallery.Added}" />
+                                      </Border>
+                                    </Panel>
+                                  </Border>
+                                  <TextBlock Text="{Binding Name}" FontSize="12" TextAlignment="Center" TextTrimming="CharacterEllipsis" />
+                                  <TextBlock Text="{Binding ClassName}" Classes="caption" FontSize="10.5" TextAlignment="Center" TextTrimming="CharacterEllipsis" />
+                                </StackPanel>
+                              </Button>
+                            </DataTemplate>
+                          </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                </ScrollViewer>
+              </DockPanel>
+            </Grid>
+
+            <ScrollViewer IsVisible="{Binding !IsGalleryOpen}">
               <StackPanel Margin="16,14" Spacing="12" DataContext="{Binding SelectedItem}" x:DataType="vm:CraftableRowViewModel">
                 <Grid ColumnDefinitions="Auto,*" ColumnSpacing="16">
                   <Border Grid.Column="0" Classes="craftHero">
@@ -113,11 +195,11 @@
                     <TextBlock Text="{Tr Craftables.Name}" Classes="caption" />
                     <TextBox x:Name="CraftNameBox" Text="{Binding Name}" ToolTip.Tip="{Tr Craftables.Name.Tip}" />
                     <TextBlock Text="{Binding Source}" Classes="caption mono" TextTrimming="CharacterEllipsis" />
+                    <TextBlock Text="{Tr Craftables.ItemNote}" Classes="caption wrap" IsVisible="{Binding IsItem}" />
                     <WrapPanel Orientation="Horizontal" ItemSpacing="8" LineSpacing="6">
                       <StackPanel Spacing="2">
                         <TextBlock Text="{Tr Craftables.Kind}" Classes="caption" />
-                        <ComboBox x:Name="CraftKindBox" MinWidth="150" SelectedItem="{Binding Kind}" ToolTip.Tip="{Tr Craftables.Kind.Tip}"
-                                  ItemsSource="{Binding $parent[UserControl].((vm:CraftablesPageViewModel)DataContext).Kinds}" />
+                        <ComboBox x:Name="CraftKindBox" MinWidth="150" SelectedItem="{Binding Kind}" ToolTip.Tip="{Tr Craftables.Kind.Tip}" ItemsSource="{Binding Kinds}" />
                       </StackPanel>
                       <StackPanel Spacing="2">
                         <TextBlock Text="{Tr Craftables.Material}" Classes="caption" />

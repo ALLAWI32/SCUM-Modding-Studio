@@ -12,12 +12,12 @@ namespace ScumStudio.Level.Export;
 public sealed partial class ProjectExporter
 {
     /// <summary>
-    /// The footprints of a placed or moved actor as written whose grass is cleared (<see cref="EditState.ClearsGrass"/>),
-    /// none otherwise. A copied Blueprint is written without its class's mesh components (a stock one stores them in the
+    /// The footprints (with their heights) of a placed or moved actor as written whose grass and spawns are cleared
+    /// (<see cref="EditState.ClearsGrass"/>), none otherwise. A copied Blueprint is written without its class's mesh components (a stock one stores them in the
     /// level, 42 of 42 in A_4_Farm_04): they are taken from the actor it was copied from (or itself where it stood), read
     /// with its class components, and put at its root as written.
     /// </summary>
-    private Func<string, ActorRecord, IEnumerable<Vector2[]>> GrassFootprints(EditState state, AssetCatalog catalog, Func<string, BendMesh?> meshes)
+    private Func<string, ActorRecord, IEnumerable<GrassClearing.Volume>> GrassFootprints(EditState state, AssetCatalog catalog, Func<string, BendMesh?> meshes)
     {
         Cue4ParseLevelReader? expanded = null;
         var documents = new Dictionary<string, LevelDocument?>(StringComparer.OrdinalIgnoreCase);
@@ -29,7 +29,7 @@ public sealed partial class ProjectExporter
                 return [];
             }
 
-            var own = GrassClearing.Footprints(actor, m => meshes(m)?.Bounds);
+            var own = GrassClearing.Volumes(actor, m => meshes(m)?.Bounds);
             var source = state.AddedActors.GetValueOrDefault(reference) switch
             {
                 AddBlueprintActorOp b => b.Source,
@@ -57,7 +57,7 @@ public sealed partial class ProjectExporter
             }
 
             return document?.FindActor(source.Actor) is { } stood
-                ? GrassClearing.Footprints(stood with
+                ? GrassClearing.Volumes(stood with
                 {
                     Components = stood.Components.Select(c => c with { WorldTransform = c.WorldTransform.GetRelativeTransform(stood.WorldTransform) * actor.WorldTransform }).ToList(),
                 }, m => meshes(m)?.Bounds)

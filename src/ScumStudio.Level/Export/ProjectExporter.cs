@@ -303,14 +303,10 @@ public sealed partial class ProjectExporter
                 continue;
             }
 
-            // The island's spawn places are not a level: their edits rewrite the static data asset that holds them.
+            // The island's spawn places are not a level: their edits rewrite the static data asset that holds them, after
+            // the levels (the spawn points inside placed objects go too).
             if (Spawns.SpawnPlaces.IsStaticData(level))
             {
-                if (await WriteSpawnPlacesAsync(state, catalog, file, staging, warnings, cancellationToken).ConfigureAwait(false) is { } placesAsset)
-                {
-                    spawnPlaces.Add(placesAsset);
-                }
-
                 continue;
             }
 
@@ -377,12 +373,19 @@ public sealed partial class ProjectExporter
                 level, report.ActorsBefore, report.ActorsAfter, report.RemovedActors.Count, report.PatchedTransforms.Count);
         }
 
-        var footprints = new List<System.Numerics.Vector2[]>();
-        GrowStreamingAreas(staging, placed, bendMeshes, warnings, cancellationToken, GrassFootprints(state, catalog, bendMeshes), footprints);
-        if (footprints.Count > 0)
+        var volumes = new List<GrassClearing.Volume>();
+        GrowStreamingAreas(staging, placed, bendMeshes, warnings, cancellationToken, GrassFootprints(state, catalog, bendMeshes), volumes);
+        if (volumes.Count > 0)
         {
             progress?.Report("Clearing the grass under placed objects");
-            ClearGrassUnder(catalog, reader, footprints, staging, levels, warnings, cancellationToken);
+            ClearGrassUnder(catalog, reader, volumes.Select(v => v.Outline).ToList(), staging, levels, warnings, cancellationToken);
+        }
+
+        if ((volumes.Count > 0 || state.ChangedLevels.Any(Spawns.SpawnPlaces.IsStaticData))
+            && catalog.TryGetPackageFile(Spawns.SpawnPlaces.StaticDataPath, out var placesFile)
+            && await WriteSpawnPlacesAsync(state, catalog, placesFile, staging, warnings, volumes, cancellationToken).ConfigureAwait(false) is { } placesAsset)
+        {
+            spawnPlaces.Add(placesAsset);
         }
         if (placedMeshes.Count > 0)
         {
@@ -585,7 +588,7 @@ public sealed partial class ProjectExporter
     /// </summary>
     private void GrowStreamingAreas(string staging, List<(string Level, string File, HashSet<string> Actors)> placed,
         Func<string, BendMesh?> meshes, List<string> warnings, CancellationToken cancellationToken,
-        Func<string, ActorRecord, IEnumerable<System.Numerics.Vector2[]>>? footprintsOf = null, List<System.Numerics.Vector2[]>? footprints = null)
+        Func<string, ActorRecord, IEnumerable<GrassClearing.Volume>>? footprintsOf = null, List<GrassClearing.Volume>? footprints = null)
     {
         if (placed.All(p => p.Actors.Count == 0))
         {
@@ -608,7 +611,7 @@ public sealed partial class ProjectExporter
                     var document = LevelDocument.Load(reader, level, cancellationToken);
                     if (footprintsOf is not null && footprints is not null)
                     {
-                        // "Clear grass under it": the footprints as written (bent pieces bent, copies in place).
+                        // "Clear grass and spawns under it": the footprints as written (bent pieces bent, copies in place).
                         footprints.AddRange(document.Actors.Where(a => actors.Contains(a.Name)).SelectMany(a => footprintsOf(level, a)));
                     }
 
@@ -1257,17 +1260,33 @@ public sealed partial class ProjectExporter
         return (uasset, uexp, ubulk);
     }
 
-    /// <summary>Writes the spawn place edits of <paramref name="state"/> into the island's static data, staged next to the levels.</summary>
-    private async Task<ExportedAsset?> WriteSpawnPlacesAsync(EditState state, AssetCatalog catalog, CUE4Parse.FileProvider.Objects.GameFile file, string staging, List<string> warnings, CancellationToken cancellationToken)
+    /// <summary>
+    /// Writes the spawn place edits of <paramref name="state"/> into the island's static data, staged next to the levels,
+    /// and removes the stock spawn points standing inside <paramref name="volumes"/> (the placed objects that clear what
+    /// is under them).
+    /// </summary>
+    private async Task<ExportedAsset?> WriteSpawnPlacesAsync(EditState state, AssetCatalog catalog, CUE4Parse.FileProvider.Objects.GameFile file, string staging, List<string> warnings,
+        IReadOnlyList<GrassClearing.Volume> volumes, CancellationToken cancellationToken)
     {
         var request = Spawns.SpawnPlacesEditor.Plan(state, warnings);
-        if (request.IsEmpty)
+        if (request.IsEmpty && volumes.Count == 0)
         {
             return null;
         }
 
         var (uasset, uexp, ubulk) = ReadPackageFiles(catalog, file);
         var package = CookedPackage.Parse(uasset, uexp, ubulk, Spawns.SpawnPlaces.StaticDataPath);
+        request = Spawns.SpawnPlacesEditor.Block(request, Spawns.SpawnPlaces.Read(package), volumes, out var blocked);
+        if (request.IsEmpty)
+        {
+            return null;
+        }
+
+        if (blocked > 0)
+        {
+            warnings.Add($"Spawn places: {blocked} vehicle or zombie/NPC spawn point(s) stood inside placed objects and were removed.");
+        }
+
         var (bytes, report) = Spawns.SpawnPlacesEditor.Apply(package, request);
         var virtualPath = file.Path.Replace('\\', '/');
         var dot = virtualPath.LastIndexOf('.');

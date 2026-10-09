@@ -54,6 +54,9 @@ public sealed record UiState
 
     /// <summary>Where the map camera was last (the map reopens there), or null.</summary>
     public MapView? MapView { get; init; }
+
+    /// <summary>The Map's time of day in hours (0-24): sun, sky and light; midday by default.</summary>
+    public double TimeOfDay { get; init; } = 13.5;
 }
 
 /// <summary>

@@ -182,7 +182,7 @@ public sealed class ThumbnailService : IDisposable
     }
 
     // Bump RenderVersion when thumbnails render differently (v2: masked leaves cut out), so stale ones are made again.
-    private const string RenderVersion = "3"; // v3: Blueprints, 2x supersampled
+    private const string RenderVersion = "4"; // v3: Blueprints, 2x supersampled; v4: the masters' brightness and tint
 
     private string CacheFile(string key, long size) =>
         Path.Combine(Directory, Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key + "|" + size + "|" + RenderVersion)))[..24] + ".png");

@@ -1,4 +1,8 @@
+using System.Collections.Concurrent;
+using System.Runtime.CompilerServices;
+using System.Text.RegularExpressions;
 using ScumStudio.Assets.Catalog;
+using ScumStudio.Formats.Packages;
 using ScumStudio.Formats.Properties;
 using ScumStudio.Modding.Catalog;
 using ScumStudio.Modding.Cloning;
@@ -9,7 +13,7 @@ namespace ScumStudio.Modding.Crafting;
 /// <summary>The new packages of one craftable.</summary>
 /// <param name="Name">Its name.</param>
 /// <param name="Recipe">The recipe package (<c>CR_SS_*</c>).</param>
-/// <param name="Product">What the recipe makes: the base element (<c>BP_SS_*</c>) or, for power, the item.</param>
+/// <param name="Product">What the recipe makes: the base element (<c>BP_SS_*</c>), for power the new item, for an item the game's item.</param>
 /// <param name="Item">The item a station or power object spawns, or null.</param>
 /// <param name="Tag">A station's ingredient tag (<c>CI_SS_*</c>), or null.</param>
 public sealed record CraftablePackages(string Name, string Recipe, string Product, string? Item, string? Tag);
@@ -33,7 +37,12 @@ public sealed record CraftablesPlan(AssetModRequest Request, IReadOnlyList<Craft
 /// to it. The clone carries a tag of its own (<c>CI_SS_*</c>, a copy of <c>CI_Group_Machinery</c>), and a craftable that
 /// requires the station gets that tag as a tool slot;</item>
 /// <item>power: the item <c>ElectricityGenerator</c> (+ <c>_ES</c>: <c>InfluenceAreaRadius</c> 1000 cm, <c>ResourceAmount</c>
-/// 500, fuel <c>ResourceUsageRate</c> 0.13889) made by a copy of the item recipe <c>CR_Small_Battery_Charger</c>.</item>
+/// 500, fuel <c>ResourceUsageRate</c> 0.13889) made by a copy of the item recipe <c>CR_Small_Battery_Charger</c>;</item>
+/// <item>an item of the game (owner: "craft something in exchange for some things"): a copy of a stock
+/// <c>ItemCraftingRecipe</c> of the same kind of item (<see cref="ItemTemplate"/>) whose soft <c>Product</c> is pointed at
+/// that item. The copy keeps the template's <c>CraftingMetadata_RecipeCategory</c> (gameplay tag
+/// <c>CraftingCategory.Items.*</c> + display priority: the crafting menu's section), <c>RelevantSkill</c>, <c>Duration</c>
+/// and rewards; the menu shows the item's own name and icon (item recipes have no caption).</item>
 /// </list>
 /// Every static mesh the template packages import is pointed at the craftable's mesh (<see cref="ClonePlan.Redirects"/>),
 /// names and captions become the craftable's, and the recipe gets the craftable's ingredients.
@@ -59,8 +68,46 @@ public static class CraftablesPlanner
     private const string StationElement = Elements + "/BP_Base_ImprovisedWorkbench";
     private const string StationItem = ModdableAssets.ConZ + "Items/Equipment/Active_Items/Improvised_Workbench";
     private const string StationTag = RecipeIngredients.TagFolder + "/CI_Group_Machinery";
+    private const string ItemRecipes = ModdableAssets.ConZ + "Items/Crafting/Recipes/Items/";
     private const string PowerSetup = "RangedResourceProviderEntityComponentContinousAmountSetup_0";
+
+    // Item recipe templates (SCUM 1.3.3, read from the paks) by the native class the item derives from, its own data (a
+    // spear, the chainsaw or a DLC tomahawk is a melee WeaponItem whatever its folder, a charm a WeaponAttachment) ...
+    private static readonly (Func<string, bool> Native, string Recipe)[] ClassTemplates =
+    [
+        (n => n == "AmmunitionArrow", "CR_Wooden_Arrow"), // Ammunition.ArrowsAndBolts
+        (n => n.StartsWith("Ammunition", StringComparison.Ordinal), "CR_Ammo_Cal22"), // Ammunition.Bullets
+        (n => n.StartsWith("WeaponAttachment", StringComparison.Ordinal) || n.StartsWith("BowAttachment", StringComparison.Ordinal), "CR_Improvised_Flashlight"), // RangedWeapons.Attachments
+        (n => n is "WeaponBow" or "WeaponCrossbow" or "WeaponAutoCrossbow", "CR_Improvised_Bow_20"), // RangedWeapons.BowsAndCrossbows
+        (n => n is "Weapon" or "WeaponRevolver", "CR_Improvised_Weapon_Handgun"), // RangedWeapons.Firearms
+        (n => n is "WeaponItem" or "Chainsaw", "CR_Improvised_Knife"), // MeleeWeapons
+        (n => n is "ClothesItem" or "Quiver" or "WeaponHolsterItem" or "NightVisionGogglesItem", "CR_Improvised_Boots"), // Clothing.ClothesAndAccessories
+        (n => n == "FishingRod" || n.StartsWith("FishingAttachment", StringComparison.Ordinal), "CR_FishingBait_Bread"), // Fishing
+        (n => n is "GrenadeItem" or "TrapItem", "CR_C4"), // Explosives
+    ];
+
+    // ... else the first rule matching the item's path; tools and misc (CR_Small_Battery_Charger,
+    // CraftingCategory.Items.ToolsAndMisc.Misc) otherwise.
+    private static readonly (Regex Path, string Recipe)[] ItemTemplates =
+    [
+        (new(@"/Ammunition/(Arrows|CrossbowBolts)/", RegexOptions.IgnoreCase), "CR_Wooden_Arrow"), // Ammunition.ArrowsAndBolts
+        (new(@"/Ammunition/", RegexOptions.IgnoreCase), "CR_Ammo_Cal22"), // Ammunition.Bullets
+        (new(@"/Weapons/Attachments/", RegexOptions.IgnoreCase), "CR_Improvised_Flashlight"), // RangedWeapons.Attachments
+        (new(@"/[12]H_", RegexOptions.IgnoreCase), "CR_Improvised_Knife"), // MeleeWeapons
+        (new(@"Crossbow|_Bow(_|\d|$)", RegexOptions.IgnoreCase), "CR_Improvised_Bow_20"), // RangedWeapons.BowsAndCrossbows
+        (new(@"/Weapons/", RegexOptions.IgnoreCase), "CR_Improvised_Weapon_Handgun"), // RangedWeapons.Firearms
+        (new(@"/Clothes/", RegexOptions.IgnoreCase), "CR_Improvised_Boots"), // Clothing.ClothesAndAccessories
+        (new(@"/Fishing/", RegexOptions.IgnoreCase), "CR_FishingBait_Bread"), // Fishing
+        (new(@"/(Traps|Explosives|Grenades)/", RegexOptions.IgnoreCase), "CR_C4"), // Explosives
+    ];
     private const string FuelSetup = "GameResourceContainerEntityComponentSetup_0";
+
+    // Where items never are: what moves on its own (RecipeRules.IsAllowedSource) but weapons and animal body parts (food).
+    // BP_Prisoner has a BP_Prisoner_ES; the vehicles' item containers are parts of the vehicle.
+    private static readonly string[] NotItems = ["/Characters/", "/NPCs/", "/NPC/", "/Zombies/", "/Puppets/", "/Vehicles/", "/Drones/"];
+
+    // IsItem's answers per catalog (two package headers each; the Add box and the gallery ask for thousands).
+    private static readonly ConditionalWeakTable<AssetCatalog, ConcurrentDictionary<string, bool>> ItemChecks = new();
 
     /// <summary>Plans every craftable of <paramref name="craftables"/> (bad or duplicate ones are left out with a warning).</summary>
     public static CraftablesPlan Plan(AssetCatalog catalog, IReadOnlyList<Craftable> craftables)
@@ -73,20 +120,60 @@ public static class CraftablesPlanner
         var ingredients = new Dictionary<string, IReadOnlyList<CraftIngredient>>(StringComparer.OrdinalIgnoreCase);
         var entries = new List<CraftablePackages>();
         var tokens = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var stations = craftables.Where(c => c.Kind == CraftKind.Station).ToDictionary(c => c.Name, c => c, StringComparer.OrdinalIgnoreCase);
 
-        foreach (var craftable in craftables)
+        // Stations first, each after the station it needs: a recipe asks for a station's tag only when that station is
+        // really built (name -> its tag).
+        var stations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var craftable in BuildOrder(craftables))
         {
             var token = craftable.Token;
             if (!CloneFamilyPlanner.IsValidName(token) || !tokens.Add(token))
             {
-                warnings.Add($"{craftable.Name}: left out (the name is empty or used twice).");
+                warnings.Add($"{craftable.Name}: left out (its asset name {token} is not valid or another craftable has it).");
                 continue;
             }
 
-            if (!catalog.PackageExists(craftable.Mesh))
+            if (craftable.Imported is null && !catalog.PackageExists(craftable.Mesh)) // an imported mesh ships in the pak (CraftablesExporter)
             {
                 warnings.Add($"{craftable.Name}: left out ({craftable.Mesh} is not in the game files).");
+                continue;
+            }
+
+            if (craftable.Kind == CraftKind.Item && !IsItem(catalog, craftable.Source))
+            {
+                warnings.Add($"{craftable.Name}: left out ({craftable.Source} is not an item of the game).");
+                continue;
+            }
+
+            // Only tags the game has (a typo would ship a recipe importing a missing package) and built stations' tags.
+            var recipe = new List<CraftIngredient>();
+            foreach (var ingredient in craftable.Ingredients.Count > 0 ? craftable.Ingredients : RecipeRules.Suggest(craftable.Material, craftable.SizeMeters))
+            {
+                if (stations.ContainsValue(ingredient.Tag) || catalog.PackageExists(PackageMap.Normalize(RecipeIngredients.TagPath(ingredient.Tag))))
+                {
+                    recipe.Add(ingredient);
+                }
+                else
+                {
+                    warnings.Add($"{craftable.Name}: the ingredient {ingredient.Tag} is not a tag of the game; left out of the recipe.");
+                }
+            }
+
+            if (craftable.Station is { Length: > 0 } station)
+            {
+                if (stations.TryGetValue(station, out var stationTag))
+                {
+                    recipe.Add(new CraftIngredient(stationTag, 1, IsTool: true));
+                }
+                else
+                {
+                    warnings.Add($"{craftable.Name}: the station '{station}' is not a station craftable built with this project; no station needed.");
+                }
+            }
+
+            if (recipe.Count == 0)
+            {
+                warnings.Add($"{craftable.Name}: left out (its recipe has no ingredient).");
                 continue;
             }
 
@@ -95,17 +182,9 @@ public static class CraftablesPlanner
                 var (plan, packages) = PlanOne(catalog, craftable, token);
                 clones.Add(plan);
                 entries.Add(packages);
-                var recipe = new List<CraftIngredient>(craftable.Ingredients.Count > 0 ? craftable.Ingredients : RecipeRules.Suggest(craftable.Material, craftable.SizeMeters));
-                if (craftable.Station is { Length: > 0 } station)
+                if (packages.Tag is { } tag)
                 {
-                    if (stations.TryGetValue(station, out var s))
-                    {
-                        recipe.Add(new CraftIngredient("CI_" + s.Token, 1, IsTool: true));
-                    }
-                    else
-                    {
-                        warnings.Add($"{craftable.Name}: the station '{station}' is not a station craftable of this project; no station needed.");
-                    }
+                    stations.TryAdd(craftable.Name, PackageMap.Leaf(tag));
                 }
 
                 ingredients[packages.Recipe] = recipe;
@@ -130,6 +209,41 @@ public static class CraftablesPlanner
         return new CraftablesPlan(request, entries, warnings);
     }
 
+    /// <summary>
+    /// Stations first, each one after the station it needs (a chain of any length; a loop is cut where it closes), then the
+    /// others in list order.
+    /// </summary>
+    public static IReadOnlyList<Craftable> BuildOrder(IReadOnlyList<Craftable> craftables)
+    {
+        ArgumentNullException.ThrowIfNull(craftables);
+        var stations = craftables.Where(c => c.Kind == CraftKind.Station).GroupBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+        var seen = new HashSet<Craftable>(ReferenceEqualityComparer.Instance);
+        var order = new List<Craftable>(craftables.Count);
+        void Visit(Craftable station)
+        {
+            if (!seen.Add(station))
+            {
+                return;
+            }
+
+            if (station.Station is { Length: > 0 } needed && stations.TryGetValue(needed, out var before))
+            {
+                Visit(before);
+            }
+
+            order.Add(station);
+        }
+
+        foreach (var craftable in craftables.Where(c => c.Kind == CraftKind.Station))
+        {
+            Visit(craftable);
+        }
+
+        order.AddRange(craftables.Where(c => c.Kind != CraftKind.Station));
+        return order;
+    }
+
     private static (ClonePlan Plan, CraftablePackages Packages) PlanOne(AssetCatalog catalog, Craftable craftable, string token)
     {
         var packages = new List<KeyValuePair<string, string>>();
@@ -146,6 +260,17 @@ public static class CraftablesPlanner
                 Add(StationItem + "_ES", token + "_ES");
                 Add(StationTag, "CI_" + token);
                 result = new CraftablePackages(craftable.Name, packages[0].Value, packages[1].Value, packages[2].Value, packages[4].Value);
+                break;
+            case CraftKind.Item:
+                var item = GamePath(PackageMap.Normalize(craftable.Source));
+                var template = ItemTemplate(catalog, item);
+                Add(template, "CR_" + token);
+                if (ProductPackage(catalog, template) is { } stock && !string.Equals(stock, item, StringComparison.OrdinalIgnoreCase))
+                {
+                    redirects.Add(new(stock, item)); // the copied recipe makes the chosen item
+                }
+
+                result = new CraftablePackages(craftable.Name, packages[0].Value, item, null, null);
                 break;
             case CraftKind.Power:
                 Add(PowerItem, token);
@@ -165,11 +290,11 @@ public static class CraftablesPlanner
                 break;
         }
 
-        // Every mesh the templates show becomes the craftable's mesh.
+        // Every mesh the templates show becomes the craftable's mesh (an item keeps its own: only its recipe is new).
         var mesh = PackageMap.Normalize(craftable.Mesh);
         foreach (var stock in packages.SelectMany(p => StaticMeshImports(catalog, p.Key)).Distinct(StringComparer.OrdinalIgnoreCase))
         {
-            if (!string.Equals(stock, mesh, StringComparison.OrdinalIgnoreCase))
+            if (craftable.Kind != CraftKind.Item && !string.Equals(stock, mesh, StringComparison.OrdinalIgnoreCase))
             {
                 redirects.Add(new(stock, mesh));
             }
@@ -206,7 +331,7 @@ public static class CraftablesPlanner
         var recipeTemplate = PackageMap.Leaf(plan.Packages.First(p => p.Value == packages.Recipe).Key);
         Edit(packages.Recipe, recipeTemplate, "Caption", name);
         Edit(packages.Recipe, recipeTemplate, "Description", name);
-        if (craftable.Kind != CraftKind.Power)
+        if (craftable.Kind is CraftKind.Furniture or CraftKind.Station)
         {
             var element = PackageMap.Leaf(plan.Packages.First(p => p.Value == packages.Product).Key);
             Edit(packages.Product, $"Default__{element}_C", "_name", name);
@@ -237,6 +362,106 @@ public static class CraftablesPlanner
         var index = Enumerable.Range(0, cooked.Exports.Count).FirstOrDefault(i => cooked.ResolveName(cooked.Exports[i].ObjectName) == exportName, -1);
         return index >= 0 && cooked.ReadProperties(index).Find(property) is not null;
     }
+
+    /// <summary>
+    /// True for an inventory item of the game (weapons, food, clothes, DLC items ...): a Blueprint class with its entity setup
+    /// <c>&lt;Name&gt;_ES</c>, a Blueprint class too, beside it. Not a static mesh with an <c>SM_x_ES</c> mesh twin (132
+    /// buildings and rivers have one) and never a character (<c>BP_Prisoner</c> has a <c>BP_Prisoner_ES</c>) or a vehicle's
+    /// part. Reads the two package headers once per catalog.
+    /// </summary>
+    public static bool IsItem(AssetCatalog catalog, string packagePath)
+    {
+        ArgumentNullException.ThrowIfNull(catalog);
+        var path = PackageMap.Normalize(packagePath);
+        if (path.EndsWith("_ES", StringComparison.OrdinalIgnoreCase) || NotItems.Any(n => path.Contains(n, StringComparison.OrdinalIgnoreCase)))
+        {
+            return false;
+        }
+
+        return ItemChecks.GetValue(catalog, _ => new ConcurrentDictionary<string, bool>(StringComparer.OrdinalIgnoreCase))
+            .GetOrAdd(path, p => IsBlueprintClass(catalog, p + "_ES") && IsBlueprintClass(catalog, p));
+    }
+
+    /// <summary>
+    /// Every item of the catalog's package list (<see cref="IsItem"/> on each package with an <c>_ES</c> beside it): a few
+    /// thousand package headers the first time, so it runs on a worker.
+    /// </summary>
+    public static IReadOnlySet<string> Items(AssetCatalog catalog)
+    {
+        ArgumentNullException.ThrowIfNull(catalog);
+        var entries = (catalog.Index ?? catalog.BuildIndex(resolveClasses: false)).Entries;
+        var paths = entries.Select(e => e.PackagePath).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return entries.Where(e => paths.Contains(e.PackagePath + "_ES")).AsParallel()
+            .Where(e => IsItem(catalog, e.PackagePath)).Select(e => e.PackagePath).ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static bool IsBlueprintClass(AssetCatalog catalog, string package)
+    {
+        try
+        {
+            return catalog.PackageExists(package) && catalog.GetExports(package).Any(e => e.ClassName == "BlueprintGeneratedClass");
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            return false; // an unreadable header is no item
+        }
+    }
+
+    /// <summary>The stock item recipe an item's recipe is copied from (its crafting menu category, skill and time).</summary>
+    public static string ItemTemplate(AssetCatalog catalog, string item)
+    {
+        ArgumentNullException.ThrowIfNull(catalog);
+        var leaf = NativeClassOf(catalog, item) is { } native && ClassTemplates.FirstOrDefault(t => t.Native(native)).Recipe is { } byClass
+            ? byClass
+            : ItemTemplates.FirstOrDefault(t => t.Path.IsMatch(item)).Recipe;
+        var recipe = leaf is null ? PowerRecipe : ItemRecipes + leaf;
+        return catalog.PackageExists(recipe) ? recipe : PowerRecipe;
+    }
+
+    /// <summary>
+    /// The native class (<c>/Script/...</c>) the Blueprint class in <paramref name="package"/> derives from, through its parent
+    /// Blueprints: <c>Weapon</c> (firearms), <c>WeaponItem</c> (melee), <c>WeaponBow</c>, <c>ClothesItem</c> ...; null when
+    /// it cannot be read.
+    /// </summary>
+    public static string? NativeClassOf(AssetCatalog catalog, string package)
+    {
+        ArgumentNullException.ThrowIfNull(catalog);
+        for (var depth = 0; depth < 16; depth++)
+        {
+            CookedPackage cooked;
+            try
+            {
+                cooked = ModdableAssets.ReadPackage(catalog, package);
+            }
+            catch (Exception ex) when (ex is IOException or InvalidDataException or ArgumentException)
+            {
+                return null;
+            }
+
+            var index = Enumerable.Range(0, cooked.Exports.Count).FirstOrDefault(i => cooked.GetExportClassName(i) == "BlueprintGeneratedClass", -1);
+            if (index < 0 || cooked.Exports[index].SuperIndex >= 0 || cooked.Imports[-cooked.Exports[index].SuperIndex - 1] is not { OuterIndex: < 0 } super)
+            {
+                return null;
+            }
+
+            var outer = cooked.ResolveName(cooked.Imports[-super.OuterIndex - 1].ObjectName);
+            if (outer.StartsWith("/Script/", StringComparison.OrdinalIgnoreCase))
+            {
+                return cooked.ResolveName(super.ObjectName);
+            }
+
+            package = outer;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// The path the game knows a package by: a DLC plugin's content (<c>/SCUM/Plugins/GameFeatures/ApexHunterPack/Content/X</c>,
+    /// as the catalog lists it) is mounted at <c>/ApexHunterPack/X</c>, the path the game's own DLC recipes name.
+    /// </summary>
+    public static string GamePath(string packagePath) =>
+        Regex.Replace(packagePath, "^/[^/]+/Plugins/(?:GameFeatures/)?([^/]+)/Content/", "/$1/", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     /// <summary>The package of the recipe's <c>Product</c> class (soft path), or null.</summary>
     public static string? ProductPackage(AssetCatalog catalog, string recipe)

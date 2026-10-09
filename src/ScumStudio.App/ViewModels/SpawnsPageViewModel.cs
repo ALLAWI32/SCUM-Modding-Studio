@@ -1,10 +1,13 @@
 using System.ComponentModel;
+using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.Extensions.Logging;
 using ScumStudio.App.Localization;
 using ScumStudio.App.Services;
 using ScumStudio.Assets.Catalog;
+using ScumStudio.Formats.Packages;
+using ScumStudio.Formats.Properties;
 using ScumStudio.Level.Editing;
 using ScumStudio.Modding.Catalog;
 using ScumStudio.Modding.Tuning;
@@ -456,7 +459,11 @@ public sealed partial class SpawnsPageViewModel : PageViewModel, ISearchablePage
         IsLoading = true;
         try
         {
-            var tunables = await Task.Run(() => TunableReader.Read(ModdableAssets.ReadPackage(catalog, entry.PackagePath))).ConfigureAwait(true);
+            var (tunables, encounters) = await Task.Run(() =>
+            {
+                var package = ModdableAssets.ReadPackage(catalog, entry.PackagePath);
+                return (TunableReader.Read(package), EncounterClasses(package));
+            }).ConfigureAwait(true);
             if (load != _load)
             {
                 return;
@@ -467,7 +474,7 @@ public sealed partial class SpawnsPageViewModel : PageViewModel, ISearchablePage
             var targets = tunables.Where(t => t.CanEdit).Select(Target).ToList();
             var cards = entry.PackagePath.StartsWith(PresetsFolder, StringComparison.OrdinalIgnoreCase)
                 ? VehicleCards(entry, targets)
-                : ZoneCards(targets);
+                : ZoneCards(targets, encounters);
             Watch(cards);
             _cards[entry.PackagePath] = cards;
             DetailCards = cards;
@@ -554,7 +561,35 @@ public sealed partial class SpawnsPageViewModel : PageViewModel, ISearchablePage
         return cards;
     }
 
-    private static IReadOnlyList<SpawnCard> ZoneCards(List<SpawnTarget> targets)
+    /// <summary>The encounter class of each <c>EncounterData</c> item of a zone (<c>MTZ_Farm_NPC_Encounter_C</c>), in order; none for other data.</summary>
+    private static IReadOnlyList<string> EncounterClasses(CookedPackage package)
+    {
+        for (var i = 0; i < package.Exports.Count; i++)
+        {
+            if (package.GetExportClassName(i) == "EncounterZoneData" && package.ReadProperties(i).Find("EncounterData")?.Value is ArrayValue data)
+            {
+                return data.Items.Select(d => d is StructValue s && s.Properties.FirstOrDefault(p => p.Name == "EncounterClass")?.Value is ObjectValue o
+                    ? o.Reference[(o.Reference.IndexOf(':') + 1)..] : string.Empty).ToList();
+            }
+        }
+
+        return [];
+    }
+
+    /// <summary>
+    /// What an encounter spawns, by SCUM's class names: <c>*_NPC_Encounter</c> armed NPCs (drifter and guard presets),
+    /// <c>*_Character_Encounter</c> / <c>LTZ_Puppet</c> zombies, animals, dropship drones (the names match the
+    /// <c>_possibleCharacters</c> presets of every zone's encounter). Most zones have a zombie and an NPC encounter
+    /// (Village 75 / 25): a zombie weight of 0 spawns armed NPCs instead (Discord request).
+    /// </summary>
+    private static string EncounterLabel(string encounterClass, int number) =>
+        encounterClass.Contains("NPC", StringComparison.OrdinalIgnoreCase) ? Loc.T("Spawns.Encounter.Npcs")
+        : encounterClass.Contains("Animal", StringComparison.OrdinalIgnoreCase) || encounterClass.Contains("Bear", StringComparison.OrdinalIgnoreCase) ? Loc.T("Spawns.Encounter.Animals")
+        : encounterClass.Contains("Dropship", StringComparison.OrdinalIgnoreCase) ? Loc.T("Spawns.Encounter.Drones")
+        : encounterClass.Contains("Character_Encounter", StringComparison.OrdinalIgnoreCase) || encounterClass.Contains("Puppet", StringComparison.OrdinalIgnoreCase) ? Loc.T("Spawns.Encounter.Zombies")
+        : Loc.F("Spawns.EncounterWeight", number);
+
+    private static IReadOnlyList<SpawnCard> ZoneCards(List<SpawnTarget> targets, IReadOnlyList<string> encounters)
     {
         IReadOnlyList<SpawnTarget> With(string path) => targets.Where(t => t.Tunable.Path.Equals(path, StringComparison.Ordinal)).ToList();
         SpawnRangeViewModel? Range(string key, string path, double max, double step, string unit, double scale = 1) =>
@@ -589,7 +624,14 @@ public sealed partial class SpawnsPageViewModel : PageViewModel, ISearchablePage
         }
 
         var what = targets.Where(t => t.Tunable.Path.StartsWith("EncounterData[", StringComparison.Ordinal) && t.Tunable.Path.EndsWith(".EncounterWeight", StringComparison.Ordinal))
-            .Select((t, i) => (object)new SpawnSliderViewModel(Loc.F("Spawns.EncounterWeight", i + 1), Loc.T("Spawns.EncounterWeight.Tip"), 0, 100, 1, string.Empty, [t]))
+            .Select(t =>
+            {
+                // The item's own index: a weight left at its default is not stored, so the list can skip items.
+                var i = int.Parse(t.Tunable.Path.AsSpan(14, t.Tunable.Path.IndexOf(']', StringComparison.Ordinal) - 14), CultureInfo.InvariantCulture);
+                var encounter = i < encounters.Count ? encounters[i] : string.Empty;
+                var tip = Loc.T("Spawns.EncounterWeight.Tip") + (encounter.Length > 0 ? "\n" + encounter : string.Empty);
+                return (object)new SpawnSliderViewModel(EncounterLabel(encounter, i + 1), tip, 0, 100, 1, string.Empty, [t]);
+            })
             .ToList();
 
         var cards = new List<SpawnCard>

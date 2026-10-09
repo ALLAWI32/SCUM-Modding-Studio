@@ -38,6 +38,16 @@ public sealed partial class MapPageViewModel
     [ObservableProperty]
     private RenderQuality _renderQuality = RenderQuality.Balanced;
 
+    /// <summary>The Map's time of day in hours (0-24, kept for the next start): the sun, sky and light of the 3D view.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(TimeOfDayText))]
+    private double _timeOfDay = 12;
+
+    /// <summary><see cref="TimeOfDay"/> as a clock time (14:30).</summary>
+    public string TimeOfDayText => $"{(int)TimeOfDay % 24:00}:{(int)Math.Round(TimeOfDay % 1 * 60) % 60:00}";
+
+    partial void OnTimeOfDayChanged(double value) => _services.UiState.Update(u => u with { TimeOfDay = value });
+
     /// <summary>The presets for the quality picker.</summary>
     public IReadOnlyList<RenderQuality> RenderQualities { get; } = Enum.GetValues<RenderQuality>();
 
@@ -53,9 +63,36 @@ public sealed partial class MapPageViewModel
         }
     }
 
-    /// <summary>Follows a quality chosen on the Settings page.</summary>
+    /// <summary>Spawn places as the objects that spawn there (Settings); off: simple marker shapes, lighter on the PC.</summary>
+    [ObservableProperty]
+    private bool _spawnModelsShown = true;
+
+    /// <summary>The sea's waves move (Settings).</summary>
+    [ObservableProperty]
+    private bool _animateWater = true;
+
+    /// <summary>The 3D view is lit and shaded (Settings).</summary>
+    [ObservableProperty]
+    private bool _lighting = true;
+
+    /// <summary>The pins are made again with their new look: the levels shown are prepared once more (a level whose pins changed is rebuilt).</summary>
+    partial void OnSpawnModelsShownChanged(bool value)
+    {
+        if (PreparedScene?.Documents.Select(d => d.PackagePath).ToList() is { Count: > 0 } shown)
+        {
+            LevelLoadCompletion = LoadLevelsAsync(shown, landscapeStep: IsWorldMode ? 4 : 1, streamed: IsWorldMode);
+        }
+    }
+
+    /// <summary>Follows a quality and the view switches chosen on the Settings page.</summary>
     private void OnSettingsChangedQuality(object? sender, EventArgs e) =>
-        _services.Dispatcher.Invoke(() => RenderQuality = _services.Settings.Load().Ui.RenderQuality);
+        _services.Dispatcher.Invoke(() =>
+        {
+            var ui = _services.Settings.Load().Ui;
+            RenderQuality = ui.RenderQuality;
+            (AnimateWater, Lighting) = (ui.AnimateWater, ui.Lighting);
+            SpawnModelsShown = ui.SpawnModels;
+        });
 
     /// <summary>
     /// The map sublevels (POI, TV base, abandoned city, misc, landscape tile; not island-wide data) whose tile bounds come within

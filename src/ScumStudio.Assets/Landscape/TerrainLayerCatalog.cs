@@ -414,8 +414,17 @@ public sealed class TerrainLayerCatalog
             .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
+    /// <summary>The distinct normal/height/roughness texture paths of every drawn layer and rock/sand/underwater style (sorted).</summary>
+    public IReadOnlyList<string> NhrTexturePaths =>
+        _layers.Values.Concat(_wildcards.Select(w => w.Style)).Append(Rules.Rock).Append(Rules.Sand).Append(Rules.Underwater)
+            .Where(s => s.Rule != TerrainLayerRule.Hidden && s.NhrTexture is not null)
+            .Select(s => s.NhrTexture!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
     /// <summary>
-    /// Decodes every texture of <see cref="DiffuseTexturePaths"/> that is in <paramref name="catalog"/>, once each, at the
+    /// Decodes every texture of <see cref="DiffuseTexturePaths"/> (and the layers' normal maps, <see cref="NhrTexturePaths"/>) that is in <paramref name="catalog"/>, once each, at the
     /// mip of at most <paramref name="maxSize"/> pixels; textures that are not in the game files are listed in
     /// <see cref="TerrainLayerTextureSet.Missing"/>, ones that fail to decode in <see cref="TerrainLayerTextureSet.Warnings"/>.
     /// </summary>
@@ -425,12 +434,17 @@ public sealed class TerrainLayerCatalog
         var images = new Dictionary<string, TextureImage>(StringComparer.OrdinalIgnoreCase);
         var missing = new List<string>();
         var warnings = new List<string>();
-        foreach (var path in DiffuseTexturePaths)
+        var diffuse = DiffuseTexturePaths;
+        foreach (var path in diffuse.Concat(NhrTexturePaths))
         {
             var packagePath = path.Contains('.') ? path[..path.IndexOf('.')] : path;
             if (!catalog.PackageExists(packagePath))
             {
-                missing.Add(path);
+                if (diffuse.Contains(path))
+                {
+                    missing.Add(path); // a missing normal map only loses the relief
+                }
+
                 continue;
             }
 

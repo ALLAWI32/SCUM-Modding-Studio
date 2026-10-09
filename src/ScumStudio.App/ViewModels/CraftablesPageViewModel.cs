@@ -8,6 +8,7 @@ using ScumStudio.App.Localization;
 using ScumStudio.App.Services;
 using ScumStudio.Assets.Catalog;
 using ScumStudio.Assets.Meshes;
+using ScumStudio.Level.Import;
 using ScumStudio.Modding.Crafting;
 
 namespace ScumStudio.App.ViewModels;
@@ -25,8 +26,10 @@ public sealed partial class CraftablesPageViewModel : PageViewModel, IDisposable
     private readonly Action _openSetup;
     private readonly Stack<string> _undo = new();
     private bool _loading;
-    private Task? _indexing;
+    private Task<IReadOnlySet<string>>? _items;
+    private AssetCatalog? _itemsOf;
     private string _lastSaved = new CraftablesFile().ToJson();
+    private CancellationTokenSource? _importCancel;
 
     /// <summary>Creates the page.</summary>
     public CraftablesPageViewModel(AppServices services, Action? openSetup = null)
@@ -36,6 +39,14 @@ public sealed partial class CraftablesPageViewModel : PageViewModel, IDisposable
         _openSetup = openSetup ?? (() => { });
         _services.Projects.Changed += OnProjectChanged;
         _services.Workspace.CatalogChanged += OnCatalogChanged;
+        Gallery = new CraftGalleryViewModel(services, PickAsync, AddedSources);
+        Items.CollectionChanged += (_, _) =>
+        {
+            if (!_loading)
+            {
+                Gallery.MarkAdded(); // Show marks them once for the whole list
+            }
+        };
         Load();
     }
 
@@ -60,6 +71,11 @@ public sealed partial class CraftablesPageViewModel : PageViewModel, IDisposable
     [NotifyPropertyChangedFor(nameof(HasAddResults))]
     private IReadOnlyList<CraftSourceRow> _addResults = [];
 
+    /// <summary>A 3D file is being imported (shows Cancel).</summary>
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(ImportModelCommand))]
+    private bool _isImporting;
+
     /// <summary>Undo has a step.</summary>
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(UndoCommand))]
@@ -76,9 +92,6 @@ public sealed partial class CraftablesPageViewModel : PageViewModel, IDisposable
 
     /// <summary>The game's files are connected.</summary>
     public bool HasCatalog => _services.Workspace.Catalog is not null;
-
-    /// <summary>What a craftable can become.</summary>
-    public IReadOnlyList<CraftKind> Kinds { get; } = Enum.GetValues<CraftKind>();
 
     /// <summary>Materials of the recipe rules.</summary>
     public IReadOnlyList<CraftMaterial> Materials { get; } = Enum.GetValues<CraftMaterial>();
@@ -130,9 +143,20 @@ public sealed partial class CraftablesPageViewModel : PageViewModel, IDisposable
         }
     }
 
-    /// <summary>A craftable for <paramref name="path"/>: its mesh, a name from the asset, the guessed kind, material and size, the suggested recipe.</summary>
+    /// <summary>
+    /// A craftable for <paramref name="path"/>: its mesh, a name from the asset, the guessed kind, material and size, the
+    /// suggested recipe. An item of the game (weapon, food, clothes …) becomes an Item craftable shown by its Blueprint.
+    /// </summary>
     public static Craftable? Describe(AssetCatalog catalog, string path)
     {
+        var leaf = path[(path.LastIndexOf('/') + 1)..];
+        var name = string.Join(' ', leaf.Split('_', StringSplitOptions.RemoveEmptyEntries).Where(w => w is not ("SM" or "BP" or "BPC")));
+        if (CraftablesPlanner.IsItem(catalog, path))
+        {
+            var guess = RecipeRules.GuessMaterial([path]);
+            return new Craftable { Name = name.Length > 0 ? name : leaf, Source = path, Mesh = path, Kind = CraftKind.Item, Material = guess, Ingredients = RecipeRules.Suggest(guess, 1) };
+        }
+
         if (CraftablesPlanner.MeshOf(catalog, path) is not { } mesh)
         {
             return null;
@@ -141,8 +165,6 @@ public sealed partial class CraftablesPageViewModel : PageViewModel, IDisposable
         var info = catalog.LoadFirstExport<UStaticMesh>(mesh) is { } loaded ? MeshExtractor.DescribeStaticMesh(loaded) : null;
         var size = info is null ? 1f : MathF.Max(0.1f, MathF.Max(info.Bounds.Size.X, MathF.Max(info.Bounds.Size.Y, info.Bounds.Size.Z)) / 100f);
         var material = RecipeRules.GuessMaterial([path, mesh, .. info?.Materials.Select(m => m.MaterialPath + " " + m.SlotName) ?? []]);
-        var leaf = path[(path.LastIndexOf('/') + 1)..];
-        var name = string.Join(' ', leaf.Split('_', StringSplitOptions.RemoveEmptyEntries).Where(w => w is not ("SM" or "BP" or "BPC")));
         return new Craftable
         {
             Name = name.Length > 0 ? name : leaf,
@@ -158,6 +180,7 @@ public sealed partial class CraftablesPageViewModel : PageViewModel, IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
+        _importCancel?.Cancel(); // the engine stops with the page
         _services.Projects.Changed -= OnProjectChanged;
         _services.Workspace.CatalogChanged -= OnCatalogChanged;
     }
@@ -171,26 +194,132 @@ public sealed partial class CraftablesPageViewModel : PageViewModel, IDisposable
             return;
         }
 
-        if (catalog.Index is not { } index)
+        if (!ReferenceEquals(_itemsOf, catalog))
         {
-            // The package list is built once (names only; the class follows from the name until the Assets page resolves it).
-            _indexing ??= Task.Run(() => catalog.BuildIndex(resolveClasses: false)).ContinueWith(_ => _services.Dispatcher.Post(() => OnAddQueryChanged(AddQuery)), TaskScheduler.Default);
+            // The package list and the game's items are found once per catalog on a worker (names only; the class follows
+            // from the name until the Assets page resolves it), not on every key press.
+            _itemsOf = catalog;
+            _items = Task.Run(() => CraftablesPlanner.Items(catalog));
+            _items.ContinueWith(_ => _services.Dispatcher.Post(() => OnAddQueryChanged(AddQuery)), TaskScheduler.Default);
+        }
+
+        if (_items is not { IsCompletedSuccessfully: true } found || catalog.Index is not { } index)
+        {
             AddResults = [];
             return;
         }
 
-        static string? ClassOf(PackageEntry p) => p.ClassName
+        // Items of the game (weapons, food, clothes …) too (CraftablesPlanner.IsItem).
+        var items = found.Result;
+        string? ClassOf(PackageEntry p) => items.Contains(p.PackagePath) ? "Item" : p.ClassName
             ?? (p.Name.StartsWith("SM_", StringComparison.OrdinalIgnoreCase) ? "StaticMesh" : p.Name.StartsWith("BP", StringComparison.OrdinalIgnoreCase) ? "Blueprint" : null);
         AddResults = index.Entries
-            .Where(p => !p.IsMap && p.Name.Contains(query, StringComparison.OrdinalIgnoreCase) && RecipeRules.IsAllowedSource(p.PackagePath, ClassOf(p)))
-            .OrderBy(p => p.Name.StartsWith(query, StringComparison.OrdinalIgnoreCase) ? 0 : 1).ThenBy(p => p.Name, StringComparer.OrdinalIgnoreCase)
+            .Where(p => !p.IsMap && p.Name.Contains(query, StringComparison.OrdinalIgnoreCase))
+            .Select(p => (Entry: p, Class: ClassOf(p)))
+            .Where(p => p.Class == "Item" || RecipeRules.IsAllowedSource(p.Entry.PackagePath, p.Class))
+            .OrderBy(p => p.Entry.Name.StartsWith(query, StringComparison.OrdinalIgnoreCase) ? 0 : 1).ThenBy(p => p.Entry.Name, StringComparer.OrdinalIgnoreCase)
             .Take(40)
-            .Select(p => new CraftSourceRow(p.PackagePath, p.Name, ClassOf(p) ?? string.Empty))
+            .Select(p => new CraftSourceRow(p.Entry.PackagePath, p.Entry.Name, p.Class ?? string.Empty))
             .ToList();
     }
 
     [RelayCommand]
     private Task AddSourceAsync(CraftSourceRow? row) => row is null ? Task.CompletedTask : AddAsync(row.PackagePath);
+
+    /// <summary>
+    /// Owner, 2026-10-09: "a list where I can add external files, for example 3D tables or a new weapon". Picks an FBX or OBJ
+    /// file, imports and cooks it with Unreal Engine 4.27 (<see cref="UeCook"/>) and adds it as a craftable.
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanImportModel))]
+    private async Task ImportModelAsync()
+    {
+        if (_services.Workspace.Catalog is not { } catalog || _services.Projects.Current is not { } project)
+        {
+            _services.Notifications.Warning(Title, Loc.T(HasProject ? "Craftables.ConnectFirst" : "Craftables.NoProject"));
+            return;
+        }
+
+        if (UeCook.FindEngine() is null)
+        {
+            _services.Notifications.Error(Title, Loc.F("Craftables.Import.NoEngine", UeCook.DefaultEngineDirectory, UeCook.EngineVariable));
+            return;
+        }
+
+        var file = await _services.Dialogs.OpenFileAsync(Loc.T("Craftables.Import"), string.Join(';', UeCook.Extensions), Loc.T("Craftables.Import.Filter")).ConfigureAwait(true);
+        if (file is null)
+        {
+            return;
+        }
+
+        using var cancel = _importCancel = new CancellationTokenSource();
+        IsImporting = true;
+        try
+        {
+            _services.Keys.TryGet(out var key);
+            var (ok, model) = await _services.Operations.RunAsync(Loc.F("Craftables.Importing", Path.GetFileName(file)),
+                (sink, ct) => UeCook.ImportAsync(catalog, file, project.DirectoryPath, sink, aesKey: key, cancellationToken: ct), cancel.Token).ConfigureAwait(true);
+            if (!ok || model is null)
+            {
+                return;
+            }
+
+            // The cooked files are in the project the import started in: another one opened meanwhile gets nothing, the
+            // craftable is added to the file of the first.
+            var other = string.Equals(_services.Projects.Current?.DirectoryPath, project.DirectoryPath, StringComparison.OrdinalIgnoreCase)
+                ? null
+                : CraftablesFile.Load(project.DirectoryPath);
+            var taken = (other?.Items.Select(i => i.Name) ?? Items.Select(i => i.Name)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var leaf = Path.GetFileNameWithoutExtension(file);
+            var material = RecipeRules.GuessMaterial([leaf]);
+            var name = leaf;
+            for (var n = 2; taken.Contains(name); n++)
+            {
+                name = $"{leaf} {n}";
+            }
+
+            var craftable = new Craftable
+            {
+                Name = name,
+                Source = file,
+                Mesh = model.Mesh,
+                Imported = model.Folder,
+                Kind = RecipeRules.GuessKind(leaf),
+                Material = material,
+                SizeMeters = MathF.Round(MathF.Max(0.1f, model.SizeMeters), 2),
+                Ingredients = RecipeRules.Suggest(material, model.SizeMeters),
+            };
+            if (other is not null)
+            {
+                try
+                {
+                    (other with { Items = [.. other.Items, craftable] }).Save(project.DirectoryPath);
+                    _services.Notifications.Info(Title, Loc.F("Craftables.Import.OtherProject", name, project.Manifest.Name));
+                }
+                catch (IOException ex)
+                {
+                    _services.Notifications.Error(Title, ex.Message);
+                }
+
+                return;
+            }
+
+            Remember();
+            var row = new CraftableRowViewModel(craftable, OnRowChanged, PictureAsync);
+            Items.Add(row);
+            SelectedItem = row;
+            Save();
+        }
+        finally
+        {
+            _importCancel = null;
+            IsImporting = false;
+        }
+    }
+
+    private bool CanImportModel() => !IsImporting;
+
+    [RelayCommand]
+    private void CancelImport() => _importCancel?.Cancel();
 
     [RelayCommand(CanExecute = nameof(HasSelection))]
     private void Remove()
@@ -313,6 +442,7 @@ public sealed partial class CraftablesPageViewModel : PageViewModel, IDisposable
         _loading = false;
         _lastSaved = File.ToJson();
         RefreshStations();
+        Gallery.MarkAdded();
     }
 
     private void OnProjectChanged(object? sender, EventArgs e) => _services.Dispatcher.Post(Load);
@@ -321,17 +451,23 @@ public sealed partial class CraftablesPageViewModel : PageViewModel, IDisposable
     {
         OnPropertyChanged(nameof(HasCatalog));
         OnAddQueryChanged(AddQuery);
+        Gallery.Load(_services.Workspace.Catalog);
     });
 
-    /// <summary>The 3D picture of a craftable's mesh (the Assets page's thumbnails).</summary>
-    private async Task<Bitmap?> PictureAsync(string mesh, CancellationToken cancellationToken)
+    /// <summary>The 3D picture of a craftable's mesh (the Assets page's thumbnails); an imported model's from its own cooked files.</summary>
+    private async Task<Bitmap?> PictureAsync(Craftable craftable, CancellationToken cancellationToken)
     {
-        if (_services.Workspace.Catalog is not { } catalog || !catalog.TryGetPackageFile(mesh, out var file))
+        var folder = craftable.Imported is { } imported && _services.Projects.Current is { } project ? Path.Combine(project.DirectoryPath, imported) : null;
+        using var own = folder is not null && Directory.Exists(folder) ? AssetCatalog.OpenLoose(folder) : null;
+        var mesh = craftable.Mesh;
+        if ((own ?? _services.Workspace.Catalog) is not { } catalog || !catalog.TryGetPackageFile(mesh, out var file))
         {
             return null;
         }
 
-        var png = await _services.Thumbnails.GetAssetAsync(catalog, new PackageEntry(file.Path, mesh, "StaticMesh"), cancellationToken).ConfigureAwait(false);
+        var png = CraftablesPlanner.IsItem(catalog, mesh)
+            ? await _services.Thumbnails.GetBlueprintAsync(catalog, mesh, cancellationToken).ConfigureAwait(false)
+            : await _services.Thumbnails.GetAssetAsync(catalog, new PackageEntry(file.Path, mesh, "StaticMesh"), cancellationToken).ConfigureAwait(false);
         return png is null ? null : await Task.Run(() => new Bitmap(png), cancellationToken).ConfigureAwait(false);
     }
 }
@@ -349,13 +485,15 @@ public sealed record CraftSourceRow(string PackagePath, string Name, string Clas
 /// <summary>One craftable of the list: name, kind, material, recipe, station, power settings and its 3D picture.</summary>
 public sealed partial class CraftableRowViewModel : ThumbnailItem
 {
+    private static readonly CraftKind[] ObjectKinds = [CraftKind.Furniture, CraftKind.Station, CraftKind.Power];
+    private static readonly CraftKind[] ItemKinds = [CraftKind.Item];
     private readonly Action<CraftableRowViewModel> _changed;
-    private readonly Func<string, CancellationToken, Task<Bitmap?>> _picture;
+    private readonly Func<Craftable, CancellationToken, Task<Bitmap?>> _picture;
     private readonly Craftable _source;
     private bool _quiet;
 
     /// <summary>Creates the row of <paramref name="craftable"/>; <paramref name="changed"/> runs after each edit.</summary>
-    public CraftableRowViewModel(Craftable craftable, Action<CraftableRowViewModel> changed, Func<string, CancellationToken, Task<Bitmap?>> picture)
+    public CraftableRowViewModel(Craftable craftable, Action<CraftableRowViewModel> changed, Func<Craftable, CancellationToken, Task<Bitmap?>> picture)
     {
         _source = craftable;
         _changed = changed;
@@ -435,6 +573,12 @@ public sealed partial class CraftableRowViewModel : ThumbnailItem
     /// <summary>The recipe's ingredients.</summary>
     public ObservableCollection<IngredientRowViewModel> Ingredients { get; } = [];
 
+    /// <summary>What it can become: an item of the game stays an item; any other object is furniture, a station or power.</summary>
+    public IReadOnlyList<CraftKind> Kinds => IsItem ? ItemKinds : ObjectKinds;
+
+    /// <summary>An item of the game (its new recipe makes the item; the game shows the item's own name and icon).</summary>
+    public bool IsItem => _source.Kind == CraftKind.Item;
+
     /// <summary>A power object (shows radius, output and fuel).</summary>
     public bool IsPower => Kind == CraftKind.Power;
 
@@ -477,7 +621,7 @@ public sealed partial class CraftableRowViewModel : ThumbnailItem
     }
 
     /// <inheritdoc />
-    protected override Task<Bitmap?> LoadThumbnailAsync(CancellationToken cancellationToken) => _picture(_source.Mesh, cancellationToken);
+    protected override Task<Bitmap?> LoadThumbnailAsync(CancellationToken cancellationToken) => _picture(_source, cancellationToken);
 
     /// <inheritdoc />
     protected override void OnPropertyChanged(System.ComponentModel.PropertyChangedEventArgs e)

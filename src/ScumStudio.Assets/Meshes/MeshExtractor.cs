@@ -303,7 +303,7 @@ public static class MeshExtractor
                 continue;
             }
 
-            outSections.Add(new MeshSection(SectionMaterialName(s, slots), first, count));
+            outSections.Add(new MeshSection(SectionMaterialName(s, slots), first, count) { SlotIndex = s.MaterialIndex });
         }
 
         if (outSections.Count == 0 && indices.Length > 0)

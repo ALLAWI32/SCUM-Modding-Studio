@@ -144,7 +144,9 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IDisposable
             if (Services.UiState.Current.ReopenLastProject && !string.IsNullOrWhiteSpace(settings.LastProjectPath) && Level.Projects.Project.Exists(settings.LastProjectPath))
             {
                 var path = settings.LastProjectPath;
-                var (ok, project) = await Services.Operations.RunAsync(Loc.T("Shell.OpeningLastProject"), (_, ct) => Services.Projects.OpenAsync(path, ct)).ConfigureAwait(true);
+                // Right after an update the old version may still be closing with the project open: give it a moment.
+                var (ok, project) = await Services.Operations.RunAsync(Loc.T("Shell.OpeningLastProject"),
+                    (_, ct) => Services.Projects.OpenAsync(path, TimeSpan.FromSeconds(10), ct)).ConfigureAwait(true);
                 if (ok && project is not null)
                 {
                     Services.Notifications.Success(Loc.F("Shell.Reopened", project.Manifest.Name), project.DirectoryPath);

@@ -24,8 +24,24 @@ public sealed partial class MainWindowViewModel
     /// <summary>Closes the app (after an update was put in place and the new version started).</summary>
     public Action? RequestShutdown { get; set; }
 
+    /// <summary>Downloads the release zip (tests replace the update steps).</summary>
+    internal Func<ReleaseInfo, string, IProgress<double>, CancellationToken, Task<string>> DownloadUpdate { get; set; } =
+        (release, folder, progress, ct) => Updater.DownloadAsync(release, folder, progress, ct);
+
+    /// <summary>Puts the downloaded release in place (zip, app folder, clean-up list, expected version).</summary>
+    internal Action<string, string, string, Version?> InstallUpdateFiles { get; set; } = Updater.Install;
+
+    /// <summary>Starts the installed version (exe, this process's id).</summary>
+    internal Action<string, int> StartNewVersion { get; set; } = Updater.Start;
+
+    /// <summary>True when this copy may update itself (<see cref="Updater.CanInstall"/>).</summary>
+    internal Func<bool> CanInstallHere { get; set; } = () => Updater.CanInstall;
+
     /// <summary>How often the app asks GitHub again while it runs (a release published meanwhile shows up).</summary>
     private static readonly TimeSpan RecheckEvery = TimeSpan.FromMinutes(30);
+
+    /// <summary>The list of files the updater left for the next start to delete.</summary>
+    private string CleanupList => Path.Combine(Services.DataDirectory, Updater.CleanupListFile);
 
     /// <summary>A newer release, or null.</summary>
     [ObservableProperty]
@@ -52,6 +68,17 @@ public sealed partial class MainWindowViewModel
     [NotifyCanExecuteChangedFor(nameof(InstallUpdateCommand))]
     private bool _isUpdating;
 
+    /// <summary>Downloading (Cancel stops it; installing cannot be stopped halfway).</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsInstallShown))]
+    [NotifyCanExecuteChangedFor(nameof(CancelUpdateCommand))]
+    private bool _isDownloading;
+
+    private CancellationTokenSource? _download;
+
+    /// <summary>This process has put an update in place: it runs from the backup now and never installs again.</summary>
+    private bool _installed;
+
     /// <summary>Download progress 0..100.</summary>
     [ObservableProperty]
     private double _updateProgress;
@@ -59,6 +86,14 @@ public sealed partial class MainWindowViewModel
     /// <summary>What the update is doing, or why it failed.</summary>
     [ObservableProperty]
     private string _updateStatus = string.Empty;
+
+    /// <summary>The update is installed but the new version did not start: the card offers Close now.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsInstallShown))]
+    private bool _isRestartNeeded;
+
+    /// <summary>The card's Install button shows (Cancel takes its place while downloading, Close now after the install).</summary>
+    public bool IsInstallShown => !IsDownloading && !IsRestartNeeded;
 
     /// <summary>Notes of the version just installed, shown once after the restart.</summary>
     [ObservableProperty]
@@ -97,16 +132,28 @@ public sealed partial class MainWindowViewModel
     /// <summary>"What's new in 0.2.0".</summary>
     public string WhatsNewTitle => Loc.F("Update.WhatsNewTitle", Updater.Current.ToString(3));
 
-    /// <summary>After an update: deletes the old files and shows the new version's notes once. Then asks GitHub for a newer release.</summary>
+    /// <summary>
+    /// After an update: deletes the files the update left (off the UI thread) and shows the new version's notes once. Then
+    /// asks GitHub for a newer release.
+    /// </summary>
     private async Task StartUpdatesAsync()
     {
+        if (CanInstallHere())
+        {
+            var folder = AppContext.BaseDirectory;
+            var list = CleanupList;
+            try
+            {
+                await Task.Run(() => Updater.CleanUp(folder, list)).ConfigureAwait(true);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                Services.Logger.LogWarning("Update clean-up: {Message}", ex.Message);
+            }
+        }
+
         try
         {
-            if (Updater.CanInstall)
-            {
-                Updater.CleanUp(AppContext.BaseDirectory);
-            }
-
             if (Updater.TakeWhatsNew(Services.DataDirectory, Updater.Current) is { } notes)
             {
                 WhatsNew = ReleaseNotes(notes);
@@ -114,7 +161,7 @@ public sealed partial class MainWindowViewModel
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            Services.Logger.LogWarning("Update clean-up: {Message}", ex.Message);
+            Services.Logger.LogWarning("What's new not read: {Message}", ex.Message);
         }
 
         if (UpdateCheck is null)
@@ -186,6 +233,14 @@ public sealed partial class MainWindowViewModel
     [RelayCommand]
     private void CloseWhatsNew() => WhatsNew = null;
 
+    /// <summary>Stops the download; nothing is changed.</summary>
+    [RelayCommand(CanExecute = nameof(IsDownloading))]
+    private void CancelUpdate() => _download?.Cancel();
+
+    /// <summary>After an update that could not start the new version: closes the app (the next start is the new version).</summary>
+    [RelayCommand]
+    private void CloseNow() => RequestShutdown?.Invoke();
+
     [RelayCommand]
     private void OpenReleasePage()
     {
@@ -202,18 +257,19 @@ public sealed partial class MainWindowViewModel
         }
     }
 
-    private bool CanInstallUpdate() => !IsUpdating;
+    /// <summary>Never twice in one process: after a swap this one runs from the backup, which a second swap would replace.</summary>
+    private bool CanInstallUpdate() => !IsUpdating && !_installed;
 
     /// <summary>Downloads the release, puts it in place of this one and restarts into it.</summary>
     [RelayCommand(CanExecute = nameof(CanInstallUpdate))]
     private async Task InstallUpdateAsync()
     {
-        if (Update is not { } release)
+        if (Update is not { } release || _installed)
         {
             return;
         }
 
-        if (!Updater.CanInstall || release.ZipUrl is null || Environment.ProcessPath is not { } exe)
+        if (!CanInstallHere() || release.ZipUrl is null || Environment.ProcessPath is not { } exe)
         {
             UpdateStatus = Loc.T("Update.DevBuild");
             OpenReleasePage();
@@ -223,6 +279,9 @@ public sealed partial class MainWindowViewModel
         IsUpdating = true;
         UpdateProgress = 0;
         UpdateStatus = Loc.F("Update.Downloading", 0);
+        using var download = new CancellationTokenSource();
+        _download = download;
+        IsDownloading = true;
         try
         {
             var progress = new Progress<double>(p =>
@@ -230,22 +289,85 @@ public sealed partial class MainWindowViewModel
                 UpdateProgress = p * 100;
                 UpdateStatus = Loc.F("Update.Downloading", (int)(p * 100));
             });
-            var zip = await Updater.DownloadAsync(release, Path.Combine(Services.DataDirectory, "updates"), progress, CancellationToken.None).ConfigureAwait(true);
+            var zip = await DownloadUpdate(release, Path.Combine(Services.DataDirectory, "updates"), progress, download.Token).ConfigureAwait(true);
+            _download = null;
+            IsDownloading = false;
             UpdateStatus = Loc.T("Update.Installing");
             Updater.SaveWhatsNew(Services.DataDirectory, release);
-            await Task.Run(() => Updater.Install(zip, AppContext.BaseDirectory)).ConfigureAwait(true);
-            TryDelete(zip);
-            Services.Logger.LogInformation("Updated to {Version}; restarting.", release.Version);
-            UpdateStatus = Loc.T("Update.Restarting");
-            Updater.Start(exe);
-            RequestShutdown?.Invoke();
+            var list = CleanupList;
+            try
+            {
+                await Task.Run(() => InstallUpdateFiles(zip, AppContext.BaseDirectory, list, release.Version)).ConfigureAwait(true);
+            }
+            finally
+            {
+                TryDelete(zip);
+            }
+
+            _installed = true;
+            InstallUpdateCommand.NotifyCanExecuteChanged();
         }
-        catch (Exception ex) when (ex is HttpRequestException or IOException or UnauthorizedAccessException or InvalidDataException or TaskCanceledException or System.ComponentModel.Win32Exception)
+        catch (OperationCanceledException) when (download.IsCancellationRequested)
+        {
+            Services.Logger.LogInformation("Update cancelled.");
+            UpdateStatus = Loc.T("Update.Cancelled");
+            IsUpdating = false;
+            return;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or IOException or UnauthorizedAccessException or InvalidDataException or TaskCanceledException or TimeoutException)
         {
             Services.Logger.LogWarning("Update failed: {Message}", ex.Message);
-            UpdateStatus = Loc.F("Update.Failed", ex.Message);
+            UpdateStatus = ex switch
+            {
+                TimeoutException => Loc.F("Update.Stalled", (int)Updater.IdleTimeout.TotalSeconds),
+                UpdateFileInUseException inUse => Loc.F("Update.FileInUse", Path.GetFileName(inUse.FilePath)),
+                _ => Loc.F("Update.Failed", ex.Message),
+            };
+            IsUpdating = false;
+            return;
+        }
+        finally
+        {
+            _download = null;
+            IsDownloading = false;
+        }
+
+        Services.Logger.LogInformation("Updated to {Version}; restarting.", release.Version);
+        await RestartAsync(release, exe).ConfigureAwait(true);
+    }
+
+    /// <summary>
+    /// Starts the installed version and closes this one. The MCP server and then the project are closed first: the new
+    /// version reopens the project (and listens on the port) at once, while this process may take seconds to exit; MCP
+    /// goes first so that no AI tool reopens the project in between. If it cannot start, the update stays in place (the
+    /// next start is the new version) and the user keeps working until then.
+    /// </summary>
+    private async Task RestartAsync(ReleaseInfo release, string exe)
+    {
+        UpdateStatus = Loc.T("Update.Restarting");
+        await Services.Mcp.StopAsync().ConfigureAwait(true);
+        var project = Services.Projects.DirectoryPath;
+        Services.Projects.Close();
+        try
+        {
+            StartNewVersion(exe, Environment.ProcessId);
+            RequestShutdown?.Invoke();
+            return;
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or PlatformNotSupportedException)
+        {
+            Services.Logger.LogWarning("Version {Version} is installed but did not start: {Message}", release.Version, ex.Message);
+            UpdateStatus = Loc.F("Update.InstalledRestart", release.Version.ToString(3));
+            IsRestartNeeded = true;
             IsUpdating = false;
         }
+
+        if (project is not null)
+        {
+            await Services.Operations.RunAsync(Loc.T("Shell.OpeningLastProject"), (_, ct) => Services.Projects.OpenAsync(project, ct)).ConfigureAwait(true);
+        }
+
+        await Services.Mcp.ApplySettingsAsync().ConfigureAwait(true);
     }
 
     /// <summary>Release notes (GitHub Markdown) as lines: <c>#</c> headings, <c>-</c>/<c>*</c> bullets, links and emphasis reduced to their text.</summary>

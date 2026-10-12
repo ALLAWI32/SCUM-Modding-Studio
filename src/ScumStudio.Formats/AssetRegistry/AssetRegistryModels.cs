@@ -30,7 +30,7 @@ public enum AssetRegistryValueKind
 /// <param name="Text">Display text (the string, name, or <c>Class'Package.Object'</c> for export paths).</param>
 public sealed record AssetRegistryValue(AssetRegistryValueKind Kind, string Text)
 {
-    /// <summary>Name number (Name kind only; stored value, 0 = none).</summary>
+    /// <summary>Name number (Name kind only; stored value, 0 = none; <see cref="Text"/> ends in <c>_{NameNumber-1}</c>).</summary>
     public int NameNumber { get; init; }
 
     /// <summary>(Class, Object, Package) for export path kinds.</summary>
@@ -51,6 +51,27 @@ public sealed record AssetRegistryValue(AssetRegistryValueKind Kind, string Text
         {
             ExportPath = [className, objectName, packageName],
         };
+
+    /// <summary>Creates a wide string value.</summary>
+    public static AssetRegistryValue Wide(string text) => new(AssetRegistryValueKind.WideString, text);
+
+    /// <summary>Creates a name value; a trailing <c>_N</c> is stored as the FName number (<see cref="FNameRef.Split"/>).</summary>
+    public static AssetRegistryValue Name(string name) =>
+        new(AssetRegistryValueKind.Name, name) { NameNumber = FNameRef.Split(name).Number };
+
+    /// <summary>Creates an export path value whose names may carry numbers.</summary>
+    public static AssetRegistryValue Export(string className, string objectName, string packageName) =>
+        NumberlessExport(className, objectName, packageName) with { Kind = AssetRegistryValueKind.ExportPath };
+
+    /// <summary>A name value of the kind the cooker would store: numberless unless the name splits off a number.</summary>
+    public static AssetRegistryValue AnyName(string name) =>
+        FNameRef.Split(name).Number == 0 ? NumberlessName(name) : Name(name);
+
+    /// <summary>An export path value of the kind the cooker would store: numberless unless one of its names splits off a number.</summary>
+    public static AssetRegistryValue AnyExport(string className, string objectName, string packageName) =>
+        new[] { className, objectName, packageName }.All(n => FNameRef.Split(n).Number == 0)
+            ? NumberlessExport(className, objectName, packageName)
+            : Export(className, objectName, packageName);
 
     /// <inheritdoc />
     public override string ToString() => Text;

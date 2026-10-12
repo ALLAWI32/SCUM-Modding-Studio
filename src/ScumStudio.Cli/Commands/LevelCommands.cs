@@ -593,14 +593,18 @@ internal sealed partial class ProjectCommands : ICommandModule
 /// <summary>Shared plumbing for the level and project commands.</summary>
 internal static class LevelCliSupport
 {
-    /// <summary>Opens the catalog with the key from --aes or the environment (validated first, never echoed).</summary>
-    public static AssetCatalog OpenCatalog(string source, string? aes, ILogger logger)
+    /// <summary>
+    /// Opens the catalog with the key from --aes or the environment (validated first, never echoed), reading only the paks
+    /// <paramref name="pakFileFilter"/> keeps when one is given.
+    /// </summary>
+    public static AssetCatalog OpenCatalog(string source, string? aes, ILogger logger, Func<string, bool>? pakFileFilter = null)
     {
         var key = string.IsNullOrWhiteSpace(aes) ? AesKeyText.FromEnvironmentOrStore() : aes;
         return AssetCatalog.Open(source, new AssetCatalogOptions
         {
             AesKey = string.IsNullOrWhiteSpace(key) ? null : AesKeyText.Normalize(key),
             Logger = logger,
+            PakFileFilter = pakFileFilter,
         });
     }
 

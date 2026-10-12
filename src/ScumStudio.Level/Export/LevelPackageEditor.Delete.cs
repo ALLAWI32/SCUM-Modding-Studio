@@ -55,13 +55,14 @@ public static partial class LevelPackageEditor
     }
 
     /// <summary>
-    /// Turns the given components of kept actors (and their sub-objects) into inert objects: the ChildActorComponents whose
-    /// child actors were deleted. Returns how many exports were replaced.
+    /// Turns the given components of kept actors (and their sub-objects) into inert objects: a deleted fireplace part's fire,
+    /// light and sound, a ChildActorComponent whose child actor was deleted. Each one done is added to
+    /// <paramref name="done"/> as <c>Actor.Component</c>; returns how many exports were replaced.
     /// </summary>
     private static int NeutralizeComponents(
         CookedPackage package, int levelIndex, IReadOnlyList<(string Actor, string Component)> components, List<ExportEntry> exports,
         List<ReadOnlyMemory<byte>> data, List<ImportEntry> imports, List<string> names, List<bool> wide, List<string> addedNames, List<int> preload,
-        List<string> warnings)
+        List<string> done, List<string> warnings)
     {
         if (components.Count == 0)
         {
@@ -77,7 +78,7 @@ public static partial class LevelPackageEditor
             var componentIndex = actorIndex < 0 ? -1 : FindExport(package, component, actorIndex + 1);
             if (componentIndex < 0)
             {
-                warnings.Add($"'{actor}.{component}' is not in the level; the component that spawned a deleted child actor was not removed.");
+                warnings.Add($"'{actor}.{component}' is not in the level; that component was not removed.");
                 continue;
             }
 
@@ -89,6 +90,7 @@ public static partial class LevelPackageEditor
             }
 
             count += inert.Replace(members, exports, data, preload);
+            done.Add($"{actor}.{package.ResolveName(package.Exports[componentIndex].ObjectName)}");
         }
 
         return count;

@@ -161,7 +161,7 @@ internal sealed class ItemCommands : ICommandModule
         var project = new Argument<string>("projectDir", "Project folder (e.g. MyMod.ssproj).");
         var source = SourceArgument();
         var template = new Argument<string>("template", "Stock asset (name or package path), e.g. Weapon_RPK-74 or BPC_WolfsWagen.");
-        var name = new Argument<string>("newName", "New name: the item name (Weapon_RPK-74_Gold) or the vehicle token (Hunter → BPC_Hunter).");
+        var name = new Argument<string>("newName", "New name: the item name (Weapon_RPK-74_Gold) or the vehicle token (Hunter → BPC_Hunter); letters, digits, _ and -, not ending in _<number> (Hunter2 or Hunter_v2, not Hunter_2).");
         var aes = AesOption();
         var noAttachments = new Option<bool>("--no-attachments", "Vehicles: keep the stock attachment classes.");
         var noPresets = new Option<bool>("--no-presets", "Vehicles: do not clone the manual spawn presets.");

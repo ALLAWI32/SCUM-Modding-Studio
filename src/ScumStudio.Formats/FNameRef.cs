@@ -49,4 +49,29 @@ public readonly record struct FNameRef(int Index, int Number = 0)
 
         throw new KeyNotFoundException($"Name '{name}' is not in the package name table.");
     }
+
+    /// <summary>
+    /// <c>FName</c>'s split of a trailing number (UE 4.27 <c>ParseNumber</c>): "_" then up to 10 digits, not starting with 0
+    /// unless it is the only digit, below int.MaxValue; the stored number is that value + 1 (0 = no number). The cooker
+    /// stores <c>ConcreteBlock002_1</c> as ("ConcreteBlock002", 2): a writer that adds the whole text with number 0 makes a
+    /// different FName for the same object.
+    /// </summary>
+    public static (string Text, int Number) Split(string value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        var digits = 0;
+        while (digits < value.Length && char.IsAsciiDigit(value[value.Length - 1 - digits]))
+        {
+            digits++;
+        }
+
+        var first = value.Length - digits;
+        if (digits == 0 || digits >= value.Length || digits > 10 || value[first - 1] != '_' || (digits > 1 && value[first] == '0')
+            || !long.TryParse(value.AsSpan(first), out var n) || n >= int.MaxValue)
+        {
+            return (value, 0);
+        }
+
+        return (value[..(first - 1)], (int)n + 1);
+    }
 }

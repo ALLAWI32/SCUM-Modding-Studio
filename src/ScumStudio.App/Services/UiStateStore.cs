@@ -57,6 +57,12 @@ public sealed record UiState
 
     /// <summary>The Map's time of day in hours (0-24): sun, sky and light; midday by default.</summary>
     public double TimeOfDay { get; init; } = 13.5;
+
+    /// <summary>
+    /// Map header items switched off (<c>PopOut</c>, <c>Snap</c>, ... as in <c>MapToolbar.Layout</c>; owner: "show only what I
+    /// want"). Unknown keys are ignored, so an item added later starts shown; files written before the switches get these.
+    /// </summary>
+    public IReadOnlyList<string> HiddenMapToolbarItems { get; init; } = ["PopOut"];
 }
 
 /// <summary>

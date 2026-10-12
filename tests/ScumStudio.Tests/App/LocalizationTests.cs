@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
+using Avalonia.VisualTree;
 using ScumStudio.App.Localization;
 using ScumStudio.App.ViewModels;
 
@@ -62,15 +63,142 @@ public sealed partial class LocalizationTests
     [Fact]
     public void EveryInteractiveControlHasAHoverDescription()
     {
-        string[] interactive = ["Button", "ToggleButton", "CheckBox", "ComboBox", "TextBox", "Slider", "MenuItem", "TabItem", "ToggleSwitch", "RadioButton"];
-        var views = Path.GetFullPath(Path.Combine(ThisDirectory(), "..", "..", "..", "src", "ScumStudio.App", "Views"));
-        var missing = Directory.EnumerateFiles(views, "*.axaml", SearchOption.AllDirectories)
+        string[] interactive =
+        [
+            "Button", "ToggleButton", "CheckBox", "ComboBox", "TextBox", "Slider", "MenuItem", "TabItem", "ToggleSwitch", "RadioButton",
+            "ColorPicker", "NumericUpDown", "Expander", "AutoCompleteBox", "SplitButton", "ToggleSplitButton", "DropDownButton", "RepeatButton", "HyperlinkButton",
+        ];
+        // Every XAML file of the app (views, and templates kept in resource dictionaries), not the parts of a control template.
+        var app = Path.GetFullPath(Path.Combine(ThisDirectory(), "..", "..", "..", "src", "ScumStudio.App"));
+        var missing = Directory.EnumerateFiles(app, "*.axaml", SearchOption.AllDirectories)
+            .Where(f => !f.Contains(Path.DirectorySeparatorChar + "obj" + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+                        && !f.Contains(Path.DirectorySeparatorChar + "bin" + Path.DirectorySeparatorChar, StringComparison.Ordinal))
             .SelectMany(file => System.Xml.Linq.XDocument.Load(file).Descendants()
-                .Where(e => interactive.Contains(e.Name.LocalName))
+                .Where(e => interactive.Contains(e.Name.LocalName) && !e.Ancestors().Any(a => a.Name.LocalName == "ControlTemplate"))
                 .Where(e => e.Attribute("ToolTip.Tip") is null && !e.Elements().Any(c => c.Name.LocalName == "ToolTip.Tip"))
                 .Select(e => $"{Path.GetFileName(file)}: <{e.Name.LocalName} {string.Join(' ', e.Attributes().Take(3))}>"))
             .ToList();
         Assert.True(missing.Count == 0, "Controls without ToolTip.Tip:" + Environment.NewLine + string.Join(Environment.NewLine, missing));
+    }
+
+    /// <summary>A control built in code (none today) gets its hover description in the same method.</summary>
+    [Fact]
+    public void EveryControlMadeInCodeHasATooltip()
+    {
+        var source = Path.GetFullPath(Path.Combine(ThisDirectory(), "..", "..", "..", "src", "ScumStudio.App"));
+        var missing = new List<string>();
+        foreach (var file in Directory.EnumerateFiles(source, "*.cs", SearchOption.AllDirectories)
+                     .Where(f => !f.Contains(Path.DirectorySeparatorChar + "obj" + Path.DirectorySeparatorChar, StringComparison.Ordinal)))
+        {
+            var text = File.ReadAllText(file);
+            foreach (Match match in ControlInCode().Matches(text))
+            {
+                var body = MethodAround(text, match.Index);
+                if (!body.Contains("ToolTip.SetTip", StringComparison.Ordinal) && !body.Contains("ToolTip.TipProperty", StringComparison.Ordinal))
+                {
+                    missing.Add($"{Path.GetFileName(file)}:{text[..match.Index].Count(c => c == '\n') + 1}: {match.Value}");
+                }
+            }
+        }
+
+        Assert.True(missing.Count == 0, "Controls made in code without ToolTip.SetTip in the same method:" + Environment.NewLine + string.Join(Environment.NewLine, missing));
+    }
+
+    /// <summary>
+    /// The controls the shell and its pages (outside Map and Craftables) really show have a hover text that is not empty
+    /// once bound, including the console, Setup, Support and a module page with values.
+    /// </summary>
+    [AvaloniaFact]
+    public void EveryVisibleControlOfTheShellPagesHasATooltipAtRuntime()
+    {
+        using var ctx = AppTestContext.Create(inline: false);
+        var (window, vm) = HeadlessUi.ShowMainWindow(ctx.Services, 1600, 900);
+        var dump = new ScumStudio.App.Views.DumpWindow { DataContext = new DumpViewModel(ctx.Services) };
+        try
+        {
+            vm.IsLogOpen = true;
+            var missing = new List<string>();
+            foreach (var key in new[] { "projects", "assets", "economy", "spawns", "vehicles", "weapons" })
+            {
+                var page = vm.NavigateTo(key);
+                HeadlessUi.Pump();
+                if (page is ModulePageViewModel module)
+                {
+                    ShellLayoutTests.ShowValues(module, window);
+                }
+                else
+                {
+                    ShellLayoutTests.ShowLoadedState(window);
+                }
+
+                HeadlessUi.Pump();
+                missing.AddRange(WithoutTip(window).Select(c => $"{key}: {c}"));
+            }
+
+            vm.OpenSetup();
+            HeadlessUi.Pump();
+            missing.AddRange(WithoutTip(HeadlessUi.FindNamed<Panel>(window, "SetupOverlay")!).Select(c => $"setup: {c}"));
+            vm.IsSetupOpen = false;
+            vm.IsSupportOpen = true;
+            HeadlessUi.Pump();
+            missing.AddRange(WithoutTip(HeadlessUi.FindNamed<Panel>(window, "SupportOverlay")!).Select(c => $"support: {c}"));
+            dump.Show();
+            HeadlessUi.Pump();
+            missing.AddRange(WithoutTip(dump).Select(c => $"dump: {c}"));
+
+            Assert.True(missing.Count == 0, "Visible controls without a hover text:" + Environment.NewLine + string.Join(Environment.NewLine, missing.Distinct()));
+        }
+        finally
+        {
+            dump.Close();
+            window.Close();
+            vm.Dispose();
+        }
+    }
+
+    /// <summary>F347: the console's counters and the search field's shortcut chip were English literals ("3 warn", "Ctrl K").</summary>
+    [AvaloniaFact]
+    public void TheConsoleCountersAndTheSearchShortcutFollowTheLanguage()
+    {
+        using var ctx = AppTestContext.Create(inline: false);
+        var (window, vm) = HeadlessUi.ShowMainWindow(ctx.Services, 1600, 900);
+        try
+        {
+            vm.IsLogOpen = true;
+            var warnings = HeadlessUi.FindNamed<TextBlock>(window, "LogWarningsBadge")!;
+            var errors = HeadlessUi.FindNamed<TextBlock>(window, "LogErrorsBadge")!;
+            var search = HeadlessUi.FindNamed<TextBox>(window, "GlobalSearch")!;
+            var chip = search.GetVisualParent()!.GetVisualDescendants().OfType<TextBlock>().Single(t => t.FindAncestorOfType<Border>()?.Classes.Contains("kbd") == true);
+            foreach (var (language, warn, err, shortcut) in new[] { ("de", "Warnungen", "Fehler", "Strg+K"), ("en", "Warnings", "Errors", "Ctrl+K") })
+            {
+                Loc.Instance.Language = language;
+                HeadlessUi.Pump();
+                Assert.Equal($"{warn}: {vm.Log.WarningCount}", warnings.Text);
+                Assert.Equal($"{err}: {vm.Log.ErrorCount}", errors.Text);
+                Assert.Equal(shortcut, chip.Text);
+            }
+        }
+        finally
+        {
+            Loc.Instance.Language = Loc.DefaultLanguage;
+            window.Close();
+            vm.Dispose();
+        }
+    }
+
+    private static IEnumerable<string> WithoutTip(Avalonia.Visual scope) =>
+        scope.GetVisualDescendants().OfType<Control>()
+            .Where(c => ShellLayoutTests.IsInteractive(c) && c is not ListBoxItem) // a list row's text carries its own tip
+            .Where(c => c.Bounds.Width > 0 && c.Bounds.Height > 0)
+            .Where(c => ToolTip.GetTip(c) is null or "")
+            .Select(c => $"{c.GetType().Name} {c.Name} {(c as ContentControl)?.Content as string ?? (c as TextBox)?.Watermark}".TrimEnd());
+
+    /// <summary>The text of the member that contains <paramref name="index"/>: from the end of the member before it to its own closing brace.</summary>
+    private static string MethodAround(string text, int index)
+    {
+        var start = text.LastIndexOf("\n    }", index, StringComparison.Ordinal);
+        var end = text.IndexOf("\n    }", index, StringComparison.Ordinal);
+        return text[(start < 0 ? 0 : start)..(end < 0 ? text.Length : end)];
     }
 
     [Fact]
@@ -186,4 +314,7 @@ public sealed partial class LocalizationTests
 
     [GeneratedRegex(@"Loc\.[TF]\(""([^""]+)""")]
     private static partial Regex CodeKey();
+
+    [GeneratedRegex(@"new (?:Button|ToggleButton|MenuItem|CheckBox|ComboBox|TextBox|Slider)\b\s*[({]")]
+    private static partial Regex ControlInCode();
 }

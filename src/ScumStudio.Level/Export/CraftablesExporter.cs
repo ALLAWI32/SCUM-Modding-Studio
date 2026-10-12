@@ -12,9 +12,9 @@ namespace ScumStudio.Level.Export;
 /// <summary>
 /// The Craftables mod: the project's craftables (<see cref="CraftablesFile"/>) built by <see cref="CraftablesPlanner"/> and
 /// <see cref="AssetModBuilder"/> into a pak of their own, <c>pakchunk&lt;N+1&gt;-&lt;Name&gt;Craftables_P.pak</c> next to the
-/// project's pak, with a copied stock <c>.sig</c>. Its <c>AssetRegistry.bin</c> is the project pak's (when that one
-/// wrote one) plus the craftables' records: the highest pak's registry is the one the game reads, so it must keep the
-/// project's vehicles and items too.
+/// project's pak, with a copied stock <c>.sig</c>. It holds only new packages. Its <c>AssetRegistry.bin</c> is the project
+/// pak's (when that one wrote one, else the game's stock one) plus the craftables' records: the highest pak's registry is
+/// the one the game reads, so it must keep the project's vehicles and items too.
 /// </summary>
 public static class CraftablesExporter
 {
@@ -25,10 +25,21 @@ public static class CraftablesExporter
     public const string StagingFolderName = "staging-craftables";
 
     /// <summary>
+    /// Packages the game already has that the Craftables pak may still ship (P0 #1: it only adds). Reviewed for 3.1.1 and
+    /// empty: every craftable is new packages, and anything else at a game path stops the export.
+    /// </summary>
+    public static readonly IReadOnlySet<string> AllowedStockPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
     /// Builds and packs <paramref name="craftables"/> for one cook. <paramref name="baseRegistry"/> is the project pak's
-    /// registry of the same export (null: the source's own). Returns null when the list is empty, after deleting the
+    /// registry of the same export (null: the game's stock one). Returns null when the list is empty, after deleting the
     /// Craftables pak an earlier export left in the role folder (<see cref="RemoveStale"/>).
     /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// No craftable was built (the reasons are listed; the previous pak stays, since removing it would take craftables
+    /// players have placed out of the game), or the pak would ship a package the game already has. Both are found before
+    /// anything is written, and <see cref="Check"/> finds them before the project's pak is.
+    /// </exception>
     public static async Task<ExportResult?> ExportAsync(
         CraftablesFile craftables, string modName, AssetCatalog catalog, ExportOptions options, ProjectSourceRole role,
         byte[]? baseRegistry = null, ILogger? logger = null, CancellationToken cancellationToken = default)
@@ -49,6 +60,7 @@ public static class CraftablesExporter
             return null;
         }
 
+        var (plan, built, imports, importedAssets, warnings) = Prepare(craftables, catalog, baseRegistry, writeRegistry: true);
         var staging = Path.Combine(roleDirectory, StagingFolderName);
         if (Directory.Exists(staging))
         {
@@ -56,39 +68,12 @@ public static class CraftablesExporter
         }
 
         Directory.CreateDirectory(staging);
-
-        var warnings = new List<string>();
-        var items = new List<Craftable>();
-        string? ImportedFolder(Craftable c) => c.Imported is null || craftables.ProjectDirectory is null ? null : Path.Combine(craftables.ProjectDirectory, c.Imported);
-        foreach (var craftable in craftables.Items)
-        {
-            if (craftable.Imported is not null && !Directory.Exists(ImportedFolder(craftable)))
-            {
-                warnings.Add($"{craftable.Name}: left out (its imported model {craftable.Imported} is not in the project folder).");
-                continue;
-            }
-
-            items.Add(craftable);
-        }
-
-        var plan = CraftablesPlanner.Plan(catalog, items);
-        warnings.AddRange(plan.Warnings);
-        var built = AssetModBuilder.Build(catalog, plan.Request with { BaseRegistry = baseRegistry });
-        warnings.AddRange(built.Warnings);
-        var assets = new List<ExportedAsset>();
-
-        // Models imported from 3D files (UeCook) of the planned craftables: their cooked mesh, materials and textures ship
-        // at their own paths (a craftable left out ships nothing).
-        var planned = plan.Entries.Select(e => e.Name).ToHashSet(StringComparer.Ordinal);
-        foreach (var folder in items.Where(c => planned.Contains(c.Name)).Select(ImportedFolder).OfType<string>())
+        var assets = new List<ExportedAsset>(importedAssets);
+        foreach (var folder in imports)
         {
             UeCook.CopyTree(folder, staging);
-            foreach (var file in Directory.EnumerateFiles(folder, "*", SearchOption.AllDirectories).Where(AssetPaths.IsPackageFile))
-            {
-                var virtualPath = Path.GetRelativePath(folder, file).Replace('\\', '/');
-                assets.Add(new ExportedAsset(AssetPaths.ToPackagePath(virtualPath, catalog.ProjectName), virtualPath, IsClone: false));
-            }
         }
+
         foreach (var package in built.Packages)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -105,11 +90,6 @@ public static class CraftablesExporter
             }
 
             assets.Add(new ExportedAsset(package.PackagePath, virtualPath, package.IsClone));
-        }
-
-        if (assets.Count == 0)
-        {
-            throw new InvalidOperationException("No craftable was built. " + string.Join(" ", warnings));
         }
 
         if (built.AssetRegistry is not null)
@@ -152,6 +132,118 @@ public static class CraftablesExporter
             AssetValues = built.Applied,
             Warnings = warnings,
         };
+    }
+
+    /// <summary>
+    /// Plans and builds <paramref name="craftables"/> without writing anything, and stops as <see cref="ExportAsync"/> would.
+    /// Call it for each cook before the project's pak is written: a Craftables pak refused after it would leave the project's
+    /// pak newer than the Craftables pak, whose registry is the one the game reads.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">No craftable would be built, or the pak would ship a package the game already has.</exception>
+    public static void Check(CraftablesFile craftables, AssetCatalog catalog)
+    {
+        ArgumentNullException.ThrowIfNull(craftables);
+        ArgumentNullException.ThrowIfNull(catalog);
+        if (craftables.Items.Count > 0)
+        {
+            _ = Prepare(craftables, catalog, null, writeRegistry: false);
+        }
+    }
+
+    private sealed record Prepared(CraftablesPlan Plan, AssetModBuildResult Built, IReadOnlyList<string> Imports, IReadOnlyList<ExportedAsset> ImportedAssets, List<string> Warnings);
+
+    // The craftables whose imported model is usable, planned and built; stops before anything is written when nothing would
+    // be built or the pak would ship a package the game already has (P0 #1: the Craftables pak only adds).
+    private static Prepared Prepare(CraftablesFile craftables, AssetCatalog catalog, byte[]? baseRegistry, bool writeRegistry)
+    {
+        var warnings = new List<string>();
+        var items = new List<Craftable>();
+        var importedFolders = new Dictionary<Craftable, string>(ReferenceEqualityComparer.Instance);
+        foreach (var craftable in craftables.Items)
+        {
+            if (craftable.Imported is not null)
+            {
+                if (ImportedFolder(craftables.ProjectDirectory, craftable.Imported, out var problem) is not { } folder)
+                {
+                    warnings.Add($"{craftable.Name}: left out (its imported model {craftable.Imported} {problem}).");
+                    continue;
+                }
+
+                importedFolders[craftable] = folder;
+            }
+
+            items.Add(craftable);
+        }
+
+        var plan = CraftablesPlanner.Plan(catalog, items);
+        warnings.AddRange(plan.Warnings);
+        var built = AssetModBuilder.Build(catalog, plan.Request with { BaseRegistry = baseRegistry, SellClones = false, WriteRegistry = writeRegistry });
+        warnings.AddRange(built.Warnings);
+
+        // Models imported from 3D files (UeCook) of the planned craftables: their cooked mesh, materials and textures ship
+        // at their own paths (a craftable left out ships nothing).
+        var planned = plan.Entries.Select(e => e.Name).ToHashSet(StringComparer.Ordinal);
+        var imports = items.Where(c => planned.Contains(c.Name) && importedFolders.ContainsKey(c)).Select(c => importedFolders[c]).ToList();
+        var importedAssets = imports
+            .SelectMany(folder => Directory.EnumerateFiles(folder, "*", SearchOption.AllDirectories).Where(AssetPaths.IsPackageFile)
+                .Select(file => Path.GetRelativePath(folder, file).Replace('\\', '/')))
+            .Select(virtualPath => new ExportedAsset(AssetPaths.ToPackagePath(virtualPath, catalog.ProjectName), virtualPath, IsClone: false))
+            .ToList();
+
+        // A package the game already has (a stock table, a stock recipe) stops it here, and the previous pak stays as it was.
+        var atGamePaths = GamePathsIn(catalog, built.Packages.Select(p => p.PackagePath).Concat(importedAssets.Select(a => a.PackagePath)));
+        if (atGamePaths.Count > 0)
+        {
+            throw new InvalidOperationException("The Craftables pak would change packages the game already has, so it was not written: " + string.Join(", ", atGamePaths) + ".");
+        }
+
+        if (built.Packages.Count == 0 && importedAssets.Count == 0)
+        {
+            throw new InvalidOperationException("No craftable was built. " + string.Join(" ", warnings));
+        }
+
+        return new Prepared(plan, built, imports, importedAssets, warnings);
+    }
+
+    /// <summary>The packages of <paramref name="packagePaths"/> that <paramref name="catalog"/> already has and <see cref="AllowedStockPaths"/> does not list.</summary>
+    public static IReadOnlyList<string> GamePathsIn(AssetCatalog catalog, IEnumerable<string> packagePaths)
+    {
+        ArgumentNullException.ThrowIfNull(catalog);
+        ArgumentNullException.ThrowIfNull(packagePaths);
+        return packagePaths.Where(p => !AllowedStockPaths.Contains(p) && catalog.PackageExists(p)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    /// <summary>
+    /// The folder of an imported model (N064: craftables.json can be edited by hand): <paramref name="imported"/> must be
+    /// exactly <c>imports/&lt;token&gt;</c> inside the project folder, and every file in it must lie in the token's own
+    /// <c>SCUM/Content/ScumStudio/Imports/&lt;token&gt;/</c>, so it cannot ship anything at a game path. Null, with
+    /// <paramref name="problem"/> set, otherwise.
+    /// </summary>
+    public static string? ImportedFolder(string? projectDirectory, string imported, out string problem)
+    {
+        ArgumentNullException.ThrowIfNull(imported);
+        var parts = imported.Split('/', '\\');
+        if (projectDirectory is null || parts.Length != 2 || !string.Equals(parts[0], UeCook.ImportsFolder, StringComparison.OrdinalIgnoreCase)
+            || parts[1].Length == 0 || parts[1] is "." or ".." || parts[1].IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+        {
+            problem = $"is not {UeCook.ImportsFolder}/<name> in the project folder";
+            return null;
+        }
+
+        var root = Path.GetFullPath(Path.Combine(projectDirectory, UeCook.ImportsFolder));
+        var folder = Path.GetFullPath(Path.Combine(root, parts[1]));
+        if (!string.Equals(Path.GetDirectoryName(folder), root, StringComparison.OrdinalIgnoreCase) || !Directory.Exists(folder))
+        {
+            problem = "is not in the project folder";
+            return null;
+        }
+
+        var own = string.Join('/', "SCUM", "Content", UeCook.ImportsRoot["/Game/".Length..], parts[1]) + "/";
+        var outside = Directory.EnumerateFiles(folder, "*", SearchOption.AllDirectories)
+            .Select(f => Path.GetRelativePath(folder, f).Replace('\\', '/'))
+            .FirstOrDefault(f => !f.StartsWith(own, StringComparison.OrdinalIgnoreCase));
+        problem = outside is null ? string.Empty : $"holds {outside}, outside {own}";
+        return outside is null ? folder : null;
     }
 
     /// <summary>File name of the Craftables pak of <paramref name="modName"/> next to the project's pak of chunk <paramref name="pakChunkIndex"/>.</summary>

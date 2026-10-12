@@ -30,7 +30,7 @@ public sealed class GrassClearingRealTests(Xunit.Abstractions.ITestOutputHelper 
     private static AssetCatalog Open(string paks) => AssetCatalog.OpenPaks(paks, new AssetCatalogOptions { AesKey = AesKeyText.FromEnvironmentOrStore() });
 
     [Fact]
-    public async Task ABridgeOnTheGrassClearsTheGrassAndBushesUnderItAndNothingElse()
+    public async Task ABridgeOnTheGrassClearsTheGrassUnderItAndNothingElse()
     {
         if (Paks is not { } paks)
         {
@@ -79,7 +79,7 @@ public sealed class GrassClearingRealTests(Xunit.Abstractions.ITestOutputHelper 
 
         var level = Assert.Single(result.Levels, l => l.PackagePath == Tile);
         Assert.True(level.Report.ClearedGrassSamples > 0);
-        Assert.True(level.Report.DeletedInstances > 0);
+        Assert.Equal(0, level.Report.DeletedInstances); // the bushes stay (3.2 hotfix: foliage as cooked)
 
         // The footprint as the export saw it: the bridge as written into the farm level.
         using var written = AssetCatalog.OpenLoose(result.StagingDirectory);
@@ -150,7 +150,7 @@ public sealed class GrassClearingRealTests(Xunit.Abstractions.ITestOutputHelper 
             }
         }
 
-        // Bushes and grass meshes standing under the bridge are gone (collapsed in place); everything else stands.
+        // Every bush and grass mesh stands, also under the bridge: the tile's foliage stays as cooked (3.2 hotfix, defolt_0999).
         var tileAfter = LevelDocument.Load(new Cue4ParseLevelReader(written, new Cue4ParseLevelReaderOptions { ExpandBlueprintComponents = false, ExpandChildActors = false }), Tile);
         var gone = 0;
         foreach (var actor in tile.Actors.Where(a => a.InstanceTransforms.Count > 0))
@@ -160,17 +160,17 @@ public sealed class GrassClearingRealTests(Xunit.Abstractions.ITestOutputHelper 
             foreach (var instance in actor.InstanceTransforms)
             {
                 var base0 = new Vector2(instance.WorldTransform.Translation.X, instance.WorldTransform.Translation.Y);
-                var cleared = GrassClearing.IsClearedFoliage(actor.FindComponent(instance.ComponentName)!) && GrassClearing.Covers(footprints, base0);
+                var under = GrassClearing.IsClearedFoliage(actor.FindComponent(instance.ComponentName)!) && GrassClearing.Covers(footprints, base0);
                 var scale = now[(instance.ComponentName, instance.InstanceIndex)].LocalTransform.Scale3D.X;
-                Assert.True(cleared ? scale < 0.01f : MathF.Abs(scale - instance.LocalTransform.Scale3D.X) < 1e-3f, $"{actor.Name}.{instance.ComponentName}[{instance.InstanceIndex}] cleared={cleared} scale={scale}");
-                gone += cleared ? 1 : 0;
+                Assert.True(MathF.Abs(scale - instance.LocalTransform.Scale3D.X) < 1e-3f, $"{actor.Name}.{instance.ComponentName}[{instance.InstanceIndex}] under={under} scale={scale}");
+                gone += under ? 1 : 0;
             }
         }
 
-        Assert.Equal(level.Report.DeletedInstances, gone);
+        Assert.True(gone > 0, "no bush stands under the bridge");
         var rock = tileAfter.Actors.Single(a => a.Name == foliage.Name).InstanceTransforms.Single(i => i.ComponentName == "FoliageInstancedStaticMeshComponent_80" && i.InstanceIndex == 8);
         Assert.Equal(moved.Location.X, rock.WorldTransform.Translation.X, 0.5f);
-        output.WriteLine($"bridge at ({at.X:0}, {at.Y:0}): {footprints.Count} footprint(s), {inside} samples under it, {level.Report.ClearedGrassSamples} densities zeroed, {gone} bush/grass instance(s) gone");
+        output.WriteLine($"bridge at ({at.X:0}, {at.Y:0}): {footprints.Count} footprint(s), {inside} samples under it, {level.Report.ClearedGrassSamples} densities zeroed, {gone} bush/grass instance(s) under it, all standing");
         Assert.True(GrassClearing.Covers(footprints, new Vector2(at.X, at.Y)));
     }
     [Fact]
@@ -200,7 +200,8 @@ public sealed class GrassClearingRealTests(Xunit.Abstractions.ITestOutputHelper 
         var result = await new ProjectExporter().ExportAsync(project, catalog, new ExportOptions { OutputDirectory = temp.Combine("out"), WritePak = false });
 
         var level = Assert.Single(result.Levels, l => l.PackagePath == Tile);
-        Assert.True(level.Report.DeletedInstances > 0, $"{blueprint.ClassPath}: the bush under it stands");
-        output.WriteLine($"{blueprint.ClassPath} at the bush: {level.Report.ClearedGrassSamples} densities zeroed, {level.Report.DeletedInstances} bush/grass instance(s) gone");
+        Assert.True(level.Report.ClearedGrassSamples > 0, $"{blueprint.ClassPath}: no grass cleared under it");
+        Assert.Equal(0, level.Report.DeletedInstances);
+        output.WriteLine($"{blueprint.ClassPath} at the bush: {level.Report.ClearedGrassSamples} densities zeroed");
     }
 }

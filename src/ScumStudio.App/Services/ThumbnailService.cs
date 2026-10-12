@@ -50,10 +50,9 @@ public sealed class ThumbnailService : IDisposable
     /// <summary>Cache folder.</summary>
     public string Directory { get; }
 
-    /// <summary>True when packages of <paramref name="className"/> get a thumbnail (textures, materials, meshes).</summary>
+    /// <summary>True when packages of <paramref name="className"/> get a thumbnail (textures, materials, meshes, Blueprints, foliage types).</summary>
     public static bool Supports(string? className) =>
-        AssetExportService.IsTextureClass(className) || AssetExportService.IsMaterialClass(className) || AssetExportService.IsMeshClass(className)
-        || AssetExportService.IsBlueprintClass(className);
+        AssetExportService.IsTextureClass(className) || AssetExportService.IsMaterialClass(className) || AssetExportService.IsModelClass(className);
 
     /// <summary>The thumbnail PNG of <paramref name="entry"/> (its class must be resolved), or null when it has none.</summary>
     public Task<string?> GetAssetAsync(AssetCatalog catalog, PackageEntry entry, CancellationToken cancellationToken = default)
@@ -67,18 +66,14 @@ public sealed class ThumbnailService : IDisposable
         }
 
         var path = CacheFile(entry.PackagePath, file.Size);
-        if (AssetExportService.IsMeshClass(className) || AssetExportService.IsBlueprintClass(className))
+        if (AssetExportService.IsModelClass(className))
         {
-            var blueprint = AssetExportService.IsBlueprintClass(className);
             return _glFailure is not null
                 ? Task.FromResult<string?>(null)
                 : MakeAsync(path, entry.Name, async ct =>
                 {
-                    var model = await DecodeAsync(() =>
-                    {
-                        var loader = new MeshPreviewLoader(catalog, _logger) { TextureSize = 512 };
-                        return blueprint ? loader.LoadBlueprint(entry.PackagePath) : loader.LoadMesh(entry.ObjectPath);
-                    }, ct).ConfigureAwait(false);
+                    var model = await DecodeAsync(() => new MeshPreviewLoader(catalog, _logger) { TextureSize = 512 }.Load(entry.ObjectPath, entry.PackagePath, className), ct)
+                        .ConfigureAwait(false);
                     return model is null || model.Parts.Count == 0 ? null : (await RenderAsync(model, ct).ConfigureAwait(false), RenderSize, RenderSize);
                 }, cancellationToken);
         }
@@ -182,7 +177,9 @@ public sealed class ThumbnailService : IDisposable
     }
 
     // Bump RenderVersion when thumbnails render differently (v2: masked leaves cut out), so stale ones are made again.
-    private const string RenderVersion = "4"; // v3: Blueprints, 2x supersampled; v4: the masters' brightness and tint
+    // v3: Blueprints, 2x supersampled; v4: the masters' brightness and tint;
+    // v5: foliage types, override materials, see-through glass, master-default colours.
+    private const string RenderVersion = "5";
 
     private string CacheFile(string key, long size) =>
         Path.Combine(Directory, Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key + "|" + size + "|" + RenderVersion)))[..24] + ".png");

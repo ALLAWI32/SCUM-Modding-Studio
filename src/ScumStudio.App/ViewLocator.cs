@@ -23,6 +23,7 @@ public sealed class ViewLocator : IDataTemplate
         [typeof(AssetsPageViewModel)] = () => new AssetsPageView(),
         [typeof(ProjectsPageViewModel)] = () => new ProjectsPageView(),
         [typeof(SettingsPageViewModel)] = () => new SettingsPageView(),
+        [typeof(SharePageViewModel)] = () => new SharePageView(),
         [typeof(SetupViewModel)] = () => new SetupView(),
     };
 

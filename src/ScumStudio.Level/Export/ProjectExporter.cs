@@ -243,6 +243,8 @@ public sealed partial class ProjectExporter
         var warnings = new List<string>();
         var solidPieces = 0;
         var bendMeshes = options.BendMeshes ?? new BendSupport(catalog).Describe;
+        var undrawn = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+        bool Undrawn(string mesh) => undrawn.TryGetValue(mesh, out var known) ? known : undrawn[mesh] = IsWorldGridOnly(catalog, mesh);
         var packageCache = new Dictionary<string, CookedPackage?>(StringComparer.OrdinalIgnoreCase);
         var documentCache = new Dictionary<string, LevelDocument?>(StringComparer.OrdinalIgnoreCase);
         var placed = new List<(string Level, string File, HashSet<string> Actors)>();
@@ -325,7 +327,7 @@ public sealed partial class ProjectExporter
             packageCache[level] = package;
             documentCache[level] = document;
 
-            var request = PlanLevel(state, level, document, warnings, SourcePackage, SourceDocument, bendMeshes, options.StraightPieces, traders);
+            var request = PlanLevel(state, level, document, warnings, SourcePackage, SourceDocument, bendMeshes, options.StraightPieces, traders, Undrawn);
             if (request.IsEmpty)
             {
                 warnings.Add($"{level}: no exportable change; skipped.");
@@ -444,12 +446,13 @@ public sealed partial class ProjectExporter
                 built.Packages.Count, built.Applied.Count, built.Registered.Count);
         }
 
-        // Imported mods (someone's pak unpacked into the project) go in too, under what this export rewrote from them.
+        // Imported mods (someone's pak unpacked into the project) go in too, under what this export rewrote from them. Their
+        // registries are never shipped as they are: the staged one is stock plus their records of what ships plus ours.
         var carried = ProjectMods.CarryInto(options.Mods, staging, catalog.ProjectName);
         if (carried > 0)
         {
             _logger.LogInformation("Imported mods: {Files} file(s) carried into the pak.", carried);
-            writeRegistry |= File.Exists(Path.Combine([staging, .. AssetModBuilder.AssetRegistryPath.Split('/')]));
+            writeRegistry |= ProjectMods.MergeRegistries(options.Mods, staging, catalog, warnings);
         }
 
         if (levels.Count == 0 && assets.Count == 0 && carried == 0)
@@ -638,7 +641,8 @@ public sealed partial class ProjectExporter
 
     /// <summary>
     /// Translates the edits of one level into a package edit request: deleted actors (plus the stored child actors they
-    /// spawned), root/component transform overrides; unsupported edits (added actors, instance edits) become warnings.
+    /// spawned and what hangs on them, see <see cref="PlanAttached"/>), deleted parts of kept actors, root/component transform
+    /// overrides; unsupported edits (added actors, instance edits) become warnings.
     /// </summary>
     public static LevelEditRequest PlanLevel(EditState state, string level, LevelDocument? document, List<string> warnings) =>
         PlanLevel(state, level, document, warnings, null, null);
@@ -683,10 +687,14 @@ public sealed partial class ProjectExporter
     /// </param>
     /// <param name="straightPieces">Shaped actors to export straight (see <see cref="ExportOptions.StraightPieces"/>).</param>
     /// <param name="traders">The placed traders' plan (<see cref="PlanTraders"/>): new outposts' managers go into their level.</param>
+    /// <param name="undrawnMesh">
+    /// True for a mesh the game never draws (every material the editor's WorldGridMaterial: a lake's top, a helper shape); such
+    /// a part never keeps an actor whose drawn parts are all deleted. Null: every visible mesh counts.
+    /// </param>
     public static LevelEditRequest PlanLevel(
         EditState state, string level, LevelDocument? document, List<string> warnings,
         Func<string, CookedPackage?>? sourcePackages, Func<string, LevelDocument?>? sourceDocuments, Func<string, BendMesh?>? bendMeshes = null,
-        IReadOnlyCollection<ActorRef>? straightPieces = null, TraderExportPlan? traders = null)
+        IReadOnlyCollection<ActorRef>? straightPieces = null, TraderExportPlan? traders = null, Func<string, bool>? undrawnMesh = null)
     {
         ArgumentNullException.ThrowIfNull(state);
         ArgumentException.ThrowIfNullOrWhiteSpace(level);
@@ -696,122 +704,10 @@ public sealed partial class ProjectExporter
             state.DeletedActors.Where(a => SameLevel(a.Level, level) && !state.IsAdded(a)).Select(a => a.Actor),
             StringComparer.OrdinalIgnoreCase);
 
-        // Older projects "deleted" a building by scaling every one of its parts to nothing (the fire, sound, heat and
-        // collision stayed in game). When every drawn part of an actor is at scale 0 the actor goes whole instead.
+        var deleteComponents = PlanDeletedComponents(state, level, document, warnings, deleted);
         if (document is not null)
         {
-            var collapsed = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
-            foreach (var (actor, component, value) in state.TransformOverrides)
-            {
-                if (SameLevel(actor.Level, level) && !state.IsAdded(actor) && component.Length > 0 && IsNothing(value.Scale))
-                {
-                    (collapsed.TryGetValue(actor.Actor, out var parts) ? parts : collapsed[actor.Actor] = new HashSet<string>(StringComparer.OrdinalIgnoreCase)).Add(component);
-                }
-            }
-
-            var wholly = 0;
-            foreach (var (name, parts) in collapsed)
-            {
-                if (deleted.Contains(name) || document.FindActor(name) is not { } actor || actor.InstanceTransforms.Count > 0)
-                {
-                    continue;
-                }
-
-                var drawn = actor.Components.Where(c => c.StaticMeshPath is not null && !c.IsSynthesized && c.IsVisible && !c.IsInstanced).Select(c => c.Name).ToList();
-                if (drawn.Count > 0 && drawn.All(parts.Contains) && AllInstancesDeleted(state, actor, level))
-                {
-                    deleted.Add(name);
-                    wholly++;
-                }
-            }
-
-            // The same for a burning tyre stack whose tyres (instances) were brushed away one by one: nothing drawn is left.
-            foreach (var actor in document.Actors.Where(a => a.InstanceTransforms.Count > 0 && !deleted.Contains(a.Name) && !collapsed.ContainsKey(a.Name)))
-            {
-                if (!actor.Components.Any(c => c.StaticMeshPath is not null && !c.IsSynthesized && c.IsVisible && !c.IsInstanced)
-                    && AllInstancesDeleted(state, actor, level))
-                {
-                    deleted.Add(actor.Name);
-                    wholly++;
-                }
-            }
-
-            if (wholly > 0)
-            {
-                warnings.Add($"{level}: {wholly} actor(s) whose every drawn part was scaled to nothing are removed whole (their fire, sound, heat and collision go too).");
-            }
-        }
-
-        var deleteComponents = new List<(string Actor, string Component)>();
-        if (document is not null && deleted.Count > 0)
-        {
-            var owner = new Dictionary<int, ActorRecord>();
-            foreach (var actor in document.Actors)
-            {
-                foreach (var component in actor.Components.Where(c => !c.IsSynthesized))
-                {
-                    owner.TryAdd(component.ExportIndex, actor);
-                }
-            }
-
-            var changed = true;
-            while (changed)
-            {
-                changed = false;
-                foreach (var actor in document.Actors)
-                {
-                    if (!deleted.Contains(actor.Name) && actor.ParentComponent is { } parent
-                        && owner.TryGetValue(parent, out var parentActor) && deleted.Contains(parentActor.Name))
-                    {
-                        deleted.Add(actor.Name);
-                        changed = true;
-                    }
-                }
-            }
-
-            // A deleted child actor takes the ChildActorComponent that spawned it along: left in a kept parent, the component
-            // would spawn a fresh child from its class when the level loads, and the deleted door would be back.
-            foreach (var actor in document.Actors)
-            {
-                if (deleted.Contains(actor.Name) && actor.ParentComponent is { } parent && owner.TryGetValue(parent, out var parentActor)
-                    && !deleted.Contains(parentActor.Name) && parentActor.Components.FirstOrDefault(c => c.ExportIndex == parent) is { } spawner)
-                {
-                    deleteComponents.Add((parentActor.Name, spawner.Name));
-                }
-            }
-        }
-
-        var transforms = new List<TransformPatch>();
-        foreach (var (actor, component, value) in state.TransformOverrides)
-        {
-            if (!SameLevel(actor.Level, level))
-            {
-                continue;
-            }
-
-            if (state.IsAdded(actor))
-            {
-                continue; // reported below with the added actor
-            }
-
-            if (deleted.Contains(actor.Actor))
-            {
-                continue;
-            }
-
-            var componentName = component.Length > 0 ? component : null;
-            if (componentName is null && document?.FindActor(actor.Actor) is { Root: { } root })
-            {
-                if (root.IsSynthesized)
-                {
-                    warnings.Add($"{actor}: its root component '{root.Name}' is not stored in the level package (inherited from the Blueprint); moving it is not supported yet.");
-                    continue;
-                }
-
-                componentName = root.Name;
-            }
-
-            transforms.Add(new TransformPatch(actor.Actor, componentName, value));
+            PlanWholeActors(state, level, document, warnings, deleted, deleteComponents, undrawnMesh);
         }
 
         // Duplicates become copies of the pristine source actor (deleted copies are simply not created); other added
@@ -887,6 +783,91 @@ public sealed partial class ProjectExporter
 
         PlanBends(state, level, document, warnings, bendMeshes, deleted, copies, meshAdds, straightPieces);
 
+        // What hangs on a deleted object follows it, the straight originals of bent actors included (audit F053).
+        var owner = new Dictionary<int, (ActorRecord Actor, ComponentRecord Component)>();
+        var detached = new List<ActorRecord>();
+        if (document is not null && (deleted.Count > 0 || deleteComponents.Count > 0))
+        {
+            foreach (var actor in document.Actors)
+            {
+                foreach (var component in actor.Components.Where(c => !c.IsSynthesized))
+                {
+                    owner.TryAdd(component.ExportIndex, (actor, component));
+                }
+            }
+
+            detached = PlanAttached(level, document, warnings, deleted, deleteComponents, undrawnMesh);
+
+            // A deleted child actor takes the ChildActorComponent that spawned it along: left in a kept parent, the component
+            // would spawn a fresh child from its class when the level loads, and the deleted door would be back.
+            foreach (var actor in document.Actors)
+            {
+                if (deleted.Contains(actor.Name) && actor.ParentComponent is { } parent && owner.TryGetValue(parent, out var spawner) && !deleted.Contains(spawner.Actor.Name))
+                {
+                    deleteComponents.Add((spawner.Actor.Name, spawner.Component.Name));
+                }
+            }
+
+            // A same-level copy keeps its source's parent (Copy.cs): with that parent gone it has no place to stand on.
+            foreach (var copy in copies)
+            {
+                if (document.FindActor(copy.SourceActor)?.Root is { AttachParent: { } parent } && owner.TryGetValue(parent, out var on)
+                    && (deleted.Contains(on.Actor.Name) || deleteComponents.Contains((on.Actor.Name, on.Component.Name))))
+                {
+                    warnings.Add($"{level}: {copy.NewName} copies {copy.SourceActor}, which stood on a deleted object; in game the copy may leave its place (copy an object that stands on its own instead).");
+                }
+            }
+        }
+
+        if (document is not null)
+        {
+            WarnLeftovers(state, level, document, warnings, deleted, bendMeshes);
+        }
+
+        // A part of an actor that went whole goes with it.
+        deleteComponents = deleteComponents.Where(c => !deleted.Contains(c.Actor))
+            .DistinctBy(c => (c.Actor.ToUpperInvariant(), c.Component.ToUpperInvariant()))
+            .OrderBy(c => document?.FindActor(c.Actor)?.FindComponent(c.Component)?.ExportIndex ?? 0)
+            .ToList();
+
+        var transforms = new List<TransformPatch>();
+        foreach (var (actor, component, value) in state.TransformOverrides)
+        {
+            if (!SameLevel(actor.Level, level) || state.IsAdded(actor) || deleted.Contains(actor.Actor))
+            {
+                continue; // an added actor is reported below, a deleted one has no place
+            }
+
+            var componentName = component.Length > 0 ? component : null;
+            if (componentName is null && document?.FindActor(actor.Actor) is { Root: { } root })
+            {
+                if (root.IsSynthesized)
+                {
+                    warnings.Add($"{actor}: its root component '{root.Name}' is not stored in the level package (inherited from the Blueprint); moving it is not supported yet.");
+                    continue;
+                }
+
+                componentName = root.Name;
+            }
+
+            transforms.Add(new TransformPatch(actor.Actor, componentName, value));
+        }
+
+        // Kept actors that stood on a deleted object: taken off it where they stand in the world, with the project's moves.
+        var detach = new List<(string Actor, string Component)>();
+        foreach (var actor in detached)
+        {
+            if (actor.Root is not { IsSynthesized: false } root)
+            {
+                warnings.Add($"{level}: {actor.Name} stood on a deleted object and its root is not stored in the level; in game it may leave its place.");
+                continue;
+            }
+
+            transforms.RemoveAll(t => string.Equals(t.Actor, actor.Name, StringComparison.OrdinalIgnoreCase) && string.Equals(t.Component, root.Name, StringComparison.OrdinalIgnoreCase));
+            transforms.Add(new TransformPatch(actor.Name, root.Name, TransformValue.FromTransform(Placed(state, level, document!, owner, actor, root).World)));
+            detach.Add((actor.Name, root.Name));
+        }
+
         // Replaced meshes of kept stored components (a bent one was re-created above and left the level; an added actor
         // took its new mesh above; a copy's exports are the source's: not patched).
         var meshPatches = new List<MeshPatch>();
@@ -956,12 +937,12 @@ public sealed partial class ProjectExporter
         // instance lists come from the level document so the editor can locate and verify PerInstanceSMData.
         var instancePatches = new List<InstancePatch>();
         var hints = new Dictionary<(string Actor, string Component), InstanceArrayHint>();
-        foreach (var instance in state.DeletedInstances.Where(i => SameLevel(i.Level, level) && !state.IsDeleted(i.ActorRef) && !state.IsAdded(i)))
+        foreach (var instance in state.DeletedInstances.Where(i => SameLevel(i.Level, level) && !state.IsDeleted(i.ActorRef) && !deleted.Contains(i.Actor) && !state.IsAdded(i)))
         {
             AddInstancePatch(instance, null);
         }
 
-        foreach (var (instance, value) in state.InstanceOverrides.Where(i => SameLevel(i.Instance.Level, level) && !state.IsDeleted(i.Instance) && !state.IsAdded(i.Instance)))
+        foreach (var (instance, value) in state.InstanceOverrides.Where(i => SameLevel(i.Instance.Level, level) && !state.IsDeleted(i.Instance) && !deleted.Contains(i.Instance.Actor) && !state.IsAdded(i.Instance)))
         {
             AddInstancePatch(instance, value.ToTransform());
         }
@@ -1014,6 +995,7 @@ public sealed partial class ProjectExporter
             Loot = loot,
             DeleteActors = deleted.ToList(),
             DeleteComponents = deleteComponents,
+            Detach = detach,
             Transforms = transforms,
             Instances = instancePatches,
             InstanceAdds = instanceAdds,
@@ -1076,6 +1058,234 @@ public sealed partial class ProjectExporter
             hints[key] = new InstanceArrayHint(instance.Actor, instance.Component, known);
             return true;
         }
+    }
+
+    /// <summary>
+    /// Components deleted from actors that stay (a fireplace part with its fire, light and sound), by the level's names. The
+    /// journal is checked again as the studio checks a delete (<see cref="EditOpFactory.DeleteComponents"/>): a journal edited
+    /// by hand, merged, or read with another root inferred never makes an actor's root, a part its C++ class makes or a part
+    /// something kept hangs under an inert object; each is reported and stays.
+    /// </summary>
+    private static List<(string Actor, string Component)> PlanDeletedComponents(EditState state, string level, LevelDocument? document, List<string> warnings, HashSet<string> deleted)
+    {
+        var picked = new List<(ActorRecord Actor, ComponentRecord Component)>();
+        foreach (var (actor, component) in state.DeletedComponents.Where(k => SameLevel(k.Actor.Level, level) && !state.IsAdded(k.Actor) && !deleted.Contains(k.Actor.Actor)))
+        {
+            if (document is null)
+            {
+                warnings.Add($"{actor}.{component}: the level could not be read to check this part; it was not deleted.");
+            }
+            else if (document.FindActor(actor.Actor) is not { } record || record.FindComponent(component) is not { } stored)
+            {
+                warnings.Add($"{actor}.{component}: not stored in the level; that part was not deleted.");
+            }
+            else if (PartRules.WhyNotDeletable(record, stored) is { } refusal)
+            {
+                warnings.Add($"{actor}: component '{stored.Name}' {refusal}; it was not deleted.");
+            }
+            else
+            {
+                picked.Add((record, stored));
+            }
+        }
+
+        // A part with a kept thing under it stays, and so do the deleted parts it hangs under.
+        for (var dropped = document is not null; dropped;)
+        {
+            dropped = false;
+            var going = picked.Select(p => p.Component.ExportIndex).ToHashSet();
+            foreach (var p in picked.ToList())
+            {
+                if (PartRules.KeptUnder(document!, [p.Component.ExportIndex], (a, c) => deleted.Contains(a.Name) || going.Contains(c.ExportIndex)) is { } kept)
+                {
+                    warnings.Add($"{level}: {kept.Actor.Name}.{kept.Component.Name} hangs under {p.Actor.Name}.{p.Component.Name} and stays; that part was not deleted.");
+                    picked.Remove(p);
+                    dropped = true;
+                }
+            }
+        }
+
+        return picked.Select(p => (p.Actor.Name, p.Component.Name)).ToList();
+    }
+
+    // A part the game draws: the map's rule, less a mesh left on the WorldGrid material unless the level paints it over.
+    private static bool IsDrawn(ActorRecord actor, ComponentRecord component, Func<string, bool>? undrawnMesh) =>
+        PartRules.IsDrawnPart(actor, component)
+        && (component.OverrideMaterials?.Any(m => m is not null && !m.StartsWith(WorldGridMaterial, StringComparison.OrdinalIgnoreCase)) == true
+            || undrawnMesh?.Invoke(component.StaticMeshPath!) != true);
+
+    /// <summary>
+    /// An actor whose every part the map draws is gone (scaled to nothing or deleted), and every instance too, goes whole:
+    /// older projects "deleted" a burning barrel part by part and its fire, sound, heat and collision stayed in game. A
+    /// hidden, helper or WorldGrid mesh, which the map never draws, does not keep it, nor do instances beside parts (research
+    /// H-D': both did).
+    /// </summary>
+    private static void PlanWholeActors(EditState state, string level, LevelDocument document, List<string> warnings, HashSet<string> deleted,
+        IReadOnlyCollection<(string Actor, string Component)> deletedParts, Func<string, bool>? undrawnMesh)
+    {
+        var collapsed = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (actor, component) in state.TransformOverrides.Where(o => SameLevel(o.Actor.Level, level) && !state.IsAdded(o.Actor) && o.Component.Length > 0 && IsNothing(o.Value.Scale))
+                     .Select(o => (o.Actor.Actor, o.Component)).Concat(deletedParts))
+        {
+            (collapsed.TryGetValue(actor, out var parts) ? parts : collapsed[actor] = new HashSet<string>(StringComparer.OrdinalIgnoreCase)).Add(component);
+        }
+
+        var touched = collapsed.Keys
+            .Concat(state.DeletedInstances.Where(i => SameLevel(i.Level, level)).Select(i => i.Actor))
+            .Where(a => !deleted.Contains(a) && !state.IsAdded(new ActorRef(level, a)))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var wholly = 0;
+        foreach (var name in touched)
+        {
+            if (document.FindActor(name) is not { } actor)
+            {
+                continue;
+            }
+
+            var drawn = actor.Components.Where(c => !c.IsSynthesized && IsDrawn(actor, c, undrawnMesh)).ToList();
+            var gone = drawn.All(c => collapsed.TryGetValue(actor.Name, out var parts) && parts.Contains(c.Name));
+            if ((drawn.Count > 0 || actor.InstanceTransforms.Count > 0) && gone && AllInstancesDeleted(state, actor, level))
+            {
+                deleted.Add(actor.Name);
+                wholly++;
+            }
+        }
+
+        if (wholly > 0)
+        {
+            warnings.Add($"{level}: {wholly} actor(s) whose every drawn part was scaled to nothing or deleted are removed whole (their fire, sound, heat and collision go too).");
+        }
+    }
+
+    /// <summary>
+    /// What hangs on a deleted actor or deleted part follows it: a stored child actor its ChildActorComponent spawned goes, and
+    /// so does an attached actor that draws nothing (a fire emitter, its light and sound hung on a fireplace). An attached
+    /// actor with a mesh of its own (a lamp on a shelf, a bridge's fence) stays and is returned, to be taken off its parent
+    /// where it stands: the parent is an inert object in the written level, the game nulls the link and the relative place
+    /// would become a world place round the origin (audit F053). So does a trader, spawner or volume hung on it: the export,
+    /// like the companions, never deletes those on its own (<see cref="ActorRoles.IsNeverTakenAlong"/>).
+    /// </summary>
+    private static List<ActorRecord> PlanAttached(string level, LevelDocument document, List<string> warnings, HashSet<string> deleted,
+        IReadOnlyCollection<(string Actor, string Component)> deletedParts, Func<string, bool>? undrawnMesh)
+    {
+        var goneParts = deletedParts.Select(p => document.FindActor(p.Actor)?.FindComponent(p.Component)?.ExportIndex).OfType<int>().ToHashSet();
+        bool Draws(ActorRecord actor) => actor.InstanceTransforms.Count > 0 || actor.Components.Any(c => IsDrawn(actor, c, undrawnMesh));
+
+        // Breadth first: the fate of what an actor hangs from is settled before its own. One that stays (detached) keeps
+        // whatever hangs on it.
+        var taken = new List<string>();
+        var detached = new List<ActorRecord>();
+        foreach (var d in Attachments.Dependents(document, new HashSet<string>(deleted, StringComparer.OrdinalIgnoreCase), goneParts))
+        {
+            if (!deleted.Contains(d.Parent.Name) && !goneParts.Contains(d.ViaComponent))
+            {
+                continue;
+            }
+
+            if (d.Kind == DependentKind.ChildActor)
+            {
+                deleted.Add(d.Actor.Name); // a stored child actor goes with what spawned it
+            }
+            else if (ActorRoles.IsNeverTakenAlong(document, d.Actor))
+            {
+                detached.Add(d.Actor);
+                warnings.Add($"{level}: {d.Actor.Name} ({d.Actor.ClassName}) hung on deleted {d.Parent.Name} and stays where it stands; the export never deletes a trader, spawner or volume on its own: delete it in the studio if it should go.");
+            }
+            else if (Draws(d.Actor))
+            {
+                detached.Add(d.Actor);
+            }
+            else
+            {
+                deleted.Add(d.Actor.Name);
+                taken.Add(d.Actor.Name);
+            }
+        }
+
+        if (taken.Count > 0)
+        {
+            warnings.Add($"{level}: {taken.Count} actor(s) attached to deleted objects and drawing nothing go with them (their fire, light and sound): {string.Join(", ", taken)}.");
+        }
+
+        if (detached.Count > 0)
+        {
+            warnings.Add($"{level}: kept where they stand in the world, taken off the deleted object they stood on: {string.Join(", ", detached.Select(a => a.Name))}.");
+        }
+
+        return detached;
+    }
+
+    /// <summary>
+    /// Says what still belongs to an object the journal deletes in this level and stays (a journal from an older studio, the
+    /// MCP, a delete of the object alone): a fire, light, sound or decal at its spot (<see cref="Companions.Find"/>), and the
+    /// items a deleted spawner already gave out. The export never deletes these on its own.
+    /// </summary>
+    private static void WarnLeftovers(EditState state, string level, LevelDocument document, List<string> warnings, HashSet<string> deleted, Func<string, BendMesh?>? bendMeshes)
+    {
+        var seeds = state.DeletedActors.Where(a => SameLevel(a.Level, level) && !state.IsAdded(a) && document.FindActor(a.Actor) is not null).Select(a => new DeleteSeed(a)).ToList();
+        if (seeds.Count == 0)
+        {
+            return;
+        }
+
+        // The deleted objects' own bounds; the kept ones (the ownership guard) stand in as 2 m boxes, so the check never reads
+        // every mesh of the level.
+        var seedMeshes = seeds.SelectMany(s => document.FindActor(s.Actor.Actor)!.Components).Select(c => c.StaticMeshPath).OfType<string>().ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var found = Companions.Find([document], seeds, state, mesh => seedMeshes.Contains(mesh) ? bendMeshes?.Invoke(mesh)?.Bounds : null);
+        foreach (var c in found.Companions.Where(c => c.DefaultOn && !c.Locked && !c.HasOwnMesh && c.Rule is not (CompanionRule.ChildActor or CompanionRule.Attached)))
+        {
+            if (!deleted.Contains(c.Actor.Actor) && (c.Component is null ? !state.IsDeleted(c.Actor) : !state.IsDeleted(c.Actor, c.Component)))
+            {
+                warnings.Add(string.Create(CultureInfo.InvariantCulture,
+                    $"{level}: {c.Actor.Actor}{(c.Component is null ? string.Empty : "." + c.Component)} ({c.ClassName}) stays {c.DistanceCm / 100f:0.#} m from deleted {c.Seed.Actor}; delete it with the object in the studio."));
+            }
+        }
+
+        foreach (var note in found.Notes.Where(n => n.Kind == CompanionNoteKind.SpawnedItemsStay))
+        {
+            warnings.Add($"{level}: items {note.Actor.Actor} already spawned stay in worlds that ran before this mod; only the game removes them.");
+        }
+    }
+
+    /// <summary>
+    /// Where a stored component stands in the world with the project's moves, its own and its parents' (as the level has it
+    /// when none moved); Moved tells whether one did. A moved one hangs in its parent's space as the level reads it: on the
+    /// parent mesh's socket, with its absolute location, rotation or scale (audit F201).
+    /// </summary>
+    private static (FTransform World, bool Moved) Placed(EditState state, string level, LevelDocument document, IReadOnlyDictionary<int, (ActorRecord Actor, ComponentRecord Component)> owner,
+        ActorRecord actor, ComponentRecord component, int depth = 0)
+    {
+        var actorRef = new ActorRef(level, actor.Name);
+        var moved = (component.ExportIndex == actor.RootComponent ? state.GetTransformOverride(actorRef) : null) ?? state.GetTransformOverride(actorRef, component.Name);
+        if (component.AttachParent is { } parent && depth < 64 && owner.TryGetValue(parent, out var up))
+        {
+            var (parentWorld, parentMoved) = Placed(state, level, document, owner, up.Actor, up.Component, depth + 1);
+            if (moved is null && !parentMoved)
+            {
+                return (component.WorldTransform, false);
+            }
+
+            return (InParent(document, component, (moved ?? component.Relative).ToTransform(), parentWorld), true);
+        }
+
+        return moved is { } own ? (own.ToTransform(), true) : (component.WorldTransform, false);
+    }
+
+    /// <summary>
+    /// <paramref name="relative"/> placed in its parent's space as the level reads it (<c>LevelDocument</c>): on the parent
+    /// mesh's socket, with the component's absolute location, rotation or scale (audit F201).
+    /// </summary>
+    private static FTransform InParent(LevelDocument document, ComponentRecord component, FTransform relative, FTransform parentWorld)
+    {
+        var stored = component.ExportIndex >= 0 && component.ExportIndex < document.Data.Exports.Count ? document.Data.Exports[component.ExportIndex] : null;
+        var world = relative * (stored?.AttachSocket is { } socket ? socket * parentWorld : parentWorld);
+        return stored is { AbsoluteLocation: true } or { AbsoluteRotation: true } or { AbsoluteScale: true }
+            ? new FTransform(
+                stored.AbsoluteRotation ? relative.Rotation : world.Rotation,
+                stored.AbsoluteLocation ? relative.Translation : world.Translation,
+                stored.AbsoluteScale ? relative.Scale3D : world.Scale3D)
+            : world;
     }
 
     /// <summary>
@@ -1188,9 +1398,9 @@ public sealed partial class ProjectExporter
 
         // A bent actor is written as a new actor of its own: one attached to another (a bridge's fence) needs its place in the world.
         static TransformValue InWorld(LevelDocument document, ActorRecord actor, TransformValue relative) =>
-            actor.Root?.AttachParent is { } parentIndex
+            actor.Root is { AttachParent: { } parentIndex } hung
             && document.Actors.SelectMany(a => a.Components).FirstOrDefault(c => c.ExportIndex == parentIndex) is { } parent
-                ? TransformValue.FromTransform(relative.ToTransform() * parent.WorldTransform)
+                ? TransformValue.FromTransform(InParent(document, hung, relative.ToTransform(), parent.WorldTransform))
                 : relative;
     }
 
@@ -1222,6 +1432,30 @@ public sealed partial class ProjectExporter
     }
 
     private static bool SameLevel(string a, string b) => string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
+
+    private const string WorldGridMaterial = "/Engine/EngineMaterials/WorldGridMaterial";
+
+    /// <summary>
+    /// True for a mesh left on the engine's default grid material only: the game never draws it (a lake's top surface, the
+    /// weather shells round the bunkers; the map skips such meshes the same way).
+    /// </summary>
+    private static bool IsWorldGridOnly(AssetCatalog catalog, string meshPath)
+    {
+        try
+        {
+            if (!catalog.TryLoadObject<CUE4Parse.UE4.Assets.Exports.StaticMesh.UStaticMesh>(meshPath, out var mesh))
+            {
+                return false;
+            }
+
+            var materials = Assets.Meshes.MeshExtractor.DescribeStaticMesh(mesh).Materials;
+            return materials.Count > 0 && materials.All(m => m.MaterialPath.StartsWith(WorldGridMaterial, StringComparison.OrdinalIgnoreCase));
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            return false; // unreadable: counted as drawn, the actor stays
+        }
+    }
 
     private static CookedPackage? TryReadPackage(AssetCatalog catalog, string level, List<string> warnings)
     {

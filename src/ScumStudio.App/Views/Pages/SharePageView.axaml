@@ -1,0 +1,321 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:ScumStudio.App.ViewModels"
+             xmlns:c="using:ScumStudio.App.Controls"
+             x:Class="ScumStudio.App.Views.Pages.SharePageView"
+             x:DataType="vm:SharePageViewModel">
+  <!-- No background anywhere outside the card and the bar: while a picture is framed the Map under it takes the mouse and keys. -->
+  <Panel>
+    <!-- ===================================================================== The card -->
+    <Panel x:Name="ShareCard" IsVisible="{Binding IsCardShown}">
+      <Border Background="{DynamicResource ScrimBrush}" />
+      <Border Classes="dialog" Width="760" MinHeight="560" MaxHeight="720" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="24">
+        <DockPanel>
+          <Border DockPanel.Dock="Top" Padding="24,20,24,10">
+            <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="14">
+              <Border Classes="iconTile" Width="44" Height="44" CornerRadius="{DynamicResource SmallCornerRadius}">
+                <c:GlyphIcon Kind="Icon.Share" IconSize="22" HorizontalAlignment="Center" VerticalAlignment="Center" />
+              </Border>
+              <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
+                <TextBlock Text="{Tr Share.Title}" Classes="h1" FontSize="19" />
+                <TextBlock Text="{Tr Share.Subtitle}" Classes="muted wrap" FontSize="12.5" />
+              </StackPanel>
+              <Button Grid.Column="2" Classes="ghost square" Command="{Binding CloseCommand}" VerticalAlignment="Top" ToolTip.Tip="{Tr Share.Close.Tip}">
+                <c:GlyphIcon Kind="Icon.Close" IconSize="14" />
+              </Button>
+            </Grid>
+          </Border>
+
+          <!-- Tabs: the same look as the workspace tabs. -->
+          <Border DockPanel.Dock="Top" Padding="18,0" BorderBrush="{DynamicResource StrokeSubtleBrush}" BorderThickness="0,0,0,1">
+            <ListBox x:Name="ShareTabs" Classes="nav" ItemsSource="{Binding Tabs}" SelectedItem="{Binding SelectedTab}" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+              <ListBox.ItemsPanel>
+                <ItemsPanelTemplate>
+                  <StackPanel Orientation="Horizontal" />
+                </ItemsPanelTemplate>
+              </ListBox.ItemsPanel>
+              <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="vm:ShareTabItem">
+                  <Panel ToolTip.Tip="{Binding Tip}">
+                    <StackPanel Orientation="Horizontal" Spacing="7" VerticalAlignment="Center">
+                      <c:GlyphIcon Kind="{Binding IconKey}" IconSize="14" VerticalAlignment="Center" />
+                      <TextBlock Text="{Binding Title}" VerticalAlignment="Center" FontWeight="Medium" FontSize="12.5" />
+                    </StackPanel>
+                    <Border Classes="navIndicator" Height="2" VerticalAlignment="Bottom" Margin="-9,0" />
+                  </Panel>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+          </Border>
+
+          <Panel>
+            <!-- ================================================================= Share -->
+            <DockPanel IsVisible="{Binding IsShareTab}">
+              <Border DockPanel.Dock="Bottom" Padding="24,12" BorderBrush="{DynamicResource StrokeSubtleBrush}" BorderThickness="0,1,0,0" Background="{DynamicResource Bg1Brush}">
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                  <TextBlock x:Name="ShareStatusText" Text="{Binding ShareStatus}" Classes="caption wrap" VerticalAlignment="Center" />
+                  <Button Grid.Column="1" x:Name="UploadButton" Classes="accent" Command="{Binding ShareCommand}" ToolTip.Tip="{Tr Share.Upload.Tip}">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                      <c:GlyphIcon Kind="Icon.Send" IconSize="14" />
+                      <TextBlock Text="{Tr Share.Upload}" />
+                    </StackPanel>
+                  </Button>
+                </Grid>
+              </Border>
+              <ScrollViewer HorizontalScrollBarVisibility="Disabled">
+                <StackPanel Margin="24,16,24,20" Spacing="18">
+                  <TextBlock Text="{Tr Share.NoProject}" Classes="caption wrap" IsVisible="{Binding !HasProject}" />
+                  <TextBlock Text="{Tr Share.NotAvailable}" Classes="caption wrap" IsVisible="{Binding !IsConfigured}" />
+
+                  <!-- Your name: no account, kept on this PC. -->
+                  <StackPanel Spacing="6">
+                    <TextBlock Text="{Tr Share.Name.Label}" FontWeight="SemiBold" />
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                      <TextBox x:Name="DisplayNameBox" Text="{Binding DisplayName}" MaxLength="{x:Static vm:SharePageViewModel.MaxDisplayName}"
+                               Watermark="{Tr Share.Name.Watermark}" ToolTip.Tip="{Tr Share.Name.Tip}" />
+                      <Button Grid.Column="1" Classes="ghost small" Content="{Tr Share.Name.Forget}" Command="{Binding ForgetNameCommand}"
+                              VerticalAlignment="Center" ToolTip.Tip="{Tr Share.Name.Forget.Tip}" />
+                    </Grid>
+                  </StackPanel>
+
+                  <!-- What to share: the cells with edits, the island-wide levels, the assets, craftables and economy. -->
+                  <StackPanel Spacing="8" IsVisible="{Binding HasProject}">
+                    <Grid ColumnDefinitions="*,Auto">
+                      <TextBlock Text="{Tr Share.Pick.Title}" FontWeight="SemiBold" VerticalAlignment="Center" />
+                      <CheckBox Grid.Column="1" x:Name="WholeMapBox" IsChecked="{Binding WholeMap}" Content="{Tr Share.WholeMap}" ToolTip.Tip="{Tr Share.WholeMap.Tip}" />
+                    </Grid>
+                    <ItemsControl x:Name="SectorList" ItemsSource="{Binding Sectors}">
+                      <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                          <WrapPanel Orientation="Horizontal" />
+                        </ItemsPanelTemplate>
+                      </ItemsControl.ItemsPanel>
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:ShareGroupItem">
+                          <!-- A TextBlock, not Content text: "A_0" would lose its underscore to the access-key marker. -->
+                          <CheckBox IsChecked="{Binding IsChecked}" MinWidth="150" Margin="0,0,12,2" ToolTip.Tip="{Tr Share.Sector.Tip}">
+                            <TextBlock Text="{Binding Label}" />
+                          </CheckBox>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <CheckBox IsChecked="{Binding IncludeIslandWide}" Content="{Binding IslandWideText}" IsVisible="{Binding HasIslandWide}" ToolTip.Tip="{Tr Share.IslandWide.Tip}" />
+                    <CheckBox IsChecked="{Binding IncludeAssets}" Content="{Binding AssetsText}" IsVisible="{Binding HasAssets}" ToolTip.Tip="{Tr Share.Assets.Tip}" />
+                    <CheckBox IsChecked="{Binding IncludeCraftables}" Content="{Binding CraftablesText}" IsVisible="{Binding HasCraftables}" ToolTip.Tip="{Tr Share.Craftables.Tip}" />
+                    <TextBlock Text="{Binding CraftablesSkippedText}" Classes="caption wrap" IsVisible="{Binding HasSkippedCraftables}" Margin="26,0,0,0" />
+                    <CheckBox IsChecked="{Binding IncludeEconomy}" Content="{Binding EconomyText}" IsVisible="{Binding HasEconomy}" ToolTip.Tip="{Tr Share.Economy.Tip}" />
+                    <TextBlock Text="{Binding PulledInText}" Classes="caption wrap" IsVisible="{Binding PulledInText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                    <TextBlock Text="{Binding ChoiceDetail}" Classes="caption wrap" Foreground="{DynamicResource WarningBrush}"
+                               IsVisible="{Binding ChoiceDetail, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                  </StackPanel>
+
+                  <!-- Name and description: shown as plain text in the gallery. -->
+                  <StackPanel Spacing="6">
+                    <TextBlock Text="{Tr Share.ModName.Label}" FontWeight="SemiBold" />
+                    <TextBox x:Name="ModNameBox" Text="{Binding ModName}" MaxLength="{x:Static vm:SharePageViewModel.MaxModName}"
+                             Watermark="{Tr Share.ModName.Watermark}" ToolTip.Tip="{Tr Share.ModName.Tip}" />
+                    <TextBlock Text="{Tr Share.Description.Label}" FontWeight="SemiBold" Margin="0,6,0,0" />
+                    <TextBox x:Name="DescriptionBox" Text="{Binding Description}" AcceptsReturn="True" TextWrapping="Wrap" Height="96"
+                             MaxLength="{x:Static vm:SharePageViewModel.MaxDescription}" Watermark="{Tr Share.Description.Watermark}" ToolTip.Tip="{Tr Share.Description.Tip}" />
+                    <TextBlock Text="{Binding DescriptionLengthText}" Classes="caption mono" HorizontalAlignment="Right" />
+                  </StackPanel>
+
+                  <!-- Picture: a high-resolution shot of the Map's view, or an image file. -->
+                  <StackPanel Spacing="8">
+                    <TextBlock Text="{Tr Share.Picture.Title}" FontWeight="SemiBold" />
+                    <Grid ColumnDefinitions="Auto,*" ColumnSpacing="14">
+                      <Border Width="256" Height="144" Background="{DynamicResource Bg0Brush}" BorderBrush="{DynamicResource StrokeBrush}" BorderThickness="1"
+                              CornerRadius="{DynamicResource SmallCornerRadius}" ClipToBounds="True">
+                        <Panel>
+                          <c:GlyphIcon Kind="Icon.Image" IconSize="28" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource TextMutedBrush}" IsVisible="{Binding !HasPicture}" />
+                          <Image x:Name="PicturePreview" Source="{Binding PictureImage}" Stretch="UniformToFill" />
+                        </Panel>
+                      </Border>
+                      <StackPanel Grid.Column="1" Spacing="8" VerticalAlignment="Center">
+                        <Button x:Name="CaptureStartButton" Classes="ghost" HorizontalAlignment="Left" Command="{Binding StartCaptureCommand}" ToolTip.Tip="{Tr Share.Picture.Capture.Tip}">
+                          <StackPanel Orientation="Horizontal" Spacing="6">
+                            <c:GlyphIcon Kind="Icon.Camera" IconSize="14" />
+                            <TextBlock Text="{Tr Share.Picture.Capture}" />
+                          </StackPanel>
+                        </Button>
+                        <Button x:Name="ImportPictureButton" Classes="ghost" HorizontalAlignment="Left" Command="{Binding ImportPictureCommand}" ToolTip.Tip="{Tr Share.Picture.Import.Tip}">
+                          <StackPanel Orientation="Horizontal" Spacing="6">
+                            <c:GlyphIcon Kind="Icon.Image" IconSize="14" />
+                            <TextBlock Text="{Tr Share.Picture.Import}" />
+                          </StackPanel>
+                        </Button>
+                      </StackPanel>
+                    </Grid>
+                  </StackPanel>
+                </StackPanel>
+              </ScrollViewer>
+            </DockPanel>
+
+            <!-- ================================================================= Gallery -->
+            <DockPanel IsVisible="{Binding IsGalleryTab}">
+              <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto" ColumnSpacing="10" Margin="24,12,24,8">
+                <StackPanel VerticalAlignment="Center" Spacing="2">
+                  <TextBlock x:Name="GalleryStatusText" Text="{Binding GalleryStatus}" Classes="caption wrap" />
+                  <TextBlock Text="{Binding GalleryDetail}" Classes="caption mono wrap" Foreground="{DynamicResource TextMutedBrush}"
+                             IsVisible="{Binding GalleryDetail, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                </StackPanel>
+                <Button Grid.Column="1" Classes="ghost small" Command="{Binding RefreshGalleryCommand}" IsEnabled="{Binding !IsGalleryLoading}"
+                        VerticalAlignment="Top" ToolTip.Tip="{Tr Share.Gallery.Refresh.Tip}">
+                  <StackPanel Orientation="Horizontal" Spacing="6">
+                    <c:GlyphIcon Kind="Icon.Refresh" IconSize="12" />
+                    <TextBlock Text="{Tr Share.Gallery.Refresh}" />
+                  </StackPanel>
+                </Button>
+              </Grid>
+
+              <!-- What Get would add, before anything changes. -->
+              <Border x:Name="PendingPanel" DockPanel.Dock="Bottom" Padding="24,14" BorderBrush="{DynamicResource StrokeSubtleBrush}" BorderThickness="0,1,0,0"
+                      Background="{DynamicResource Bg1Brush}" IsVisible="{Binding HasPending}">
+                <StackPanel Spacing="6">
+                  <TextBlock Text="{Binding Pending.Title, FallbackValue=''}" FontWeight="SemiBold" FontSize="14" Classes="wrap" />
+                  <ItemsControl ItemsSource="{Binding Pending.Lines, FallbackValue={x:Null}}">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="x:String">
+                        <TextBlock Text="{Binding}" Classes="wrap" />
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                  <TextBlock Text="{Binding Pending.BuildWarning, FallbackValue=''}" Classes="caption wrap" Foreground="{DynamicResource WarningBrush}"
+                             IsVisible="{Binding Pending.HasBuildWarning, FallbackValue=False}" />
+                  <StackPanel Spacing="2" IsVisible="{Binding Pending.HasConflict, FallbackValue=False}">
+                    <TextBlock Text="{Tr Share.Preview.Conflict}" Classes="wrap" Foreground="{DynamicResource DangerBrush}" />
+                    <TextBlock Text="{Binding Pending.ConflictDetail, FallbackValue=''}" Classes="caption mono wrap" />
+                  </StackPanel>
+                  <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right" Margin="0,4,0,0">
+                    <Button Classes="ghost" Content="{Tr Share.Preview.Cancel}" Command="{Binding CancelPendingCommand}" ToolTip.Tip="{Tr Share.Preview.Cancel.Tip}" />
+                    <Button x:Name="ApplyPendingButton" Classes="accent" Command="{Binding ApplyPendingCommand}" ToolTip.Tip="{Tr Share.Preview.Apply.Tip}">
+                      <StackPanel Orientation="Horizontal" Spacing="6">
+                        <c:GlyphIcon Kind="Icon.Download" IconSize="14" />
+                        <TextBlock Text="{Tr Share.Preview.Apply}" />
+                      </StackPanel>
+                    </Button>
+                  </StackPanel>
+                </StackPanel>
+              </Border>
+
+              <ScrollViewer HorizontalScrollBarVisibility="Disabled">
+                <ItemsControl x:Name="GalleryList" ItemsSource="{Binding Gallery}" Margin="24,0,24,16">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:ShareCardItem">
+                      <Border Classes="card" Margin="0,0,0,10">
+                        <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="14">
+                          <Border Width="160" Height="90" Background="{DynamicResource Bg0Brush}" CornerRadius="{DynamicResource SmallCornerRadius}" ClipToBounds="True">
+                            <Panel>
+                              <c:GlyphIcon Kind="Icon.Image" IconSize="20" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="{DynamicResource TextMutedBrush}"
+                                           IsVisible="{Binding Thumb, Converter={x:Static ObjectConverters.IsNull}}" />
+                              <Image Source="{Binding Thumb}" Stretch="UniformToFill" />
+                            </Panel>
+                          </Border>
+                          <StackPanel Grid.Column="1" Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                            <TextBlock Text="{Binding ByText}" Classes="caption" TextTrimming="CharacterEllipsis" />
+                            <TextBlock Text="{Binding Description}" Classes="muted wrap" MaxLines="3" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Description}" />
+                            <TextBlock Text="{Binding Meta}" Classes="caption" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding VersionText}" />
+                          </StackPanel>
+                          <Button Grid.Column="2" Classes="accent small" VerticalAlignment="Center"
+                                  Command="{Binding $parent[ItemsControl].((vm:SharePageViewModel)DataContext).GetCommand}" CommandParameter="{Binding}"
+                                  ToolTip.Tip="{Tr Share.Gallery.Get.Tip}">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                              <c:GlyphIcon Kind="Icon.Download" IconSize="13" />
+                              <TextBlock Text="{Tr Share.Gallery.Get}" />
+                            </StackPanel>
+                          </Button>
+                        </Grid>
+                      </Border>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </ScrollViewer>
+            </DockPanel>
+
+            <!-- ================================================================= Added to this project -->
+            <ScrollViewer IsVisible="{Binding IsInstalledTab}" HorizontalScrollBarVisibility="Disabled">
+              <StackPanel Margin="24,16,24,20" Spacing="10">
+                <TextBlock Text="{Tr Share.NoProject}" Classes="caption wrap" IsVisible="{Binding !HasProject}" />
+                <TextBlock Text="{Tr Share.Installed.Empty}" Classes="caption wrap" IsVisible="{Binding HasNoInstalled}" />
+                <ItemsControl x:Name="InstalledList" ItemsSource="{Binding Installed}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:ShareInstalledItem">
+                      <Border Classes="card" Margin="0,0,0,8">
+                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                          <StackPanel Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                            <TextBlock Text="{Binding ByText}" Classes="caption" TextTrimming="CharacterEllipsis" />
+                          </StackPanel>
+                          <Button Grid.Column="1" Classes="ghost small" Content="{Tr Share.Installed.Remove}" VerticalAlignment="Center"
+                                  Command="{Binding $parent[ItemsControl].((vm:SharePageViewModel)DataContext).RemoveInstalledCommand}" CommandParameter="{Binding}"
+                                  ToolTip.Tip="{Tr Share.Installed.Remove.Tip}" />
+                        </Grid>
+                      </Border>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </StackPanel>
+            </ScrollViewer>
+
+            <!-- ================================================================= Moderate (owner only: the key file is on this PC) -->
+            <DockPanel IsVisible="{Binding IsModerateTab}">
+              <StackPanel DockPanel.Dock="Top" Margin="24,12,24,8" Spacing="4">
+                <TextBlock Text="{Tr Share.Moderate.Hint}" Classes="caption wrap" />
+                <TextBlock Text="{Binding ModerateStatus}" Classes="caption wrap" IsVisible="{Binding ModerateStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                <TextBlock Text="{Binding GalleryStatus}" Classes="caption wrap" IsVisible="{Binding GalleryStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+              </StackPanel>
+              <ScrollViewer HorizontalScrollBarVisibility="Disabled">
+                <ItemsControl x:Name="ModerateList" ItemsSource="{Binding Gallery}" Margin="24,0,24,16">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:ShareCardItem">
+                      <Border Classes="card" Margin="0,0,0,8">
+                        <StackPanel Spacing="8">
+                          <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                            <StackPanel Spacing="2">
+                              <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                              <TextBlock Text="{Binding ByText}" Classes="caption" />
+                              <TextBlock Text="{Binding Description}" Classes="muted wrap" MaxLines="2" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Description}" />
+                            </StackPanel>
+                            <Button Grid.Column="1" Classes="ghost small" Content="{Tr Share.Moderate.Remove}" VerticalAlignment="Top" IsVisible="{Binding !IsConfirming}"
+                                    Command="{Binding $parent[ItemsControl].((vm:SharePageViewModel)DataContext).AskRemoveListingCommand}" CommandParameter="{Binding}"
+                                    ToolTip.Tip="{Tr Share.Moderate.Remove.Tip}" />
+                          </Grid>
+                          <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8" IsVisible="{Binding IsConfirming}">
+                            <TextBlock Text="{Binding ConfirmText}" Classes="wrap" Foreground="{DynamicResource DangerBrush}" VerticalAlignment="Center" />
+                            <Button Grid.Column="1" Classes="ghost small" Content="{Tr Share.Moderate.No}"
+                                    Command="{Binding $parent[ItemsControl].((vm:SharePageViewModel)DataContext).KeepListingCommand}" CommandParameter="{Binding}"
+                                    ToolTip.Tip="{Tr Share.Moderate.No.Tip}" />
+                            <Button Grid.Column="2" Classes="danger small" Content="{Tr Share.Moderate.Yes}"
+                                    Command="{Binding $parent[ItemsControl].((vm:SharePageViewModel)DataContext).RemoveListingCommand}" CommandParameter="{Binding}"
+                                    ToolTip.Tip="{Tr Share.Moderate.Yes.Tip}" />
+                          </Grid>
+                        </StackPanel>
+                      </Border>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </ScrollViewer>
+            </DockPanel>
+          </Panel>
+        </DockPanel>
+      </Border>
+    </Panel>
+
+    <!-- ===================================================================== Capture bar: the card steps aside while the camera is flown to the spot -->
+    <Border x:Name="CaptureBar" Classes="card" IsVisible="{Binding IsCapturing}" HorizontalAlignment="Center" VerticalAlignment="Top" Margin="16,148,16,0" Padding="14,8">
+      <StackPanel Orientation="Horizontal" Spacing="12">
+        <c:GlyphIcon Kind="Icon.Camera" IconSize="16" VerticalAlignment="Center" Foreground="{DynamicResource AccentBrush}" />
+        <TextBlock Text="{Tr Share.Capture.Hint}" VerticalAlignment="Center" />
+        <Button x:Name="CaptureButton" Classes="accent" Command="{Binding CaptureCommand}" ToolTip.Tip="{Tr Share.Capture.Button.Tip}">
+          <StackPanel Orientation="Horizontal" Spacing="6">
+            <c:GlyphIcon Kind="Icon.Camera" IconSize="14" />
+            <TextBlock Text="{Tr Share.Capture.Button}" />
+          </StackPanel>
+        </Button>
+        <Button Classes="ghost" Content="{Tr Share.Capture.Cancel}" Command="{Binding CancelCaptureCommand}" ToolTip.Tip="{Tr Share.Capture.Cancel.Tip}" />
+      </StackPanel>
+    </Border>
+  </Panel>
+</UserControl>

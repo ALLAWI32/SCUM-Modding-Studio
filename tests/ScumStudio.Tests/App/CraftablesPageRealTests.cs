@@ -3,6 +3,7 @@ using Avalonia.VisualTree;
 using ScumStudio.App.Services;
 using ScumStudio.App.ViewModels;
 using ScumStudio.Core.Abstractions;
+using ScumStudio.Formats.Packages;
 using ScumStudio.Modding.Crafting;
 using ScumStudio.Pak;
 
@@ -112,6 +113,14 @@ public sealed class CraftablesPageRealTests
             chair.Ingredients[0].Amount = 77;
             page.SelectedItem = chair;
 
+            // "Shows in": the chair goes where the game's walls are (a building section, read from the game's recipes).
+            Assert.True(HeadlessUi.PumpUntil(() => chair.Sections.Count > 1, TimeSpan.FromMinutes(3)), "no crafting sections");
+            Assert.True(chair.IsBuilding);
+            var wall = CraftCategories.SectionOf(CraftCategories.Read(ctx.Services.Workspace.Catalog!), CraftCategories.WallRecipe)!;
+            chair.SelectedSection = chair.Sections.Single(s => s.Tag == wall.Tag);
+            HeadlessUi.Pump();
+            Assert.Equal(wall.Tag, CraftablesFile.Load(project.DirectoryPath).Items[1].Category);
+
             // 3D pictures of both meshes, then the page's picture.
             Assert.True(HeadlessUi.PumpUntil(() => page.Items.All(i => i.Thumbnail is not null), TimeSpan.FromSeconds(90)), "no 3D pictures");
             var list = window.GetVisualDescendants().OfType<ListBox>().Single(l => l.Name == "CraftList");
@@ -125,6 +134,13 @@ public sealed class CraftablesPageRealTests
             Assert.True(File.Exists(crafted.PakPath) && File.Exists(crafted.SigPath));
             Assert.Contains(crafted.Assets, a => a.PackagePath.EndsWith("/CR_SS_Chair_Asian", StringComparison.Ordinal));
             Assert.Contains(crafted.Assets, a => a.PackagePath.EndsWith("/CI_SS_Carpenter_Bench", StringComparison.Ordinal));
+
+            // The chair's recipe carries the chosen section.
+            Assert.DoesNotContain(crafted.Warnings, w => w.Contains(" sections", StringComparison.Ordinal));
+            var recipe = crafted.Assets.Single(a => a.PackagePath.EndsWith("/CR_SS_Chair_Asian", StringComparison.Ordinal));
+            var file = Path.Combine([crafted.StagingDirectory, .. recipe.VirtualPath.Split('/')]);
+            var staged = CookedPackage.Parse(File.ReadAllBytes(file), File.ReadAllBytes(Path.ChangeExtension(file, ".uexp")), null, recipe.PackagePath);
+            Assert.Equal(wall.Tag, CraftCategories.Of(staged)?.Tag);
         }
         finally
         {

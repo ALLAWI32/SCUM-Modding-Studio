@@ -25,12 +25,19 @@ public sealed partial class EditState
     private readonly Dictionary<(ActorRef Actor, string Component), MeshOverride> _meshes = new(TransformKeyComparer.Instance);
     private readonly Dictionary<(ActorRef Actor, string Component), (LootSetting Base, LootSetting Current)> _loot = new(TransformKeyComparer.Instance);
     private readonly Dictionary<ActorRef, bool> _grass = new(ActorRef.Comparer);
+    private readonly HashSet<(ActorRef Actor, string Component)> _deletedComponents = new(TransformKeyComparer.Instance);
 
     /// <summary>True when no operation has a net effect.</summary>
     public bool IsEmpty =>
         _deletedActors.Count == 0 && _deletedInstances.Count == 0 && _transforms.Count == 0 && _instanceTransforms.Count == 0 && _added.Count == 0
         && _addedInstances.Count == 0 && _clones.Count == 0 && _values.Count == 0 && _replacements.Count == 0 && _bends.Count == 0 && _segmentSways.Count == 0 && _spawnPoints.Count == 0
-        && _meshes.Count == 0 && _loot.Count == 0;
+        && _meshes.Count == 0 && _loot.Count == 0 && _deletedComponents.Count == 0;
+
+    /// <summary>Deleted components of kept actors (see <see cref="DeleteComponentsOp"/>).</summary>
+    public IReadOnlyCollection<(ActorRef Actor, string Component)> DeletedComponents => _deletedComponents;
+
+    /// <summary>True when the component is deleted (directly, or because its actor is).</summary>
+    public bool IsDeleted(ActorRef actor, string component) => _deletedComponents.Contains((actor, component)) || _deletedActors.Contains(actor);
 
     /// <summary>Every mesh component drawing another mesh (see <see cref="ReplaceMeshOp"/>): the actor, the component (empty = the root) and the mesh now.</summary>
     public IEnumerable<(ActorRef Actor, string Component, string Mesh)> MeshOverrides =>
@@ -115,6 +122,7 @@ public sealed partial class EditState
             .Concat(_spawnPoints.Keys.Select(k => k.Actor.Level))
             .Concat(_meshes.Keys.Select(k => k.Actor.Level))
             .Concat(_loot.Keys.Select(k => k.Actor.Level))
+            .Concat(_deletedComponents.Select(k => k.Actor.Level))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(l => l, StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -204,6 +212,12 @@ public sealed partial class EditState
                 return _deletedActors.Contains(d.Target) ? $"{d.Target} is already deleted." : null;
             case RestoreActorOp r:
                 return _deletedActors.Contains(r.Target) ? null : $"{r.Target} is not deleted.";
+            case DeleteComponentsOp dc:
+                return ValidateComponents(dc.Target, dc.Components)
+                       ?? FirstError(dc.Components.Where(c => _deletedComponents.Contains((dc.Target, c))).Select(c => $"{dc.Target}.{c} is already deleted."));
+            case RestoreComponentsOp rc:
+                return ValidateComponents(rc.Target, rc.Components)
+                       ?? FirstError(rc.Components.Where(c => !_deletedComponents.Contains((rc.Target, c))).Select(c => $"{rc.Target}.{c} is not deleted."));
             case DeleteAllOfKindOp all:
                 if (all.Actors.Count == 0 && all.Instances.Count == 0)
                 {
@@ -384,6 +398,12 @@ public sealed partial class EditState
                 break;
             case RestoreActorOp r:
                 _deletedActors.Remove(r.Target);
+                break;
+            case DeleteComponentsOp dc:
+                _deletedComponents.UnionWith(dc.Components.Select(c => (dc.Target, c)));
+                break;
+            case RestoreComponentsOp rc:
+                _deletedComponents.ExceptWith(rc.Components.Select(c => (rc.Target, c)));
                 break;
             case DeleteAllOfKindOp all:
                 _deletedActors.UnionWith(all.Actors);
@@ -571,6 +591,9 @@ public sealed partial class EditState
         SetTransformOp { Component: not null } t => _deletedActors.Contains(t.Target),
         SetInstanceTransformOp it => _deletedActors.Contains(it.Target.ActorRef),
         BendActorOp bend => _deletedActors.Contains(bend.Target),
+        // The fire of a fireplace the batch deletes whole goes with it; on the way back the actor's restore comes after.
+        DeleteComponentsOp dc => _deletedActors.Contains(dc.Target),
+        RestoreComponentsOp rc => _deletedActors.Contains(rc.Target),
         _ => false,
     };
 
@@ -580,6 +603,7 @@ public sealed partial class EditState
         var copy = new EditState();
         copy._deletedActors.UnionWith(_deletedActors);
         copy._deletedInstances.UnionWith(_deletedInstances);
+        copy._deletedComponents.UnionWith(_deletedComponents);
         Copy(_transforms, copy._transforms);
         Copy(_instanceTransforms, copy._instanceTransforms);
         Copy(_added, copy._added);
@@ -623,6 +647,7 @@ public sealed partial class EditState
         var lines = new List<string>();
         lines.AddRange(_deletedActors.Select(a => "delete " + Key(a)));
         lines.AddRange(_deletedInstances.Select(i => "delete-instance " + Key(i)));
+        lines.AddRange(_deletedComponents.Select(c => $"delete-component {Key(c.Actor)}.{c.Component.ToLowerInvariant()}"));
         lines.AddRange(_transforms.Select(t => $"transform {Key(t.Key.Actor)}.{t.Key.Component.ToLowerInvariant()} {t.Value.Base} -> {t.Value.Current}"));
         lines.AddRange(_instanceTransforms.Select(t => $"instance-transform {Key(t.Key)} {t.Value.Base} -> {t.Value.Current}"));
         lines.AddRange(_added.Select(a => $"added {Key(a.Key)} by {a.Value.GetType().Name}"));
@@ -644,6 +669,14 @@ public sealed partial class EditState
 
         static string Key(object o) => (o.ToString() ?? string.Empty).ToLower(CultureInfo.InvariantCulture);
     }
+
+    // What both component ops refuse: a deleted or added actor (its copy's exports are its source's), no name, a name twice.
+    private string? ValidateComponents(ActorRef actor, IReadOnlyList<string> components) =>
+        _deletedActors.Contains(actor) ? $"{actor} is deleted."
+        : _added.ContainsKey(actor) ? $"{actor} was added by an edit; delete the whole copy instead."
+        : components.Count == 0 ? "No component given."
+        : components.Any(string.IsNullOrWhiteSpace) ? "A component needs a name."
+        : Duplicates(components, StringComparer.OrdinalIgnoreCase).FirstOrDefault();
 
     private string? ValidateNewActor(ActorRef created)
     {

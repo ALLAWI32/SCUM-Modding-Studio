@@ -3,6 +3,7 @@
              xmlns:vm="using:ScumStudio.App.ViewModels"
              xmlns:c="using:ScumStudio.App.Controls"
              xmlns:conv="using:ScumStudio.App.Converters"
+             xmlns:p="using:ScumStudio.App.Views.Pages"
              x:Class="ScumStudio.App.Views.Pages.AssetsPageView"
              x:DataType="vm:AssetsPageViewModel">
   <DockPanel>
@@ -36,7 +37,13 @@
     </Border>
 
     <!-- ===== Toolbar ===== -->
-    <Grid DockPanel.Dock="Top" Margin="24,0,24,12" ColumnDefinitions="360,*,Auto" ColumnSpacing="12" IsVisible="{Binding HasCatalog}">
+    <!-- Same columns as the browser below, so the filter lines up with the tree and the view switch ends with the details. -->
+    <Grid x:Name="AssetsToolbar" DockPanel.Dock="Top" Margin="24,0,24,12" ColumnSpacing="12" IsVisible="{Binding HasCatalog}">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="*" MinWidth="300" MaxWidth="360" />
+        <ColumnDefinition Width="3*" />
+        <ColumnDefinition Width="360" />
+      </Grid.ColumnDefinitions>
       <Panel Grid.Column="0">
         <TextBox x:Name="SearchBox" Classes="search" Text="{Binding SearchText}"
                  Watermark="{Tr Assets.Filter}" ToolTip.Tip="{Tr Assets.Filter.Tip}" />
@@ -60,7 +67,7 @@
           </DataTemplate>
         </ItemsControl.ItemTemplate>
       </ItemsControl>
-      <Border Grid.Column="2" Classes="segmented">
+      <Border Grid.Column="2" Classes="segmented" HorizontalAlignment="Right">
         <StackPanel Orientation="Horizontal">
           <ToggleButton x:Name="GridViewButton" IsChecked="{Binding IsGridView}" ToolTip.Tip="{Tr Assets.Tiles.Tip}">
             <c:GlyphIcon Kind="Icon.Grid" IconSize="14" />
@@ -102,7 +109,13 @@
       </Border>
 
       <!-- Browser -->
-      <Grid ColumnDefinitions="260,*,360" ColumnSpacing="12" IsVisible="{Binding HasCatalog}">
+      <!-- The tree takes a quarter of the room the details leave (300 to 360 px, room for the filter's hint), the tiles the rest. -->
+      <Grid x:Name="AssetsBody" ColumnSpacing="12" IsVisible="{Binding HasCatalog}">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="*" MinWidth="300" MaxWidth="360" />
+          <ColumnDefinition Width="3*" />
+          <ColumnDefinition Width="360" />
+        </Grid.ColumnDefinitions>
 
         <!-- Folder tree -->
         <Border Grid.Column="0" Classes="panel">
@@ -231,7 +244,7 @@
                          Classes="caption wrap" TextAlignment="Center" />
             </StackPanel>
 
-            <ScrollViewer IsVisible="{Binding HasSelection}">
+            <ScrollViewer x:Name="DetailsScroll" IsVisible="{Binding HasSelection}">
               <ContentControl x:Name="DetailsHost" Content="{Binding Details}" HorizontalContentAlignment="Stretch">
                 <ContentControl.ContentTemplate>
                   <DataTemplate x:DataType="vm:AssetDetailsViewModel">
@@ -251,8 +264,9 @@
                   </StackPanel>
                 </Grid>
 
-                <!-- Preview: meshes orbit in the OpenGL viewport, textures and materials show their image, anything else its class icon. -->
-                <Border x:Name="PreviewRegion" Height="240" CornerRadius="{DynamicResource SmallCornerRadius}" ClipToBounds="True"
+                <!-- Preview: meshes orbit in the OpenGL viewport, textures and materials show their image, anything else its class icon.
+                     Expand makes it as tall as the details panel (and the panel wider): AssetsPageView.PreviewHeight. -->
+                <Border x:Name="PreviewRegion" Height="{Binding $parent[p:AssetsPageView].PreviewHeight}" CornerRadius="{DynamicResource SmallCornerRadius}" ClipToBounds="True"
                         BorderBrush="{DynamicResource StrokeSubtleBrush}" BorderThickness="1" Background="{DynamicResource ViewportBrush}">
                   <Panel>
                     <c:ViewportGrid CellSize="16" MajorEvery="4" Background="{DynamicResource ViewportBrush}" AxisXBrush="{DynamicResource AxisXBrush}" AxisYBrush="{DynamicResource AxisYBrush}"
@@ -261,7 +275,28 @@
                                  Foreground="{Binding Tint, Converter={x:Static conv:HexBrushConverter.Instance}}" />
                     <Image Source="{Binding Image, Converter={x:Static conv:TextureImageConverter.Instance}}" Stretch="Uniform" Margin="8" IsVisible="{Binding HasImage}" />
                     <c:MeshPreview x:Name="MeshView" Model="{Binding Preview}" IsVisible="{Binding HasPreview}" />
-                    <Border Classes="hud" HorizontalAlignment="Center" VerticalAlignment="Top" Margin="8" IsHitTestVisible="False"
+                    <Border Classes="segmented" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="8" IsVisible="{Binding HasPreview}">
+                      <StackPanel Orientation="Horizontal">
+                        <ToggleButton x:Name="PreviewSunButton" IsChecked="{Binding #MeshView.Light, Converter={x:Static c:PreviewLightConverter.IsSun}}" ToolTip.Tip="{Tr Preview.Sun.Tip}">
+                          <StackPanel Orientation="Horizontal" Spacing="5">
+                            <c:GlyphIcon Kind="Icon.Sun" IconSize="13" VerticalAlignment="Center" />
+                            <TextBlock Text="{Tr Preview.Sun}" VerticalAlignment="Center" />
+                          </StackPanel>
+                        </ToggleButton>
+                        <ToggleButton x:Name="PreviewScaleButton" IsChecked="{Binding #MeshView.ShowScale}" ToolTip.Tip="{Tr Preview.Scale.Tip}">
+                          <StackPanel Orientation="Horizontal" Spacing="5">
+                            <c:GlyphIcon Kind="Icon.Ruler" IconSize="13" VerticalAlignment="Center" />
+                            <TextBlock Text="{Tr Preview.Scale}" VerticalAlignment="Center" />
+                          </StackPanel>
+                        </ToggleButton>
+                      </StackPanel>
+                    </Border>
+                    <Border Classes="segmented" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="8">
+                      <ToggleButton x:Name="PreviewExpandButton" IsChecked="{Binding $parent[p:AssetsPageView].IsPreviewExpanded}" ToolTip.Tip="{Tr Preview.Expand.Tip}">
+                        <c:GlyphIcon Kind="Icon.Scale" IconSize="13" />
+                      </ToggleButton>
+                    </Border>
+                    <Border Classes="hud" HorizontalAlignment="Center" VerticalAlignment="Top" Margin="8,44,8,8" IsHitTestVisible="False"
                             IsVisible="{Binding #MeshView.SelectedPart, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
                       <StackPanel Orientation="Horizontal" Spacing="8">
                         <TextBlock Text="{Binding #MeshView.SelectedPart}" FontWeight="SemiBold" />
@@ -273,7 +308,10 @@
                       <TextBlock Text="{Binding ImageText}" />
                     </Border>
                     <Border Classes="hud" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="8" IsHitTestVisible="False" IsVisible="{Binding HasPreview}">
-                      <TextBlock Text="{Binding #MeshView.Info}" />
+                      <StackPanel Spacing="1">
+                        <TextBlock Text="{Binding #MeshView.Info}" TextTrimming="CharacterEllipsis" />
+                        <TextBlock Text="{Binding #MeshView.SizeText}" IsVisible="{Binding #MeshView.SizeText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                      </StackPanel>
                     </Border>
                   </Panel>
                 </Border>

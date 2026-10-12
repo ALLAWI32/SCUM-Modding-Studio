@@ -1,6 +1,11 @@
+using ScumStudio.Assets.Catalog;
+using ScumStudio.Formats.AssetRegistry;
+using ScumStudio.Level.Editing;
+using ScumStudio.Level.Export;
 using ScumStudio.Level.Projects;
 using ScumStudio.Pak.Reading;
 using ScumStudio.Pak.Writing;
+using ScumStudio.Tests.Modding;
 
 namespace ScumStudio.Tests.Level;
 
@@ -78,5 +83,69 @@ public sealed class ProjectModsTests : IDisposable
         Assert.Equal([folder], ProjectMods.Folders(project)); // still read over the game
         ProjectMods.SetCarried(folder, true);
         Assert.True(ProjectMods.IsCarried(folder));
+    }
+
+    [Fact]
+    public void CarryIntoNeverCopiesTheRegistry()
+    {
+        // F005/N012: a mod's AssetRegistry.bin shipped as it is would replace the game's (stock records lost, old ones kept).
+        var mod = Path.Combine(_dir, "project", ProjectMods.FolderName, "ModA");
+        SyntheticGame.Write(mod, "/Game/Mods/BP_ModCar", SyntheticGame.Package("/Game/Mods/BP_ModCar"));
+        SyntheticGame.Write(mod, SyntheticGame.StockRegistry());
+        var staging = Path.Combine(_dir, "staging");
+
+        Assert.Equal(2, ProjectMods.CarryInto([mod], staging));
+        Assert.True(File.Exists(Path.Combine(staging, "SCUM", "Content", "Mods", "BP_ModCar.uasset")));
+        Assert.False(File.Exists(Path.Combine(staging, "SCUM", "AssetRegistry.bin")));
+        Assert.Equal([("ModA", Path.Combine(mod, "SCUM", "AssetRegistry.bin"))], ProjectMods.Registries([mod]));
+    }
+
+    [Fact]
+    public void FoldersSkipImporting()
+    {
+        // F012: an import that failed half-way is neither read over the game nor carried into the pak.
+        var project = Path.Combine(_dir, "project");
+        SyntheticGame.Write(Path.Combine(project, ProjectMods.FolderName, "Done"), "/Game/Mods/BP_A", SyntheticGame.Package("/Game/Mods/BP_A"));
+        SyntheticGame.Write(Path.Combine(project, ProjectMods.FolderName, "Half" + ProjectMods.ImportingSuffix), "/Game/Mods/BP_B", SyntheticGame.Package("/Game/Mods/BP_B"));
+
+        Assert.Equal([Path.Combine(project, ProjectMods.FolderName, "Done")], ProjectMods.Folders(project));
+    }
+
+    [Fact]
+    public async Task ACarriedModsRegistryIsMergedIntoStockPlusOurs()
+    {
+        // The game as paks (stock registry in pakchunk0), an imported mod read over it with an older registry of its own
+        // (one stock record fewer, its car, a record of a package it does not have), and a project that clones a Blueprint.
+        var game = Path.Combine(_dir, "game");
+        var stock = SyntheticGame.WriteGame(game);
+        SyntheticLevels.WriteContent(game, withBlueprintPackage: true);
+        var paks = Path.Combine(_dir, "Paks");
+        Directory.CreateDirectory(paks);
+        await new PakWriter().WriteFromDirectoryAsync(game, Path.Combine(paks, "pakchunk0-WindowsNoEditor.pak"));
+
+        var mod = Path.Combine(_dir, "project", ProjectMods.FolderName, "ModA");
+        SyntheticGame.Write(mod, "/Game/Mods/BP_ModCar", SyntheticGame.Package("/Game/Mods/BP_ModCar"));
+        var modRegistry = AssetRegistryFile.Parse(stock.Save());
+        modRegistry.Remove(a => a.ObjectPath == SyntheticGame.Stock2);
+        var template = modRegistry.Assets.First(a => a.AssetClass == "Blueprint");
+        foreach (var leaf in new[] { "BP_ModCar", "BP_ModGone" })
+        {
+            modRegistry.AddAsset(template, $"/Game/Mods/{leaf}.{leaf}", "/Game/Mods", "/Game/Mods/" + leaf, leaf, SyntheticGame.PrimaryTags("Vehicle", leaf));
+        }
+
+        SyntheticGame.Write(mod, modRegistry);
+        using var catalog = AssetCatalog.OpenPaks(paks, new AssetCatalogOptions { LooseOverlays = [mod] });
+        using var project = Project.Create(Path.Combine(_dir, "project", "Merge.ssproj"), "Merge");
+        project.Apply(new CloneAssetOp("item", SyntheticGame.Gen, "/Game/T/BP_Ours",
+            [new PackagePair(SyntheticGame.Gen, "/Game/T/BP_Ours"), new PackagePair(SyntheticGame.GenEs, "/Game/T/BP_Ours_ES")]));
+
+        var result = await new ProjectExporter().ExportAsync(project, catalog,
+            new ExportOptions { OutputDirectory = Path.Combine(_dir, "out"), WritePak = false, Mods = [mod] });
+
+        var shipped = AssetRegistryFile.Load(Path.Combine(result.StagingDirectory, "SCUM", "AssetRegistry.bin"));
+        ExportSafety.AssertRegistrySuperset(stock, shipped, result.Registered.Select(r => r.ObjectPath).Append("/Game/Mods/BP_ModCar.BP_ModCar"));
+        Assert.Contains("/Game/T/BP_Ours.BP_Ours_C", result.Registered.Select(r => r.ObjectPath));
+        Assert.Contains(result.Warnings, w => w.StartsWith("ModA: 1 record(s)", StringComparison.Ordinal) && w.Contains("BP_ModGone", StringComparison.Ordinal));
+        Assert.True(File.Exists(Path.Combine(result.StagingDirectory, "SCUM", "Content", "Mods", "BP_ModCar.uasset")));
     }
 }

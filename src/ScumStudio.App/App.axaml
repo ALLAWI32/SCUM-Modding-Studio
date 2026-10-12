@@ -25,6 +25,7 @@
     <ResourceDictionary>
       <ResourceDictionary.MergedDictionaries>
         <ResourceInclude Source="avares://ScumStudio.App/Styles/Icons.axaml" />
+        <ResourceInclude Source="avares://ScumStudio.App/Views/Pages/MapLoadMode.axaml" />
       </ResourceDictionary.MergedDictionaries>
 
       <!-- Type -->

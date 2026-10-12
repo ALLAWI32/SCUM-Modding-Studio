@@ -20,6 +20,37 @@ namespace ScumStudio.Tests.Level;
 /// </summary>
 public sealed class UeCookTests
 {
+    /// <summary>
+    /// Audit N010: a second import of a model was SS_A_2, which UE cooks as the FName ('SM_SS_A', 3) while the craftable's
+    /// element imports 'SM_SS_A_2' (number 0): the element showed no mesh. New import tokens never end in '_' and a number.
+    /// </summary>
+    [Fact]
+    public void ASecondImportOfAModelGetsATokenThatDoesNotSplit()
+    {
+        var project = Path.Combine(Path.GetTempPath(), "scumstudio-uetoken-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var models = Path.Combine(project, "models");
+            Assert.Equal("SS_A", UeCook.NewToken(project, Path.Combine(models, "A.fbx")));
+            Directory.CreateDirectory(Path.Combine(project, UeCook.ImportsFolder, "SS_A"));
+            Assert.Equal("SS_A_v2", UeCook.NewToken(project, Path.Combine(models, "A.fbx")));
+            Directory.CreateDirectory(Path.Combine(project, UeCook.ImportsFolder, "SS_A_v2"));
+            Assert.Equal("SS_a_v3", UeCook.NewToken(project, Path.Combine(models, "a.obj"))); // package names compare in any case, on Linux too
+            foreach (var file in new[] { "table_1.obj", "chair 2.fbx", "كرسي.fbx" })
+            {
+                var token = UeCook.NewToken(project, Path.Combine(models, file));
+                Assert.True(ScumStudio.Formats.FNameRef.Split("SM_" + token).Number == 0, token);
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(project))
+            {
+                Directory.Delete(project, recursive: true);
+            }
+        }
+    }
+
     [Fact]
     public void TheGeneratedProjectCooksLikeTheGame()
     {

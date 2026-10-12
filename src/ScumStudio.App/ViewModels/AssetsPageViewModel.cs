@@ -522,13 +522,10 @@ public sealed partial class AssetsPageViewModel : PageViewModel, ISearchablePage
         details.IsPreviewLoading = true;
         try
         {
-            if (AssetExportService.IsMeshClass(className) || AssetExportService.IsBlueprintClass(className))
+            if (AssetExportService.IsModelClass(className))
             {
-                var model = await Task.Run(() =>
-                {
-                    var loader = new MeshPreviewLoader(catalog, _services.Logger) { TextureSize = MeshPreviewTextureSize, ForGpu = true };
-                    return AssetExportService.IsBlueprintClass(className) ? loader.LoadBlueprint(entry.PackagePath) : loader.LoadMesh(entry.ObjectPath);
-                }).ConfigureAwait(true);
+                var model = await Task.Run(() => new MeshPreviewLoader(catalog, _services.Logger) { TextureSize = MeshPreviewTextureSize, ForGpu = true }
+                    .Load(entry.ObjectPath, entry.PackagePath, className)).ConfigureAwait(true);
                 if (ReferenceEquals(Details, details))
                 {
                     details.Preview = model;

@@ -201,7 +201,9 @@ public sealed partial class SettingsPageViewModel : PageViewModel, IDisposable
             SelectedLanguage = Loc.Languages.FirstOrDefault(l => l.Code == s.Ui.Language) ?? Loc.Languages[0];
             RenderQuality = s.Ui.RenderQuality;
             ClearGrassUnderNew = s.Ui.ClearGrassUnderNewObjects;
+            DeleteWithCompanions = s.Ui.DeleteWithCompanions;
             (SpawnModels, AnimateWater, Lighting) = (s.Ui.SpawnModels, s.Ui.AnimateWater, s.Ui.Lighting);
+            AntiAliasedFoliage = s.Ui.AntiAliasedFoliage;
             McpEnabled = s.Mcp.Enabled;
             McpPort = s.Mcp.Port.ToString(System.Globalization.CultureInfo.InvariantCulture);
         }
@@ -296,6 +298,18 @@ public sealed partial class SettingsPageViewModel : PageViewModel, IDisposable
         }
     }
 
+    /// <summary>A delete takes the object's fire, light, sound and attached actors with it (the owner's fireplace).</summary>
+    [ObservableProperty]
+    private bool _deleteWithCompanions = true;
+
+    partial void OnDeleteWithCompanionsChanged(bool value)
+    {
+        if (!_reloading)
+        {
+            _services.UpdateSettings(s => s with { Ui = s.Ui with { DeleteWithCompanions = value } });
+        }
+    }
+
     /// <summary>Spawn places drawn as the objects that spawn there; off: simple shapes (Discord feature request: lighter).</summary>
     [ObservableProperty]
     private bool _spawnModels = true;
@@ -307,6 +321,10 @@ public sealed partial class SettingsPageViewModel : PageViewModel, IDisposable
     /// <summary>The 3D view is lit and shaded.</summary>
     [ObservableProperty]
     private bool _lighting = true;
+
+    /// <summary>Smooth edges and steady leaves in the 3D view (4 samples a pixel).</summary>
+    [ObservableProperty]
+    private bool _antiAliasedFoliage = true;
 
     partial void OnSpawnModelsChanged(bool value)
     {
@@ -329,6 +347,14 @@ public sealed partial class SettingsPageViewModel : PageViewModel, IDisposable
         if (!_reloading)
         {
             _services.UpdateSettings(s => s with { Ui = s.Ui with { Lighting = value } });
+        }
+    }
+
+    partial void OnAntiAliasedFoliageChanged(bool value)
+    {
+        if (!_reloading)
+        {
+            _services.UpdateSettings(s => s with { Ui = s.Ui with { AntiAliasedFoliage = value } });
         }
     }
 
@@ -358,6 +384,7 @@ public sealed partial class SettingsPageViewModel : PageViewModel, IDisposable
         _services.KeyChanged -= OnKeyChanged;
         _services.SettingsChanged -= OnSettingsChanged;
         _services.Mcp.StateChanged -= OnMcpStateChanged;
+        _toolbar?.Dispose();
     }
 
     private void OnKeyChanged(object? sender, EventArgs e) => _services.Dispatcher.Invoke(Reload);

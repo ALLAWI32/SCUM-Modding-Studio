@@ -34,7 +34,7 @@ public sealed class TerrainHeightField
     public TerrainHeightField(IEnumerable<(LandscapeSurface Surface, LandscapeComponentLayers? Layers)> components)
     {
         ArgumentNullException.ThrowIfNull(components);
-        _entries = components.Select(c => new Entry(c.Surface, c.Layers is { } l && l.SampleCount == c.Surface.SampleCount ? l : null)).ToArray();
+        _entries = components.Select(c => new Entry(c.Surface, c.Layers is { ComponentSizeQuads: > 0 } l ? l : null)).ToArray();
         var min = new Vector3(float.MaxValue);
         var max = new Vector3(float.MinValue);
         var cell = 0f;
@@ -92,7 +92,8 @@ public sealed class TerrainHeightField
 
     /// <summary>
     /// The paint layers at world (<paramref name="x"/>, <paramref name="y"/>) with their weights (bilinear between
-    /// samples), strongest first; empty outside the terrain or without layer data.
+    /// samples), strongest first; empty outside the terrain or without layer data. The weights are read on their own grid,
+    /// also when the heights came coarser than the weightmap.
     /// </summary>
     public IReadOnlyList<TerrainLayerSample> SampleLayers(float x, float y)
     {
@@ -102,6 +103,8 @@ public sealed class TerrainHeightField
         }
 
         var n = layers.SampleCount;
+        var toLayers = layers.ComponentSizeQuads / (float)e.Surface.ComponentSizeQuads;
+        (qx, qy) = (qx * toLayers, qy * toLayers);
         var x0 = Math.Min((int)MathF.Floor(qx), n - 2);
         var y0 = Math.Min((int)MathF.Floor(qy), n - 2);
         x0 = Math.Max(0, x0);

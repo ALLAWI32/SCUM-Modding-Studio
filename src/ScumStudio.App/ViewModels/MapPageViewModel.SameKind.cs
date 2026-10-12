@@ -23,6 +23,7 @@ public sealed partial class MapPageViewModel
 
     /// <summary>Actors of the kind selection (highlighted by the viewport).</summary>
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HighlightIds))]
     private IReadOnlyCollection<uint> _kindSelectionIds = [];
 
     /// <summary>Instances of the kind selection (highlighted by the viewport).</summary>
@@ -137,12 +138,15 @@ public sealed partial class MapPageViewModel
         RefreshKindSelection();
     }
 
-    /// <summary>Deletes the kind selection in one journal step (the whole island reads every level that imports the mesh).</summary>
-    public async Task DeleteKindSelectionAsync()
+    /// <summary>
+    /// Deletes the kind selection in one journal step (the whole island reads every level that imports the mesh), with
+    /// what belongs to each object unless <paramref name="alone"/> (Shift+Delete).
+    /// </summary>
+    public async Task DeleteKindSelectionAsync(bool alone = false)
     {
         if (HasGroup)
         {
-            DeleteGroup();
+            await DeleteGroupAsync(alone).ConfigureAwait(true);
             return;
         }
 
@@ -153,7 +157,7 @@ public sealed partial class MapPageViewModel
 
         if (!_kindWholeMap && KindRadius > 0)
         {
-            DeleteHighlighted(mesh);
+            await DeleteHighlightedAsync(mesh, alone).ConfigureAwait(true);
             return;
         }
 
@@ -164,15 +168,16 @@ public sealed partial class MapPageViewModel
         }
 
         var wholeMap = _kindWholeMap;
-        IReadOnlyList<LevelDocument> levels = scene.Documents;
-        if (wholeMap && _services.Workspace.Catalog is { } catalog && World is { } world)
-        {
-            LoadStatus = Localization.Loc.F("Map.Kind.Looking", ShortName(mesh));
-            levels = await Task.Run(() => LevelsUsing(catalog, world, mesh, scene.Documents)).ConfigureAwait(true);
-        }
-
         try
         {
+            // Inside the try: a level that cannot be read must not leave "Looking for ..." up with nothing deleted (audit F205).
+            IReadOnlyList<LevelDocument> levels = scene.Documents;
+            if (wholeMap && _services.Workspace.Catalog is { } catalog && World is { } world)
+            {
+                LoadStatus = Localization.Loc.F("Map.Kind.Looking", ShortName(mesh));
+                levels = await Task.Run(() => LevelsUsing(catalog, world, mesh, scene.Documents)).ConfigureAwait(true);
+            }
+
             var op = EditOpFactory.DeleteAllOfKind(levels, new KindMatch(MatchBy.StaticMesh, mesh), wholeMap ? EditScope.Island : ScopeOfLoaded(scene),
                 project.State, includeInstances: true);
             if (op.Actors.Count == 0 && op.Instances.Count == 0)
@@ -181,24 +186,31 @@ public sealed partial class MapPageViewModel
                 return;
             }
 
-            var entry = _services.Projects.Apply(op);
-            _services.Notifications.Info(string.Create(CultureInfo.CurrentCulture,
-                $"Deleted {op.Actors.Count + op.Instances.Count:N0} × {ShortName(mesh)}{(wholeMap ? " on the whole island" : string.Empty)}"), entry.Op.Describe() + " — Ctrl+Z undoes it");
-            ClearKindSelection();
-            RefreshHiddenIds();
+            LoadStatus = string.Empty;
+            var title = string.Create(CultureInfo.CurrentCulture,
+                $"Deleted {op.Actors.Count + op.Instances.Count:N0} × {ShortName(mesh)}{(wholeMap ? " on the whole island" : string.Empty)}");
+            await DeleteWithCompanionsAsync(new DeleteRequest(string.Create(CultureInfo.CurrentCulture, $"{op.Actors.Count + op.Instances.Count:N0} × {ShortName(mesh)}"),
+                [op], op.Actors.Select(a => new DeleteSeed(a)).ToList(), levels)
+            {
+                Notify = done => _services.Notifications.Info(title, done.Describe() + " — Ctrl+Z undoes it"),
+                Refresh = () => { ClearKindSelection(); RefreshHiddenIds(); },
+            }, alone).ConfigureAwait(true);
         }
-        catch (Exception ex) when (ex is InvalidOperationException or IOException)
+        catch (Exception ex) when (ex is InvalidOperationException or IOException or InvalidDataException)
         {
             _services.Notifications.Error("Delete failed", ex.Message);
         }
         finally
         {
-            LoadStatus = string.Empty;
+            if (_companionSearch is null)
+            {
+                LoadStatus = string.Empty;
+            }
         }
     }
 
     /// <summary>Deletes exactly what the kind selection highlights (the radius-limited case) in one journal step.</summary>
-    private void DeleteHighlighted(string mesh)
+    private async Task DeleteHighlightedAsync(string mesh, bool alone)
     {
         if (_services.Projects.Current is not { } project || PreparedScene is not { } scene)
         {
@@ -215,18 +227,13 @@ public sealed partial class MapPageViewModel
             return;
         }
 
-        try
+        var title = Localization.Loc.F("Map.Kind.DeletedNear", actors.Count + instances.Count, ShortName(mesh), KindRadius.ToString("0", CultureInfo.CurrentCulture));
+        await DeleteWithCompanionsAsync(new DeleteRequest(string.Create(CultureInfo.CurrentCulture, $"{actors.Count + instances.Count:N0} × {ShortName(mesh)}"),
+            [new DeleteAllOfKindOp(new KindMatch(MatchBy.StaticMesh, mesh), ScopeOfLoaded(scene), actors, instances)], actors.Select(a => new DeleteSeed(a)).ToList(), scene.Documents)
         {
-            var entry = _services.Projects.Apply(new DeleteAllOfKindOp(new KindMatch(MatchBy.StaticMesh, mesh), ScopeOfLoaded(scene), actors, instances));
-            _services.Notifications.Info(Localization.Loc.F("Map.Kind.DeletedNear", actors.Count + instances.Count, ShortName(mesh), KindRadius.ToString("0", CultureInfo.CurrentCulture)),
-                entry.Op.Describe() + Localization.Loc.T("Map.CtrlZUndoes"));
-            ClearKindSelection();
-            RefreshHiddenIds();
-        }
-        catch (Exception ex) when (ex is InvalidOperationException or IOException)
-        {
-            _services.Notifications.Error(Localization.Loc.T("Map.DeleteFailed"), ex.Message);
-        }
+            Notify = done => _services.Notifications.Info(title, done.Describe() + Localization.Loc.T("Map.CtrlZUndoes")),
+            Refresh = () => { ClearKindSelection(); RefreshHiddenIds(); },
+        }, alone).ConfigureAwait(true);
     }
 
     private static EditScope ScopeOfLoaded(PreparedLevelScene scene) =>
@@ -261,6 +268,20 @@ public sealed partial class MapPageViewModel
         }).ToList();
 
         var reader = new Cue4ParseLevelReader(catalog, new Cue4ParseLevelReaderOptions(), _services.Logger);
-        return [.. loaded, .. using_.Select(p => LevelDocument.Load(reader, p))];
+        var levels = new List<LevelDocument>(loaded);
+        foreach (var path in using_)
+        {
+            try
+            {
+                levels.Add(LevelDocument.Load(reader, path));
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                // One level the reader cannot take keeps its objects; the others still go (audit F205: it lost the whole delete).
+                _services.Logger.LogWarning("{Level} left out of the delete: {Message}", path, ex.Message);
+            }
+        }
+
+        return levels;
     }
 }

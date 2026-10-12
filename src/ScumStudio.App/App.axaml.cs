@@ -1,4 +1,5 @@
 using Avalonia;
+using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 using Avalonia.Threading;
@@ -14,6 +15,41 @@ namespace ScumStudio.App;
 public partial class App : Application
 {
     private AppServices? _services;
+
+    private static Window? s_window;
+    private static volatile bool s_closed;
+
+    /// <summary>This process's hold on the one app window (<see cref="Program.Main"/>); null for automation runs.</summary>
+    internal static SingleInstance? Instance { get; set; }
+
+    /// <summary>
+    /// Another start asked for the window (<see cref="SingleInstance.Listen"/>, on a pool thread): it comes forward, or is
+    /// still opening and opens in front. Also while it downloads or installs an update: a start told no would run beside
+    /// it, during the install as the old version from the file the update renames to <c>.old</c>. Once the window closed
+    /// it says no and that start goes on (an update's new version waits for this process to end and never asks).
+    /// </summary>
+    internal static bool ComeForward()
+    {
+        if (s_closed)
+        {
+            return false;
+        }
+
+        if (Volatile.Read(ref s_window) is { } window)
+        {
+            Dispatcher.UIThread.Post(() => BringToFront(window));
+        }
+
+        return true;
+    }
+
+    /// <summary>The window <see cref="ComeForward"/> brings to the front until it closes (UI thread).</summary>
+    internal static void Attach(Window window)
+    {
+        s_closed = false;
+        Volatile.Write(ref s_window, window);
+        window.Closed += (_, _) => s_closed = true;
+    }
 
     /// <inheritdoc />
     public override void Initialize()
@@ -55,8 +91,11 @@ public partial class App : Application
                 }
             };
             desktop.MainWindow = window;
+            Attach(window);
             desktop.Exit += (_, _) =>
             {
+                // The window first (a start now gets its own), then the project and its lock (AppServices.Dispose).
+                Instance?.Dispose();
                 viewModel.Dispose();
                 services.Dispose();
             };
@@ -89,6 +128,18 @@ public partial class App : Application
                 services.Logger.LogCritical(ex, "Fatal exception: {Message}", ex.Message);
             }
         };
+    }
+
+    private static void BringToFront(Window window)
+    {
+        if (window.WindowState == WindowState.Minimized)
+        {
+            window.WindowState = WindowState.Normal;
+        }
+
+        window.Activate();
+        window.Topmost = true; // above the other windows even when Windows keeps the focus where it is
+        window.Topmost = false;
     }
 
     private static AppServices CreateServices()

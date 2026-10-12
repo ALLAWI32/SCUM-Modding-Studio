@@ -165,4 +165,114 @@ public sealed class EditOpFactoryTests
         Assert.False(EditOpFactory.SameObject("/Game/X/SM_A", "/Game/Y/SM_A"));
         Assert.False(EditOpFactory.SameObject("/Game/X/SM_A.SM_A", "/Game/X/SM_A.SM_B"));
     }
+
+    /// <summary>
+    /// A house Blueprint with a fireplace part: the fire and its light hang under the fireplace, a pot (another actor) stands
+    /// attached to it, a smoke plume comes from the Blueprint's template and a door leaf from its C++ class.
+    /// </summary>
+    internal static LevelDocument FireplaceHouse(string path)
+    {
+        var b = new FakeLevelBuilder(path);
+        var house = b.Actor("House_1", "/Game/ConZ_Files/Buildings/BP_House.BP_House_C", blueprint: true);
+        var root = b.Component(house, "DefaultSceneRoot");
+        b.Root(house, root);
+        b.Component(house, "Walls", "StaticMeshComponent", attachTo: root, mesh: "/Game/ConZ_Files/Buildings/SM_Walls.SM_Walls");
+        var fireplace = b.Component(house, "Fireplace", "StaticMeshComponent", location: new FVector(300, 0, 0), attachTo: root, mesh: "/Game/ConZ_Files/Buildings/SM_Fireplace_01.SM_Fireplace_01");
+        var fire = b.Component(house, "P_Fire", "ParticleSystemComponent", location: new FVector(0, 0, 40), attachTo: fireplace);
+        b.Component(house, "FireLight", "PointLightComponent", location: new FVector(0, 0, 60), attachTo: fire);
+        var leaf = b.Component(house, "DoorLeaf", "StaticMeshComponent", attachTo: root, mesh: "/Game/ConZ_Files/Buildings/SM_Door.SM_Door");
+        var pot = b.Actor("Pot_1", "/Script/Engine.StaticMeshActor");
+        b.Root(pot, b.Component(pot, "StaticMeshComponent0", "StaticMeshComponent", location: new FVector(0, 0, 80), attachTo: fireplace, mesh: "/Game/ConZ_Files/Props/SM_Pot.SM_Pot"));
+        var data = b.Build();
+        return LevelDocument.FromData(data with
+        {
+            Exports = data.Exports.Select(e => e.Index == leaf ? e with { TemplatePath = "/Game/ConZ_Files/Buildings/BP_House.Default__BP_House_C:DoorLeaf" } : e).ToList(),
+            SynthesizedComponents =
+            [
+                new ScumStudio.Level.Reading.LevelExportData
+                {
+                    Index = -2, Name = "Chimney_Smoke", ClassName = "ParticleSystemComponent", ClassPath = "/Script/Engine.ParticleSystemComponent",
+                    OuterIndex = house, IsComponent = true, IsSceneComponent = true, IsSynthesized = true, AttachParent = root,
+                    TemplatePath = "/Game/ConZ_Files/Buildings/BP_House.BP_House_C:Chimney_Smoke_GEN_VARIABLE",
+                },
+            ],
+        });
+    }
+
+    [Fact]
+    public void DeleteComponentsRefusesRootSynthesizedNativeUnknownAndKeptDescendants()
+    {
+        var level = FireplaceHouse(Outpost);
+        var house = level.FindActor("House_1")!;
+        Assert.True(house.FindComponent("Chimney_Smoke")!.IsSynthesized);
+        Assert.True(house.FindComponent("DoorLeaf")!.IsNativeSubobject);
+        string Refusal(string[] names, EditState? state = null) =>
+            Assert.Throws<ArgumentException>(() => EditOpFactory.DeleteComponents(level, house, names, state)).Message;
+
+        Assert.Contains("root", Refusal(["DefaultSceneRoot"]), StringComparison.Ordinal);
+        Assert.Contains("template", Refusal(["Chimney_Smoke"]), StringComparison.Ordinal);
+        Assert.Contains("own class", Refusal(["DoorLeaf"]), StringComparison.Ordinal);
+        Assert.Contains("no component 'Chimney'", Refusal(["Chimney"]), StringComparison.Ordinal);
+        Assert.Contains("no component", Refusal([]), StringComparison.Ordinal);
+
+        // The fire hangs under the fireplace, its light under the fire, the pot (another actor) on it: all go, or none.
+        Assert.Contains("House_1.P_Fire", Refusal(["Fireplace"]), StringComparison.Ordinal);
+        Assert.Contains("House_1.FireLight", Refusal(["Fireplace", "P_Fire"]), StringComparison.Ordinal);
+        Assert.Contains("Pot_1.StaticMeshComponent0", Refusal(["fireplace", "P_Fire", "FireLight"]), StringComparison.Ordinal);
+        var state = new EditState();
+        state.Apply(new DeleteActorOp(new ActorRef(Outpost, "Pot_1")));
+        var op = EditOpFactory.DeleteComponents(level, house, ["fireplace", "P_Fire", "FireLight", "P_FIRE"], state);
+        Assert.Equal(new ActorRef(Outpost, "House_1"), op.Target);
+        Assert.Equal(new[] { "Fireplace", "P_Fire", "FireLight" }, op.Components);
+        Assert.Null(state.Validate(op));
+
+        // Only the fire and its light (the fireplace mesh stays) is fine; an added actor's parts cannot be deleted.
+        Assert.Equal(new[] { "P_Fire", "FireLight" }, EditOpFactory.DeleteComponents(level, house, ["P_Fire", "FireLight"]).Components);
+        var added = new EditState();
+        added.Apply(new AddStaticMeshActorOp(Outpost, "House_1", Rock, EditOpTests.Somewhere));
+        Assert.Contains("added", Refusal(["P_Fire", "FireLight"], added), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DeleteWithCompanionsMakesOneBatchAndSkipsWhatIsAlreadyDeleted()
+    {
+        var level = FireplaceHouse(Outpost);
+        var house = new ActorRef(Outpost, "House_1");
+        var light = new ActorRef(Outpost, "FireLight_7");
+        var sound = new ActorRef(Outpost, "Fire_Sound_7");
+        var state = new EditState();
+        state.Apply(new DeleteActorOp(sound));
+        var before = state.Describe();
+        Companion Taken(ActorRef actor, string? component, CompanionRule rule, bool locked = false) =>
+            new(actor, component, "X", rule, 50f, locked, DefaultOn: true) { Seed = house };
+
+        // The house's fireplace part scaled to nothing, as the map's part delete does; its fire and light go as components.
+        var seed = EditOpFactory.SetTransform(level, level.FindActor("House_1")!, TransformValue.Identity with { Scale = FVector.Zero }, state, "Fireplace");
+        var op = EditOpFactory.DeleteWithCompanions([level], [seed],
+        [
+            Taken(light, null, CompanionRule.AtTheSpot),
+            Taken(light, null, CompanionRule.AtTheSpot), // found for two seeds
+            Taken(sound, null, CompanionRule.AtTheSpot), // already deleted
+            Taken(new ActorRef(Outpost, "Door_Child_1"), null, CompanionRule.ChildActor, locked: true), // the export takes it along
+            Taken(house, "P_Fire", CompanionRule.OwnEffect),
+            Taken(house, "FireLight", CompanionRule.OwnEffect),
+            Taken(house, "Chimney_Smoke", CompanionRule.OwnEffect), // from the template: cannot go alone
+        ], state, "Delete Fireplace and what belongs to it");
+
+        var batch = Assert.IsType<BatchOp>(op);
+        Assert.Equal("Delete Fireplace and what belongs to it", batch.Title);
+        Assert.Equal(new EditOp[] { seed, new DeleteActorOp(light), new DeleteComponentsOp(house, ["P_Fire", "FireLight"]) }, batch.Ops);
+        Assert.Null(state.Validate(batch));
+        state.Apply(batch);
+        Assert.True(state.IsDeleted(light));
+        Assert.True(state.IsDeleted(house, "FireLight"));
+        state.Apply(batch.Inverse());
+        Assert.Equal(before, state.Describe()); // one Ctrl+Z puts it all back
+
+        // A fire with its light (kept) hanging under it stays; nothing taken is the seed op alone.
+        Assert.Equal(seed, EditOpFactory.DeleteWithCompanions([level], [seed], [Taken(house, "P_Fire", CompanionRule.OwnEffect)], state, "t"));
+        Assert.Equal(seed, EditOpFactory.DeleteWithCompanions([level], [seed], [], state, "t"));
+        var whole = new DeleteActorOp(light);
+        Assert.Equal(whole, EditOpFactory.DeleteWithCompanions([level], [whole], [Taken(light, null, CompanionRule.AtTheSpot)], state, "t"));
+    }
 }

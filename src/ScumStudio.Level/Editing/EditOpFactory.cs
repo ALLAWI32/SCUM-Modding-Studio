@@ -110,6 +110,131 @@ public static class EditOpFactory
     }
 
     /// <summary>
+    /// A <see cref="DeleteComponentsOp"/> removing <paramref name="components"/> of <paramref name="actor"/>, which stays (names
+    /// as the level stores them).
+    /// </summary>
+    /// <exception cref="ArgumentException">
+    /// No component is given, the actor was added by an edit, or a component is unknown, the root, synthesized from a
+    /// Blueprint template, made by the actor's C++ class (<see cref="ComponentRecord.IsNativeSubobject"/>), or carries a kept
+    /// component attached under it (a lamp on the deleted shelf would fall to the world's origin) that is not listed too.
+    /// </exception>
+    public static DeleteComponentsOp DeleteComponents(LevelDocument level, ActorRecord actor, IReadOnlyList<string> components, EditState? state = null)
+    {
+        ArgumentNullException.ThrowIfNull(level);
+        ArgumentNullException.ThrowIfNull(actor);
+        ArgumentNullException.ThrowIfNull(components);
+        var actorRef = new ActorRef(level.PackagePath, actor.Name);
+        if (components.Count == 0)
+        {
+            throw new ArgumentException($"{actorRef}: no component given.", nameof(components));
+        }
+
+        if (state?.IsAdded(actorRef) == true)
+        {
+            throw new ArgumentException($"{actorRef} was added by an edit; its parts cannot be deleted (delete the whole copy instead).", nameof(actor));
+        }
+
+        var picked = new List<ComponentRecord>();
+        foreach (var name in components)
+        {
+            var c = actor.FindComponent(name) ?? throw new ArgumentException($"{actorRef} has no component '{name}'.", nameof(components));
+            if (PartRules.WhyNotDeletable(actor, c) is { } refusal)
+            {
+                throw new ArgumentException($"{actorRef}: component '{c.Name}' {refusal}; it cannot be deleted.", nameof(components));
+            }
+
+            if (!picked.Contains(c))
+            {
+                picked.Add(c);
+            }
+        }
+
+        // What hangs under a deleted component loses its parent in the game: it must go along (or be deleted already).
+        if (PartRules.KeptUnder(level, picked.Select(c => c.ExportIndex), (a, c) => state?.IsDeleted(new ActorRef(level.PackagePath, a.Name), c.Name) == true) is { } kept)
+        {
+            throw new ArgumentException(
+                $"{actorRef}: '{kept.Actor.Name}.{kept.Component.Name}' is attached under a component being deleted; delete it too, or it would lose its place.", nameof(components));
+        }
+
+        return new DeleteComponentsOp(actorRef, picked.Select(c => c.Name).ToList());
+    }
+
+    /// <summary>
+    /// One undo step for a delete and what belongs to it (see <see cref="Companions.Find"/>): <paramref name="seedOps"/> first,
+    /// then a <see cref="DeleteActorOp"/> for each taken actor and one <see cref="DeleteComponentsOp"/> per kept actor for its
+    /// taken effect components. What is already deleted (before or by an earlier op) is skipped, as are locked child actors the
+    /// export takes along anyway, and a component that would leave a kept one hanging under it. With nothing taken it is the
+    /// single seed op itself.
+    /// </summary>
+    /// <exception cref="ArgumentException">No seed op is given.</exception>
+    public static EditOp DeleteWithCompanions(IReadOnlyList<LevelDocument> levels, IReadOnlyList<EditOp> seedOps, IReadOnlyList<Companion> taken, EditState state, string title)
+    {
+        ArgumentNullException.ThrowIfNull(levels);
+        ArgumentNullException.ThrowIfNull(seedOps);
+        ArgumentNullException.ThrowIfNull(taken);
+        ArgumentNullException.ThrowIfNull(state);
+        if (seedOps.Count == 0)
+        {
+            throw new ArgumentException("No delete given.", nameof(seedOps));
+        }
+
+        var dry = state.Clone();
+        foreach (var op in seedOps.Where(o => dry.Validate(o) is null))
+        {
+            dry.Apply(op);
+        }
+
+        var ops = new List<EditOp>(seedOps);
+        foreach (var actor in taken.Where(c => c.Component is null && !(c.Locked && c.Rule == CompanionRule.ChildActor)).Select(c => c.Actor).Distinct(ActorRef.Comparer))
+        {
+            if (!dry.IsDeleted(actor) && !dry.IsAdded(actor))
+            {
+                var delete = new DeleteActorOp(actor);
+                dry.Apply(delete);
+                ops.Add(delete);
+            }
+        }
+
+        foreach (var group in taken.Where(c => c.Component is not null).GroupBy(c => c.Actor, ActorRef.Comparer))
+        {
+            if (dry.IsDeleted(group.Key) || levels.FirstOrDefault(l => string.Equals(l.PackagePath, group.Key.Level, StringComparison.OrdinalIgnoreCase))?.FindActor(group.Key.Actor) is not { } record)
+            {
+                continue;
+            }
+
+            // Stored, deletable, not gone yet; one with a kept component under it stays (that one keeps its place).
+            var parts = group.Select(c => record.FindComponent(c.Component!))
+                .OfType<ComponentRecord>()
+                .Where(c => c.ExportIndex >= 0 && !c.IsSynthesized && !c.IsNativeSubobject && c.ExportIndex != record.RootComponent && !dry.IsDeleted(group.Key, c.Name))
+                .Distinct()
+                .ToList();
+            for (var dropped = true; dropped;)
+            {
+                var keptParents = record.Components.Where(c => !c.IsSynthesized && !parts.Contains(c) && !dry.IsDeleted(group.Key, c.Name))
+                    .Select(c => c.AttachParent).OfType<int>().ToHashSet();
+                dropped = parts.RemoveAll(p => keptParents.Contains(p.ExportIndex)) > 0;
+            }
+
+            if (parts.Count > 0)
+            {
+                var level = levels.First(l => string.Equals(l.PackagePath, group.Key.Level, StringComparison.OrdinalIgnoreCase));
+                try
+                {
+                    var delete = DeleteComponents(level, record, parts.Select(p => p.Name).ToList(), dry);
+                    dry.Apply(delete);
+                    ops.Add(delete);
+                }
+                catch (ArgumentException)
+                {
+                    // Another actor hangs on one of them: they stay with it.
+                }
+            }
+        }
+
+        return ops.Count == 1 ? ops[0] : new BatchOp(title, ops);
+    }
+
+    /// <summary>
     /// A <see cref="SetSpawnPointsOp"/> giving the point array on <paramref name="component"/> of <paramref name="actor"/>
     /// (null = its patrol points) the points <paramref name="points"/>; the old list is the current override in
     /// <paramref name="state"/>, else the stored one.

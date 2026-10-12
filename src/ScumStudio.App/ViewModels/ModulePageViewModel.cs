@@ -562,7 +562,9 @@ public abstract partial class ModulePageViewModel : PageViewModel, ISearchablePa
         try
         {
             var template = item.CloneOf ?? item.PackagePath;
-            var model = await Task.Run(() => new MeshPreviewLoader(catalog, _services.Logger).LoadBlueprint(template, addOn)).ConfigureAwait(true);
+            // Full-size textures as the Assets page shows them (kept compressed for the GPU; paint decodes the ones it needs).
+            var loader = new MeshPreviewLoader(catalog, _services.Logger) { TextureSize = AssetsPageViewModel.MeshPreviewTextureSize, ForGpu = true };
+            var model = await Task.Run(() => loader.LoadBlueprint(template, addOn)).ConfigureAwait(true);
             if (!ReferenceEquals(SelectedItem, item))
             {
                 return;

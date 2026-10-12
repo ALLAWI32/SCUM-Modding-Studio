@@ -142,7 +142,7 @@ public static partial class MaterialParameters
         var sibling = items[0];
         var entry = payload.AsSpan(sibling.Offset, sibling.Size).ToArray();
         var nameTag = Member((StructValue)Member(sibling, "ParameterInfo")!.Value, "Name")!;
-        var nameRef = AddName(tables.Names, tables.Wide, name);
+        var nameRef = tables.Name(name);
         BinaryPrimitives.WriteInt32LittleEndian(entry.AsSpan(nameTag.ValueOffset - sibling.Offset), nameRef.Index);
         BinaryPrimitives.WriteInt32LittleEndian(entry.AsSpan(nameTag.ValueOffset - sibling.Offset + 4), nameRef.Number);
         WriteValue(entry, Member(sibling, "ParameterValue")!, array, value, tables, -sibling.Offset);
@@ -196,19 +196,6 @@ public static partial class MaterialParameters
 
     /// <summary>The import index of texture <paramref name="objectPath"/> (<c>/Game/…/T_X.T_X</c>), added when missing.</summary>
     private static int TextureImport(PackageTables t, string objectPath) => t.Import("/Script/Engine", "Texture2D", objectPath);
-
-    private static FNameRef AddName(List<string> names, List<bool> wide, string name)
-    {
-        var index = names.IndexOf(name);
-        if (index < 0)
-        {
-            index = names.Count;
-            names.Add(name);
-            wide.Add(!name.All(char.IsAscii));
-        }
-
-        return new FNameRef(index, 0);
-    }
 
     private static void Add(byte[] data, int offset, int delta) =>
         BinaryPrimitives.WriteInt32LittleEndian(data.AsSpan(offset), BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(offset)) + delta);

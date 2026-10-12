@@ -1,0 +1,10 @@
+{
+  "comment": "Test vector for the mod share moderation signature (ECDSA P-256, SHA-256, IEEE P1363 r||s). A throw-away TEST key made once for this file; its private half was never saved. Never the moderator key.",
+  "publicKeySpki": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEiw3nfkP3rinID+jpdul/aUkhzWCjD/576vEzoljX600BbECCqTldQ85FzGFmXN5JfLj434C1a0SNnKM4SHN5tw==",
+  "method": "DELETE",
+  "path": "/mods/abcdefghijkl",
+  "time": 1760270000,
+  "nonce": "yofGEHM23JzpGpAxzeVGcg",
+  "canonical": "DELETE\n/mods/abcdefghijkl\n1760270000\nyofGEHM23JzpGpAxzeVGcg",
+  "signature": "GmdXvAr0RuqRNkCUptrJ7+0sh29QXRcWC1qah7eVmrvSDPlh5Gpat14yxwehUbiTeHT5kwOtLDt/aiUIu4HouQ=="
+}

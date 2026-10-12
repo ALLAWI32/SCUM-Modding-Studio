@@ -370,6 +370,384 @@ public sealed class ProjectExporterTests
     }
 
     [Fact]
+    public void AFenceOnTheDecksSocketBendsWhereTheLevelPutsIt()
+    {
+        // Audit F201 for bends: the fence hangs on a socket of the deck (turned, raised, half scale); the bent copy is a new
+        // actor of its own and must stand where the level reads the fence, socket included.
+        const string level = "/Game/ConZ_Files/Maps/The_Island/A_0_Synth_Bridge";
+        var b = new FakeLevelBuilder(level);
+        var bridge = b.Actor("Bridge_1", "/Script/Engine.StaticMeshActor");
+        var deck = b.Component(bridge, "StaticMeshComponent0", "StaticMeshComponent", location: new FVector(10000, 5000, 3000), rotation: new FRotator(0, 90, 0), mesh: "/Game/Road/SM_Bridge.SM_Bridge");
+        b.Root(bridge, deck);
+        var fence = b.Actor("Fence_1", "/Script/Engine.StaticMeshActor");
+        var fenceRoot = b.Component(fence, "StaticMeshComponent0", "StaticMeshComponent", location: new FVector(-2381, 0, -1), attachTo: deck, mesh: "/Game/Road/SM_Bridge_Fence.SM_Bridge_Fence");
+        b.Root(fence, fenceRoot);
+        var data = b.Build();
+        var socket = new FTransform(new FRotator(0, 30, 0), new FVector(0, 0, 50), new FVector(0.5f, 0.5f, 0.5f));
+        var document = LevelDocument.FromData(data with { Exports = data.Exports.Select(e => e.Index == fenceRoot ? e with { AttachSocket = socket } : e).ToList() });
+
+        var bounds = new ScumStudio.Core.Geometry.BoundingBox(new System.Numerics.Vector3(-791, -14, 0), new System.Numerics.Vector3(794, 14, 120));
+        var state = new EditState();
+        state.Apply(new BendActorOp(new ActorRef(level, "Fence_1"), 0f, 10f));
+        var request = ProjectExporter.PlanLevel(state, level, document, [], null, null, _ => new BendMesh(bounds, null, [new ScumStudio.Assets.Meshes.CollisionBox(new FVector(1.5f, 0, 60), FRotator.Zero, new FVector(1585, 9, 120))], new ScumStudio.Formats.FGuid(1, 2, 3, 4)));
+
+        var want = document.FindActor("Fence_1")!.Root!.WorldTransform;
+        var piece = Assert.Single(request.StaticMeshAdds);
+        Assert.True(FVector.Distance(piece.Transform.Location, want.Translation) < 0.5f, $"bent at {piece.Transform.Location}, the level says {want.Translation}");
+        Assert.True(piece.Transform.Rotation.Equals(TransformValue.FromTransform(want).Rotation, 0.01f), $"turned {piece.Transform.Rotation}");
+    }
+
+    [Fact]
+    public void ADeletedComponentOfAKeptActorIsPlannedAsDeleteComponents()
+    {
+        // Owner: "if I delete a fire place, the fire stays burning in game" - a house's fireplace part with its fire and light.
+        var document = EditOpFactoryTests.FireplaceHouse(LevelPath);
+        var house = new ActorRef(LevelPath, "House_1");
+        var state = new EditState();
+        state.Apply(new DeleteActorOp(new ActorRef(LevelPath, "Pot_1")));
+        state.Apply(EditOpFactory.DeleteComponents(document, document.FindActor(house.Actor)!, ["Fireplace", "P_Fire", "FireLight"], state));
+
+        var warnings = new List<string>();
+        var request = ProjectExporter.PlanLevel(state, LevelPath, document, warnings);
+        Assert.Equal(new[] { ("House_1", "Fireplace"), ("House_1", "P_Fire"), ("House_1", "FireLight") }, request.DeleteComponents);
+        Assert.Equal(new[] { "Pot_1" }, request.DeleteActors); // the walls and the door still stand: the house stays
+        Assert.Empty(warnings);
+
+        // A name the level does not have is reported; the house deleted later takes its parts along.
+        var ghost = new EditState();
+        ghost.Apply(new DeleteComponentsOp(house, ["Ghost_Fire"]));
+        Assert.Empty(ProjectExporter.PlanLevel(ghost, LevelPath, document, warnings).DeleteComponents);
+        Assert.Single(warnings, w => w.Contains("Ghost_Fire", StringComparison.Ordinal));
+        state.Apply(new DeleteActorOp(house));
+        var whole = ProjectExporter.PlanLevel(state, LevelPath, document, []);
+        Assert.Contains("House_1", whole.DeleteActors);
+        Assert.Empty(whole.DeleteComponents);
+    }
+
+    /// <summary>A burning barrel Blueprint: its barrel, a hidden collision mesh, an editor gizmo, a WorldGrid top and its fire.</summary>
+    private static LevelDocument FireBarrel(bool withTires = false)
+    {
+        var b = new FakeLevelBuilder(LevelPath);
+        var barrel = b.Actor("BP_Barrel_FirePit24", "/Game/ConZ_Files/Models/Objects/Outdoor/Barrel/Barrel_Fire_pit/BP_Barrel_FirePit.BP_Barrel_FirePit_C", blueprint: true);
+        var root = b.Component(barrel, "DefaultSceneRoot", location: new FVector(500, 500, 0));
+        b.Root(barrel, root);
+        b.Component(barrel, "Barrel", "StaticMeshComponent", attachTo: root, mesh: "/Game/ConZ_Files/Models/Objects/Outdoor/Barrel/SM_Barrel.SM_Barrel");
+        var hidden = b.Component(barrel, "Collision", "StaticMeshComponent", attachTo: root, mesh: "/Game/ConZ_Files/Models/Objects/Outdoor/Barrel/SM_Barrel_Col.SM_Barrel_Col");
+        b.Component(barrel, "Gizmo", "StaticMeshComponent", attachTo: root, mesh: "/Engine/EditorMeshes/EditorSphere.EditorSphere");
+        b.Component(barrel, "FireTop", "StaticMeshComponent", attachTo: root, mesh: "/Game/ConZ_Files/Models/Objects/Outdoor/Barrel/SM_FireTop_Grid.SM_FireTop_Grid");
+        b.Component(barrel, "P_Fire", "ParticleSystemComponent", attachTo: root, location: new FVector(0, 0, 90));
+        if (withTires)
+        {
+            b.Component(barrel, "Tires", "InstancedStaticMeshComponent", attachTo: root, mesh: "/Game/ConZ_Files/Models/Debris/SM_Tire.SM_Tire",
+                instances: [new FTransform(new FVector(100, 0, 0)), new FTransform(new FVector(-100, 0, 0))]);
+        }
+
+        var data = b.Build();
+        return LevelDocument.FromData(data with { Exports = data.Exports.Select(e => e.Index == hidden ? e with { IsVisible = false } : e).ToList() });
+    }
+
+    [Fact]
+    public void AHiddenOrHelperMeshNoLongerBlocksTheWholeActorDelete()
+    {
+        // Research H-D': a mesh the map never draws (hidden, an editor gizmo, a WorldGrid surface) kept the burning barrel.
+        var document = FireBarrel();
+        var barrel = new ActorRef(LevelPath, "BP_Barrel_FirePit24");
+        var state = new EditState();
+        state.Apply(new SetTransformOp(barrel, TransformValue.Identity, TransformValue.Identity with { Scale = FVector.Zero }, "Barrel"));
+        static bool Grid(string mesh) => mesh.Contains("_Grid", StringComparison.Ordinal);
+
+        var warnings = new List<string>();
+        var request = ProjectExporter.PlanLevel(state, LevelPath, document, warnings, null, null, undrawnMesh: Grid);
+        Assert.Equal(new[] { barrel.Actor }, request.DeleteActors);
+        Assert.Empty(request.Transforms);
+        Assert.Contains(warnings, w => w.Contains("removed whole", StringComparison.Ordinal));
+
+        // Without the catalog's word on the WorldGrid top it may be drawn: the barrel stays. A deleted part counts as gone too.
+        Assert.Empty(ProjectExporter.PlanLevel(state, LevelPath, document, []).DeleteActors);
+        var parts = new EditState();
+        parts.Apply(new DeleteComponentsOp(barrel, ["Barrel"]));
+        Assert.Equal(new[] { barrel.Actor }, ProjectExporter.PlanLevel(parts, LevelPath, document, [], null, null, undrawnMesh: Grid).DeleteActors);
+    }
+
+    [Fact]
+    public void AnActorWithInstancesAndAZeroScaledPartGoesWholeWhenNothingIsLeft()
+    {
+        // Research H-D': a tyre stack with a part and tyres (instances) was skipped by both whole-actor rules.
+        var document = FireBarrel(withTires: true);
+        var barrel = new ActorRef(LevelPath, "BP_Barrel_FirePit24");
+        static bool Grid(string mesh) => mesh.Contains("_Grid", StringComparison.Ordinal);
+        var state = new EditState();
+        state.Apply(new DeleteInstanceOp(new InstanceRef(LevelPath, barrel.Actor, "Tires", 0)));
+        state.Apply(new SetTransformOp(barrel, TransformValue.Identity, TransformValue.Identity with { Scale = FVector.Zero }, "Barrel"));
+        Assert.Empty(ProjectExporter.PlanLevel(state, LevelPath, document, [], null, null, undrawnMesh: Grid).DeleteActors); // one tyre left
+
+        state.Apply(new DeleteInstanceOp(new InstanceRef(LevelPath, barrel.Actor, "Tires", 1)));
+        var warnings = new List<string>();
+        var request = ProjectExporter.PlanLevel(state, LevelPath, document, warnings, null, null, undrawnMesh: Grid);
+        Assert.Equal(new[] { barrel.Actor }, request.DeleteActors);
+        Assert.Empty(request.Instances);
+        Assert.Contains(warnings, w => w.Contains("removed whole", StringComparison.Ordinal));
+    }
+
+    /// <summary>A fireplace at (1000, 0, 0) turned a quarter and scaled 2: a fire emitter and its light hang on it, a lamp (a mesh of its own) stands on it.</summary>
+    private static LevelDocument FireplaceWithAttachedActors(bool keepers = false)
+    {
+        var b = new FakeLevelBuilder(LevelPath);
+        var fireplace = b.Actor("Fireplace_1", "/Script/Engine.StaticMeshActor");
+        var mesh = b.Component(fireplace, "StaticMeshComponent0", "StaticMeshComponent", location: new FVector(1000, 0, 0), rotation: new FRotator(0, 90, 0), scale: new FVector(2, 2, 2),
+            mesh: "/Game/ConZ_Files/Models/Buildings/Outpost/Trader/Assets/Fireplace/SM_Fireplace_01.SM_Fireplace_01");
+        b.Root(fireplace, mesh);
+        var fx = b.Actor("FireFX_1", "/Script/Engine.Emitter");
+        var fxRoot = b.Component(fx, "ParticleSystemComponent0", "ParticleSystemComponent", location: new FVector(0, 0, 20), attachTo: mesh);
+        b.Root(fx, fxRoot);
+        var light = b.Actor("FireLight_1", "/Script/Engine.PointLight");
+        b.Root(light, b.Component(light, "LightComponent0", "PointLightComponent", location: new FVector(0, 0, 30), attachTo: fxRoot));
+        var lamp = b.Actor("Lamp_1", "/Script/Engine.StaticMeshActor");
+        b.Root(lamp, b.Component(lamp, "StaticMeshComponent0", "StaticMeshComponent", location: new FVector(100, 0, 50), attachTo: mesh, mesh: "/Game/ConZ_Files/Props/SM_Lamp.SM_Lamp"));
+        if (keepers)
+        {
+            // Mesh-less, but the game's: loot on the mantel, a trade post's counter, a blocking volume round the hearth.
+            var spawner = b.Actor("ItemSpawner_Mantel", "/Game/ConZ_Files/Items/Spawners/BP_ItemSpawner_Kitchen.BP_ItemSpawner_Kitchen_C", blueprint: true);
+            b.Root(spawner, b.Component(spawner, "DefaultSceneRoot", location: new FVector(0, 0, 120), attachTo: mesh));
+            var post = b.Actor("TradePost_Hearth", "/Game/ConZ_Files/Economy/BP_TradePost.BP_TradePost_C", blueprint: true);
+            var postRoot = b.Component(post, "DefaultSceneRoot", location: new FVector(0, 50, 0), attachTo: mesh);
+            b.Root(post, postRoot);
+            b.Traders(post, new TraderMarker(FTransform.Identity, "Barber", "Barber", "/Game/ConZ_Files/Economy/BP_Trader.BP_Trader_C", string.Empty));
+            var postLight = b.Actor("TradePost_Light", "/Script/Engine.PointLight");
+            b.Root(postLight, b.Component(postLight, "LightComponent0", "PointLightComponent", location: new FVector(0, 0, 80), attachTo: postRoot));
+            var volume = b.Actor("Hearth_BlockingVolume", "/Script/Engine.BlockingVolume");
+            b.Root(volume, b.Component(volume, "BrushComponent0", "BrushComponent", attachTo: mesh));
+        }
+
+        return LevelDocument.FromData(b.Build());
+    }
+
+    [Fact]
+    public void AMeshlessActorAttachedToADeletedActorGoesWithIt()
+    {
+        var document = FireplaceWithAttachedActors();
+        var state = new EditState();
+        state.Apply(new DeleteActorOp(new ActorRef(LevelPath, "Fireplace_1")));
+        var warnings = new List<string>();
+        var request = ProjectExporter.PlanLevel(state, LevelPath, document, warnings);
+
+        Assert.Equal(new[] { "FireFX_1", "FireLight_1", "Fireplace_1" }, request.DeleteActors.Order(StringComparer.Ordinal));
+        Assert.Contains(warnings, w => w.Contains("FireFX_1", StringComparison.Ordinal) && w.Contains("FireLight_1", StringComparison.Ordinal) && w.Contains("attached", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void AnAttachedActorWithItsOwnMeshIsDetachedInItsWorldPlace()
+    {
+        // Audit F053: an attached actor kept while its parent goes must not jump to its relative place round the world origin.
+        var document = FireplaceWithAttachedActors();
+        var lamp = new ActorRef(LevelPath, "Lamp_1");
+        var state = new EditState();
+        state.Apply(new DeleteActorOp(new ActorRef(LevelPath, "Fireplace_1")));
+        var request = ProjectExporter.PlanLevel(state, LevelPath, document, []);
+
+        Assert.DoesNotContain("Lamp_1", request.DeleteActors);
+        Assert.Equal(new[] { ("Lamp_1", "StaticMeshComponent0") }, request.Detach);
+        var patch = Assert.Single(request.Transforms);
+        Assert.Equal(("Lamp_1", "StaticMeshComponent0"), (patch.Actor, patch.Component));
+        Assert.True(FVector.Distance(patch.Value.Location, new FVector(1000, 200, 100)) < 0.5f, $"at {patch.Value.Location}"); // (100, 0, 50) x2, turned a quarter
+        Assert.Equal(90f, patch.Value.Rotation.Yaw, 0.01f);
+        Assert.Equal(new FVector(2, 2, 2), patch.Value.Scale);
+
+        // Moved in the project first: its world place is the moved one, written once.
+        state.Apply(new SetTransformOp(lamp, TransformValue.At(100, 0, 50), TransformValue.At(0, 0, 50)));
+        patch = Assert.Single(ProjectExporter.PlanLevel(state, LevelPath, document, []).Transforms);
+        Assert.True(FVector.Distance(patch.Value.Location, new FVector(1000, 0, 100)) < 0.5f, $"at {patch.Value.Location}");
+    }
+
+    [Fact]
+    public void EffectsLeftAtADeletedObjectAreReportedNotDeleted()
+    {
+        // Owner: the fire stayed burning without the fireplace. A journal that took the fireplace alone (an older studio, the
+        // MCP, Shift+Delete) is told what stays at its spot; the export deletes only what hangs on it.
+        using var temp = new LevelTempDirectory();
+        SyntheticCampLevel.WriteCampContent(temp.Path);
+        using var catalog = AssetCatalog.OpenLoose(temp.Path);
+        var document = LevelDocument.Load(new Cue4ParseLevelReader(catalog), SyntheticCampLevel.LevelPath);
+        var state = new EditState();
+        state.Apply(new DeleteActorOp(new ActorRef(SyntheticCampLevel.LevelPath, "SM_Fireplace_1")));
+
+        var warnings = new List<string>();
+        var request = ProjectExporter.PlanLevel(state, SyntheticCampLevel.LevelPath, document, warnings);
+        Assert.Equal(new[] { "Glow_1", "SM_Fireplace_1" }, request.DeleteActors.Order(StringComparer.Ordinal)); // the glow hangs on it
+        foreach (var effect in new[] { "FireLight_1", "P_Fire_1", "Fire_Sound_1", "Ash_Decal_1" })
+        {
+            Assert.Single(warnings, w => w.Contains($": {effect} (", StringComparison.Ordinal)
+                                         && w.Contains("from deleted SM_Fireplace_1; delete it with the object in the studio.", StringComparison.Ordinal));
+        }
+
+        foreach (var kept in new[] { "Camp_Ambience", "Lamp_1", "DirectionalLight_1", "BP_House_1", "Smoke_Volume" })
+        {
+            Assert.DoesNotContain(warnings, w => w.Contains(kept, StringComparison.Ordinal));
+        }
+    }
+
+    [Fact]
+    public void ABentOriginalsAttachedActorIsDetachedInPlace()
+    {
+        // Audit F053: the bridge deck bent (re-created as Bridge_1_Bent), its fence straight: the fence keeps its world place.
+        const string level = "/Game/ConZ_Files/Maps/The_Island/A_0_Synth_Bridge";
+        var b = new FakeLevelBuilder(level);
+        var bridge = b.Actor("Bridge_1", "/Script/Engine.StaticMeshActor");
+        var deck = b.Component(bridge, "StaticMeshComponent0", "StaticMeshComponent", location: new FVector(10000, 5000, 3000), rotation: new FRotator(0, 90, 0), mesh: "/Game/Road/SM_Bridge.SM_Bridge");
+        b.Root(bridge, deck);
+        var fence = b.Actor("Fence_1", "/Script/Engine.StaticMeshActor");
+        b.Root(fence, b.Component(fence, "StaticMeshComponent0", "StaticMeshComponent", location: new FVector(-2381, 0, -1), attachTo: deck, mesh: "/Game/Road/SM_Bridge_Fence.SM_Bridge_Fence"));
+        var document = LevelDocument.FromData(b.Build());
+        var bounds = new ScumStudio.Core.Geometry.BoundingBox(new System.Numerics.Vector3(-2500, -400, 0), new System.Numerics.Vector3(2500, 400, 300));
+        var solid = new BendMesh(bounds, null, [new ScumStudio.Assets.Meshes.CollisionBox(new FVector(0, 0, 150), FRotator.Zero, new FVector(5000, 800, 300))], new ScumStudio.Formats.FGuid(1, 2, 3, 4));
+
+        var state = new EditState();
+        state.Apply(new BendActorOp(new ActorRef(level, "Bridge_1"), 0f, 10f));
+        var request = ProjectExporter.PlanLevel(state, level, document, [], null, null, _ => solid);
+
+        Assert.Equal(new[] { "Bridge_1" }, request.DeleteActors);
+        Assert.Equal(new[] { "Bridge_1_Bent" }, request.StaticMeshAdds.Select(a => a.NewName));
+        Assert.Equal(new[] { ("Fence_1", "StaticMeshComponent0") }, request.Detach);
+        var patch = Assert.Single(request.Transforms);
+        Assert.True(FVector.Distance(patch.Value.Location, new FVector(10000, 2619, 2999)) < 0.5f, $"at {patch.Value.Location}");
+        Assert.Equal(90f, patch.Value.Rotation.Yaw, 0.01f);
+    }
+
+    [Fact]
+    public void AHandMadeDeleteOfARootNativeOrHeldPartIsReportedNotPlanned()
+    {
+        // A journal edited by hand, merged, or read with another root inferred: the export checks again what the studio checks.
+        var document = EditOpFactoryTests.FireplaceHouse(LevelPath);
+        var house = new ActorRef(LevelPath, "House_1");
+        var state = new EditState();
+        state.Apply(new DeleteComponentsOp(house, ["DefaultSceneRoot", "DoorLeaf", "Chimney_Smoke", "Fireplace", "P_Fire"]));
+
+        var warnings = new List<string>();
+        var request = ProjectExporter.PlanLevel(state, LevelPath, document, warnings);
+        Assert.Empty(request.DeleteComponents);
+        Assert.Empty(request.DeleteActors); // the walls still stand
+        Assert.Single(warnings, w => w.Contains("'DefaultSceneRoot' is its root", StringComparison.Ordinal));
+        Assert.Single(warnings, w => w.Contains("'DoorLeaf' is made by the actor's own class", StringComparison.Ordinal));
+        Assert.Single(warnings, w => w.Contains("Chimney_Smoke", StringComparison.Ordinal) && w.Contains("not stored in the level", StringComparison.Ordinal));
+        Assert.Single(warnings, w => w.Contains("hangs under House_1.Fireplace and stays", StringComparison.Ordinal));
+        Assert.Single(warnings, w => w.Contains("House_1.FireLight hangs under House_1.P_Fire", StringComparison.Ordinal));
+
+        // The pot kept on the fireplace: the fire and its light go, the fireplace stays under the pot.
+        var potKept = new EditState();
+        potKept.Apply(new DeleteComponentsOp(house, ["Fireplace", "P_Fire", "FireLight"]));
+        warnings.Clear();
+        Assert.Equal(new[] { ("House_1", "P_Fire"), ("House_1", "FireLight") }, ProjectExporter.PlanLevel(potKept, LevelPath, document, warnings).DeleteComponents);
+        Assert.Single(warnings, w => w.Contains("Pot_1.StaticMeshComponent0 hangs under House_1.Fireplace", StringComparison.Ordinal));
+
+        // The pot deleted too, the light kept: the fire keeps its light and so the fireplace keeps the fire.
+        var held = new EditState();
+        held.Apply(new DeleteActorOp(new ActorRef(LevelPath, "Pot_1")));
+        held.Apply(new DeleteComponentsOp(house, ["Fireplace", "P_Fire"]));
+        warnings.Clear();
+        Assert.Empty(ProjectExporter.PlanLevel(held, LevelPath, document, warnings).DeleteComponents);
+        Assert.Equal(2, warnings.Count(w => w.Contains("that part was not deleted", StringComparison.Ordinal)));
+
+        // Without the level nothing can be checked: nothing is deleted.
+        warnings.Clear();
+        var blind = new EditState();
+        blind.Apply(new DeleteComponentsOp(house, ["FireLight"]));
+        Assert.Empty(ProjectExporter.PlanLevel(blind, LevelPath, null, warnings, null, null).DeleteComponents);
+        Assert.Single(warnings, w => w.Contains("FireLight", StringComparison.Ordinal) && w.Contains("could not be read", StringComparison.Ordinal));
+        Assert.Equal(new[] { ("House_1", "FireLight") }, ProjectExporter.PlanLevel(blind, LevelPath, document, []).DeleteComponents);
+    }
+
+    [Fact]
+    public void AMovedParentsSocketAndAbsoluteScaleKeepTheDetachedChildInItsWorldPlace()
+    {
+        // Audit F201: a lamp hung on the shelf mesh's socket (half scale, 50 up) and a sign with its own world scale; the shelf
+        // moved in the project, then deleted. Each child is written where the level would put it under the moved shelf.
+        var socket = new FTransform(new FRotator(0, 30, 0), new FVector(0, 0, 50), new FVector(0.5f, 0.5f, 0.5f));
+        LevelDocument Shelf(TransformValue at)
+        {
+            var b = new FakeLevelBuilder(LevelPath);
+            var shelf = b.Actor("Shelf_1", "/Script/Engine.StaticMeshActor");
+            var mesh = b.Component(shelf, "StaticMeshComponent0", "StaticMeshComponent", location: at.Location, rotation: at.Rotation, scale: at.Scale, mesh: "/Game/ConZ_Files/Props/SM_Shelf.SM_Shelf");
+            b.Root(shelf, mesh);
+            var lamp = b.Actor("Lamp_1", "/Script/Engine.StaticMeshActor");
+            var lampRoot = b.Component(lamp, "StaticMeshComponent0", "StaticMeshComponent", location: new FVector(10, 0, 0), attachTo: mesh, mesh: "/Game/ConZ_Files/Props/SM_Lamp.SM_Lamp");
+            b.Root(lamp, lampRoot);
+            var sign = b.Actor("Sign_1", "/Script/Engine.StaticMeshActor");
+            var signRoot = b.Component(sign, "StaticMeshComponent0", "StaticMeshComponent", location: new FVector(0, 40, 0), attachTo: mesh, mesh: "/Game/ConZ_Files/Props/SM_Sign.SM_Sign");
+            b.Root(sign, signRoot);
+            var data = b.Build();
+            return LevelDocument.FromData(data with
+            {
+                Exports = data.Exports.Select(e => e.Index == lampRoot ? e with { AttachSocket = socket } : e.Index == signRoot ? e with { AbsoluteScale = true } : e).ToList(),
+            });
+        }
+
+        var pristine = new TransformValue(new FVector(1000, 0, 0), new FRotator(0, 90, 0), new FVector(2, 2, 2));
+        var moved = new TransformValue(new FVector(3000, -500, 200), new FRotator(0, 45, 0), new FVector(3, 3, 3));
+        var document = Shelf(pristine);
+        var expected = Shelf(moved);
+        var state = new EditState();
+        var shelfRef = new ActorRef(LevelPath, "Shelf_1");
+        state.Apply(new SetTransformOp(shelfRef, pristine, moved));
+        state.Apply(new DeleteActorOp(shelfRef));
+
+        var request = ProjectExporter.PlanLevel(state, LevelPath, document, []);
+        Assert.Equal(new[] { ("Lamp_1", "StaticMeshComponent0"), ("Sign_1", "StaticMeshComponent0") }, request.Detach.Order());
+        foreach (var name in new[] { "Lamp_1", "Sign_1" })
+        {
+            var want = expected.FindActor(name)!.Root!.WorldTransform;
+            var patch = Assert.Single(request.Transforms, t => t.Actor == name);
+            Assert.True(FVector.Distance(patch.Value.Location, want.Translation) < 0.5f, $"{name} at {patch.Value.Location}, the level says {want.Translation}");
+            Assert.True(patch.Value.Rotation.Equals(TransformValue.FromTransform(want).Rotation, 0.01f), $"{name} turned {patch.Value.Rotation}");
+            Assert.True(FVector.Distance(patch.Value.Scale, want.Scale3D) < 0.001f, $"{name} scaled {patch.Value.Scale}, the level says {want.Scale3D}");
+        }
+
+        Assert.True(FVector.Distance(new FVector(1.5f, 1.5f, 1.5f), Assert.Single(request.Transforms, t => t.Actor == "Lamp_1").Value.Scale) < 0.001f); // the socket's half of 3
+        Assert.True(FVector.Distance(FVector.One, Assert.Single(request.Transforms, t => t.Actor == "Sign_1").Value.Scale) < 0.001f); // its own world scale
+    }
+
+    [Fact]
+    public void ARepaintedWorldGridPartStillKeepsItsActor()
+    {
+        // The map draws a WorldGrid mesh with the level's own materials: painted over, it is drawn and keeps the barrel.
+        var barrel = new ActorRef(LevelPath, "BP_Barrel_FirePit24");
+        var state = new EditState();
+        state.Apply(new SetTransformOp(barrel, TransformValue.Identity, TransformValue.Identity with { Scale = FVector.Zero }, "Barrel"));
+        static bool Grid(string mesh) => mesh.Contains("_Grid", StringComparison.Ordinal);
+        LevelDocument Painted(params string?[] materials)
+        {
+            var data = FireBarrel().Data;
+            return LevelDocument.FromData(data with { Exports = data.Exports.Select(e => e.Name == "FireTop" ? e with { OverrideMaterials = materials } : e).ToList() });
+        }
+
+        Assert.Empty(ProjectExporter.PlanLevel(state, LevelPath, Painted("/Game/ConZ_Files/Materials/M_Embers.M_Embers"), [], null, null, undrawnMesh: Grid).DeleteActors);
+        Assert.Equal(new[] { barrel.Actor }, ProjectExporter.PlanLevel(state, LevelPath, Painted([null]), [], null, null, undrawnMesh: Grid).DeleteActors);
+        Assert.Equal(new[] { barrel.Actor }, ProjectExporter.PlanLevel(state, LevelPath, Painted("/Engine/EngineMaterials/WorldGridMaterial.WorldGridMaterial"), [], null, null, undrawnMesh: Grid).DeleteActors);
+    }
+
+    [Fact]
+    public void ATraderSpawnerOrVolumeHungOnADeletedObjectStaysInItsPlace()
+    {
+        // Never deleted on the export's own word: what players were given and the game's own logic stay, taken off in place.
+        var document = FireplaceWithAttachedActors(keepers: true);
+        var state = new EditState();
+        state.Apply(new DeleteActorOp(new ActorRef(LevelPath, "Fireplace_1")));
+        var warnings = new List<string>();
+        var request = ProjectExporter.PlanLevel(state, LevelPath, document, warnings);
+
+        // The trade post's own light hangs on the post, which stays: it stays with it, still attached.
+        Assert.Equal(new[] { "FireFX_1", "FireLight_1", "Fireplace_1" }, request.DeleteActors.Order(StringComparer.Ordinal));
+        Assert.DoesNotContain(request.Detach, d => d.Actor == "TradePost_Light");
+        foreach (var keeper in new[] { "ItemSpawner_Mantel", "TradePost_Hearth", "Hearth_BlockingVolume" })
+        {
+            Assert.Contains(request.Detach, d => d.Actor == keeper);
+            var root = document.FindActor(keeper)!.Root!;
+            var patch = Assert.Single(request.Transforms, t => t.Actor == keeper);
+            Assert.True(FVector.Distance(patch.Value.Location, root.WorldTransform.Translation) < 0.5f, $"{keeper} at {patch.Value.Location}");
+            Assert.Single(warnings, w => w.Contains($"{keeper} (", StringComparison.Ordinal) && w.Contains("never deletes a trader, spawner or volume", StringComparison.Ordinal));
+        }
+    }
+
+    [Fact]
     public async Task ExportsFromAPakSourceAndCopiesTheStockSig()
     {
         using var temp = new LevelTempDirectory();

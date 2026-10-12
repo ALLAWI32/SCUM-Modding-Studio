@@ -1,7 +1,10 @@
+using System.Globalization;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Data.Converters;
 using Avalonia.Input;
 using CommunityToolkit.Mvvm.Input;
+using ScumStudio.App.Localization;
 
 namespace ScumStudio.App.Views;
 
@@ -23,6 +26,12 @@ public partial class MainWindow : Window
         this.AttachDevTools(); // F12 opens Avalonia DevTools (Debug builds only).
 #endif
     }
+
+    /// <summary>
+    /// Formats the string key given as the converter parameter with the first value ("Warnings: {0}"); the other values
+    /// (the UI language) only make the text follow a language switch.
+    /// </summary>
+    public static IMultiValueConverter LocalizedCount { get; } = new LocalizedCountConverter();
 
     /// <inheritdoc />
     protected override void OnSizeChanged(SizeChangedEventArgs e)
@@ -61,5 +70,11 @@ public partial class MainWindow : Window
         {
             await clipboard.SetTextAsync(text);
         }
+    }
+
+    private sealed class LocalizedCountConverter : IMultiValueConverter
+    {
+        public object? Convert(IList<object?> values, Type targetType, object? parameter, CultureInfo culture) =>
+            parameter is string key && values.Count > 0 && values[0] is not UnsetValueType ? Loc.F(key, values[0]) : null;
     }
 }

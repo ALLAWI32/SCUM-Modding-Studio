@@ -371,30 +371,41 @@ public sealed partial class MapPageViewModel
         }
     }
 
-    private void DeleteInstance(SelectedInstance sel)
+    private void DeleteInstance(SelectedInstance sel, bool alone = false)
     {
         if (LeavesNothingDrawn(sel.Item, [sel]))
         {
             // The last part or instance of the actor: the actor goes whole (its fire, lights and collision with it).
-            try
-            {
-                var entry = _services.Projects.Apply(new DeleteActorOp(sel.Item.Reference));
-                _services.Notifications.Info(Localization.Loc.T("Map.Deleted"), entry.Op.Describe());
-                RefreshHiddenIds();
-            }
-            catch (Exception ex) when (ex is InvalidOperationException or IOException)
-            {
-                _services.Notifications.Error(Localization.Loc.T("Map.DeleteFailed"), ex.Message);
-            }
-
+            _ = DeleteWithCompanionsAsync(WholeDelete(sel.Item), alone);
             return;
         }
 
         if (sel.Instance is null)
         {
-            // ponytail: a segment is removed by scaling it to zero (drawn and collided as nothing, written by the existing
-            // component transform patch); a real component delete op when a mod needs the export gone.
-            ApplyInstanceTransform(sel, CurrentInstanceTransform(sel) with { Scale = new FVector(0f, 0f, 0f) });
+            // A part or a road piece is scaled to nothing (drawn and collided as nothing, written by the component transform
+            // patch). Its own fire, light and sound would keep burning in the kept building (the owner's fireplace): they go
+            // as deleted components, what hangs on it as actors.
+            if (_services.Projects.Current?.State is not { } state)
+            {
+                _services.Notifications.Warning(Localization.Loc.T("History.NoProject"), Localization.Loc.T("Map.NoProject.Deletes"));
+                return;
+            }
+
+            try
+            {
+                var op = EditOpFactory.SetTransform(sel.Item.Level, sel.Item.Actor, CurrentInstanceTransform(sel) with { Scale = new FVector(0f, 0f, 0f) }, state, sel.Component.Name);
+                _ = DeleteWithCompanionsAsync(new DeleteRequest($"{sel.Item.Name}.{sel.Component.Name}", [op], [new DeleteSeed(sel.Item.Reference, sel.Component.Name)],
+                    PreparedScene?.Documents ?? [sel.Item.Level])
+                {
+                    Refresh = RefreshEdits,
+                    Whole = WholeDelete(sel.Item),
+                }, alone);
+            }
+            catch (ArgumentException ex)
+            {
+                _services.Notifications.Error(Localization.Loc.T("Map.DeleteFailed"), ex.Message);
+            }
+
             return;
         }
 

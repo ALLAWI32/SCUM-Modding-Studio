@@ -8,10 +8,13 @@ using CUE4Parse.UE4.Assets.Exports.Component.SplineMesh;
 using CUE4Parse.UE4.Assets.Exports.Component.StaticMesh;
 using CUE4Parse.UE4.Assets.Objects;
 using CUE4Parse.UE4.Objects.Engine;
+using CUE4Parse.UE4.Objects.PhysicsEngine;
 using CUE4Parse.UE4.Objects.UObject;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using ScumStudio.Assets.Catalog;
+using ScumStudio.Assets.Meshes;
+using ScumStudio.Core.Geometry;
 using ScumStudio.Core.Mathematics;
 using ScumStudio.Level.Model;
 using ScumStudio.Level.World;
@@ -419,10 +422,12 @@ public sealed partial class Cue4ParseLevelReader : ILevelReader
             patrol = points.Select(p => p.TryGetValue(out UeVector v, "LocationRelativeToSentry") ? new FVector(v.X, v.Y, v.Z) : FVector.Zero).ToList();
         }
 
+        var ignored = false;
         return header with
         {
             PatrolPoints = patrol,
             TraderMarkers = ReadTraderMarkers(actor),
+            WaterVolume = TryGetProperty(actor, "bWaterVolume", out bool water, ref ignored) && water,
             IsItemContainer = ClassChain(header.ClassPath, header.IsBlueprintClass).Contains("ItemContainer", StringComparer.Ordinal),
             IsLoaded = true,
             PropertyNames = PropertyNames(actor),
@@ -558,10 +563,111 @@ public sealed partial class Cue4ParseLevelReader : ILevelReader
             : name.EndsWith("BoxComponent", StringComparison.Ordinal) || classChain.Contains("BoxComponent", StringComparer.Ordinal) ? new FVector(32f, 32f, 32f)
             : null;
 
+        // What a fire's flames, a lake's sound or a decal plays or shows: deleting an object finds what belongs to it by it.
+        string? assetPath = null;
+        var assetProperty = AssetPropertyOf(classChain);
+        if (assetProperty is not null && TryGetProperty(templates, assetProperty, out FPackageIndex assetIndex, ref ignored) && !assetIndex.IsNull)
+        {
+            assetPath = ObjectPathOf(assetIndex);
+        }
+        else if (assetProperty is "AkAudioEvent" && TryGetProperty(templates, "EventName", out string eventName, ref ignored) && eventName.Length > 0)
+        {
+            assetPath = eventName; // older Wwise integrations name the event instead of referencing it
+        }
+
         return new ComponentValues(location, rotation, scale, absLocation, absRotation, absScale, mesh, instances, isInstancedClass,
             isMesh, isScene, isComponent, visible, childActorClass, spline, fromTemplate, endCullDistance, overrides, markers, collision, boxExtent,
-            isMesh ? ReadLootPresets(templates) : null);
+            isMesh ? ReadLootPresets(templates) : null, assetPath,
+            boxExtent is { } halfSize ? Box(halfSize) : ReadShapeBounds(templates, classChain));
     }
+
+    /// <summary>The property naming what an effect, sound or decal component plays or shows; null for other classes.</summary>
+    private static string? AssetPropertyOf(IReadOnlyList<string> classChain)
+    {
+        foreach (var c in classChain)
+        {
+            if (c.EndsWith("AkComponent", StringComparison.Ordinal))
+            {
+                return "AkAudioEvent";
+            }
+
+            if (c.EndsWith("ParticleSystemComponent", StringComparison.Ordinal))
+            {
+                return "Template";
+            }
+
+            if (c.EndsWith("NiagaraComponent", StringComparison.Ordinal))
+            {
+                return "Asset";
+            }
+
+            if (c.EndsWith("AudioComponent", StringComparison.Ordinal))
+            {
+                return "Sound";
+            }
+
+            if (c.EndsWith("DecalComponent", StringComparison.Ordinal))
+            {
+                return "DecalMaterial";
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// The box around a sphere, capsule or brush component in its own space (engine defaults for unstored sizes; a volume's
+    /// brush from the simple shapes of its <c>BrushBodySetup</c>), or null.
+    /// </summary>
+    private BoundingBox? ReadShapeBounds(TemplateChain templates, IReadOnlyList<string> classChain)
+    {
+        var ignored = false;
+        if (classChain.Contains("SphereComponent", StringComparer.Ordinal))
+        {
+            return Box(new FVector(TryGetProperty(templates, "SphereRadius", out float radius, ref ignored) ? radius : 32f));
+        }
+
+        if (classChain.Contains("CapsuleComponent", StringComparer.Ordinal))
+        {
+            var radius = TryGetProperty(templates, "CapsuleRadius", out float r, ref ignored) ? r : 22f;
+            return Box(new FVector(radius, radius, TryGetProperty(templates, "CapsuleHalfHeight", out float half, ref ignored) ? half : 44f));
+        }
+
+        if (!classChain.Contains("BrushComponent", StringComparer.Ordinal)
+            || !TryGetProperty(templates, "BrushBodySetup", out FPackageIndex bodyIndex, ref ignored) || bodyIndex.IsNull)
+        {
+            return null;
+        }
+
+        try
+        {
+            if (!bodyIndex.TryLoad<UBodySetup>(out var setup) || setup is null)
+            {
+                return null;
+            }
+
+            var bounds = BoundingBox.Empty;
+            foreach (var shape in MeshCollision.Boxes(setup))
+            {
+                var half = shape.Size * 0.5f;
+                var turn = shape.Rotation.Quaternion();
+                for (var corner = 0; corner < 8; corner++)
+                {
+                    var p = new FVector((corner & 1) == 0 ? -half.X : half.X, (corner & 2) == 0 ? -half.Y : half.Y, (corner & 4) == 0 ? -half.Z : half.Z);
+                    bounds = bounds.Include((shape.Center + turn.RotateVector(p)).ToVector3());
+                }
+            }
+
+            return bounds.IsEmpty ? null : bounds;
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogDebug(ex, "Could not read the brush of {Object}.", templates.Object.Name);
+            return null;
+        }
+    }
+
+    private static BoundingBox Box(FVector halfSize) => new(-halfSize.ToVector3(), halfSize.ToVector3());
 
     /// <summary>
     /// The loot presets of a mesh component's <c>AssetUserData</c> entries of class <c>ExamineAssetData</c> (what a player's

@@ -130,4 +130,97 @@ public sealed class MapHeaderTests
             vm.Dispose();
         }
     }
+
+    [Avalonia.Headless.XUnit.AvaloniaFact]
+    public async Task TheHeaderNeverOverlapsAtCommonScreenSizes()
+    {
+        // Owner: every option in its place, nothing covering or pushing another when the window grows or shrinks. Every
+        // conditional item shows (a selection, a copy, a shape, a project), so the header is as full as it gets.
+        using var ctx = AppTestContext.Create(inline: false);
+        var game = ctx.Combine("game");
+        SyntheticLevels.WriteContent(game, withBlueprintPackage: true);
+        await ctx.Services.Workspace.OpenLooseAsync(game, ScumStudio.Core.Abstractions.ProgressSink.Null);
+        await ctx.Services.Projects.CreateAsync(ctx.Combine("projects"), "Header");
+        var (window, vm) = HeadlessUi.ShowMainWindow(ctx.Services, 1280, 720);
+        try
+        {
+            var map = (MapPageViewModel)vm.NavigateTo("map")!;
+            await map.LoadCompletion;
+            await map.LoadLevelsAsync([SyntheticLevels.LevelPath]);
+            map.SelectedActor = map.AllActors.First(a => a.Name == "BP_Lamp_C_1");
+            map.CopySelectedCommand.Execute(null);
+            map.HasShape = true;
+            map.IsWorldMode = true;
+            map.WorldStatus = Loc.F("Map.World.Around", 41);
+            var viewport = window.GetVisualDescendants().OfType<ScumStudio.App.Controls.LevelViewport>().Single(v => v.Name == "Viewport3d");
+            var header = window.GetVisualDescendants().OfType<Border>().Single(b => b.Classes.Contains("pageHeader") && b.FindAncestorOfType<ScumStudio.App.Views.Pages.MapPageView>() is not null);
+            foreach (var (name, configure) in ToolbarConfigurations)
+            {
+                configure(map);
+                foreach (var (width, height) in new[] { (1280, 720), (1600, 900), (1920, 1080), (2560, 1440) })
+                {
+                    window.Width = width;
+                    window.Height = height;
+                    HeadlessUi.Pump();
+                    HeadlessUi.SaveScreenshot(window, $"map-header-{name}-{width}");
+                    var at = $"{name} at {width}x{height}";
+                    var box = Bounds(header, window);
+                    var items = HeaderItems(header.Child!).Where(c => c.IsEffectivelyVisible && c.Bounds.Width > 0 && c.Bounds.Height > 0)
+                        .Select(c => (Control: c, Rect: Bounds(c, window))).ToList();
+                    Assert.True(items.Count >= 3, $"{at}: {items.Count} header items");
+                    foreach (var item in items)
+                    {
+                        Assert.True(box.Inflate(0.5).Contains(item.Rect), $"{at}: {Describe(item.Control)} {item.Rect} leaves the header {box}");
+                    }
+
+                    for (var i = 0; i < items.Count; i++)
+                    {
+                        for (var j = i + 1; j < items.Count; j++)
+                        {
+                            var overlap = items[i].Rect.Intersect(items[j].Rect);
+                            Assert.True(overlap.Width < 0.5 || overlap.Height < 0.5,
+                                $"{at}: {Describe(items[i].Control)} {items[i].Rect} overlaps {Describe(items[j].Control)} {items[j].Rect}");
+                        }
+                    }
+
+                    var view = Bounds(viewport, window);
+                    Assert.True(view.Top >= box.Bottom, $"{at}: the view starts at {view.Top}, under the header's bottom {box.Bottom}");
+                    Assert.True(viewport.IsEffectivelyVisible && view.Width > 300 && view.Height > 200, $"{at}: the view is {view}");
+                }
+            }
+        }
+        finally
+        {
+            window.Close();
+            vm.Dispose();
+        }
+    }
+
+    /// <summary>The toolbar switch sets the overlap test walks through: everything, the defaults, and a minimal header.</summary>
+    private static readonly (string Name, Action<MapPageViewModel> Configure)[] ToolbarConfigurations =
+    [
+        ("all", map => map.Toolbar.ShowAll()),
+        ("defaults", map => map.Toolbar.ResetDefaults()),
+        ("minimal", map =>
+        {
+            foreach (var item in map.Toolbar.Items)
+            {
+                item.IsShown = item.Key is "Quality" or "Snap" or "AddObject";
+            }
+        }),
+    ];
+
+    /// <summary>The header's leaf items: the toolbar's buttons and groups, the project controls and the status line's pieces.</summary>
+    private static IEnumerable<Control> HeaderItems(Control control)
+    {
+        var container = control.Name is "ViewToolbar" or "ViewStatus" or "ProjectControls"
+                        || control is Grid { Parent: Border }
+                        || control is StackPanel && (control.Parent is Grid { Parent: Border } || control.Parent is DockPanel { Name: "ViewStatus" });
+        return container && control is Panel panel ? panel.Children.SelectMany(HeaderItems) : [control];
+    }
+
+    private static Rect Bounds(Visual visual, Visual root) => new(visual.TranslatePoint(new Point(0, 0), root)!.Value, visual.Bounds.Size);
+
+    private static string Describe(Control control) =>
+        control.Name ?? (control is ContentControl { Content: string text } ? text : null) ?? control.GetType().Name + (ToolTip.GetTip(control) is string tip ? $" ({tip[..Math.Min(30, tip.Length)]})" : string.Empty);
 }

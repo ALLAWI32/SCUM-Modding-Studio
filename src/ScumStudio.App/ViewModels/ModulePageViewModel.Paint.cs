@@ -6,6 +6,7 @@ using CUE4Parse.UE4.Assets.Exports.Material;
 using CUE4Parse.UE4.Assets.Exports.Texture;
 using Microsoft.Extensions.Logging;
 using ScumStudio.App.Localization;
+using ScumStudio.App.Services;
 using ScumStudio.Assets.Catalog;
 using ScumStudio.Assets.Materials;
 using ScumStudio.Assets.Textures;
@@ -29,7 +30,12 @@ public abstract partial class ModulePageViewModel
     /// <summary>Changes closer together than this are one Ctrl+Z step (dragging in the colour picker).</summary>
     private static readonly TimeSpan PaintUndoPause = TimeSpan.FromMilliseconds(600);
 
+    /// <summary>Largest edge of the colour textures paint is baked into (the 3D view keeps the full-size ones compressed).</summary>
+    internal const int PaintTextureSize = 2048;
+
     private readonly Dictionary<string, TextureImage> _paintMasks = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, TextureImage> _paintPixels = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, TextureImage> _paintDragPixels = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, (Vector4 A, Vector4? B, TextureImage Image)> _paintBakes = new(StringComparer.OrdinalIgnoreCase);
     private readonly Stack<Dictionary<PaintMaterialViewModel, PaintState>> _paintHistory = new();
     private readonly Dictionary<PaintMaterialViewModel, PaintState> _paintShown = [];
@@ -37,6 +43,8 @@ public abstract partial class ModulePageViewModel
     private Dictionary<string, PaintState>? _paintCarry;
     private PaintMaterialViewModel? _paintLastChanged;
     private TimeSpan _paintLastTime;
+    private CancellationTokenSource? _paintRest;
+    private bool _paintDragging;
     private bool _paintRestoring;
     private bool _armourQuiet;
     private int _paintLoads;
@@ -99,6 +107,8 @@ public abstract partial class ModulePageViewModel
             if (_paintCarry is null)
             {
                 Paints = []; // another vehicle (a new armour kit keeps the panel while it loads)
+                _paintPixels.Clear();
+                _paintDragPixels.Clear();
             }
 
             _paintBakes.Clear();
@@ -140,10 +150,27 @@ public abstract partial class ModulePageViewModel
                 ? clone.Packages.ToDictionary(p => p.Old, p => p.New, StringComparer.OrdinalIgnoreCase)
                 : null;
             var weaponItem = !IsVehicleModule;
-            var sources = await Task.Run(() => materials.Select(m => ReadPaint(catalog, m, !known.Contains(m), own, weaponItem)).OfType<PaintSource>().ToList()).ConfigureAwait(true);
+            var pixels = new Dictionary<string, TextureImage>(_paintPixels, StringComparer.OrdinalIgnoreCase);
+            var sources = await Task.Run(() =>
+            {
+                var found = materials.Select(m => ReadPaint(catalog, m, !known.Contains(m), own, weaponItem)).OfType<PaintSource>().ToList();
+                // The 3D view keeps its textures compressed for the GPU: the ones paint tints or bakes are decoded here.
+                var painted = found.Select(s => s.MaterialPath).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                foreach (var path in model.Parts.Where(p => painted.Contains(p.Material)).Select(p => p.TexturePath).OfType<string>().Distinct(StringComparer.OrdinalIgnoreCase))
+                {
+                    RgbaOf(model, path, pixels, p => DecodePixels(catalog, p), PaintTextureSize);
+                }
+
+                return found;
+            }).ConfigureAwait(true);
             if (!ReferenceEquals(SelectedItem, item) || load != _paintLoads)
             {
                 return;
+            }
+
+            foreach (var (path, image) in pixels)
+            {
+                _paintPixels[path] = image;
             }
 
             CloneSharesPaint = own is not null && sources.Count == 0;
@@ -157,7 +184,7 @@ public abstract partial class ModulePageViewModel
             foreach (var s in sources)
             {
                 var paint = new PaintMaterialViewModel(s.MaterialPath, s.Name, s.Colour, s.Second, s.Metal, s.ClearCoat, s.Added, s.Diffuse,
-                    s.Tint, s.Tint ? TintGain(model, s.MaterialPath) : 1f);
+                    s.Tint, s.Tint ? TintGain(model, s.MaterialPath, _paintPixels) : 1f);
                 if (_paintCarry is { } carry && carry.TryGetValue(paint.MaterialPath, out var kept))
                 {
                     kept.ApplyTo(paint); // another armour kit: the paint chosen so far stays
@@ -223,12 +250,15 @@ public abstract partial class ModulePageViewModel
 
     /// <summary>
     /// How much a weapon's tint is lifted so the colour comes out as picked over its own (dark) texture: the texture's mean
-    /// linear luminance brought to about that of a mid-grey, between 1 and 6 times.
+    /// linear luminance brought to about that of a mid-grey, between 1 and 6 times; 1 when no pixel of it could be read.
     /// </summary>
-    private static float TintGain(PreviewModel model, string material)
+    /// <param name="model">The preview.</param>
+    /// <param name="material">The weapon's material.</param>
+    /// <param name="pixels">Decoded colour textures by path (<see cref="RgbaOf"/>).</param>
+    internal static float TintGain(PreviewModel model, string material, IReadOnlyDictionary<string, TextureImage> pixels)
     {
         var path = model.Parts.FirstOrDefault(p => string.Equals(p.Material, material, StringComparison.OrdinalIgnoreCase) && p.TexturePath is not null)?.TexturePath;
-        if (path is null || !model.Textures.TryGetValue(path, out var image))
+        if (path is null || !pixels.TryGetValue(path, out var image))
         {
             return 1f;
         }
@@ -243,6 +273,54 @@ public abstract partial class ModulePageViewModel
         }
 
         return n == 0 ? 1f : Math.Clamp(0.3f / Math.Max(1e-3f, (float)(sum / n)), 1f, 6f);
+    }
+
+    /// <summary>
+    /// The pixels of <paramref name="model"/>'s texture <paramref name="path"/> at most <paramref name="maxSize"/> px (what a
+    /// bake repaints on every colour change): the image itself when it has them, else (a texture kept compressed for the
+    /// GPU) <paramref name="decode"/>d; halved down to the size when larger, once into <paramref name="cache"/>; null when it
+    /// cannot be read.
+    /// </summary>
+    internal static TextureImage? RgbaOf(PreviewModel model, string path, IDictionary<string, TextureImage> cache, Func<string, TextureImage?> decode, int maxSize)
+    {
+        if (cache.TryGetValue(path, out var known))
+        {
+            return known;
+        }
+
+        if (!model.Textures.TryGetValue(path, out var image))
+        {
+            return null;
+        }
+
+        var pixels = image.Rgba.Length > 0 ? image : decode(path);
+        if (pixels is not { Rgba.Length: > 0 })
+        {
+            return null;
+        }
+
+        if (Math.Max(pixels.Width, pixels.Height) > maxSize)
+        {
+            var (rgba, w, h) = ThumbnailService.Shrink(pixels.Rgba, pixels.Width, pixels.Height, maxSize);
+            pixels = pixels with { Rgba = rgba, Width = w, Height = h };
+        }
+
+        cache[path] = pixels;
+        return pixels;
+    }
+
+    /// <summary>A colour texture decoded for painting (at most <see cref="PaintTextureSize"/> px), or null when it cannot be read.</summary>
+    private TextureImage? DecodePixels(AssetCatalog catalog, string path)
+    {
+        try
+        {
+            return TextureDecoder.Decode(catalog.LoadObject<UTexture2D>(path), maxSize: PaintTextureSize);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _services.Logger.LogDebug("Paint texture {Texture}: {Message}", path, ex.Message);
+            return null;
+        }
     }
 
     /// <summary>A clone without its own copies of the paint (made before clones had them): painting it is off.</summary>
@@ -377,9 +455,14 @@ public abstract partial class ModulePageViewModel
         {
             // One step per pause: a drag through the colour picker is undone at once. A step remembers every part.
             var now = _paintClock.Elapsed;
-            if (!ReferenceEquals(paint, _paintLastChanged) || now - _paintLastTime > PaintUndoPause)
+            _paintDragging = ReferenceEquals(paint, _paintLastChanged) && now - _paintLastTime <= PaintUndoPause;
+            if (!_paintDragging)
             {
                 _paintHistory.Push(new Dictionary<PaintMaterialViewModel, PaintState>(_paintShown));
+            }
+            else
+            {
+                _ = SharpenPaintAsync();
             }
 
             _paintLastChanged = paint;
@@ -418,6 +501,7 @@ public abstract partial class ModulePageViewModel
         }
 
         _paintRestoring = true;
+        _paintDragging = false;
         try
         {
             foreach (var (paint, state) in step)
@@ -459,12 +543,12 @@ public abstract partial class ModulePageViewModel
             {
                 parts.Add(part with { TexturePath = null, Tint = paint.LinearColour, Surface = surface }); // the plain white finish, painted
             }
-            else if (!paint.IsTint && part.TexturePath is { } path && model.Textures.TryGetValue(path, out var diffuse)
+            else if (!paint.IsTint && part.TexturePath is { } path && _paintPixels.TryGetValue(path, out var diffuse)
                      && (paint.IsAdded ? WhiteMask : _paintMasks.GetValueOrDefault(paint.MaterialPath)) is { } mask)
             {
                 // Through the colour mask; an added paint (armour) is paint all over, its plate print adding the scratches.
                 var key = "#paint/" + paint.MaterialPath;
-                textures[key] = Baked(paint, diffuse, mask);
+                textures[key] = Baked(paint, _paintDragging ? DragPixels(path, diffuse) : diffuse, mask);
                 parts.Add(part with { TexturePath = key, Tint = null, Surface = surface });
             }
             else
@@ -479,12 +563,12 @@ public abstract partial class ModulePageViewModel
     /// <summary>The export's white colour mask on an added paint (<see cref="PaintMaterialViewModel.WhiteMask"/>): paint everywhere.</summary>
     private static readonly TextureImage WhiteMask = new("WhiteMask", 1, 1, [255, 255, 255, 255], "PF_B8G8R8A8", 0, 1, 1, false, false);
 
-    /// <summary>The painted texture of <paramref name="paint"/>, baked again only when its colours changed.</summary>
+    /// <summary>The painted texture of <paramref name="paint"/>, baked again only when its colours changed or it is smaller than <paramref name="diffuse"/>.</summary>
     private TextureImage Baked(PaintMaterialViewModel paint, TextureImage diffuse, TextureImage mask)
     {
         var a = paint.LinearColour;
         Vector4? b = paint.HasSecond ? PaintMaterialViewModel.ToLinear(paint.Second) : null;
-        if (_paintBakes.TryGetValue(paint.MaterialPath, out var bake) && bake.A == a && bake.B == b)
+        if (_paintBakes.TryGetValue(paint.MaterialPath, out var bake) && bake.A == a && bake.B == b && bake.Image.Width >= diffuse.Width)
         {
             return bake.Image;
         }
@@ -492,6 +576,39 @@ public abstract partial class ModulePageViewModel
         var image = PaintBaker.Bake(diffuse, mask, a, b);
         _paintBakes[paint.MaterialPath] = (a, b, image);
         return image;
+    }
+
+    /// <summary>
+    /// The colour texture <paramref name="path"/> at half its size, for the bakes while the colour picker is dragged: a bake
+    /// at the paint size takes 35-100 ms on the UI thread, a quarter of that here (<see cref="SharpenPaintAsync"/> bakes it whole).
+    /// </summary>
+    private TextureImage DragPixels(string path, TextureImage diffuse)
+    {
+        if (!_paintDragPixels.TryGetValue(path, out var half))
+        {
+            var (rgba, w, h) = ThumbnailService.Shrink(diffuse.Rgba, diffuse.Width, diffuse.Height, Math.Max(1, Math.Max(diffuse.Width, diffuse.Height) / 2));
+            half = _paintDragPixels[path] = diffuse with { Rgba = rgba, Width = w, Height = h };
+        }
+
+        return half;
+    }
+
+    /// <summary>Once the colour picker rests (<see cref="PaintUndoPause"/>), the paint dragged at half size is baked whole.</summary>
+    private async Task SharpenPaintAsync()
+    {
+        _paintRest?.Cancel();
+        var rest = _paintRest = new CancellationTokenSource();
+        try
+        {
+            await Task.Delay(PaintUndoPause, rest.Token).ConfigureAwait(true);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+
+        _paintDragging = false;
+        Repaint();
     }
 
     /// <summary>The project changed (an apply, an undo): the applied values are the new starting point.</summary>

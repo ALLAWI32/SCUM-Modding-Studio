@@ -1,10 +1,14 @@
+using System.Globalization;
 using System.Numerics;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Data.Converters;
 using Avalonia.Input;
 using Avalonia.OpenGL;
 using Avalonia.OpenGL.Controls;
 using Avalonia.Threading;
+using ScumStudio.App.Localization;
+using ScumStudio.App.Services;
 using ScumStudio.Core.Geometry;
 using ScumStudio.Core.Mathematics;
 using ScumStudio.Rendering;
@@ -16,11 +20,36 @@ using ScumStudio.Viewport;
 
 namespace ScumStudio.App.Controls;
 
+/// <summary>How <see cref="MeshPreview"/> lights the model.</summary>
+public enum PreviewLight
+{
+    /// <summary>Soft studio light: a neutral sky and a warm key light that follows the camera, so every side reads.</summary>
+    Studio,
+
+    /// <summary>The island's sun at 13:30 with its sky, and shadows on a floor: the model as it stands in the game.</summary>
+    Sun,
+}
+
+/// <summary>A toggle's <c>IsChecked</c> to <see cref="PreviewLight.Sun"/> and back.</summary>
+public sealed class PreviewLightConverter : IValueConverter
+{
+    /// <summary>Checked = <see cref="PreviewLight.Sun"/>.</summary>
+    public static PreviewLightConverter IsSun { get; } = new();
+
+    /// <inheritdoc />
+    public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture) => value is PreviewLight.Sun;
+
+    /// <inheritdoc />
+    public object? ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) => value is true ? PreviewLight.Sun : PreviewLight.Studio;
+}
+
 /// <summary>
-/// A studio-lit orbit preview of one <see cref="PreviewModel"/> (meshes with their base-colour textures) in the app's
-/// OpenGL renderer: left-drag orbits, right/middle-drag pans, the wheel zooms, a double click or <c>F</c> reframes.
-/// The model is prepared on a worker (<see cref="MeshPreviewLoader"/>); the GPU upload happens in
-/// <see cref="OnOpenGlRender"/> when <see cref="Model"/> changes.
+/// An orbit preview of one <see cref="PreviewModel"/> (meshes with their textures) in the app's OpenGL renderer, in studio
+/// light or in the island's sun (<see cref="Light"/>), with a 1.8 m person and a metre grid beside it (<see cref="ShowScale"/>):
+/// left-drag orbits, right/middle-drag pans, the wheel zooms, a double click or <c>F</c> reframes. The frame is drawn at
+/// twice the control's size and filtered down (<see cref="RenderScale"/>). The model is prepared on a worker
+/// (<see cref="MeshPreviewLoader"/>); the GPU upload happens in <see cref="OnOpenGlRender"/> when <see cref="Model"/> changes,
+/// its full-size textures over the next frames (<see cref="PreviewScene.UploadStaged"/>).
 /// </summary>
 public sealed class MeshPreview : OpenGlControlBase
 {
@@ -28,9 +57,21 @@ public sealed class MeshPreview : OpenGlControlBase
     public static readonly StyledProperty<PreviewModel?> ModelProperty =
         AvaloniaProperty.Register<MeshPreview, PreviewModel?>(nameof(Model));
 
-    /// <summary>Draw the ground grid under the model.</summary>
+    /// <summary>Draw the ground grid under the model (while <see cref="ShowScale"/> is on).</summary>
     public static readonly StyledProperty<bool> ShowGridProperty =
         AvaloniaProperty.Register<MeshPreview, bool>(nameof(ShowGrid), true);
+
+    /// <summary>A 1.8 m person beside the model and a grid in metres (centimetres for small items) under it.</summary>
+    public static readonly StyledProperty<bool> ShowScaleProperty =
+        AvaloniaProperty.Register<MeshPreview, bool>(nameof(ShowScale), true);
+
+    /// <summary>Studio light or the island's sun.</summary>
+    public static readonly StyledProperty<PreviewLight> LightProperty =
+        AvaloniaProperty.Register<MeshPreview, PreviewLight>(nameof(Light));
+
+    /// <summary>The model's length × width × height ("4.12 × 1.86 × 1.52 m"), read-only.</summary>
+    public static readonly StyledProperty<string> SizeTextProperty =
+        AvaloniaProperty.Register<MeshPreview, string>(nameof(SizeText), string.Empty);
 
     /// <summary>True when the OpenGL context could be created.</summary>
     public static readonly StyledProperty<bool> IsGlReadyProperty =
@@ -49,10 +90,21 @@ public sealed class MeshPreview : OpenGlControlBase
         AvaloniaProperty.Register<MeshPreview, string>(nameof(Info), string.Empty);
 
     private const float OrbitDegreesPerPixel = 0.4f;
-    private const float DefaultYaw = -135f;
+    private const float DefaultYaw = PreviewScene.DefaultViewYaw;
     private const float DefaultPitch = -20f;
 
+    /// <summary>13:30, the island's usual look (<see cref="RenderSettings.TimeOfDay"/>).</summary>
+    private const float IslandHour = 13.5f;
+
+    /// <summary>Milliseconds a frame may spend sending full-size textures (<see cref="PreviewScene.Stage"/>).</summary>
+    private const double StageBudgetMs = 8.0;
+
     private static readonly Scene EmptyScene = new();
+
+    // Soft studio light: brighter hemisphere ambient than the level viewport, a warm key light that follows the camera.
+    private static readonly Vector3 StudioSky = new(0.5f, 0.52f, 0.56f);
+    private static readonly Vector3 StudioGround = new(0.2f, 0.19f, 0.17f);
+    private static readonly Vector3 StudioLight = new(0.72f, 0.7f, 0.64f);
 
     private readonly FlyCamera _camera = new();
     private ProcAddressGlContext? _context;
@@ -85,6 +137,8 @@ public sealed class MeshPreview : OpenGlControlBase
             c.RequestNextFrameRendering();
         });
         ShowGridProperty.Changed.AddClassHandler<MeshPreview>((c, _) => c.RequestNextFrameRendering());
+        ShowScaleProperty.Changed.AddClassHandler<MeshPreview>((c, _) => c.RequestNextFrameRendering());
+        LightProperty.Changed.AddClassHandler<MeshPreview>((c, _) => c.RequestNextFrameRendering());
         HighlightAttachmentProperty.Changed.AddClassHandler<MeshPreview>((c, _) =>
         {
             c._highlightDirty = true;
@@ -104,6 +158,27 @@ public sealed class MeshPreview : OpenGlControlBase
     {
         get => GetValue(ShowGridProperty);
         set => SetValue(ShowGridProperty, value);
+    }
+
+    /// <inheritdoc cref="ShowScaleProperty" />
+    public bool ShowScale
+    {
+        get => GetValue(ShowScaleProperty);
+        set => SetValue(ShowScaleProperty, value);
+    }
+
+    /// <inheritdoc cref="LightProperty" />
+    public PreviewLight Light
+    {
+        get => GetValue(LightProperty);
+        set => SetValue(LightProperty, value);
+    }
+
+    /// <inheritdoc cref="SizeTextProperty" />
+    public string SizeText
+    {
+        get => GetValue(SizeTextProperty);
+        private set => SetValue(SizeTextProperty, value);
     }
 
     /// <inheritdoc cref="IsGlReadyProperty" />
@@ -164,20 +239,13 @@ public sealed class MeshPreview : OpenGlControlBase
         {
             _context = new ProcAddressGlContext(gl.GetProcAddress, PixelSize);
             _renderer = new SceneRenderer(_context);
-            // Soft studio light: brighter hemisphere ambient than the level viewport, a warm key light that follows the camera.
-            _renderer.Settings = _renderer.Settings with
-            {
-                SkyColor = new Vector3(0.5f, 0.52f, 0.56f),
-                GroundColor = new Vector3(0.2f, 0.19f, 0.17f),
-                LightColor = new Vector3(0.72f, 0.7f, 0.64f),
-            };
             _target = _renderer.CreateTarget(Math.Max(1, PixelSize().W), Math.Max(1, PixelSize().H));
             _modelDirty = Model is not null;
             IsGlReady = true;
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            Info = "OpenGL 4.3 is not available: " + ex.Message;
+            Info = Loc.F("Preview.NoOpenGl", ex.Message);
             IsGlReady = false;
         }
     }
@@ -208,7 +276,8 @@ public sealed class MeshPreview : OpenGlControlBase
             return;
         }
 
-        _target.Resize(w, h);
+        var scale = RenderScale(w, h);
+        _target.Resize(w * scale, h * scale);
         if (_modelDirty || _highlightDirty)
         {
             var modelChanged = _modelDirty;
@@ -226,28 +295,42 @@ public sealed class MeshPreview : OpenGlControlBase
             _scene?.Highlight(HighlightAttachment); // a part row's "show on the car" (the selection colour)
         }
 
+        if (_scene is { } extras && (extras.ShowScale != ShowScale || extras.Ground != (Light == PreviewLight.Sun)))
+        {
+            extras.ShowScale = ShowScale;
+            extras.Ground = Light == PreviewLight.Sun;
+            _bounds = extras.Bounds; // the camera stays; a double click frames the person too
+        }
+
         if (_frameRequested)
         {
             _frameRequested = false;
             Frame(w, h);
         }
 
+        // Full-size textures land a few a frame over their stand-ins (all at once for a screenshot).
+        if (_scene is { PendingTextures: > 0 } staging && !staging.Stage(_pendingScreenshot is null ? StageBudgetMs : double.PositiveInfinity))
+        {
+            RequestNextFrameRendering();
+        }
+
         var radius = Radius();
         _camera.Orbit(_orbitCentre, _yaw, _pitch, _distance);
         _camera.FitClipRange(_distance, radius);
-        var cell = MathF.Pow(10f, MathF.Floor(MathF.Log10(radius)) - 1f);
-        _renderer.Settings = _renderer.Settings with
+        var model = _scene?.ModelBounds.Size ?? Vector3.Zero;
+        var keyLight = Vector3.Normalize(_camera.Forward - (_camera.Up * 0.8f) + (_camera.Right * 0.35f));
+        // The sun's shadow square is centred ahead of the camera: it grows with the zoom so a far model keeps its shadow.
+        _renderer.Settings = SettingsFor(Light, _renderer.Settings, MathF.Max(radius, _distance * 0.5f), keyLight) with
         {
-            LightDirection = Vector3.Normalize(_camera.Forward - (_camera.Up * 0.8f) + (_camera.Right * 0.35f)),
-            ShowGrid = ShowGrid && !_bounds.IsEmpty,
+            ShowGrid = ShowGrid && ShowScale && !_bounds.IsEmpty,
             GridHeight = _bounds.IsEmpty ? 0f : _bounds.Min.Y,
-            GridCellSize = cell,
+            GridCellSize = GridCellFor(MathF.Max(model.X, MathF.Max(model.Y, model.Z))),
             GridFadeDistance = MathF.Max(_distance * 3f, radius * 6f),
         };
         if (_pendingPick is { } pick && _scene is { } picked)
         {
             _pendingPick = null;
-            SelectPart(_renderer.Pick(_target, picked.Scene, _camera, pick.X, pick.Y)?.Node);
+            SelectPart(_renderer.Pick(_target, picked.Scene, _camera, pick.X * scale, pick.Y * scale)?.Node);
         }
 
         _renderer.Render(_target, _scene?.Scene ?? EmptyScene, _camera);
@@ -264,6 +347,8 @@ public sealed class MeshPreview : OpenGlControlBase
                 {
                     try
                     {
+                        // The control's own size, as on screen (the supersampled frame halved by the same 2×2 box).
+                        (rgba, sw, sh) = ThumbnailService.Shrink(rgba, sw, sh, Math.Max(w, h));
                         await Rendering.Imaging.ImageExport.SavePngAsync(rgba, sw, sh, shotPath).ConfigureAwait(false);
                         tcs?.TrySetResult(shotPath);
                     }
@@ -458,15 +543,83 @@ public sealed class MeshPreview : OpenGlControlBase
         HasRenderedModel = false;
         if (model is null || _renderer is null)
         {
-            PostInfo(string.Empty);
+            PostInfo(string.Empty, string.Empty);
             return;
         }
 
-        _scene = PreviewScene.Upload(_renderer, model);
+        _scene = PreviewScene.UploadStaged(_renderer, model);
+        _scene.ShowScale = ShowScale;
+        _scene.Ground = Light == PreviewLight.Sun;
         _bounds = _scene.Bounds;
         var textured = model.Parts.Count(p => p.TexturePath is not null);
-        PostInfo($"{model.Parts.Count:N0} part{(model.Parts.Count == 1 ? string.Empty : "s")} · {model.Triangles:N0} tris" + (textured > 0 ? $" · {textured:N0} textured" : " · untextured"));
+        var parts = model.Parts.Count.ToString("N0", CultureInfo.CurrentCulture);
+        var triangles = model.Triangles.ToString("N0", CultureInfo.CurrentCulture);
+        PostInfo(textured > 0 ? Loc.F("Preview.Info", parts, triangles, textured.ToString("N0", CultureInfo.CurrentCulture)) : Loc.F("Preview.InfoUntextured", parts, triangles),
+            PreviewSize(_scene.ModelBounds));
     }
+
+    /// <summary>
+    /// Supersampling of the preview's frame: 2 (drawn at twice the control's size, then a 2×2 box down to it: smooth edges,
+    /// calmer leaves and fences) while that frame stays within 4K (3840×2160 pixels, 4096 per edge), else 1.
+    /// </summary>
+    internal static int RenderScale(int width, int height) =>
+        (long)width * height * 4 <= 3840L * 2160 && width * 2 <= 4096 && height * 2 <= 4096 ? 2 : 1;
+
+    /// <summary>
+    /// The grid's cell (cm) under a model whose largest edge is <paramref name="extentCm"/>: a metre from 50 cm up (major
+    /// lines every 10 m), so a car or a tree reads in metres; 10 cm below that, 1 cm under 5 cm.
+    /// </summary>
+    internal static float GridCellFor(float extentCm) => extentCm >= 50f ? 100f : extentCm >= 5f ? 10f : 1f;
+
+    /// <summary>
+    /// Length × width × height of GL-space <paramref name="bounds"/> in UE's axes (X, Y, Z): metres with two decimals
+    /// from 1 m up, centimetres below; empty bounds give an empty text.
+    /// </summary>
+    internal static string PreviewSize(BoundingBox bounds)
+    {
+        if (bounds.IsEmpty)
+        {
+            return string.Empty;
+        }
+
+        var (x, y, z) = (bounds.Size.X, bounds.Size.Z, bounds.Size.Y); // GL Y is up (UE Z)
+        string Text(float value, string format) => value.ToString(format, CultureInfo.CurrentCulture);
+        return MathF.Max(x, MathF.Max(y, z)) >= 100f
+            ? Loc.F("Preview.SizeMetres", Text(x / 100f, "0.00"), Text(y / 100f, "0.00"), Text(z / 100f, "0.00"))
+            : Loc.F("Preview.SizeCentimetres", Text(x, "0.#"), Text(y, "0.#"), Text(z, "0.#"));
+    }
+
+    /// <summary>
+    /// <paramref name="current"/> lit for <paramref name="light"/>: the studio's soft sky and a key light along
+    /// <paramref name="keyLight"/> (it follows the camera), or the island's sun at 13:30 with its sky and shadows reaching
+    /// six times <paramref name="radius"/> (at least 30 m) around the view.
+    /// </summary>
+    internal static RenderSettings SettingsFor(PreviewLight light, RenderSettings current, float radius, Vector3 keyLight) => light == PreviewLight.Sun
+        ? current with
+        {
+            ClearColor = RenderSettings.Outdoor.ClearColor,
+            SkyColor = RenderSettings.Outdoor.SkyColor,
+            GroundColor = RenderSettings.Outdoor.GroundColor,
+            LightColor = RenderSettings.Outdoor.LightColor,
+            LightDirection = RenderSettings.IslandSunDirection,
+            Exposure = RenderSettings.Outdoor.Exposure,
+            Sky = true,
+            TimeOfDay = IslandHour,
+            Shadows = true,
+            ShadowDistance = MathF.Max(radius * 6f, 3000f),
+        }
+        : current with
+        {
+            ClearColor = new RenderSettings().ClearColor,
+            SkyColor = StudioSky,
+            GroundColor = StudioGround,
+            LightColor = StudioLight,
+            LightDirection = keyLight,
+            Exposure = 0f,
+            Sky = false,
+            TimeOfDay = null,
+            Shadows = false,
+        };
 
     private void ClearScene()
     {
@@ -512,15 +665,20 @@ public sealed class MeshPreview : OpenGlControlBase
 
     private float Radius() => _bounds.IsEmpty ? 100f : MathF.Max(_bounds.Extent.Length(), 1f);
 
-    private void PostInfo(string text)
+    private void PostInfo(string text, string size)
     {
         if (Dispatcher.UIThread.CheckAccess())
         {
             Info = text;
+            SizeText = size;
         }
         else
         {
-            Dispatcher.UIThread.Post(() => Info = text);
+            Dispatcher.UIThread.Post(() =>
+            {
+                Info = text;
+                SizeText = size;
+            });
         }
     }
 

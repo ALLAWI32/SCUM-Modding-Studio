@@ -1,6 +1,8 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using ScumStudio.Core.IO;
 using ScumStudio.Level.Serialization;
 
 namespace ScumStudio.Level.Editing;
@@ -81,24 +83,32 @@ public sealed record JournalRecord
 
 /// <summary>
 /// Append-only JSONL log of edits with an undo pointer. Every change is one line, flushed to disk immediately:
-/// <c>edit</c> lines carry an <see cref="EditOp"/>, <c>undo</c>/<c>redo</c> lines reference an edit. Nothing is ever
-/// rewritten, so the file is a complete audit trail; the current state (the applied stack and the redo stack) is
-/// recomputed on open. A new edit after undos discards the redo stack (the undone edits stay in the file as
+/// <c>edit</c> lines carry an <see cref="EditOp"/>, <c>undo</c>/<c>redo</c> lines reference an edit. Nothing is
+/// rewritten in normal use, so the file is a complete audit trail; the current state (the applied stack and the redo
+/// stack) is recomputed on open. A new edit after undos discards the redo stack (the undone edits stay in the file as
 /// <see cref="HistoryStatus.Discarded"/>).
 /// </summary>
 /// <remarks>
-/// A line torn by a crash at the very end of the file is truncated on open (and reported in <see cref="Warnings"/>); an
-/// unreadable line elsewhere is an error. One process writes at a time: the file stays open for appending (others may read).
+/// One writer per project: the file stays open for appending (others may read, see <see cref="OpenReadOnly"/>), and the
+/// project's lock keeps a second window out. A write that fails is rolled back (the file is cut back and the sequence
+/// number stays free), so a failed change never reaches the file later; when even the rollback fails the journal closes.
+/// On open, a line torn by a crash at the very end is truncated, and a run of records sharing one sequence number (a
+/// failed write an older version flushed later) keeps only its last record: the file is then rewritten after the
+/// original is saved as <c>journal.jsonl.bak</c>. Both are reported in <see cref="Warnings"/>; any other unreadable or
+/// inconsistent line is an error.
 /// </remarks>
 public sealed class Journal : IDisposable
 {
     /// <summary>Format identifier written in the header line.</summary>
     public const string FormatId = "scumstudio.journal/1";
 
+    private const string FaultedMessage = "The journal could not be written and was closed; reopen the project.";
+
     private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
 
     private readonly object _lock = new();
     private readonly TimeProvider _clock;
+    private readonly Func<string, FileStream> _openWriter;
     private readonly List<JournalEntry> _applied = [];
     private readonly List<JournalEntry> _redo = [];
     private readonly List<JournalEntry> _allEdits = [];
@@ -106,15 +116,20 @@ public sealed class Journal : IDisposable
     private readonly List<string> _warnings = [];
     private FileStream? _stream;
     private long _lastSeq;
+    private bool _faulted;
 
-    private Journal(string filePath, TimeProvider clock)
+    private Journal(string filePath, TimeProvider clock, Func<string, FileStream> openWriter)
     {
         FilePath = filePath;
         _clock = clock;
+        _openWriter = openWriter;
     }
 
     /// <summary>Full path of the journal file.</summary>
     public string FilePath { get; }
+
+    /// <summary>True when opened with <see cref="OpenReadOnly"/>: the state is readable, every change is refused.</summary>
+    public bool IsReadOnly { get; private init; }
 
     /// <summary>Edits currently applied, oldest first (the effective operation list).</summary>
     public IReadOnlyList<JournalEntry> Applied
@@ -191,13 +206,35 @@ public sealed class Journal : IDisposable
 
     /// <summary>Opens (or creates, with a header line) the journal at <paramref name="filePath"/>.</summary>
     /// <exception cref="InvalidDataException">A line is unreadable or the undo/redo records are inconsistent.</exception>
-    public static Journal Open(string filePath, TimeProvider? clock = null)
+    public static Journal Open(string filePath, TimeProvider? clock = null) => Open(filePath, clock, OpenWriter);
+
+    /// <summary>Opens the journal, writing through the stream <paramref name="openWriter"/> returns (tests: a failing disk).</summary>
+    internal static Journal Open(string filePath, TimeProvider? clock, Func<string, FileStream> openWriter)
     {
         ArgumentException.ThrowIfNullOrEmpty(filePath);
-        var journal = new Journal(Path.GetFullPath(filePath), clock ?? TimeProvider.System);
+        var journal = new Journal(Path.GetFullPath(filePath), clock ?? TimeProvider.System, openWriter);
         var bytes = File.Exists(journal.FilePath) ? File.ReadAllBytes(journal.FilePath) : null;
-        journal.Initialize(bytes);
-        return journal;
+        return journal.Initialize(bytes);
+    }
+
+    /// <summary>
+    /// Opens the journal for reading only, also while another process writes it. Repairs (a torn last line, failed
+    /// writes an older version left) are made in memory and reported in <see cref="Warnings"/>; the file is never written.
+    /// </summary>
+    /// <exception cref="InvalidDataException">A line is unreadable or the undo/redo records are inconsistent.</exception>
+    public static Journal OpenReadOnly(string filePath)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(filePath);
+        var journal = new Journal(Path.GetFullPath(filePath), TimeProvider.System, OpenWriter) { IsReadOnly = true };
+        if (!File.Exists(journal.FilePath))
+        {
+            return journal;
+        }
+
+        using var stream = new FileStream(journal.FilePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var bytes = new MemoryStream();
+        stream.CopyTo(bytes);
+        return journal.Initialize(bytes.ToArray());
     }
 
     /// <summary>Asynchronously opens (or creates) the journal.</summary>
@@ -205,18 +242,20 @@ public sealed class Journal : IDisposable
     public static async Task<Journal> OpenAsync(string filePath, TimeProvider? clock = null, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(filePath);
-        var journal = new Journal(Path.GetFullPath(filePath), clock ?? TimeProvider.System);
+        var journal = new Journal(Path.GetFullPath(filePath), clock ?? TimeProvider.System, OpenWriter);
         var bytes = File.Exists(journal.FilePath)
             ? await File.ReadAllBytesAsync(journal.FilePath, cancellationToken).ConfigureAwait(false)
             : null;
-        journal.Initialize(bytes);
-        return journal;
+        return journal.Initialize(bytes);
     }
 
     /// <summary>Records a new edit (discarding the redo stack) and returns its entry.</summary>
+    /// <exception cref="IOException">The record could not be written (nothing changed).</exception>
+    /// <exception cref="InvalidOperationException">The journal is read-only.</exception>
     public JournalEntry Append(EditOp op)
     {
         ArgumentNullException.ThrowIfNull(op);
+        ThrowIfReadOnly();
         lock (_lock)
         {
             var record = new JournalRecord { Seq = _lastSeq + 1, At = Now(), Type = JournalRecordType.Edit, Edit = op };
@@ -230,6 +269,7 @@ public sealed class Journal : IDisposable
     /// <summary>Undoes the last applied edit; returns it (apply <c>entry.Op.Inverse()</c> to in-memory state), or null.</summary>
     public JournalEntry? Undo()
     {
+        ThrowIfReadOnly();
         lock (_lock)
         {
             if (_applied.Count == 0)
@@ -248,6 +288,7 @@ public sealed class Journal : IDisposable
     /// <summary>Redoes the last undone edit; returns it (apply <c>entry.Op</c>), or null.</summary>
     public JournalEntry? Redo()
     {
+        ThrowIfReadOnly();
         lock (_lock)
         {
             if (_redo.Count == 0)
@@ -291,17 +332,62 @@ public sealed class Journal : IDisposable
         }
     }
 
-    private void Initialize(byte[]? bytes)
+    private Journal Initialize(byte[]? bytes)
     {
-        var directory = Path.GetDirectoryName(FilePath)!;
-        Directory.CreateDirectory(directory);
-        if (bytes is null || bytes.Length == 0)
+        try
         {
-            OpenStream(truncateTo: null);
-            Write(new JournalRecord { Seq = 0, At = Now(), Type = JournalRecordType.Header, Format = FormatId });
-            return;
-        }
+            if (bytes is null || bytes.Length == 0)
+            {
+                if (!IsReadOnly)
+                {
+                    Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
+                    OpenStream(truncateTo: null);
+                    Write(new JournalRecord { Seq = 0, At = Now(), Type = JournalRecordType.Header, Format = FormatId });
+                }
 
+                return this;
+            }
+
+            var (lines, truncateTo) = Parse(bytes);
+            var (kept, backup) = DropFailedWrites(lines);
+            foreach (var line in kept)
+            {
+                Replay(line.Record, line.Number);
+            }
+
+            if (IsReadOnly)
+            {
+                return this;
+            }
+
+            if (backup is not null)
+            {
+                // Only once the kept records replayed: a journal that is refused anyway stays as it is.
+                AtomicFile.WriteAllBytes(backup, bytes);
+                AtomicFile.WriteAllBytes(FilePath, Utf8NoBom.GetBytes(string.Concat(kept.Select(l => l.Text + "\n"))));
+                OpenStream(truncateTo: null);
+            }
+            else
+            {
+                OpenStream(truncateTo);
+                if (truncateTo is null && bytes[^1] != (byte)'\n')
+                {
+                    // The last record is complete but lacks its newline: terminate it before appending.
+                    WriteBytes("\n"u8);
+                }
+            }
+
+            return this;
+        }
+        catch
+        {
+            Dispose();
+            throw;
+        }
+    }
+
+    private (List<ParsedLine> Lines, long? TruncateTo) Parse(byte[] bytes)
+    {
         var text = Utf8NoBom.GetString(bytes);
         var offset = 0L;
         if (text.Length > 0 && text[0] == '\uFEFF')
@@ -310,8 +396,8 @@ public sealed class Journal : IDisposable
             offset = 3;
         }
 
+        var parsed = new List<ParsedLine>();
         var lines = text.Split('\n');
-        long? truncateTo = null;
         for (var i = 0; i < lines.Length; i++)
         {
             var raw = lines[i];
@@ -324,34 +410,70 @@ public sealed class Journal : IDisposable
                 continue;
             }
 
-            JournalRecord record;
             try
             {
-                record = DeserializeRecord(line);
+                parsed.Add(new ParsedLine(i + 1, line, DeserializeRecord(line)));
             }
             catch (JsonException ex) when (isLast)
             {
                 // A crash while appending leaves a partial last line without its newline: drop it.
-                _warnings.Add($"Line {i + 1} was incomplete and has been removed ({ex.Message}).");
-                truncateTo = offset;
-                break;
+                _warnings.Add($"Line {i + 1} was incomplete and has been {(IsReadOnly ? "skipped" : "removed")} ({ex.Message}).");
+                return (parsed, offset);
             }
             catch (JsonException ex)
             {
                 throw new InvalidDataException($"{FilePath}: line {i + 1} is not a valid journal record: {ex.Message}", ex);
             }
 
-            Replay(record, i + 1);
             offset += lineBytes;
         }
 
-        OpenStream(truncateTo);
-        if (truncateTo is null && bytes[^1] != (byte)'\n')
+        return (parsed, null);
+    }
+
+    /// <summary>
+    /// Drops every record followed by one with the same sequence number: before writes were rolled back, a record whose
+    /// write failed stayed in the stream and reached the file together with the next one, which reused its number. The
+    /// last record of such a run is the one the session went on with. Returns the backup the repair will be saved to.
+    /// </summary>
+    private (List<ParsedLine> Kept, string? Backup) DropFailedWrites(List<ParsedLine> lines)
+    {
+        var kept = new List<ParsedLine>(lines.Count);
+        string? backup = null;
+        for (var i = 0; i < lines.Count; i++)
         {
-            // The last record is complete but lacks its newline: terminate it before appending.
-            _stream!.Write("\n"u8);
-            _stream.Flush(flushToDisk: true);
+            var line = lines[i];
+            if (line.Record.Seq == 0 || i + 1 == lines.Count || lines[i + 1].Record.Seq != line.Record.Seq)
+            {
+                kept.Add(line);
+                continue;
+            }
+
+            var problem = $"Line {line.Number} repeats sequence {line.Record.Seq} (a write that failed in an older version)";
+            if (IsReadOnly)
+            {
+                _warnings.Add($"{problem} and has been skipped.");
+                continue;
+            }
+
+            backup ??= BackupPath();
+            _warnings.Add($"{problem} and has been removed; the original journal is saved as {Path.GetFileName(backup)}.");
         }
+
+        return (kept, backup);
+    }
+
+    // journal.jsonl.bak, else journal.jsonl.<time>.bak, else journal.jsonl.<time>-2.bak, ...: an earlier backup is never replaced.
+    private string BackupPath()
+    {
+        var backup = FilePath + ".bak";
+        var stamped = $"{FilePath}.{Now().ToString("yyyyMMddHHmmss", CultureInfo.InvariantCulture)}";
+        for (var n = 1; File.Exists(backup); n++)
+        {
+            backup = n == 1 ? stamped + ".bak" : $"{stamped}-{n}.bak";
+        }
+
+        return backup;
     }
 
     private void Replay(JournalRecord record, int lineNumber)
@@ -414,9 +536,12 @@ public sealed class Journal : IDisposable
         _allEdits.Add(entry);
     }
 
+    // Unbuffered: a record that failed is never held in memory, so neither a later write nor Dispose can put it on disk.
+    private static FileStream OpenWriter(string path) => new(path, FileMode.OpenOrCreate, FileAccess.Write, FileShare.Read, bufferSize: 0);
+
     private void OpenStream(long? truncateTo)
     {
-        _stream = new FileStream(FilePath, FileMode.OpenOrCreate, FileAccess.Write, FileShare.Read);
+        _stream = _openWriter(FilePath);
         if (truncateTo is { } length)
         {
             _stream.SetLength(length);
@@ -427,12 +552,63 @@ public sealed class Journal : IDisposable
 
     private void Write(JournalRecord record)
     {
-        var stream = _stream ?? throw new ObjectDisposedException(nameof(Journal));
-        var bytes = Utf8NoBom.GetBytes(SerializeRecord(record) + "\n");
-        stream.Write(bytes);
-        stream.Flush(flushToDisk: true);
+        WriteBytes(Utf8NoBom.GetBytes(SerializeRecord(record) + "\n"));
         _lastSeq = record.Seq;
     }
 
+    /// <summary>Appends <paramref name="bytes"/> durably, or leaves the file as it was and throws.</summary>
+    private void WriteBytes(ReadOnlySpan<byte> bytes)
+    {
+        if (_faulted)
+        {
+            throw new IOException(FaultedMessage);
+        }
+
+        var stream = _stream ?? throw new ObjectDisposedException(nameof(Journal));
+        var start = stream.Length;
+        try
+        {
+            stream.Write(bytes);
+            stream.Flush(flushToDisk: true);
+            if (stream.Length != start + bytes.Length)
+            {
+                throw new IOException($"{FilePath}: a write of {bytes.Length} bytes at {start} left the file at {stream.Length} bytes.");
+            }
+        }
+        catch
+        {
+            RollBack(stream, start);
+            throw;
+        }
+    }
+
+    private void RollBack(FileStream stream, long start)
+    {
+        try
+        {
+            stream.SetLength(start);
+            stream.Position = start;
+            stream.Flush(flushToDisk: true);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            // The disk is gone: appending after what is left of the failed record would corrupt the journal, so close it.
+            // The next open drops a torn last line.
+            _faulted = true;
+            _stream = null;
+            stream.Dispose();
+        }
+    }
+
+    private void ThrowIfReadOnly()
+    {
+        if (IsReadOnly)
+        {
+            throw new InvalidOperationException($"{FilePath} is open read-only.");
+        }
+    }
+
     private DateTimeOffset Now() => _clock.GetUtcNow();
+
+    private readonly record struct ParsedLine(int Number, string Text, JournalRecord Record);
 }

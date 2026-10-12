@@ -18,6 +18,9 @@ public sealed record GlInfo(string Vendor, string Renderer, string Version, int 
     /// </summary>
     public bool SupportsS3tc { get; init; }
 
+    /// <summary>The most samples a multisampled render target can have (GL_MAX_SAMPLES; 1 = none).</summary>
+    public int MaxSamples { get; init; } = 1;
+
     /// <summary>True when the context version is at least <paramref name="major"/>.<paramref name="minor"/>.</summary>
     public bool IsAtLeast(int major, int minor) => Major > major || (Major == major && Minor >= minor);
 
@@ -44,7 +47,8 @@ public sealed record GlInfo(string Vendor, string Renderer, string Version, int 
         var clipControl = major > 4 || (major == 4 && minor >= 5) || HasExtension(gl, "GL_ARB_clip_control");
         var s3tc = HasExtension(gl, "GL_EXT_texture_compression_s3tc")
                    && (HasExtension(gl, "GL_EXT_texture_sRGB") || HasExtension(gl, "GL_EXT_texture_compression_s3tc_srgb"));
-        return new GlInfo(vendor, renderer, version, major, minor, clipControl) { SupportsS3tc = s3tc };
+        var maxSamples = Math.Max(1, gl.GetInteger((GetPName)0x8D57)); // GL_MAX_SAMPLES
+        return new GlInfo(vendor, renderer, version, major, minor, clipControl) { SupportsS3tc = s3tc, MaxSamples = maxSamples };
     }
 
     /// <summary>True when the current context advertises <paramref name="name"/>.</summary>

@@ -70,13 +70,19 @@
     </Border>
 
     <!-- ===== Toolbar ===== -->
-    <Grid DockPanel.Dock="Top" Margin="24,0,24,12" ColumnDefinitions="300,*" ColumnSpacing="12" IsVisible="{Binding HasCatalog}">
+    <!-- Same three columns as the body below, so the search box always lines up with the list. -->
+    <Grid x:Name="ModuleToolbar" DockPanel.Dock="Top" Margin="24,0,24,12" ColumnSpacing="12" IsVisible="{Binding HasCatalog}">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="*" MinWidth="220" MaxWidth="300" />
+        <ColumnDefinition Width="2*" />
+        <ColumnDefinition Width="*" MinWidth="240" MaxWidth="330" />
+      </Grid.ColumnDefinitions>
       <Panel Grid.Column="0">
         <TextBox x:Name="SearchBox" Classes="search" Text="{Binding SearchText}" Watermark="{Tr Module.Filter}" ToolTip.Tip="{Tr Module.Filter.Tip}" />
         <c:GlyphIcon Kind="Icon.Search" IconSize="15" Margin="11,0,0,0" IsHitTestVisible="False"
                      HorizontalAlignment="Left" VerticalAlignment="Center" Foreground="{DynamicResource TextMutedBrush}" />
       </Panel>
-      <ListBox Grid.Column="1" Classes="chips" ItemsSource="{Binding Filters}" SelectedItem="{Binding SelectedFilter}" VerticalAlignment="Center"
+      <ListBox Grid.Column="1" Grid.ColumnSpan="2" Classes="chips" ItemsSource="{Binding Filters}" SelectedItem="{Binding SelectedFilter}" VerticalAlignment="Center"
                ToolTip.Tip="{Tr Module.Chips.Tip}">
         <ListBox.ItemsPanel>
           <ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate>
@@ -114,7 +120,13 @@
         </StackPanel>
       </Border>
 
-      <Grid ColumnDefinitions="300,*,330" ColumnSpacing="12" IsVisible="{Binding HasCatalog}">
+      <!-- The list and the clone column give way first (down to their minimum), so the values keep their names on a small screen. -->
+      <Grid x:Name="ModuleBody" ColumnSpacing="12" IsVisible="{Binding HasCatalog}">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="*" MinWidth="220" MaxWidth="300" />
+          <ColumnDefinition Width="2*" />
+          <ColumnDefinition Width="*" MinWidth="240" MaxWidth="330" />
+        </Grid.ColumnDefinitions>
 
         <!-- List: inventory icons load for the rows on screen; right-click selects the row and opens the menu -->
         <Border Grid.Column="0" Classes="panel">
@@ -159,7 +171,14 @@
         <Border Grid.Column="1" Classes="panel">
           <DockPanel IsVisible="{Binding HasSelection}">
             <Border DockPanel.Dock="Top" Classes="panelHeader">
-              <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="12">
+              <!-- The spawn chip shares the room with the name (2:1) instead of taking it all: the name vanished on a small screen. -->
+              <Grid ColumnSpacing="12">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="Auto" />
+                  <ColumnDefinition Width="2*" MinWidth="90" />
+                  <ColumnDefinition Width="Auto" />
+                  <ColumnDefinition Width="*" MaxWidth="256" />
+                </Grid.ColumnDefinitions>
                 <Border Grid.Column="0" Classes="iconTile" Width="40" Height="40">
                   <c:GlyphIcon Kind="{Binding SelectedItem.IconKey, FallbackValue=Icon.Weapon}" IconSize="20" HorizontalAlignment="Center" VerticalAlignment="Center" />
                 </Border>
@@ -188,8 +207,8 @@
                     </ToggleButton>
                   </StackPanel>
                 </Border>
-                <Border Grid.Column="3" Classes="chip" VerticalAlignment="Center" ToolTip.Tip="{Tr Module.SpawnChip.Tip}">
-                  <TextBlock Text="{Binding SpawnCommandText}" Classes="mono" MaxWidth="240" TextTrimming="CharacterEllipsis" />
+                <Border Grid.Column="3" Classes="chip" VerticalAlignment="Center" HorizontalAlignment="Right" ToolTip.Tip="{Tr Module.SpawnChip.Tip}">
+                  <TextBlock Text="{Binding SpawnCommandText}" Classes="mono" TextTrimming="CharacterEllipsis" />
                 </Border>
               </Grid>
             </Border>
@@ -197,7 +216,12 @@
             <Panel>
               <!-- Values tab -->
               <DockPanel IsVisible="{Binding !ShowPreviewTab}">
-                <Grid DockPanel.Dock="Top" Margin="12,10,12,6" ColumnDefinitions="260,*,Auto" ColumnSpacing="10">
+                <Grid DockPanel.Dock="Top" Margin="12,10,12,6" ColumnSpacing="10">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" MinWidth="120" MaxWidth="260" />
+                    <ColumnDefinition Width="*" MinWidth="90" />
+                    <ColumnDefinition Width="Auto" />
+                  </Grid.ColumnDefinitions>
                   <ComboBox Grid.Column="0" ItemsSource="{Binding Parts}" SelectedItem="{Binding SelectedPart}" HorizontalAlignment="Stretch"
                             ToolTip.Tip="{Tr Module.Part.Tip}">
                     <ComboBox.ItemTemplate>
@@ -232,7 +256,13 @@
                   </Grid>
                 </Border>
 
-                <Grid DockPanel.Dock="Top" Margin="22,4,80,2" ColumnDefinitions="*,120,200" ColumnSpacing="10">
+                <!-- Same star columns as the rows below (their width minus the 60 px action column and its gap), so they line up at any width. -->
+                <Grid DockPanel.Dock="Top" Margin="22,4,80,2" ColumnSpacing="10">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="2*" MinWidth="110" />
+                    <ColumnDefinition Width="*" MinWidth="64" MaxWidth="120" />
+                    <ColumnDefinition Width="*" MinWidth="100" MaxWidth="200" />
+                  </Grid.ColumnDefinitions>
                   <TextBlock Grid.Column="0" Text="{Tr Module.Col.Value}" Classes="section" ToolTip.Tip="{Tr Module.Col.Value.Tip}" />
                   <TextBlock Grid.Column="1" Text="{Tr Module.Col.Stock}" Classes="section" ToolTip.Tip="{Tr Module.Col.Stock.Tip}" />
                   <TextBlock Grid.Column="2" Text="{Tr Module.Col.New}" Classes="section" ToolTip.Tip="{Tr Module.Col.New.Tip}" />
@@ -250,16 +280,30 @@
                               <ItemsControl.ItemTemplate>
                                 <DataTemplate x:DataType="vm:TunableRowViewModel">
                                   <Border Classes="valueRow" Classes.pending="{Binding IsPending}">
-                                    <Grid ColumnDefinitions="*,120,200,60" ColumnSpacing="10">
-                                      <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="7" VerticalAlignment="Center">
-                                        <Ellipse Classes="edited" Width="7" Height="7" IsVisible="{Binding IsOverridden}" ToolTip.Tip="{Tr Module.Edited.Tip}" />
+                                    <Grid ColumnSpacing="10">
+                                      <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="2*" MinWidth="110" />
+                                        <ColumnDefinition Width="*" MinWidth="64" MaxWidth="120" />
+                                        <ColumnDefinition Width="*" MinWidth="100" MaxWidth="200" />
+                                        <ColumnDefinition Width="60" />
+                                      </Grid.ColumnDefinitions>
+                                      <!-- A dock, not a horizontal stack: a long name trims at its column instead of running under the stock value. -->
+                                      <DockPanel Grid.Column="0" VerticalAlignment="Center">
+                                        <Ellipse Classes="edited" Width="7" Height="7" Margin="0,0,7,0" IsVisible="{Binding IsOverridden}" ToolTip.Tip="{Tr Module.Edited.Tip}" />
                                         <TextBlock Text="{Binding Label}" ToolTip.Tip="{Binding PathText}" TextTrimming="CharacterEllipsis" />
-                                      </StackPanel>
+                                      </DockPanel>
                                       <TextBlock Grid.Column="1" Text="{Binding StockDisplay}" Classes="muted mono" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
                                                  ToolTip.Tip="{Binding StockValue}" />
                                       <Panel Grid.Column="2">
-                                        <TextBox Text="{Binding Value}" IsVisible="{Binding IsText}" IsReadOnly="{Binding IsReadOnly}" Classes="mono"
-                                                 ToolTip.Tip="{Binding Error}" />
+                                        <!-- The tip says what to type, with the reason first when the game cannot read the value. -->
+                                        <TextBox Text="{Binding Value}" IsVisible="{Binding IsText}" IsReadOnly="{Binding IsReadOnly}" Classes="mono">
+                                          <ToolTip.Tip>
+                                            <StackPanel Spacing="2" MaxWidth="360">
+                                              <TextBlock Text="{Binding Error}" Classes="error wrap" IsVisible="{Binding Error, Converter={x:Static ObjectConverters.IsNotNull}}" />
+                                              <TextBlock Text="{Tr Module.Col.New.Tip}" Classes="wrap" />
+                                            </StackPanel>
+                                          </ToolTip.Tip>
+                                        </TextBox>
                                         <CheckBox IsChecked="{Binding BoolValue}" IsVisible="{Binding IsBool}" IsEnabled="{Binding !IsReadOnly}" ToolTip.Tip="{Tr Module.BoolValue.Tip}" />
                                         <ComboBox ItemsSource="{Binding Choices}" SelectedItem="{Binding Value}" IsVisible="{Binding IsEnum}" HorizontalAlignment="Stretch" ToolTip.Tip="{Tr Module.EnumValue.Tip}">
                                           <ComboBox.ItemTemplate>
@@ -308,6 +352,22 @@
                       <TextBlock Text="{Tr Module.PreviewHint}" MaxWidth="420" TextTrimming="CharacterEllipsis" />
                     </Border>
                   </Grid>
+                  <Border Classes="segmented" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="8" IsVisible="{Binding HasPreview}">
+                    <StackPanel Orientation="Horizontal">
+                      <ToggleButton x:Name="ItemPreviewSunButton" IsChecked="{Binding #ItemPreview.Light, Converter={x:Static c:PreviewLightConverter.IsSun}}" ToolTip.Tip="{Tr Preview.Sun.Tip}">
+                        <StackPanel Orientation="Horizontal" Spacing="5">
+                          <c:GlyphIcon Kind="Icon.Sun" IconSize="13" VerticalAlignment="Center" />
+                          <TextBlock Text="{Tr Preview.Sun}" VerticalAlignment="Center" />
+                        </StackPanel>
+                      </ToggleButton>
+                      <ToggleButton x:Name="ItemPreviewScaleButton" IsChecked="{Binding #ItemPreview.ShowScale}" ToolTip.Tip="{Tr Preview.Scale.Tip}">
+                        <StackPanel Orientation="Horizontal" Spacing="5">
+                          <c:GlyphIcon Kind="Icon.Ruler" IconSize="13" VerticalAlignment="Center" />
+                          <TextBlock Text="{Tr Preview.Scale}" VerticalAlignment="Center" />
+                        </StackPanel>
+                      </ToggleButton>
+                    </StackPanel>
+                  </Border>
                   <Border Classes="hud" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="8,30,8,8" MaxWidth="460" IsHitTestVisible="False" IsVisible="{Binding CloneSharesPaint}">
                     <TextBlock Text="{Tr Paint.CloneShared}" TextWrapping="Wrap" />
                   </Border>

@@ -11,18 +11,22 @@ internal sealed record PackageTables(List<string> Names, List<bool> Wide, List<I
         package.Names.ToList(), package.NameEntries.Select(n => n.IsWide).ToList(), package.Imports.ToList(),
         package.Exports.ToList(), package.ReadPreloadDependencies().ToList(), exportIndex);
 
-    /// <summary>The index of <paramref name="name"/> in the name table (added when missing).</summary>
+    /// <summary>
+    /// <paramref name="name"/> as the cooker stores it (<see cref="FNameRef.Split"/>: <c>X_39</c> is "X" number 40), its
+    /// text added to the name table when missing.
+    /// </summary>
     public FNameRef Name(string name)
     {
-        var index = Names.IndexOf(name);
+        var (text, number) = FNameRef.Split(name);
+        var index = Names.IndexOf(text);
         if (index < 0)
         {
             index = Names.Count;
-            Names.Add(name);
-            Wide.Add(!name.All(char.IsAscii));
+            Names.Add(text);
+            Wide.Add(!text.All(char.IsAscii));
         }
 
-        return new FNameRef(index, 0);
+        return new FNameRef(index, number);
     }
 
     /// <summary>

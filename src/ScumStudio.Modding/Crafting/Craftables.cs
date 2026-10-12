@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using ScumStudio.Formats;
 
 namespace ScumStudio.Modding.Crafting;
 
@@ -66,6 +67,12 @@ public sealed record Craftable
     /// <summary>Name shown in game (recipe caption and element name).</summary>
     public required string Name { get; init; }
 
+    /// <summary>
+    /// The token of its new assets (<c>CR_</c>/<c>BP_</c> + it), stored the first time the craftable is saved and kept by a
+    /// rename: objects players placed are saved by class path. A file without it gets it from <see cref="CraftablesFile.Parse"/>.
+    /// </summary>
+    public string? Token { get; init; }
+
     /// <summary>The asset it was made from (a static mesh or a Blueprint, package path).</summary>
     public required string Source { get; init; }
 
@@ -84,6 +91,13 @@ public sealed record Craftable
     /// <summary>Main material (for the suggested recipe).</summary>
     public CraftMaterial Material { get; init; }
 
+    /// <summary>
+    /// The crafting menu section it shows in: a gameplay tag stock recipes of its recipe class use
+    /// (<see cref="CraftCategories"/>; furniture and stations are building recipes, power and items crafting ones). Null
+    /// shows it in its default section (<see cref="CraftCategories.DefaultFor"/>).
+    /// </summary>
+    public string? Category { get; init; }
+
     /// <summary>Largest extent of the mesh in metres (for the suggested recipe).</summary>
     public float SizeMeters { get; init; } = 1;
 
@@ -98,10 +112,6 @@ public sealed record Craftable
 
     /// <summary>Power settings (used when <see cref="Kind"/> is <see cref="CraftKind.Power"/>).</summary>
     public PowerSettings Power { get; init; } = new();
-
-    /// <summary>The token of its new assets (<see cref="CraftablesFile.TokenOf"/>).</summary>
-    [JsonIgnore]
-    public string Token => CraftablesFile.TokenOf(Name);
 }
 
 /// <summary>The project's craftables, stored as <c>craftables.json</c> in the project folder.</summary>
@@ -124,6 +134,10 @@ public sealed record CraftablesFile
     [JsonIgnore]
     public string? ProjectDirectory { get; init; }
 
+    /// <summary><see cref="Parse"/> gave tokens to craftables stored without one: saving the file keeps them.</summary>
+    [JsonIgnore]
+    public bool TokensAdded { get; init; }
+
     /// <summary>The file of <paramref name="projectDirectory"/>, or an empty list when there is none.</summary>
     public static CraftablesFile Load(string projectDirectory)
     {
@@ -131,8 +145,13 @@ public sealed record CraftablesFile
         return (File.Exists(path) ? Parse(File.ReadAllText(path)) : new CraftablesFile()) with { ProjectDirectory = projectDirectory };
     }
 
-    /// <summary>Reads the JSON text of the file.</summary>
-    public static CraftablesFile Parse(string json) => JsonSerializer.Deserialize<CraftablesFile>(json, Json) ?? new CraftablesFile();
+    /// <summary>Reads the JSON text of the file; every craftable gets its token (<see cref="WithTokens"/>).</summary>
+    public static CraftablesFile Parse(string json)
+    {
+        var file = JsonSerializer.Deserialize<CraftablesFile>(json, Json) ?? new CraftablesFile();
+        var items = WithTokens(file.Items);
+        return ReferenceEquals(items, file.Items) ? file : file with { Items = items, TokensAdded = true };
+    }
 
     /// <summary>The JSON text of the file.</summary>
     public string ToJson() => JsonSerializer.Serialize(this, Json);
@@ -144,13 +163,11 @@ public sealed record CraftablesFile
     public void Save(string projectDirectory) => File.WriteAllText(Path.Combine(projectDirectory, FileName), ToJson());
 
     /// <summary>
-    /// The asset names of a craftable: <c>SS_</c> + the Latin letters and digits of <paramref name="name"/> (other runs as
-    /// '_'), the token every earlier export gave it whenever that is a valid asset name (objects players placed are saved by
-    /// class path: a new token would make them vanish). Only a name whose token was not valid (no Latin letter at all, as
-    /// in an Arabic name, or more than 61 of them) gets at most 40 of them and the first 8 hex digits of its SHA-256, so two
-    /// Arabic names never share a token and an export keeps the same one.
+    /// The token every export before 3.2 gave a craftable, computed from its name: <c>SS_</c> + the Latin letters and digits
+    /// of <paramref name="name"/> (other runs as '_'); a name with no Latin letter or digit, or more than 61, gets at most 40
+    /// of them and the first 8 hex digits of its SHA-256. Kept unchanged for files stored without a token.
     /// </summary>
-    public static string TokenOf(string name)
+    public static string LegacyTokenOf(string name)
     {
         var trimmed = name.Trim();
         var latin = Regex.Replace(trimmed, "[^A-Za-z0-9]+", "_", RegexOptions.CultureInvariant).Trim('_');
@@ -163,6 +180,68 @@ public sealed record CraftablesFile
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(trimmed)))[..8];
         return latin.Length > 0 ? $"SS_{latin}_{hash}" : "SS_" + hash;
     }
+
+    /// <summary>
+    /// The token of a new craftable named <paramref name="name"/>: <c>SS_</c> + its Latin letters and digits (spaces as '_').
+    /// A name with other letters or punctuation, or one whose token <paramref name="taken"/> already has (in any case), gets
+    /// <c>_h</c> + 8 hex digits of its SHA-256 too, so 'كرسي 01' and 'طاولة 01' differ. It never ends in '_' and a number,
+    /// which the engine would read as an FName number: 'Shelf 1' gives <c>SS_Shelf_v1</c>.
+    /// </summary>
+    public static string NewTokenFor(string name, IEnumerable<string?> taken)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        var used = taken.OfType<string>().ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var trimmed = name.Trim();
+        var latin = Regex.Replace(trimmed, "[^A-Za-z0-9]+", "_", RegexOptions.CultureInvariant).Trim('_');
+        var plain = latin.Length is > 0 and <= 60 && !Regex.IsMatch(trimmed, @"[^A-Za-z0-9_\s]", RegexOptions.CultureInvariant) ? Unsplit("SS_" + latin) : null;
+        if (plain is not null && !used.Contains(plain))
+        {
+            return plain;
+        }
+
+        var stem = latin[..Math.Min(latin.Length, 40)].TrimEnd('_');
+        var hashed = "SS_" + (stem.Length > 0 ? stem + "_" : string.Empty) + "h" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(trimmed)))[..8];
+        var token = hashed;
+        for (var n = 2; used.Contains(token); n++)
+        {
+            token = $"{hashed}_v{n}"; // the same name twice
+        }
+
+        return token;
+    }
+
+    /// <summary>True for a token the planner accepts: <c>SS_</c> and 1 to 61 letters, digits or '_' (a stored one is never renamed).</summary>
+    public static bool IsValidToken(string? token) => token is not null && Regex.IsMatch(token, "^SS_[A-Za-z0-9_]{1,61}$", RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// <paramref name="items"/> with every token set (the same list when none was missing). A missing token is the one every
+    /// earlier export gave the craftable (<see cref="LegacyTokenOf"/>) unless a stored token or a craftable before it in the
+    /// planner's build order has it: that one was left out of every export (the planner keeps the first), so it gets a new one.
+    /// </summary>
+    public static IReadOnlyList<Craftable> WithTokens(IReadOnlyList<Craftable> items)
+    {
+        ArgumentNullException.ThrowIfNull(items);
+        if (items.All(i => i.Token is not null))
+        {
+            return items;
+        }
+
+        var taken = items.Select(i => i.Token).OfType<string>().ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var tokens = new Dictionary<Craftable, string>(ReferenceEqualityComparer.Instance);
+        foreach (var craftable in CraftablesPlanner.BuildOrder(items).Where(i => i.Token is null))
+        {
+            var legacy = LegacyTokenOf(craftable.Name);
+            var token = taken.Contains(legacy) ? NewTokenFor(craftable.Name, taken) : legacy;
+            taken.Add(token);
+            tokens[craftable] = token;
+        }
+
+        return items.Select(i => i.Token is null ? i with { Token = tokens[i] } : i).ToList();
+    }
+
+    /// <summary><paramref name="token"/>, or with 'v' after its last '_' when it ends in '_' and a number (<c>SS_Chair_01_v2</c>).</summary>
+    private static string Unsplit(string token) =>
+        FNameRef.Split(token).Number == 0 ? token : token.Insert(token.LastIndexOf('_') + 1, "v");
 }
 
 /// <summary>

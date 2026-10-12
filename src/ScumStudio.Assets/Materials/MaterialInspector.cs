@@ -2,6 +2,7 @@ using System.Numerics;
 using CUE4Parse.UE4.Assets.Exports;
 using CUE4Parse.UE4.Assets.Exports.Material;
 using CUE4Parse.UE4.Assets.Objects;
+using CUE4Parse.UE4.Assets.Objects.Properties;
 using CUE4Parse.UE4.Objects.UObject;
 using ScumStudio.Assets.Catalog;
 
@@ -28,6 +29,8 @@ public sealed class MaterialInspector
         ["BaseColor", "Base Color", "Diffuse Color", "DiffuseColor", "Color Tint", "Tint", "Albedo Color", "Color"];
 
     private const int MaxDepth = 16;
+    private const string BrightnessName = "Base Material Brightness";
+    private const string ScaleTintName = "Base Material Tint";
     private readonly AssetCatalog _catalog;
 
     /// <summary>Creates an inspector that resolves parents through <paramref name="catalog"/>.</summary>
@@ -50,7 +53,9 @@ public sealed class MaterialInspector
         var referenced = new List<string>();
 
         UObject? current = material;
+        Parameters master = new([], [], []);
         float? maskClip = null;
+        float? clipOverride = null;
         var blend = EBlendMode.BLEND_Opaque;
         var blendKnown = false;
         var splineMeshes = false;
@@ -63,6 +68,13 @@ public sealed class MaterialInspector
                 blendKnown = true;
                 blend = overrides.BlendMode;
                 maskClip = overrides.BlendMode == EBlendMode.BLEND_Masked ? ClipOrDefault(overrides.OpacityMaskClipValue) : null;
+            }
+
+            // An instance may change only the clip of its parent's masked blend (sparser leaves): the nearest one wins.
+            if (clipOverride is null && current is UMaterialInstance && current.GetOrDefault<FStructFallback>("BasePropertyOverrides") is { } raw
+                && raw.GetOrDefault<bool>("bOverride_OpacityMaskClipValue"))
+            {
+                clipOverride = ClipOrDefault(raw.GetOrDefault<float>("OpacityMaskClipValue"));
             }
 
             if (current is UMaterialInstanceConstant mic)
@@ -105,6 +117,7 @@ public sealed class MaterialInspector
                     }
                 }
 
+                master = MasterDefaults(baseMaterial);
                 break;
             }
 
@@ -119,22 +132,115 @@ public sealed class MaterialInspector
             current = TryLoad(parentIndex, parentPath);
         }
 
-        var texList = textures.Values.OrderBy(t => t.Name, StringComparer.OrdinalIgnoreCase).ToList();
-        var vecList = vectors.Values.OrderBy(v => v.Name, StringComparer.OrdinalIgnoreCase).ToList();
-        var baseColor = PickTexture(texList) ?? referenced.FirstOrDefault(r => LooksLikeDiffuse(r) && !IsOverlay(r) && !IsEnginePlaceholder(r));
-        var tint = PickTint(vecList);
+        if (blend == EBlendMode.BLEND_Masked && clipOverride is { } clip)
+        {
+            maskClip = clip;
+        }
+
+        // The master's own values for what no instance sets (a SpeedTree pine's 'Color' texture, the masters' brightness
+        // and roughness defaults), kept apart for the picks.
+        var own = new Parameters(Sorted(scalars.Values), Sorted(vectors.Values), Sorted(textures.Values));
+        AddDefaults(scalars, master.Scalars, p => p.Name);
+        AddDefaults(vectors, master.Vectors, p => p.Name);
+        AddDefaults(textures, master.Textures, p => p.Name);
+        var left = new Parameters(Sorted(scalars.Values.Except(own.Scalars)), Sorted(vectors.Values.Except(own.Vectors)), Sorted(textures.Values.Except(own.Textures)));
+        var picked = Pick(own, left);
+        var texList = Sorted(textures.Values);
+        var vecList = Sorted(vectors.Values);
+        var baseColor = picked.BaseColor ?? referenced.FirstOrDefault(r => LooksLikeDiffuse(r) && !IsOverlay(r) && !IsEnginePlaceholder(r));
         return new MaterialInfo(material.Name, AssetPaths.NormalizeObjectPath(material.GetPathName(), _catalog.ProjectName), chain,
-            scalars.Values.OrderBy(s => s.Name, StringComparer.OrdinalIgnoreCase).ToList(), vecList, texList, baseColor, tint, referenced)
+            Sorted(scalars.Values), vecList, texList, baseColor, picked.Tint, referenced)
         {
             OpacityMaskClip = maskClip,
             UsedWithSplineMeshes = splineMeshes,
-            NormalTexture = PickNormal(texList),
+            NormalTexture = picked.Normal,
             RoughnessRange = Roughness(scalars),
-            BaseColorScale = ColorScale(scalars, vectors),
+            BaseColorScale = picked.Scale,
             WritesLandscapeTexture = landscapeOutput,
             IsTranslucent = blend is EBlendMode.BLEND_Translucent or EBlendMode.BLEND_Additive or EBlendMode.BLEND_Modulate or EBlendMode.BLEND_AlphaComposite,
         };
     }
+
+    /// <summary>
+    /// Adds the base material's own parameter values under the instances' (<paramref name="values"/>, by name): a parameter
+    /// an instance sets keeps the instance's value.
+    /// </summary>
+    internal static void AddDefaults<T>(Dictionary<string, T> values, IEnumerable<T> defaults, Func<T, string> nameOf)
+    {
+        foreach (var value in defaults)
+        {
+            values.TryAdd(nameOf(value), value);
+        }
+    }
+
+    /// <summary>
+    /// The base material's own parameter values, from its cooked <c>CachedExpressionData.Parameters</c>: the runtime entries
+    /// (a static array: 0 scalar, 1 vector, 2 texture) name them in the order of <c>ScalarValues</c>, <c>VectorValues</c>
+    /// and <c>TextureValues</c> (the layout <c>MaterialParameters.ExpressionGuids</c> reads). Empty when it has none.
+    /// </summary>
+    private Parameters MasterDefaults(UMaterial material)
+    {
+        var scalars = new List<ScalarParameter>();
+        var vectors = new List<VectorParameter>();
+        var textures = new List<TextureParameter>();
+        if (!material.TryGetValue(out FStructFallback cached, "CachedExpressionData") || cached.GetOrDefault<FStructFallback>("Parameters") is not { } parameters)
+        {
+            return new Parameters(scalars, vectors, textures);
+        }
+
+        var names = new string[3][];
+        foreach (var entry in parameters.Properties.Where(p => p.Name.Text == "RuntimeEntries" && p.ArrayIndex is >= 0 and < 3))
+        {
+            if (entry.Tag is StructProperty { Value.StructType: FStructFallback runtime })
+            {
+                names[entry.ArrayIndex] = (runtime.GetOrDefault<FStructFallback[]>("ParameterInfos") ?? []).Select(i => i?.GetOrDefault<FName>("Name").Text ?? string.Empty).ToArray();
+            }
+        }
+
+        var scalarValues = parameters.GetOrDefault<float[]>("ScalarValues") ?? [];
+        for (var i = 0; i < Math.Min(names[0]?.Length ?? 0, scalarValues.Length); i++)
+        {
+            scalars.Add(new ScalarParameter(names[0][i], scalarValues[i], material.Name));
+        }
+
+        var vectorValues = parameters.GetOrDefault<CUE4Parse.UE4.Objects.Core.Math.FLinearColor[]>("VectorValues") ?? [];
+        for (var i = 0; i < Math.Min(names[1]?.Length ?? 0, vectorValues.Length); i++)
+        {
+            vectors.Add(new VectorParameter(names[1][i], new Vector4(vectorValues[i].R, vectorValues[i].G, vectorValues[i].B, vectorValues[i].A), material.Name));
+        }
+
+        var textureValues = parameters.GetOrDefault<FPackageIndex[]>("TextureValues") ?? [];
+        for (var i = 0; i < Math.Min(names[2]?.Length ?? 0, textureValues.Length); i++)
+        {
+            textures.Add(new TextureParameter(names[2][i], PathOf(textureValues[i], _catalog.ProjectName), material.Name));
+        }
+
+        return new Parameters([.. scalars.Where(p => p.Name.Length > 0)], [.. vectors.Where(p => p.Name.Length > 0)], [.. textures.Where(p => p.Name.Length > 0)]);
+    }
+
+    /// <summary>A material's scalar, vector and texture parameters.</summary>
+    internal sealed record Parameters(IReadOnlyList<ScalarParameter> Scalars, IReadOnlyList<VectorParameter> Vectors, IReadOnlyList<TextureParameter> Textures);
+
+    /// <summary>
+    /// The base-colour texture, normal map, tint colour and colour scale among the parameters the instances set
+    /// (<paramref name="own"/>), and only where those give none, among the base material's defaults for the ones they
+    /// leave (<paramref name="master"/>): an instance's <c>Diffuse</c> beats a master's <c>Base Color</c> that sits behind a
+    /// switch the instance turned off. The masters' white <c>Base Material Tint</c> and brightness 1 are a scale, not a
+    /// colour: alone they leave an untextured surface grey, and they complete a scale an instance sets.
+    /// </summary>
+    internal static (string? BaseColor, string? Normal, Vector4? Tint, Vector3? Scale) Pick(Parameters own, Parameters master)
+    {
+        var colours = master.Vectors.Where(v => !string.Equals(v.Name, ScaleTintName, StringComparison.OrdinalIgnoreCase)).ToList();
+        var scale = ColorScale(own.Scalars, own.Vectors) is null ? null : ColorScale([.. own.Scalars, .. master.Scalars], [.. own.Vectors, .. master.Vectors]);
+        return (PickTexture(own.Textures) ?? PickTexture(master.Textures), PickNormal(own.Textures) ?? PickNormal(master.Textures),
+            PickTint(own.Vectors) ?? PickTint(colours), scale);
+    }
+
+    private static List<ScalarParameter> Sorted(IEnumerable<ScalarParameter> values) => [.. values.OrderBy(p => p.Name, StringComparer.OrdinalIgnoreCase)];
+
+    private static List<VectorParameter> Sorted(IEnumerable<VectorParameter> values) => [.. values.OrderBy(p => p.Name, StringComparer.OrdinalIgnoreCase)];
+
+    private static List<TextureParameter> Sorted(IEnumerable<TextureParameter> values) => [.. values.OrderBy(p => p.Name, StringComparer.OrdinalIgnoreCase)];
 
     /// <summary>The engine's stand-in textures (DefaultDiffuse, DefaultTexture …): never an object's real colour.</summary>
     private static bool IsEnginePlaceholder(string texturePath) => texturePath.StartsWith("/Engine/EngineMaterials/", StringComparison.OrdinalIgnoreCase);
@@ -169,7 +275,7 @@ public sealed class MaterialInspector
         foreach (var hint in BaseColorTextureHints)
         {
             // "Diffuse/Roughness": colour packed with roughness in alpha (SCUM's object master shader).
-            var partial = withValue.FirstOrDefault(t => (t.Name.Contains(hint, StringComparison.OrdinalIgnoreCase) && !IsNonColour(t.Name))
+            var partial = withValue.FirstOrDefault(t => !IsBlendLayer(t.Name) && (t.Name.Contains(hint, StringComparison.OrdinalIgnoreCase) && !IsNonColour(t.Name))
                                                         || t.Name.StartsWith(hint + "/", StringComparison.OrdinalIgnoreCase));
             if (partial is not null)
             {
@@ -177,7 +283,7 @@ public sealed class MaterialInspector
             }
         }
 
-        return withValue.FirstOrDefault(t => LooksLikeDiffuse(t.TexturePath) && !IsOverlay(t.Name))?.TexturePath;
+        return withValue.FirstOrDefault(t => LooksLikeDiffuse(t.TexturePath) && !IsOverlay(t.Name) && !IsBlendLayer(t.Name))?.TexturePath;
     }
 
     /// <summary>
@@ -219,17 +325,17 @@ public sealed class MaterialInspector
     /// <c>Base Material Tint</c> x <c>Base Material Brightness</c> of SCUM's opaque master shaders, or null when neither is set.
     /// Their contrast and saturation work per texel and are not applied.
     /// </summary>
-    private static Vector3? ColorScale(Dictionary<string, ScalarParameter> scalars, Dictionary<string, VectorParameter> vectors)
+    private static Vector3? ColorScale(IReadOnlyList<ScalarParameter> scalars, IReadOnlyList<VectorParameter> vectors)
     {
-        var hasBrightness = scalars.TryGetValue("Base Material Brightness", out var brightness);
-        var hasTint = vectors.TryGetValue("Base Material Tint", out var tint);
-        if (!hasBrightness && !hasTint)
+        var brightness = scalars.FirstOrDefault(s => string.Equals(s.Name, BrightnessName, StringComparison.OrdinalIgnoreCase));
+        var tint = vectors.FirstOrDefault(v => string.Equals(v.Name, ScaleTintName, StringComparison.OrdinalIgnoreCase));
+        if (brightness is null && tint is null)
         {
             return null;
         }
 
-        var rgb = hasTint ? new Vector3(tint!.Value.X, tint.Value.Y, tint.Value.Z) : Vector3.One;
-        return Vector3.Max(rgb * (hasBrightness ? brightness!.Value : 1f), Vector3.Zero);
+        var rgb = tint is null ? Vector3.One : new Vector3(tint.Value.X, tint.Value.Y, tint.Value.Z);
+        return Vector3.Max(rgb * (brightness?.Value ?? 1f), Vector3.Zero);
     }
 
     /// <summary>Layers painted over the base (moss, dirt, snow, puddles): never the object's own colour.</summary>
@@ -262,7 +368,7 @@ public sealed class MaterialInspector
         return null;
     }
 
-    /// <summary>True when a texture name follows the diffuse naming convention (<c>T_X_D</c>, <c>_BaseColor</c>, <c>_Albedo</c>).</summary>
+    /// <summary>True when a texture name follows the diffuse naming convention (<c>T_X_D</c>, <c>_BaseColor</c>, <c>_Albedo</c>, SpeedTree's <c>_Color</c>).</summary>
     public static bool LooksLikeDiffuse(string texturePath)
     {
         var name = texturePath[(texturePath.LastIndexOfAny(['/', '.']) + 1)..];
@@ -272,8 +378,19 @@ public sealed class MaterialInspector
                || name.Contains("_D_", StringComparison.OrdinalIgnoreCase)
                || name.Contains("BaseColor", StringComparison.OrdinalIgnoreCase)
                || name.Contains("Albedo", StringComparison.OrdinalIgnoreCase)
-               || name.Contains("Diffuse", StringComparison.OrdinalIgnoreCase);
+               || name.Contains("Diffuse", StringComparison.OrdinalIgnoreCase)
+               || (name.EndsWith("_Color", StringComparison.OrdinalIgnoreCase) && !IsFoliageMap(name)); // SpeedTree: ScotsPine_01_Color
     }
+
+    /// <summary>The maps a SpeedTree or bush texture set has beside its colour (masks, normals, subsurface, opacity).</summary>
+    private static bool IsFoliageMap(string name) =>
+        name.Contains("Mask", StringComparison.OrdinalIgnoreCase) || name.Contains("Normal", StringComparison.OrdinalIgnoreCase)
+        || name.Contains("Subsurface", StringComparison.OrdinalIgnoreCase) || name.Contains("SSS", StringComparison.OrdinalIgnoreCase)
+        || name.Contains("Opacity", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Blend layers painted over the base (<c>Blend Color/Alpha</c>, <c>B Material Diffuse</c>): never the object's own colour.</summary>
+    private static bool IsBlendLayer(string name) =>
+        name.Contains("Blend", StringComparison.OrdinalIgnoreCase) || name.StartsWith("B Material", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsNonColour(string name) =>
         name.Contains("Normal", StringComparison.OrdinalIgnoreCase) || name.Contains("Mask", StringComparison.OrdinalIgnoreCase)

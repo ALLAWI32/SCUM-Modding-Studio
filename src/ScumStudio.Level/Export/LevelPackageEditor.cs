@@ -88,11 +88,20 @@ public sealed record LevelEditRequest
     public IReadOnlyCollection<string> DeleteActors { get; init; } = [];
 
     /// <summary>
-    /// Components of kept actors to turn into inert objects, as (actor name, component name): the ChildActorComponents that
-    /// spawned deleted child actors. Left alone, such a component spawns a fresh child from its class when the level loads
-    /// (<c>UChildActorComponent::OnRegister</c> with a null <c>ChildActor</c>), so a deleted door would come back.
+    /// Components of kept actors to turn into inert objects (with their sub-objects), as (actor name, component name): the
+    /// fire, light and sound of a deleted fireplace part (<see cref="Editing.DeleteComponentsOp"/>), and the
+    /// ChildActorComponents that spawned deleted child actors (left alone, such a component spawns a fresh child from its
+    /// class when the level loads, <c>UChildActorComponent::OnRegister</c> with a null <c>ChildActor</c>: a deleted door
+    /// would come back).
     /// </summary>
     public IReadOnlyList<(string Actor, string Component)> DeleteComponents { get; init; } = [];
+
+    /// <summary>
+    /// Components of kept actors to take off their parent, as (actor name, component name): the roots of actors attached to
+    /// a deleted one. Their <c>AttachParent</c> and <c>AttachSocketName</c> go, so a <see cref="Transforms"/> entry must give
+    /// them their place in the world (a nulled parent would make the relative place a world place).
+    /// </summary>
+    public IReadOnlyList<(string Actor, string Component)> Detach { get; init; } = [];
 
     /// <summary>Relative transforms to patch into component exports.</summary>
     public IReadOnlyList<TransformPatch> Transforms { get; init; } = [];
@@ -132,7 +141,7 @@ public sealed record LevelEditRequest
     public IReadOnlyList<(string Post, string Outpost)> TradeJoins { get; init; } = [];
 
     /// <summary>True when the request changes nothing.</summary>
-    public bool IsEmpty => DeleteActors.Count == 0 && DeleteComponents.Count == 0 && Transforms.Count == 0 && Instances.Count == 0 && InstanceAdds.Count == 0 && Copies.Count == 0
+    public bool IsEmpty => DeleteActors.Count == 0 && DeleteComponents.Count == 0 && Detach.Count == 0 && Transforms.Count == 0 && Instances.Count == 0 && InstanceAdds.Count == 0 && Copies.Count == 0
         && StaticMeshAdds.Count == 0 && ForeignCopies.Count == 0 && SplinePatches.Count == 0 && SpawnPoints.Count == 0 && Meshes.Count == 0 && Loot.Count == 0;
 }
 
@@ -174,6 +183,9 @@ public sealed record LevelEditReport
 
     /// <summary>Exports of deleted actors (the actors and everything under them) turned into inert objects.</summary>
     public int NeutralizedExports { get; init; }
+
+    /// <summary>Components of kept actors turned into inert objects (see <see cref="LevelEditRequest.DeleteComponents"/>), as <c>Actor.Component</c>.</summary>
+    public IReadOnlyList<string> NeutralizedComponents { get; init; } = [];
 
     /// <summary>Trade posts added to an outpost manager of the level, as (post, manager).</summary>
     public IReadOnlyList<(string Post, string Manager)> JoinedTradePosts { get; init; } = [];
@@ -243,6 +255,7 @@ public static partial class LevelPackageEditor
         var actors = RemoveActors(package, levelIndex, request.DeleteActors, addedIndices, warnings);
         data[levelIndex] = actors.Payload;
         ForgetTradePosts(package, actors.Removed, data);
+        ForgetSentrySpawners(package, levelIndex, actors.Removed, data);
         var joined = JoinTradePosts(package, levelIndex + 1, request.TradeJoins, exports, data, names);
 
         var patched = new List<string>();
@@ -288,9 +301,19 @@ public static partial class LevelPackageEditor
             }
         }
 
+        // After every patch (they read the stored property offsets): kept actors taken off a deleted parent.
+        foreach (var (actor, component) in request.Detach)
+        {
+            if (TryDetach(package, levelIndex, actor, component, data, names, warnings) is { } label)
+            {
+                patched.Add(label);
+            }
+        }
+
         // Last: a deleted actor's exports become inert objects, whatever another patch wrote into them.
+        var neutralizedComponents = new List<string>();
         var neutralized = NeutralizeDeletedExports(package, levelIndex, actors.Removed, exports, data, imports, names, wide, addedNames, preload, warnings)
-            + NeutralizeComponents(package, levelIndex, request.DeleteComponents, exports, data, imports, names, wide, addedNames, preload, warnings);
+            + NeutralizeComponents(package, levelIndex, request.DeleteComponents, exports, data, imports, names, wide, addedNames, preload, neutralizedComponents, warnings);
 
         var bytes = PackageWriter.Build(new PackageBuildInput
         {
@@ -317,6 +340,7 @@ public static partial class LevelPackageEditor
             MovedInstances = movedInstances,
             AddedInstances = addedInstances,
             NeutralizedExports = neutralized,
+            NeutralizedComponents = neutralizedComponents,
             JoinedTradePosts = joined,
             Warnings = warnings,
         };
@@ -708,6 +732,41 @@ public static partial class LevelPackageEditor
 
         data[componentIndex] = patched;
         return label;
+    }
+
+    /// <summary>
+    /// Takes a kept component off its parent (a lamp on a deleted shelf, a fence on a bent bridge deck): its
+    /// <c>AttachParent</c> and <c>AttachSocketName</c> tags go, as <see cref="TryPatchMesh"/> drops a tag; the transform
+    /// patch written before gives its place in the world. Returns the label written, or null with a warning.
+    /// </summary>
+    private static string? TryDetach(CookedPackage package, int levelIndex, string actor, string component, IList<ReadOnlyMemory<byte>> data, List<string> names, List<string> warnings)
+    {
+        var componentIndex = FindComponent(package, levelIndex, actor, component, "place off its deleted parent", warnings);
+        if (componentIndex < 0)
+        {
+            return null;
+        }
+
+        var label = $"{actor}.{package.ResolveName(package.Exports[componentIndex].ObjectName)}";
+        var payload = data[componentIndex].ToArray();
+        try
+        {
+            foreach (var property in new[] { "AttachParent", "AttachSocketName" })
+            {
+                if (PropertyReader.ReadPayload(package, payload, names, componentIndex).Find(property) is { } tag)
+                {
+                    payload = [.. payload[..tag.Offset], .. payload[tag.EndOffset..]];
+                }
+            }
+        }
+        catch (Exception ex) when (ex is FormatException or EndOfStreamException or ArgumentOutOfRangeException or NotSupportedException or InvalidDataException or IndexOutOfRangeException)
+        {
+            warnings.Add($"'{label}': the export could not be read after its other edits ({ex.Message}); it stays attached to its deleted parent.");
+            return null;
+        }
+
+        data[componentIndex] = payload;
+        return label + " (detached)";
     }
 
     /// <summary>
@@ -1126,7 +1185,7 @@ public static partial class LevelPackageEditor
     /// </summary>
     private static FNameRef GetOrAddName(List<string> names, List<bool> wide, List<string> added, string value)
     {
-        var (text, number) = SplitNumber(value);
+        var (text, number) = FNameRef.Split(value);
         var index = names.FindIndex(n => string.Equals(n, text, StringComparison.Ordinal));
         if (index < 0)
         {
@@ -1137,28 +1196,6 @@ public static partial class LevelPackageEditor
         }
 
         return new FNameRef(index, number);
-    }
-
-    /// <summary>
-    /// <c>FName</c>'s split of a trailing number (UE 4.27 <c>ParseNumber</c>): "_" then up to 10 digits, not starting with 0
-    /// unless it is the only digit, below int.MaxValue; the stored number is that value + 1 (0 = no number).
-    /// </summary>
-    internal static (string Text, int Number) SplitNumber(string value)
-    {
-        var digits = 0;
-        while (digits < value.Length && char.IsAsciiDigit(value[value.Length - 1 - digits]))
-        {
-            digits++;
-        }
-
-        var first = value.Length - digits;
-        if (digits == 0 || digits >= value.Length || digits > 10 || value[first - 1] != '_' || (digits > 1 && value[first] == '0')
-            || !long.TryParse(value.AsSpan(first), out var n) || n >= int.MaxValue)
-        {
-            return (value, 0);
-        }
-
-        return (value[..(first - 1)], (int)n + 1);
     }
 
     /// <summary>Export index of the export named <paramref name="name"/> whose outer is <paramref name="outerPackageIndex"/>, or -1.</summary>

@@ -2,6 +2,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.Extensions.Logging;
 using ScumStudio.App.Services;
+using ScumStudio.Assets.Catalog;
 using ScumStudio.Core.Mathematics;
 using ScumStudio.Level.World;
 using ScumStudio.Viewport;
@@ -16,34 +17,71 @@ public sealed partial class MapPageViewModel
 {
     /// <summary>True while the whole island is shown (the viewport keeps the camera when cells swap).</summary>
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(NeedsLoadChoice))]
     private bool _isWorldMode;
 
     /// <summary>The island's terrain (all tiles, coarse), drawn behind the detailed cell.</summary>
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(HasView))]
+    [NotifyPropertyChangedFor(nameof(HasView), nameof(NeedsLoadChoice))]
     private PreparedLevelScene? _worldBackdrop;
 
     /// <summary>World mode status for the HUD ("Island · A_0 · loading B_0").</summary>
     [ObservableProperty]
     private string _worldStatus = string.Empty;
 
-    /// <summary>Builds the whole-island backdrop and switches to world mode.</summary>
+    private Task<bool>? _backdropBuild;
+    private AssetCatalog? _backdropCatalog;
+    private FVector? _lastCamera;
+
+    /// <summary>Builds the whole-island backdrop and switches to world mode, streaming the levels around the camera.</summary>
     [RelayCommand]
     public async Task OpenWholeIslandAsync()
     {
         if (_services.Workspace.Catalog is not { } catalog || World is not { } world)
         {
             _services.Notifications.Warning(Localization.Loc.T("Map.NoGameFiles"), Localization.Loc.T("Dump.Status.NoPaks"));
+            RefreshSwitch();
             return;
         }
 
+        EndSector(MapLoadMode.Island);
         IsWorldMode = true;
         _holdStreaming = false; // the island streams around the camera at once
+        if (await EnsureBackdropAsync(catalog, world).ConfigureAwait(true) && LoadMode == MapLoadMode.Island)
+        {
+            WorldStatus = Localization.Loc.T("Map.World.Ready");
+        }
+    }
+
+    /// <summary>
+    /// The island's terrain behind whatever is loaded: built once per catalog (a build under way is shared, a failed one
+    /// is tried again). False when it failed.
+    /// </summary>
+    private Task<bool> EnsureBackdropAsync(AssetCatalog catalog, WorldIndex world)
+    {
+        if (ReferenceEquals(_backdropCatalog, catalog) && _backdropBuild is { } build && (!build.IsCompleted || build.Result))
+        {
+            return build;
+        }
+
+        _backdropCatalog = catalog;
+        return _backdropBuild = BuildBackdropAsync(catalog, world);
+    }
+
+    private async Task<bool> BuildBackdropAsync(AssetCatalog catalog, WorldIndex world)
+    {
         var tiles = world.Packages.Where(p => p.IsMap && p.Kind == WorldPackageKind.Landscape).Select(p => p.PackagePath).ToList();
         WorldStatus = Localization.Loc.F("Map.World.Terrain", 0, tiles.Count);
         try
         {
-            var progress = new Progress<(int Done, int Total, string Item)>(p => WorldStatus = Localization.Loc.F("Map.World.Terrain", p.Done, p.Total));
+            // A cancelled sector keeps its line: the terrain goes on building in the background for the next load.
+            var progress = new Progress<(int Done, int Total, string Item)>(p =>
+            {
+                if (LoadMode != MapLoadMode.Sector || IsSectorLoading)
+                {
+                    WorldStatus = Localization.Loc.F("Map.World.Terrain", p.Done, p.Total);
+                }
+            });
             var options = new LevelSceneOptions { LandscapeStep = 16, TerrainTextureSize = 128 };
             WorldBackdrop = await Task.Run(() =>
             {
@@ -67,18 +105,20 @@ public sealed partial class MapPageViewModel
 
                 return built;
             }).ConfigureAwait(true);
-            WorldStatus = Localization.Loc.T("Map.World.Ready");
+            return true;
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             _services.Logger.LogWarning("Island terrain failed: {Message}", ex.Message);
             WorldStatus = Localization.Loc.F("Map.World.Failed", ex.Message);
+            return false;
         }
     }
 
     /// <summary>
     /// Called about twice a second with the camera position: in whole-island mode the levels around the camera stream
-    /// in and out as it moves (see <see cref="StreamAround"/>), whatever sector they belong to.
+    /// in and out as it moves (see <see cref="StreamAround"/>), whatever sector they belong to. With only a sector
+    /// loaded (<see cref="MapLoadMode.Sector"/>) nothing else loads until Load more.
     /// </summary>
     public void UpdateWorldCamera(FVector cameraUe)
     {
@@ -87,6 +127,13 @@ public sealed partial class MapPageViewModel
             return;
         }
 
+        _lastCamera = cameraUe;
+        if (LoadMode == MapLoadMode.Sector)
+        {
+            return;
+        }
+
+        FollowCamera(world, cameraUe);
         if (_holdStreaming)
         {
             _holdCamera ??= cameraUe;

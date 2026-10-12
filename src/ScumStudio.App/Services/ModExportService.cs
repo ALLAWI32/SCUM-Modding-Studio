@@ -71,6 +71,10 @@ public static class ModExportService
             throw new InvalidOperationException(blocker);
         }
 
+        // The client's game files were opened before this export's mod name was known: they leave out the same own paks
+        // as the server's (re-opened only when that name changes which paks are read).
+        var ownNames = OwnPaks.ProjectNames(request.Project.Manifest.Name, request.ModName);
+        await services.Workspace.UseModsAsync(services.Workspace.ModFolders, ownNames, progress, cancellationToken).ConfigureAwait(false);
         var catalog = services.Workspace.Catalog!;
         var craftables = request.IncludeCraftables ? CraftablesFile.Load(request.Project.DirectoryPath) : new CraftablesFile();
         var modName = request.ModName ?? request.Project.Manifest.Name;
@@ -170,7 +174,11 @@ public static class ModExportService
                 {
                     progress.Report(Localization.Loc.T("Export.OpeningServer"), 0, 0);
                     services.Keys.TryGet(out var key);
-                    using var server = AssetCatalog.OpenPaks(serverFolder, new AssetCatalogOptions { AesKey = key, Logger = services.Logger, LooseOverlays = options.Mods });
+                    using var server = AssetCatalog.OpenPaks(serverFolder, new AssetCatalogOptions
+                    {
+                        AesKey = key, Logger = services.Logger, LooseOverlays = options.Mods,
+                        PakFileFilter = OwnPaks.Filter(ownNames),
+                    });
                     progress.Report(Localization.Loc.T("Export.ServerPak"), 0, 0);
                     await ExportRole(server, ProjectSourceRole.Server).ConfigureAwait(false);
                 }

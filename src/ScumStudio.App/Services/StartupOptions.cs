@@ -13,10 +13,10 @@ namespace ScumStudio.App.Services;
 /// <summary>
 /// Developer / automation command line: <c>ScumStudio.App --source &lt;folder-or-paks&gt; --load &lt;sublevel|cell&gt; [--select &lt;actor&gt;]
 /// [--page assets|weapons|vehicles --select &lt;name-or-path&gt;] [--screenshot out.png] [--exit-after seconds] [--mcp-port 47130]
-/// [--mcp-token text]</c>. Opens a source without the setup dialog, loads a level or a whole cell into the map viewport
-/// (or shows a page with an asset selected), optionally saves the viewport's rendered frame (map) or the window with the
-/// 3D preview pasted in (other pages) and quits. Used to verify the real OpenGL path on machines without a desktop
-/// session (e.g. under <c>xvfb-run</c>) and for owner screenshots.
+/// [--mcp-token text] [--after-update pid]</c>. Opens a source without the setup dialog, loads a level or a whole cell
+/// into the map viewport (or shows a page with an asset selected), optionally saves the viewport's rendered frame (map)
+/// or the window with the 3D preview pasted in (other pages) and quits. Used to verify the real OpenGL path on machines
+/// without a desktop session (e.g. under <c>xvfb-run</c>) and for owner screenshots.
 /// </summary>
 public sealed record StartupOptions(string? Source, string? Load, string? Screenshot, double? ExitAfterSeconds, string? Select = null)
 {
@@ -35,6 +35,12 @@ public sealed record StartupOptions(string? Source, string? Load, string? Screen
     /// <summary><c>--view 3d</c>: the Vehicles/Weapons page opens on its 3D tab.</summary>
     public string? View { get; init; }
 
+    /// <summary>
+    /// <c>--after-update &lt;pid&gt;</c>: the update of process <c>pid</c> started this one, which waits for that process to
+    /// exit before it takes the window and the project (a normal start otherwise: the last project reopens).
+    /// </summary>
+    public int? AfterUpdatePid { get; init; }
+
     /// <summary>Whether any option was given.</summary>
     public bool HasWork => Source is not null || Load is not null || Screenshot is not null || ExitAfterSeconds is not null || Page is not null;
 
@@ -42,7 +48,7 @@ public sealed record StartupOptions(string? Source, string? Load, string? Screen
     public static StartupOptions Parse(string[] args)
     {
         string? source = null, load = null, shot = null, select = null, mcpToken = null, page = null, search = null, view = null;
-        int? mcpPort = null;
+        int? mcpPort = null, afterUpdate = null;
         double? exit = null;
         for (var i = 0; i < args.Length; i++)
         {
@@ -58,11 +64,12 @@ public sealed record StartupOptions(string? Source, string? Load, string? Screen
                 case "--view" when next is not null: view = next; i++; break;
                 case "--mcp-port" when next is not null && int.TryParse(next, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var port) && port is > 0 and < 65536: mcpPort = port; i++; break;
                 case "--mcp-token" when next is not null: mcpToken = next; i++; break;
+                case "--after-update" when next is not null && int.TryParse(next, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var pid) && pid > 0: afterUpdate = pid; i++; break;
                 case "--exit-after" when next is not null && double.TryParse(next, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var s): exit = s; i++; break;
             }
         }
 
-        return new StartupOptions(source, load, shot, exit, select) { McpPort = mcpPort, McpToken = mcpToken, Page = page, Search = search, View = view };
+        return new StartupOptions(source, load, shot, exit, select) { McpPort = mcpPort, McpToken = mcpToken, Page = page, Search = search, View = view, AfterUpdatePid = afterUpdate };
     }
 
     private bool ShowsPage => Page is { } key && !string.Equals(key, "map", StringComparison.OrdinalIgnoreCase);

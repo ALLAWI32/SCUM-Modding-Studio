@@ -14,6 +14,14 @@ namespace ScumStudio.Tests.App;
 [Collection(GlCollection.Name)]
 public sealed class ThumbnailServiceTests
 {
+    [Fact]
+    public void FoliageTypesGetThumbnails()
+    {
+        // Most of the Assets page's trees are foliage types (ScotsPine_FT): their tiles stayed empty.
+        Assert.True(ThumbnailService.Supports("FoliageType_InstancedStaticMesh"));
+        Assert.False(ThumbnailService.Supports("SoundWave"));
+    }
+
     [FixturesFact]
     public async Task TexturesAndMaterialsAreCachedAsSmallPngs()
     {

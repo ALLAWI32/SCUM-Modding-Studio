@@ -1,0 +1,58 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:vm="using:ScumStudio.App.ViewModels">
+  <!--
+    The Map's load mode (owner: "load only this sector"), shown by the Map page through two ContentControl slots
+    (Content bound to the page, ContentTemplate a DynamicResource of the key): the header item and the question in the centre card.
+  -->
+
+  <!-- Header: Whole island / Only this sector, the sector picker, Load more once a sector is in, its progress while it loads. -->
+  <DataTemplate x:Key="MapLoadModeItemTemplate" x:DataType="vm:MapPageViewModel">
+    <StackPanel x:Name="LoadModeStrip" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center" IsVisible="{Binding HasIsland}">
+      <TextBlock Text="{Tr Map.LoadMode}" Classes="caption" VerticalAlignment="Center" ToolTip.Tip="{Tr Map.LoadMode.Tip}" />
+      <Border Classes="segmented" ToolTip.Tip="{Tr Map.LoadMode.Tip}">
+        <StackPanel Orientation="Horizontal">
+          <ToggleButton x:Name="LoadIslandButton" Content="{Tr Map.LoadMode.Island}" IsChecked="{Binding IsIslandMode, Mode=OneWay}"
+                        Command="{Binding OpenWholeIslandCommand}" ToolTip.Tip="{Tr Map.LoadMode.Island.Tip}" />
+          <ToggleButton x:Name="LoadSectorButton" IsChecked="{Binding IsSectorMode, Mode=OneWay}"
+                        Command="{Binding ChooseSectorCommand}" ToolTip.Tip="{Tr Map.LoadMode.Sector.Tip}">
+            <!-- Which sector it loads (the cell the camera is in, or the one picked in the tree) while the picker is hidden. -->
+            <StackPanel Orientation="Horizontal" Spacing="5">
+              <TextBlock Text="{Tr Map.LoadMode.Sector}" />
+              <TextBlock x:Name="NextSectorText" Text="{Binding NextSector, StringFormat='{}{0}'}" Classes="caption mono" VerticalAlignment="Center"
+                         IsVisible="{Binding NextSector, Converter={x:Static ObjectConverters.IsNotNull}}" />
+            </StackPanel>
+          </ToggleButton>
+        </StackPanel>
+      </Border>
+      <ComboBox x:Name="SectorBox" ItemsSource="{Binding Cells}" SelectedItem="{Binding SectorCell}" PlaceholderText="{Tr Map.LoadMode.Pick}" MinWidth="76" Padding="8,3"
+                VerticalAlignment="Center" IsVisible="{Binding IsSectorMode}" ToolTip.Tip="{Tr Map.LoadMode.Pick.Tip}" />
+      <Button x:Name="LoadMoreButton" Classes="ghost" Padding="8,4" Content="{Tr Map.LoadMode.More}" Command="{Binding LoadMoreCommand}"
+              IsVisible="{Binding IsSectorLocked}" ToolTip.Tip="{Tr Map.LoadMode.More.Tip}" />
+      <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding IsSectorLoading}">
+        <ProgressBar x:Name="SectorProgress" Width="90" MinWidth="0" VerticalAlignment="Center" Minimum="0"
+                     Maximum="{Binding LoadProgress.Total}" Value="{Binding LoadProgress.Done}" IsIndeterminate="{Binding !LoadProgress.HasTotal}"
+                     ToolTip.Tip="{Tr Map.LoadMode.Progress.Tip}" />
+        <TextBlock Text="{Binding SectorProgressText}" Classes="caption mono" VerticalAlignment="Center" />
+        <Button x:Name="CancelSectorButton" Classes="ghost small" Padding="7,2" Content="{Tr Map.LoadMode.Cancel}" Command="{Binding CancelLoadCommand}"
+                ToolTip.Tip="{Tr Map.LoadMode.Cancel.Tip}" />
+      </StackPanel>
+    </StackPanel>
+  </DataTemplate>
+
+  <!-- Centre card while nothing is shown: the question, the whole island, or one sector picked below. -->
+  <DataTemplate x:Key="MapLoadChoiceTemplate" x:DataType="vm:MapPageViewModel">
+    <StackPanel x:Name="LoadChoicePanel" Spacing="8" IsVisible="{Binding NeedsLoadChoice}">
+      <TextBlock Text="{Tr Map.LoadChoice.Title}" Classes="h3" HorizontalAlignment="Center" />
+      <TextBlock Text="{Tr Map.LoadChoice.Body}" Classes="muted wrap" FontSize="12" />
+      <Button x:Name="ChooseIslandButton" Classes="accent" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+              Content="{Tr Map.LoadMode.Island}" Command="{Binding OpenWholeIslandCommand}" ToolTip.Tip="{Tr Map.LoadMode.Island.Tip}" />
+      <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
+        <Button x:Name="ChooseSectorButton" Grid.Column="0" Classes="ghost" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                Content="{Tr Map.LoadMode.Sector}" Command="{Binding ChooseSectorCommand}" ToolTip.Tip="{Tr Map.LoadMode.Sector.Tip}" />
+        <ComboBox x:Name="ChoiceSectorBox" Grid.Column="1" ItemsSource="{Binding Cells}" SelectedItem="{Binding SectorCell}" PlaceholderText="{Tr Map.LoadMode.Pick}" MinWidth="76"
+                  VerticalAlignment="Center" ToolTip.Tip="{Tr Map.LoadMode.Pick.Tip}" />
+      </Grid>
+    </StackPanel>
+  </DataTemplate>
+</ResourceDictionary>

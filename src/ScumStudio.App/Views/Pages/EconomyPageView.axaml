@@ -142,7 +142,7 @@
         </StackPanel>
       </Border>
 
-      <Grid ColumnDefinitions="300,*" ColumnSpacing="12" IsVisible="{Binding HasCatalog}">
+      <Grid x:Name="EconomyBody" ColumnDefinitions="300,*" ColumnSpacing="12" IsVisible="{Binding HasCatalog}">
         <!-- Traders: one card each, by map cell -->
         <Border Grid.Column="0" Classes="panel">
           <DockPanel>

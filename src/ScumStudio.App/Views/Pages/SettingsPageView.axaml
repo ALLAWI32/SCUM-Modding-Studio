@@ -4,8 +4,22 @@
              xmlns:c="using:ScumStudio.App.Controls"
              xmlns:conv="using:ScumStudio.App.Converters"
              xmlns:loc="using:ScumStudio.App.Localization"
+             xmlns:cs="using:ScumStudio.Core.Settings"
              x:Class="ScumStudio.App.Views.Pages.SettingsPageView"
              x:DataType="vm:SettingsPageViewModel">
+  <UserControl.DataTemplates>
+    <!-- A quality preset (QualityPicker) by its name in the UI language, as the Map header's picker -->
+    <DataTemplate x:DataType="cs:RenderQuality">
+      <TextBlock>
+        <TextBlock.Text>
+          <MultiBinding Converter="{x:Static conv:RenderQualityTextConverter.Instance}">
+            <Binding />
+            <Binding Path="Language" Source="{x:Static loc:Loc.Instance}" />
+          </MultiBinding>
+        </TextBlock.Text>
+      </TextBlock>
+    </DataTemplate>
+  </UserControl.DataTemplates>
   <ScrollViewer HorizontalScrollBarVisibility="Disabled">
     <StackPanel Margin="24,20,24,24" Spacing="16" MaxWidth="920" HorizontalAlignment="Left">
       <StackPanel Spacing="4">
@@ -18,9 +32,9 @@
         <StackPanel Spacing="12">
           <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12">
             <Border Grid.Column="0" Classes="iconTile"><c:GlyphIcon Kind="Icon.Palette" IconSize="20" HorizontalAlignment="Center" VerticalAlignment="Center" /></Border>
-            <StackPanel Grid.Column="1" VerticalAlignment="Center">
+            <StackPanel Grid.Column="1" Spacing="4" VerticalAlignment="Center">
               <TextBlock Text="{Tr Settings.Appearance}" Classes="h2" />
-              <TextBlock Classes="caption" Text="{Binding AccentCaption}" />
+              <TextBlock Classes="caption wrap" Text="{Binding AccentCaption}" />
             </StackPanel>
           </Grid>
           <ItemsControl x:Name="AccentList" ItemsSource="{Binding Accents}">
@@ -61,8 +75,11 @@
           <CheckBox x:Name="SpawnModelsBox" IsChecked="{Binding SpawnModels}" Content="{Tr Settings.SpawnModels}" ToolTip.Tip="{Tr Settings.SpawnModels.Tip}" />
           <CheckBox x:Name="AnimateWaterBox" IsChecked="{Binding AnimateWater}" Content="{Tr Settings.AnimateWater}" ToolTip.Tip="{Tr Settings.AnimateWater.Tip}" />
           <CheckBox x:Name="LightingBox" IsChecked="{Binding Lighting}" Content="{Tr Settings.Lighting}" ToolTip.Tip="{Tr Settings.Lighting.Tip}" />
+          <CheckBox x:Name="AntiAliasedFoliageBox" IsChecked="{Binding AntiAliasedFoliage}" Content="{Tr Settings.AntiAliasedFoliage}" ToolTip.Tip="{Tr Settings.AntiAliasedFoliage.Tip}" />
           <CheckBox x:Name="ReopenLastProject" IsChecked="{Binding ReopenLastProject}" Content="{Tr Settings.ReopenLast}" ToolTip.Tip="{Tr Settings.ReopenLast.Tip}" />
           <CheckBox x:Name="ClearGrassUnderNew" IsChecked="{Binding ClearGrassUnderNew}" Content="{Tr Settings.ClearGrass}" ToolTip.Tip="{Tr Settings.ClearGrass.Tip}" />
+          <!-- Owner: "when I delete it, everything of it must be deleted"; off, Delete takes the object alone as before -->
+          <CheckBox x:Name="DeleteWithCompanionsBox" IsChecked="{Binding DeleteWithCompanions}" Content="{Tr Settings.DeleteWithCompanions}" ToolTip.Tip="{Tr Settings.DeleteWithCompanions.Tip}" />
           <!-- Owner: the toolbar button for this was pointless; the choice lives here now -->
           <StackPanel>
             <TextBlock Text="{Tr Map.Axes}" Classes="label" />
@@ -76,9 +93,9 @@
         <StackPanel Spacing="12">
           <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12">
             <Border Grid.Column="0" Classes="iconTile"><c:GlyphIcon Kind="Icon.Folder" IconSize="20" HorizontalAlignment="Center" VerticalAlignment="Center" /></Border>
-            <StackPanel Grid.Column="1" VerticalAlignment="Center">
+            <StackPanel Grid.Column="1" Spacing="4" VerticalAlignment="Center">
               <TextBlock Text="{Tr Settings.Folders}" Classes="h2" />
-              <TextBlock Classes="caption" Text="{Tr Settings.Folders.Caption}" />
+              <TextBlock Classes="caption wrap" Text="{Tr Settings.Folders.Caption}" />
             </StackPanel>
             <Button Grid.Column="2" Classes="accent" Content="{Tr Settings.SaveFolders}" Command="{Binding SavePathsCommand}" VerticalAlignment="Center"
                     ToolTip.Tip="{Tr Settings.SaveFolders.Tip}" />
@@ -211,6 +228,33 @@
             <Button x:Name="SettingsImportPrefabButton" Content="{Tr Map.Prefabs.Import}" Command="{Binding ImportPrefabCommand}" HorizontalAlignment="Stretch" ToolTip.Tip="{Tr Settings.Prefabs.Import.Tip}" />
           </StackPanel>
         </Grid>
+      </Border>
+
+      <!-- Map toolbar: what the Map header shows (owner: "show only what I want"); the settings button at the header's end has the same switches -->
+      <Border x:Name="ToolbarCard" Classes="card">
+        <StackPanel Spacing="12">
+          <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12">
+            <Border Grid.Column="0" Classes="iconTile" VerticalAlignment="Top"><c:GlyphIcon Kind="Icon.Sliders" IconSize="20" HorizontalAlignment="Center" VerticalAlignment="Center" /></Border>
+            <StackPanel Grid.Column="1" Spacing="4">
+              <TextBlock Text="{Tr Settings.Toolbar}" Classes="h2" ToolTip.Tip="{Tr Settings.Toolbar.Tip}" />
+              <TextBlock Text="{Tr Settings.Toolbar.Hint}" Classes="caption wrap" />
+            </StackPanel>
+            <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Top">
+              <Button x:Name="SettingsToolbarShowAllButton" Content="{Tr Map.Toolbar.ShowAll}" Command="{Binding Toolbar.ShowAllCommand}" ToolTip.Tip="{Tr Map.Toolbar.ShowAll.Tip}" />
+              <Button x:Name="SettingsToolbarResetButton" Content="{Tr Map.Toolbar.Reset}" Command="{Binding Toolbar.ResetDefaultsCommand}" ToolTip.Tip="{Tr Map.Toolbar.Reset.Tip}" />
+            </StackPanel>
+          </Grid>
+          <ItemsControl x:Name="SettingsToolbarSwitches" ItemsSource="{Binding Toolbar.Items}">
+            <ItemsControl.ItemsPanel>
+              <ItemsPanelTemplate><WrapPanel ItemSpacing="16" LineSpacing="2" /></ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="vm:MapToolbarItem">
+                <CheckBox Content="{Binding Title}" IsChecked="{Binding IsShown}" ToolTip.Tip="{Binding Tip}" MinWidth="190" />
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </StackPanel>
       </Border>
 
       <!-- About -->

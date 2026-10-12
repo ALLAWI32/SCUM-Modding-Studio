@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using ScumStudio.Formats;
 using ScumStudio.Formats.Packages;
 using ScumStudio.Formats.Properties;
 using ScumStudio.Modding.Tuning;
@@ -29,9 +30,12 @@ public static class RecipeIngredients
     public static int[] PerSkill(int amount) =>
         [amount, amount, Math.Max(1, (int)MathF.Round(amount * 0.8f)), Math.Max(1, (int)MathF.Round(amount * 0.65f)), Math.Max(1, (int)MathF.Round(amount * 0.6f))];
 
-    /// <summary>Writes <paramref name="ingredients"/> as the recipe's whole ingredient list.</summary>
-    /// <exception cref="InvalidOperationException">No recipe export, no slot to copy, or an empty list.</exception>
-    public static PackageBytes Rewrite(CookedPackage package, IReadOnlyList<CraftIngredient> ingredients)
+    /// <summary>
+    /// Writes <paramref name="ingredients"/> as the recipe's whole ingredient list and, when given, moves it to the crafting
+    /// menu section <paramref name="section"/> (<see cref="SetCategory(CookedPackage, CraftCategory)"/>).
+    /// </summary>
+    /// <exception cref="InvalidOperationException">No recipe export, no slot to copy, an empty list, or a section but no section sub-object.</exception>
+    public static PackageBytes Rewrite(CookedPackage package, IReadOnlyList<CraftIngredient> ingredients, CraftCategory? section = null)
     {
         ArgumentNullException.ThrowIfNull(package);
         ArgumentNullException.ThrowIfNull(ingredients);
@@ -91,15 +95,30 @@ public static class RecipeIngredients
         Add(result, inner.SizeFieldOffset, delta);
 
         var data = Enumerable.Range(0, package.Exports.Count).Select(i => i == exportIndex ? (ReadOnlyMemory<byte>)result : package.GetExportData(i)).ToArray();
-        return PackageWriter.Build(PackageWriter.ToBuildInput(package) with
+        if (section is not null)
         {
-            Names = tables.Names,
-            NameIsWide = tables.Wide,
-            Imports = tables.Imports,
-            Exports = tables.Exports,
-            PreloadDependencies = tables.Preload,
-            ExportData = data,
-        });
+            var category = CategoryIndex(package);
+            data[category] = SetCategory(package, category, package.GetExportData(category).ToArray(), tables, section);
+        }
+
+        return Build(package, tables, data);
+    }
+
+    /// <summary>
+    /// The recipe shown in the crafting menu section <paramref name="section"/>: the FName of its
+    /// <c>CraftingMetadata_RecipeCategory.CraftingCategoryTag.TagName</c> and, when the recipe stores one, of its
+    /// <c>DisplayDomain</c> are replaced (same size; the names are added to the name table when missing).
+    /// </summary>
+    /// <exception cref="InvalidOperationException">The recipe has no section sub-object or no tag in it.</exception>
+    public static PackageBytes SetCategory(CookedPackage package, CraftCategory section)
+    {
+        ArgumentNullException.ThrowIfNull(package);
+        ArgumentNullException.ThrowIfNull(section);
+        var index = CategoryIndex(package);
+        var tables = PackageTables.Of(package, index);
+        var data = Enumerable.Range(0, package.Exports.Count).Select(i => package.GetExportData(i)).ToArray();
+        data[index] = SetCategory(package, index, data[index].ToArray(), tables, section);
+        return Build(package, tables, data);
     }
 
     /// <summary>The recipe's ingredients as written (tag name, amount without skill, tool or material).</summary>
@@ -159,6 +178,53 @@ public static class RecipeIngredients
 
         return payload;
     }
+
+    private static byte[] SetCategory(CookedPackage package, int exportIndex, byte[] payload, PackageTables tables, CraftCategory section)
+    {
+        var block = PropertyReader.ReadPayload(package, payload, exportIndex);
+        if (block.Find("CraftingCategoryTag")?.Value is not StructValue tag || Member(tag, "TagName") is not { Value: NameValue } tagName)
+        {
+            throw new InvalidOperationException($"{package.BasePath}: no crafting section tag.");
+        }
+
+        WriteName(payload, tagName.ValueOffset, NameOf(tables, section.Tag));
+        if (section.Domain is { } domain && block.Find("DisplayDomain") is { Value: NameValue } stored)
+        {
+            WriteName(payload, stored.ValueOffset, NameOf(tables, domain));
+        }
+
+        return payload;
+    }
+
+    private static int CategoryIndex(CookedPackage package) =>
+        CraftCategories.CategoryExport(package) is >= 0 and var index ? index : throw new InvalidOperationException($"{package.BasePath}: no crafting section.");
+
+    // A name as the engine splits it: "Tag_2" is "Tag" with number 3, the way the game's own packages store it.
+    private static FNameRef NameOf(PackageTables tables, string text)
+    {
+        var underscore = text.LastIndexOf('_');
+        var tail = underscore >= 0 ? text[(underscore + 1)..] : string.Empty;
+        return tail.Length is > 0 and < 10 && tail.All(char.IsAsciiDigit) && (tail == "0" || tail[0] != '0')
+            ? tables.Name(text[..underscore]) with { Number = int.Parse(tail, System.Globalization.CultureInfo.InvariantCulture) + 1 }
+            : tables.Name(text);
+    }
+
+    private static void WriteName(byte[] payload, int offset, FNameRef name)
+    {
+        BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(offset), name.Index);
+        BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(offset + 4), name.Number);
+    }
+
+    private static PackageBytes Build(CookedPackage package, PackageTables tables, ReadOnlyMemory<byte>[] data) =>
+        PackageWriter.Build(PackageWriter.ToBuildInput(package) with
+        {
+            Names = tables.Names,
+            NameIsWide = tables.Wide,
+            Imports = tables.Imports,
+            Exports = tables.Exports,
+            PreloadDependencies = tables.Preload,
+            ExportData = data,
+        });
 
     private static PropertyTag? Member(StructValue value, string name) => value.Properties.FirstOrDefault(p => p.Name == name);
 

@@ -20,11 +20,29 @@ public sealed record AssetModRequest(IReadOnlyList<ClonePlan> Clones, IReadOnlyD
     /// <summary>Data assets copied under a new path with ids of their own (a placed trader's personality, a new outpost's description).</summary>
     public IReadOnlyList<DataAssetCopy> DataAssets { get; init; } = [];
 
+    /// <summary>Recipe package of <see cref="Ingredients"/> → the crafting menu section it moves to (<see cref="Crafting.CraftCategories"/>).</summary>
+    public IReadOnlyDictionary<string, Crafting.CraftCategory> RecipeCategories { get; init; } = new Dictionary<string, Crafting.CraftCategory>();
+
     /// <summary>Recipe package → its new ingredient list (craftables, see <see cref="Crafting.RecipeIngredients"/>), written after the clones.</summary>
     public IReadOnlyDictionary<string, IReadOnlyList<Crafting.CraftIngredient>> Ingredients { get; init; } = new Dictionary<string, IReadOnlyList<Crafting.CraftIngredient>>();
 
-    /// <summary>The <c>AssetRegistry.bin</c> to register into instead of the source's (the main pak's of the same export), or null.</summary>
+    /// <summary>
+    /// The <c>AssetRegistry.bin</c> to register into (the main pak's of the same export), or null for the game's stock one
+    /// (<see cref="RegistryMerge.ReadBase"/>).
+    /// </summary>
     public byte[]? BaseRegistry { get; init; }
+
+    /// <summary>
+    /// True (the default) when clones of things the traders sell get a row in the stock <c>Table_TradeableDesc</c>. The
+    /// Craftables pak sets false: it ships only new packages, and a copied generator is not for sale.
+    /// </summary>
+    public bool SellClones { get; init; } = true;
+
+    /// <summary>
+    /// True (the default) when the clones are registered. False builds the packages only, without reading or writing a
+    /// registry: a check of what would ship, before anything is written.
+    /// </summary>
+    public bool WriteRegistry { get; init; } = true;
 
     /// <summary>True when nothing is requested.</summary>
     public bool IsEmpty => Clones.Count == 0 && Edits.Count == 0 && Replacements.Count == 0 && DataAssets.Count == 0;
@@ -72,9 +90,8 @@ public sealed record AssetModBuildResult(
 
 /// <summary>
 /// Builds the vehicle/weapon part of a mod from pristine packages: clones every planned family (names remapped,
-/// payloads verbatim), writes the stat edits, and registers the clones in the source's effective
-/// <c>AssetRegistry.bin</c> (so other installed mods' records are kept). The same request applied to a client and a
-/// server catalog gives the two cooks of the mod.
+/// payloads verbatim), writes the stat edits, and registers the clones in the game's stock <c>AssetRegistry.bin</c> (or
+/// the request's base). The same request applied to a client and a server catalog gives the two cooks of the mod.
 /// </summary>
 public static class AssetModBuilder
 {
@@ -88,33 +105,107 @@ public static class AssetModBuilder
         ArgumentNullException.ThrowIfNull(request);
         var warnings = new List<string>();
         var built = new Dictionary<string, (CookedPackage Package, PackageBytes Bytes, bool IsClone)>(StringComparer.OrdinalIgnoreCase);
-        var maps = new List<PackageMap>();
+        var maps = new List<(string Owner, PackageMap Map, IReadOnlyList<KeyValuePair<string, string>>? Copied)>();
+        var cloned = new List<ClonePlan>();
+        var dropped = new HashSet<string>(StringComparer.OrdinalIgnoreCase); // new paths of clones that were not built
 
         foreach (var plan in request.Clones)
         {
-            var map = plan.ToMap();
-            maps.Add(map);
+            // N017: every member is read first; one that cannot be read keeps its stock path in the others (they would
+            // import a new path that does not ship). Without its template the clone is not built at all.
+            var read = new List<(string Old, string New, CookedPackage Package)>();
             foreach (var (oldPath, newPath) in plan.Packages)
             {
-                CookedPackage source;
                 try
                 {
-                    source = ModdableAssets.ReadPackage(catalog, oldPath);
+                    read.Add((oldPath, newPath, ModdableAssets.ReadPackage(catalog, oldPath)));
                 }
                 catch (Exception ex) when (ex is FileNotFoundException or FormatException or InvalidDataException or IOException)
                 {
-                    warnings.Add($"{oldPath}: not cloned ({ex.Message}).");
+                    warnings.Add($"{oldPath}: not cloned ({ex.Message}); {plan.NewPrimary} keeps pointing at it.");
+                    dropped.Add(PackageMap.Normalize(newPath));
+                }
+            }
+
+            bool IsTemplate(string path) => string.Equals(PackageMap.Normalize(path), PackageMap.Normalize(plan.Template), StringComparison.OrdinalIgnoreCase);
+            if (plan.Packages.Any(p => IsTemplate(p.Key)) && !read.Any(r => IsTemplate(r.Old)))
+            {
+                warnings.Add($"{plan.NewPrimary}: not created ({plan.Template} could not be read).");
+                dropped.UnionWith(plan.Packages.Select(p => PackageMap.Normalize(p.Value)));
+                continue;
+            }
+
+            // N031: one clone that cannot be built (a name its template already has, a bad map) is left out whole, with a
+            // warning; the others are still built.
+            var copies = new List<(string New, CookedPackage Package, PackageBytes Bytes)>();
+            var pairs = read.Select(r => new KeyValuePair<string, string>(r.Old, r.New)).ToList();
+            PackageMap map;
+            try
+            {
+                map = (plan with { Packages = pairs }).ToMap();
+                foreach (var (oldPath, newPath, source) in read)
+                {
+                    var clone = PackageCloner.Clone(source, oldPath, map);
+                    copies.Add((newPath, CookedPackage.Parse(clone.Bytes.UAsset, clone.Bytes.UExp, clone.UBulk, newPath), clone.Bytes));
+                }
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or FormatException)
+            {
+                warnings.Add($"{plan.NewPrimary}: not created, none of its {plan.Packages.Count} package(s) ship ({ex.Message}).");
+                dropped.UnionWith(plan.Packages.Select(p => PackageMap.Normalize(p.Value)));
+                continue;
+            }
+
+            foreach (var (newPath, package, bytes) in copies)
+            {
+                built[newPath] = (package, bytes, true);
+            }
+
+            maps.Add((plan.NewPrimary, map, pairs)); // only what was copied is registered, never a redirect's target
+            cloned.Add(plan);
+        }
+
+        // A station that was not built ships no tag: a recipe that asked for nothing else leaves its craftable out too (it
+        // may be a station another recipe asks for), the others lose that ingredient below.
+        string TagPackage(Crafting.CraftIngredient ingredient) => PackageMap.Normalize(Crafting.RecipeIngredients.TagPath(ingredient.Tag));
+        for (var again = true; again;)
+        {
+            again = false;
+            foreach (var (recipe, ingredients) in request.Ingredients)
+            {
+                var path = PackageMap.Normalize(recipe);
+                if (dropped.Contains(path) || ingredients.Count == 0 || !ingredients.All(i => dropped.Contains(TagPackage(i))))
+                {
                     continue;
                 }
 
-                var clone = PackageCloner.Clone(source, oldPath, map);
-                var parsed = CookedPackage.Parse(clone.Bytes.UAsset, clone.Bytes.UExp, clone.UBulk, newPath);
-                built[newPath] = (parsed, clone.Bytes, true);
+                var tags = string.Join(", ", ingredients.Select(i => i.Tag));
+                var owners = cloned.Where(c => c.Packages.Any(p => string.Equals(PackageMap.Normalize(p.Value), path, StringComparison.OrdinalIgnoreCase))).ToList();
+                if (owners.Count == 0)
+                {
+                    warnings.Add($"{path}: ingredients not written, it asks only for {tags}, which was not created.");
+                }
+
+                foreach (var plan in owners)
+                {
+                    warnings.Add($"{plan.NewPrimary}: not created, its recipe asks only for {tags}, which was not created.");
+                    foreach (var (_, newPath) in plan.Packages)
+                    {
+                        built.Remove(newPath);
+                        dropped.Add(PackageMap.Normalize(newPath));
+                    }
+
+                    maps.RemoveAll(m => m.Owner == plan.NewPrimary);
+                    cloned.Remove(plan);
+                }
+
+                dropped.Add(path);
+                again = true;
             }
         }
 
         // A cloned melee weapon looks its hit damage up in WeaponDesc_Table by its own name: it gets a copy of its template's row.
-        foreach (var plan in request.Clones.Where(c => ModdableAssets.IsMelee(c.Template)))
+        foreach (var plan in cloned.Where(c => ModdableAssets.IsMelee(c.Template)))
         {
             var table = DataTableEdits.WeaponDescTable;
             try
@@ -129,7 +220,10 @@ public static class AssetModBuilder
             }
         }
 
-        AddTradeRows(catalog, request.Clones, built, warnings);
+        if (request.SellClones)
+        {
+            AddTradeRows(catalog, cloned, built, warnings);
+        }
 
         // New traders' personalities and new outposts' descriptions: a renamed copy with its own id (and trader name).
         foreach (var copy in request.DataAssets)
@@ -147,9 +241,9 @@ public static class AssetModBuilder
                 var clone = PackageCloner.Clone(ModdableAssets.ReadPackage(catalog, template), template, map);
                 var bytes = PatchDataAsset(CookedPackage.Parse(clone.Bytes.UAsset, clone.Bytes.UExp, clone.UBulk, path), copy);
                 built[path] = (CookedPackage.Parse(bytes.UAsset, bytes.UExp, clone.UBulk, path), bytes, true);
-                maps.Add(map);
+                maps.Add((path, map, null));
             }
-            catch (Exception ex) when (ex is FileNotFoundException or FormatException or InvalidDataException or IOException or InvalidOperationException)
+            catch (Exception ex) when (ex is FileNotFoundException or FormatException or InvalidDataException or IOException or InvalidOperationException or ArgumentException)
             {
                 warnings.Add($"{path}: not created from {template} ({ex.Message}).");
             }
@@ -175,12 +269,23 @@ public static class AssetModBuilder
         foreach (var (recipe, ingredients) in request.Ingredients)
         {
             var path = PackageMap.Normalize(recipe);
+            if (dropped.Contains(path))
+            {
+                continue;
+            }
+
+            var gone = ingredients.Where(i => dropped.Contains(TagPackage(i))).ToList();
+            if (gone.Count > 0)
+            {
+                warnings.Add($"{path}: {string.Join(", ", gone.Select(i => i.Tag))} left out of the recipe (not created).");
+            }
+
             try
             {
                 var found = built.TryGetValue(path, out var kept);
                 var isClone = found && kept.IsClone;
                 var package = found ? kept.Package : ModdableAssets.ReadPackage(catalog, path);
-                var bytes = Crafting.RecipeIngredients.Rewrite(package, ingredients);
+                var bytes = Crafting.RecipeIngredients.Rewrite(package, ingredients.Where(i => !dropped.Contains(TagPackage(i))).ToList(), request.RecipeCategories.GetValueOrDefault(recipe));
                 built[path] = (CookedPackage.Parse(bytes.UAsset, bytes.UExp, package.UBulk, path), bytes, isClone);
             }
             catch (Exception ex) when (ex is FileNotFoundException or FormatException or InvalidDataException or IOException or InvalidOperationException)
@@ -198,6 +303,11 @@ public static class AssetModBuilder
             }
 
             var path = PackageMap.Normalize(packagePath);
+            if (dropped.Contains(path))
+            {
+                continue;
+            }
+
             CookedPackage package;
             var isClone = false;
             if (built.TryGetValue(path, out var existing))
@@ -261,22 +371,25 @@ public static class AssetModBuilder
 
         byte[]? registryBytes = null;
         var registered = new List<RegisteredAsset>();
-        if (maps.Count > 0)
+        if (maps.Count > 0 && request.WriteRegistry)
         {
-            var source = request.BaseRegistry ?? (catalog.Provider.Files.TryGetValue(AssetRegistryPath, out var registryFile) ? registryFile.Read() : null);
+            // Stock plus additions (P0 #1): never the registry the catalog happens to read (an imported mod's, an installed pak's).
+            // The base's own records (the game's; under the Craftables pak the project pak's too) are never rewritten.
+            var source = request.BaseRegistry ?? RegistryMerge.ReadBase(catalog, warnings);
             if (source is not null)
             {
                 var registry = AssetRegistryFile.Parse(source);
-                foreach (var map in maps)
+                var kept = registry.Assets.Select(a => a.ObjectPath).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                foreach (var (owner, map, copied) in maps)
                 {
-                    registered.AddRange(RegistryCloner.Register(registry, map, warnings));
+                    registered.AddRange(RegistryCloner.Register(registry, map, warnings, owner, copied, kept));
                 }
 
                 registryBytes = registry.Save();
             }
             else
             {
-                warnings.Add($"{AssetRegistryPath} is not in {catalog.DisplayName}: the clones are built but not registered, so the game's spawn commands will not find them.");
+                warnings.Add($"No stock {AssetRegistryPath} in {catalog.DisplayName}: the clones are built but not registered, so the game's spawn commands will not find them.");
             }
         }
 

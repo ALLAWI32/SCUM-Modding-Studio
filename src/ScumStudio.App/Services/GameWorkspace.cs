@@ -83,22 +83,30 @@ public sealed partial class GameWorkspace : ObservableObject, IDisposable
     /// <summary>Imported mods (the open project's, see <see cref="Level.Projects.ProjectMods"/>) read over the game files.</summary>
     public IReadOnlyList<string> ModFolders { get; private set; } = [];
 
+    /// <summary>The open project's mod names: its own exported paks are not read as game files (<see cref="Level.Export.OwnPaks"/>).</summary>
+    public IReadOnlyList<string> OwnModNames { get; private set; } = [];
+
+    /// <summary>The paks of the Paks folder that were not read because the studio exported them (<see cref="Level.Export.OwnPaks"/>).</summary>
+    public IReadOnlyList<string> SkippedOwnPaks { get; private set; } = [];
+
     /// <summary>
-    /// Reads <paramref name="folders"/> over the game files from now on: re-opens the game paks when they are open and the
-    /// list changed.
+    /// Reads <paramref name="folders"/> over the game files from now on, and leaves out the exported paks of
+    /// <paramref name="ownModNames"/>: re-opens the game paks when they are open and either list changed.
     /// </summary>
-    public async Task UseModsAsync(IReadOnlyList<string> folders, IProgressSink progress, CancellationToken cancellationToken = default)
+    public async Task UseModsAsync(IReadOnlyList<string> folders, IReadOnlyList<string> ownModNames, IProgressSink progress, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(folders);
-        if (folders.SequenceEqual(ModFolders, StringComparer.OrdinalIgnoreCase))
-        {
-            return;
-        }
-
+        ArgumentNullException.ThrowIfNull(ownModNames);
+        var modsChanged = !folders.SequenceEqual(ModFolders, StringComparer.OrdinalIgnoreCase);
+        var oldNames = OwnModNames;
         ModFolders = folders.ToList();
-        if (Catalog is not null && !IsLoose)
+        OwnModNames = ownModNames.ToList();
+
+        // A new name re-opens the paks only when it changes which paks of the source are read; the same source is opened.
+        if (Catalog is not null && !IsLoose && SourcePath is { } paks
+            && (modsChanged || Level.Export.OwnPaks.ChangesSkips(paks, oldNames, OwnModNames)))
         {
-            await ConnectAsync(progress, cancellationToken).ConfigureAwait(false);
+            await OpenAsync(paks, loose: false, progress, cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -190,7 +198,8 @@ public sealed partial class GameWorkspace : ObservableObject, IDisposable
             _logger.LogInformation("Opened {Source}: {Status}.", catalog.DisplayName, status); // the log stays English
             var shown = loose
                 ? Localization.Loc.F("Workspace.LooseStatus", packages)
-                : Localization.Loc.F("Workspace.Status", mounted, packages) + (locked > 0 ? Localization.Loc.F("Workspace.Locked", locked) : string.Empty);
+                : Localization.Loc.F("Workspace.Status", mounted, packages) + (locked > 0 ? Localization.Loc.F("Workspace.Locked", locked) : string.Empty)
+                  + (SkippedOwnPaks.Count > 0 ? ". " + Localization.Loc.F("Workspace.OwnPaksSkipped", string.Join(", ", SkippedOwnPaks)) : string.Empty);
             _dispatcher.Invoke(() =>
             {
                 MountedContainers = mounted;
@@ -210,10 +219,12 @@ public sealed partial class GameWorkspace : ObservableObject, IDisposable
     {
         if (loose)
         {
+            SkippedOwnPaks = [];
             return AssetCatalog.OpenLoose(folder, new AssetCatalogOptions { Logger = _logger });
         }
 
-        // The key is only held for the duration of the mount and is never logged. Imported mods are read over the game.
+        // The key is only held for the duration of the mount and is never logged. Imported mods are read over the game; the
+        // studio's own exported paks are not (an earlier export copied into Paks is not a game file).
         _keys.TryGet(out var key);
         var mods = ModFolders.Where(Directory.Exists).ToList();
         if (mods.Count > 0)
@@ -221,7 +232,18 @@ public sealed partial class GameWorkspace : ObservableObject, IDisposable
             _logger.LogInformation("Reading {Count} imported mod(s) over the game files.", mods.Count);
         }
 
-        return AssetCatalog.OpenPaks(folder, new AssetCatalogOptions { AesKey = key, Logger = _logger, LooseOverlays = mods });
+        var skipped = new List<string>();
+        var catalog = AssetCatalog.OpenPaks(folder, new AssetCatalogOptions
+        {
+            AesKey = key, Logger = _logger, LooseOverlays = mods, PakFileFilter = Level.Export.OwnPaks.Filter(OwnModNames, skipped),
+        });
+        SkippedOwnPaks = skipped;
+        if (skipped.Count > 0)
+        {
+            _logger.LogWarning("Not read as game files (the studio's own exported paks): {Paks}.", string.Join(", ", skipped));
+        }
+
+        return catalog;
     }
 
     private Task ReplaceAsync(AssetCatalog? catalog, WorkspaceState state, string status, string? source, bool loose)

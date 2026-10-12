@@ -227,6 +227,112 @@ public sealed class ProjectTests
     }
 
     [Fact]
+    public async Task ASecondOpenOfTheSameProjectIsRefused()
+    {
+        // #9 (F123/F217): two windows on one project. Before, the second failed on Windows with a raw sharing violation
+        // from the journal and was not stopped at all on Linux, where two writers could append clashing records.
+        using var temp = new LevelTempDirectory();
+        var dir = temp.Combine("Mod.ssproj");
+        Project.Create(dir, "Mod").Dispose();
+        using (var first = Project.Open(dir))
+        {
+            var refused = Assert.Throws<ProjectLockedException>(() => Project.Open(dir));
+            Assert.Equal(unchecked((int)0x80070020), refused.HResult);
+            Assert.Equal(first.DirectoryPath, refused.Directory);
+            Assert.Contains("open in another ScumStudio window", refused.Message, StringComparison.Ordinal);
+            await Assert.ThrowsAsync<ProjectLockedException>(() => Project.OpenAsync(Path.Combine(dir, Project.JournalFileName)));
+            first.Apply(new DeleteActorOp(new ActorRef(Outpost, "A"))); // the first window keeps editing
+        }
+
+        using var again = Project.Open(dir);
+        Assert.Single(again.Journal.Applied);
+    }
+
+    [Fact]
+    public async Task CreatingAProjectLocksIt()
+    {
+        using var temp = new LevelTempDirectory();
+        var dir = temp.Combine("Mod.ssproj");
+        using (Project.Create(dir, "Mod"))
+        {
+            Assert.Throws<ProjectLockedException>(() => Project.Open(dir));
+            if (OperatingSystem.IsWindows())
+            {
+                Assert.True(File.GetAttributes(Path.Combine(dir, ".lock")).HasFlag(FileAttributes.Hidden));
+            }
+        }
+
+        var other = temp.Combine("Async.ssproj");
+        using (await Project.CreateAsync(other, "Async"))
+        {
+            await Assert.ThrowsAsync<ProjectLockedException>(() => Project.OpenAsync(other));
+        }
+
+        // Only the open handle locks: the file stays, and the project opens once the creator closed it.
+        Assert.True(File.Exists(Path.Combine(dir, ".lock")));
+        using (Project.Open(dir))
+        {
+        }
+
+        using (await Project.OpenAsync(other))
+        {
+        }
+    }
+
+    [Fact]
+    public async Task AFailedOpenReleasesTheLock()
+    {
+        using var temp = new LevelTempDirectory();
+        var dir = temp.Combine("Mod.ssproj");
+        using (var project = Project.Create(dir, "Mod"))
+        {
+            project.Apply(new DeleteActorOp(new ActorRef(Outpost, "A")));
+        }
+
+        var journalPath = Path.Combine(dir, Project.JournalFileName);
+        var good = File.ReadAllLines(journalPath);
+        File.WriteAllLines(journalPath, [good[0], "not json", good[1]]);
+        Assert.Throws<InvalidDataException>(() => Project.Open(dir));
+        await Assert.ThrowsAsync<InvalidDataException>(() => Project.OpenAsync(dir));
+
+        var manifestPath = Path.Combine(dir, Project.ManifestFileName);
+        var manifest = File.ReadAllBytes(manifestPath);
+        File.WriteAllLines(journalPath, good);
+        File.WriteAllText(manifestPath, "{ not json");
+        Assert.Throws<InvalidDataException>(() => Project.Open(dir));
+
+        File.WriteAllBytes(manifestPath, manifest);
+        using var opened = Project.Open(dir);
+        Assert.Single(opened.Journal.Applied);
+    }
+
+    [Fact]
+    public async Task ExportReadsAProjectThatIsOpen()
+    {
+        // F217: `project export` (and anything else that only reads) works while the app has the project open.
+        using var temp = new LevelTempDirectory();
+        var dir = temp.Combine("Mod.ssproj");
+        using var project = Project.Create(dir, "Mod");
+        project.Apply(new DeleteActorOp(new ActorRef(Outpost, "A")));
+        project.Apply(new SetTransformOp(new ActorRef(Outpost, "B"), TransformValue.Identity, Somewhere));
+        using (var readOnly = Project.OpenReadOnly(dir))
+        {
+            Assert.True(readOnly.IsReadOnly);
+            Assert.False(project.IsReadOnly);
+            Assert.Equal(project.State.Describe(), readOnly.State.Describe());
+            Assert.Equal(project.PendingExportSet, readOnly.PendingExportSet);
+            Assert.Throws<InvalidOperationException>(() => readOnly.Apply(new DeleteActorOp(new ActorRef(Outpost, "C"))));
+            Assert.Throws<InvalidOperationException>(() => readOnly.Undo());
+            Assert.Throws<InvalidOperationException>(() => readOnly.Redo());
+            Assert.Throws<InvalidOperationException>(() => readOnly.Save());
+            await Assert.ThrowsAsync<InvalidOperationException>(() => readOnly.SaveAsync());
+        }
+
+        project.Apply(new DeleteActorOp(new ActorRef(Outpost, "C")));
+        Assert.Equal(3, project.History.Count);
+    }
+
+    [Fact]
     public void DetectsSourceKinds()
     {
         using var temp = new LevelTempDirectory();

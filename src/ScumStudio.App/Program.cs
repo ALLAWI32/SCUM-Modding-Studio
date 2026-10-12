@@ -2,6 +2,7 @@ using System.Diagnostics;
 using Avalonia;
 using Avalonia.Logging;
 using Avalonia.OpenGL;
+using ScumStudio.App.Services;
 
 namespace ScumStudio.App;
 
@@ -14,12 +15,66 @@ internal static class Program
     /// <summary>Set this environment variable to let Avalonia use a software OpenGL renderer (llvmpipe) for the viewport.</summary>
     public const string AllowSoftwareGlVariable = "SCUMSTUDIO_ALLOW_SOFTWARE_GL";
 
+    /// <summary>Name of the one-window mutex and its events (per user session).</summary>
+    internal const string InstanceName = "ScumStudio.App";
+
     // Initialization code. Don't use any Avalonia, third-party APIs or any
     // SynchronizationContext-reliant code before AppMain is called: things aren't initialized
     // yet and stuff might break.
     [STAThread]
-    public static void Main(string[] args) => BuildAvaloniaApp()
-        .StartWithClassicDesktopLifetime(args);
+    public static void Main(string[] args)
+    {
+        var options = StartupOptions.Parse(args);
+        if (options.AfterUpdatePid is { } pid)
+        {
+            WaitForExit(pid, TimeSpan.FromSeconds(30)); // the old version still closes its project and its files
+        }
+
+        App.Instance = TakeWindow(InstanceName, options, out var answered);
+        if (answered)
+        {
+            return;
+        }
+
+        App.Instance?.Listen(App.ComeForward); // from now on: a start while this one still opens is answered too
+        BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
+    }
+
+    /// <summary>
+    /// One window (zarkos6175: two copies open, the project not saved): the hold on <paramref name="name"/>, or with
+    /// <paramref name="answered"/> the window that has it came forward and this start quits. Automation and screenshot runs
+    /// keep their own window (null). A window that does not answer in 2 s (closing, hung) lets this one start, owning the
+    /// window when it lets go within 3 s more; the project lock protects the project.
+    /// </summary>
+    internal static SingleInstance? TakeWindow(string name, StartupOptions options, out bool answered)
+    {
+        answered = false;
+        if (options.HasWork || options.McpPort is not null)
+        {
+            return null;
+        }
+
+        if (SingleInstance.Acquire(name, options.AfterUpdatePid is null ? TimeSpan.Zero : TimeSpan.FromSeconds(10)) is { } owned)
+        {
+            return owned;
+        }
+
+        answered = SingleInstance.SignalOwner(name, TimeSpan.FromSeconds(2));
+        return answered ? null : SingleInstance.Acquire(name, TimeSpan.FromSeconds(3));
+    }
+
+    private static void WaitForExit(int pid, TimeSpan limit)
+    {
+        try
+        {
+            using var old = Process.GetProcessById(pid);
+            old.WaitForExit(limit);
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            // already gone
+        }
+    }
 
     /// <summary>
     /// Avalonia configuration; also used by the visual designer. The 3D viewport needs a desktop OpenGL 4.3+ context,

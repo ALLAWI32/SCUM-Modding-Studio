@@ -50,6 +50,29 @@ public sealed class TimeOfDayTests
         Assert.InRange(Shown(night) / Shown(Outdoor), 0.05f, 0.15f);
     }
 
+    /// <summary>
+    /// Audit F427: from 21:00 to 21:13 (and 05:47 to 06:00) the sun below the horizon stayed the key light, shining
+    /// upward, and at -2° the light snapped to the moon. Now no light comes from below and the light changes smoothly
+    /// minute by minute; its direction only jumps (sun to moon) where both are dark.
+    /// </summary>
+    [Fact]
+    public void NoLightFromBelowAndNoJumpAtDuskOrDawn()
+    {
+        foreach (var (from, to) in new[] { (20.8f, 21.5f), (5.5f, 6.2f) })
+        {
+            for (var step = 0; from + (step / 100f) <= to + 1e-4f; step++)
+            {
+                var h = from + (step / 100f);
+                var (now, next) = (Outdoor.AtHour(h), Outdoor.AtHour(h + 0.01f));
+                Assert.True(now.LightDirection.Y <= 0f, $"{h:0.00} h: the light {now.LightDirection} comes from below the horizon");
+                var (luma, nextLuma) = (Luma(now.LightColor), Luma(next.LightColor));
+                Assert.True(MathF.Abs(nextLuma - luma) < 0.02f, $"{h:0.00} h: the light jumps from {now.LightColor} to {next.LightColor}");
+                var turn = MathF.Acos(Math.Clamp(Vector3.Dot(Vector3.Normalize(now.LightDirection), Vector3.Normalize(next.LightDirection)), -1f, 1f)) * 180f / MathF.PI;
+                Assert.True(turn <= 3f || MathF.Max(luma, nextLuma) < 1e-3f, $"{h:0.00} h: the light turns {turn:0.0}° at {now.LightColor}");
+            }
+        }
+    }
+
     /// <summary>Light on flat ground as the frame shows it: sun or moon, plus the sky, times the exposure.</summary>
     private static float Shown(RenderSettings s) =>
         (Luma(s.LightColor) * MathF.Max(0f, -Vector3.Normalize(s.LightDirection).Y) + Luma(s.SkyColor)) * s.Exposure;

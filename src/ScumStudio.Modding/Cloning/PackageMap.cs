@@ -1,12 +1,14 @@
 using System.Text.RegularExpressions;
+using ScumStudio.Formats;
 
 namespace ScumStudio.Modding.Cloning;
 
 /// <summary>
 /// The rename map of a clone: old package path → new package path, plus the object-name map derived from the package
 /// leaf names (<c>Weapon_RPK-74</c> → <c>Weapon_RPK-74_Gold</c>). Port of <c>use_maps</c>/<c>remap</c>/<c>remap_obj</c>
-/// from the owner's <c>clone_vehicle.py</c>: cooked data refers to every object by FName index, so a clone only rewrites
-/// name-table strings; object names follow the package leaf (<c>X_C</c>, <c>Default__X_C</c>, numbered <c>X_3</c>).
+/// from the owner's <c>clone_vehicle.py</c>: cooked data refers to every object by FName (index, number), so a clone
+/// rewrites name-table strings and, where a number changes, the header FNames (<see cref="RemapFName"/>); object names
+/// follow the package leaf (<c>X_C</c>, <c>Default__X_C</c>, numbered <c>X_3</c>).
 /// </summary>
 public sealed partial class PackageMap
 {
@@ -110,6 +112,19 @@ public sealed partial class PackageMap
         var obj = colon < 0 ? rest : rest[..colon];
         var sub = colon < 0 ? string.Empty : rest[colon..];
         return newPackage + "." + RemapObject(obj) + sub;
+    }
+
+    /// <summary>
+    /// Remaps the FName (<paramref name="text"/>, <paramref name="number"/>) by its display form (<c>CR_Improvised_Bow</c>
+    /// number 21 is the leaf <c>CR_Improvised_Bow_20</c>) and returns a renamed one split the way the cooker stores it
+    /// (<see cref="FNameRef.Split"/>). A name the map does not change keeps its stored form.
+    /// </summary>
+    public (string Text, int Number) RemapFName(string text, int number)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        var display = new FNameRef(0, number).Format([text]);
+        var mapped = RemapName(display);
+        return string.Equals(mapped, display, StringComparison.Ordinal) ? (text, number) : FNameRef.Split(mapped);
     }
 
     /// <summary>

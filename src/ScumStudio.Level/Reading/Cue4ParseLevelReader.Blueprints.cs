@@ -5,6 +5,7 @@ using CUE4Parse.UE4.Assets.Objects;
 using CUE4Parse.UE4.Objects.UObject;
 using Microsoft.Extensions.Logging;
 using ScumStudio.Assets.Catalog;
+using ScumStudio.Core.Geometry;
 using ScumStudio.Core.Mathematics;
 using ScumStudio.Level.Model;
 
@@ -60,6 +61,7 @@ public sealed partial class Cue4ParseLevelReader
         "CameraComponent", "WidgetComponent", "BrushComponent", "PostProcessComponent", "ExponentialHeightFogComponent",
         "LightComponent", "LocalLightComponent", "PointLightComponent", "SpotLightComponent", "RectLightComponent",
         "DirectionalLightComponent", "SkyLightComponent", "SceneCaptureComponent2D", "SceneCaptureComponentCube",
+        "AkComponent", "NiagaraComponent",
     };
 
     private readonly Dictionary<string, BlueprintClass?> _blueprints = new(StringComparer.OrdinalIgnoreCase);
@@ -376,11 +378,15 @@ public sealed partial class Cue4ParseLevelReader
         IReadOnlyList<SpawnMarker>? SpawnMarkers = null,
         string? CollisionProfile = null,
         FVector? BoxExtent = null,
-        IReadOnlyList<string>? LootPresets = null)
+        IReadOnlyList<string>? LootPresets = null,
+        string? AssetPath = null,
+        BoundingBox? LocalBounds = null)
     {
         public LevelExportData ApplyTo(LevelExportData header) => header with
         {
             BoxExtent = BoxExtent,
+            AssetPath = AssetPath,
+            LocalBounds = LocalBounds,
             InstanceEndCullDistance = InstanceEndCullDistance,
             IsLoaded = true,
             IsComponent = IsComponent,

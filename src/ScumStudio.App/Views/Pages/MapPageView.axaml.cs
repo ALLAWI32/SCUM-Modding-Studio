@@ -30,6 +30,11 @@ public partial class MapPageView : UserControl
         Viewport3d.PickToggled += (_, pick) => _viewModel?.ToggleGroup(pick.Id, pick.Instance);
         Viewport3d.BrushPainted += (_, stroke) =>
         {
+            if (_viewModel is not { BrushSelect: true })
+            {
+                return; // a dab the view resolved after the brush was turned off: its stroke is already journaled
+            }
+
             if (_viewModel is { BrushPaint: true } painting)
             {
                 if (painting.PaintTimed)
@@ -39,8 +44,7 @@ public partial class MapPageView : UserControl
                     if (_paintTimer is null)
                     {
                         painting.PaintOneAt(_paintAt);
-                        _paintTimer = new DispatcherTimer(TimeSpan.FromSeconds(Math.Max(0.05, painting.PaintEvery)), DispatcherPriority.Input,
-                            (_, _) => _viewModel?.PaintOneAt(_paintAt));
+                        _paintTimer = new DispatcherTimer(TimeSpan.FromSeconds(Math.Max(0.05, painting.PaintEvery)), DispatcherPriority.Input, (_, _) => TickPaint());
                         _paintTimer.Start();
                     }
 
@@ -56,9 +60,16 @@ public partial class MapPageView : UserControl
         };
         Viewport3d.BrushStrokeEnded += (_, _) =>
         {
-            _paintTimer?.Stop();
-            _paintTimer = null;
+            StopPaintTimer();
             _viewModel?.EndPaintStroke();
+        };
+        // Hovering in paint mode marks the spots a click would plant and those it would leave out.
+        Viewport3d.BrushHovered += (_, at) =>
+        {
+            if (_viewModel is { BrushSelect: true, BrushPaint: true } painting)
+            {
+                painting.PreviewPaintAt(at);
+            }
         };
         // The Replacer's cards are filled when the menu opens (the selection changes far more often); while a menu is open
         // the first pictures of its lists are made on workers, closing it lets them go (the disk cache keeps them).
@@ -180,20 +191,79 @@ public partial class MapPageView : UserControl
             }
         };
         _worldTimer.Start();
+        // The load-mode pieces come from their own resource dictionary, followed as a DynamicResource would be; until it is
+        // merged both slots stay empty.
+        LoadModeItem.Bind(ContentControl.ContentTemplateProperty, LoadModeItem.GetResourceObservable("MapLoadModeItemTemplate"));
+        LoadChoiceSlot.Bind(ContentControl.ContentTemplateProperty, LoadChoiceSlot.GetResourceObservable("MapLoadChoiceTemplate"));
+        foreach (var item in ViewToolbar.Children.Where(c => !c.Classes.Contains("vsep")))
+        {
+            item.PropertyChanged += (_, e) =>
+            {
+                if (e.Property == IsVisibleProperty || e.Property == ContentControl.ContentTemplateProperty)
+                {
+                    UpdateSeparators();
+                }
+            };
+        }
+
+        UpdateSeparators();
+    }
+
+    /// <summary>A timer tick plants only while the brush is still on, in paint mode, on the timer; otherwise the timer stops.</summary>
+    private void TickPaint()
+    {
+        if (_viewModel is { BrushSelect: true, BrushPaint: true, PaintTimed: true } painting)
+        {
+            painting.PaintOneAt(_paintAt);
+        }
+        else
+        {
+            StopPaintTimer();
+        }
+    }
+
+    /// <summary>Stops the paint timer and journals its stroke (button let go, brush or timer turned off, page left).</summary>
+    private void StopPaintTimer()
+    {
+        if (_paintTimer is null)
+        {
+            return;
+        }
+
+        _paintTimer.Stop();
+        _paintTimer = null;
+        _viewModel?.EndPaintStroke();
+    }
+
+    private void OnViewModelPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (_paintTimer is not null && e.PropertyName == nameof(MapPageViewModel.PaintEvery) && _viewModel is { } vm)
+        {
+            _paintTimer.Interval = TimeSpan.FromSeconds(Math.Max(0.05, vm.PaintEvery));
+        }
+        else if (e.PropertyName is nameof(MapPageViewModel.BrushSelect) or nameof(MapPageViewModel.BrushPaint) or nameof(MapPageViewModel.PaintTimed)
+                 && _viewModel is not { BrushSelect: true, BrushPaint: true, PaintTimed: true })
+        {
+            StopPaintTimer();
+        }
     }
 
     private void Attach(MapPageViewModel? viewModel)
     {
+        StopPaintTimer();
         if (_viewModel is not null)
         {
             _viewModel.FrameSelectionRequested -= OnFrameSelectionRequested;
+            _viewModel.FrameSectorRequested -= OnFrameSectorRequested;
             _viewModel.CopiedObjects -= OnCopiedObjects;
+            _viewModel.PropertyChanged -= OnViewModelPropertyChanged;
         }
 
         _viewModel = viewModel;
         if (_viewModel is not null)
         {
             _viewModel.CopiedObjects += OnCopiedObjects;
+            _viewModel.PropertyChanged += OnViewModelPropertyChanged;
             // First open of the map this run: start where the camera was left, so streaming loads that area right away.
             if (_viewModel.SavedView is { } saved && !_viewModel.HasView)
             {
@@ -203,9 +273,13 @@ public partial class MapPageView : UserControl
             }
 
             _viewModel.FrameSelectionRequested += OnFrameSelectionRequested;
+            _viewModel.FrameSectorRequested += OnFrameSectorRequested;
             _viewModel.AimPointProvider = () => Viewport3d.AimPointUe(MapPageViewModel.PlacementDistance);
         }
     }
+
+    // A sector loaded away from the camera (picked in the list or the tree): look at it, since streaming is paused.
+    private void OnFrameSectorRequested(CameraShot shot) => Viewport3d.SetView(shot.Eye, shot.LookAt, null, null);
 
     private void OnFrameSelectionRequested(object? sender, EventArgs e)
     {
@@ -259,11 +333,36 @@ public partial class MapPageView : UserControl
 
     private void OnFrameAllClick(object? sender, RoutedEventArgs e) => Viewport3d.FrameAll();
 
-    private void OnDroneClick(object? sender, RoutedEventArgs e) => Viewport3d.ToggleDrone();
+    /// <summary>A separator shows only between two groups that both show something (items switched off, or waiting for a selection).</summary>
+    private void UpdateSeparators()
+    {
+        var items = ViewToolbar.Children;
+        for (var i = 0; i < items.Count; i++)
+        {
+            if (items[i].Classes.Contains("vsep"))
+            {
+                items[i].IsVisible = Shows(i, -1) && Shows(i, 1);
+            }
+        }
+
+        bool Shows(int from, int step)
+        {
+            for (var i = from + step; i >= 0 && i < items.Count && !items[i].Classes.Contains("vsep"); i += step)
+            {
+                // The load-mode slot stays empty until its template is merged.
+                if (items[i].IsVisible && (items[i] != LoadModeItem || LoadModeItem.ContentTemplate is not null))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+    }
 
     private void OnMaximizeClick(object? sender, RoutedEventArgs e) => SetMaximized(!_maximized);
 
-    /// <summary>Hides the side panels and the entity list so the 3D view fills the page (and back, with the user's sizes).</summary>
+    /// <summary>Hides the side panels and the bottom row so the 3D view fills the page (and back, with the user's sizes).</summary>
     private void SetMaximized(bool on)
     {
         if (on == _maximized)
@@ -273,7 +372,7 @@ public partial class MapPageView : UserControl
 
         _maximized = on;
         var columns = MapBody.ColumnDefinitions;
-        var rows = CenterGrid.RowDefinitions;
+        var rows = MapBody.RowDefinitions;
         if (on)
         {
             _savedSizes = [columns[0].Width, columns[1].Width, columns[3].Width, columns[4].Width, rows[1].Height, rows[2].Height];
@@ -286,7 +385,7 @@ public partial class MapPageView : UserControl
                 (saved[0], saved[1], saved[2], saved[3], saved[4], saved[5]);
         }
 
-        LeftPanel.IsVisible = RightPanel.IsVisible = EntitiesPanel.IsVisible = !on;
+        LeftPanel.IsVisible = PropertiesPanel.IsVisible = EntitiesPanel.IsVisible = HistoryPanel.IsVisible = !on;
         LeftSplitter.IsVisible = RightSplitter.IsVisible = RowSplitter.IsVisible = !on;
         MaximizeButton.Content = on ? Localization.Loc.T("Map.Restore") : Localization.Loc.T("Map.Maximize");
         Viewport3d.Focus();
@@ -359,6 +458,7 @@ public partial class MapPageView : UserControl
     /// <inheritdoc />
     protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
     {
+        StopPaintTimer();
         _keyRoot?.RemoveHandler(KeyDownEvent, OnRootKeyDown);
         _keyRoot = null;
         base.OnDetachedFromVisualTree(e);
@@ -389,9 +489,16 @@ public partial class MapPageView : UserControl
             return;
         }
 
-        if (e.Key == Key.A && e.KeyModifiers.HasFlag(KeyModifiers.Control))
+        var shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
+        if (_viewModel.Companions is { } preview && e.Key is Key.Enter or Key.Escape)
         {
-            _viewModel.SelectAllOfKind(wholeMap: e.KeyModifiers.HasFlag(KeyModifiers.Shift));
+            // The list of what goes with a deleted object: Enter deletes it all, Esc nothing.
+            (e.Key == Key.Enter ? preview.DeleteAllCommand : preview.CancelCommand).Execute(null);
+            e.Handled = true;
+        }
+        else if (e.Key == Key.A && e.KeyModifiers.HasFlag(KeyModifiers.Control))
+        {
+            _viewModel.SelectAllOfKind(wholeMap: shift);
             e.Handled = true;
         }
         else if (e.Key == Key.Escape && _viewModel.HasKindSelection)
@@ -401,7 +508,12 @@ public partial class MapPageView : UserControl
         }
         else if (e.Key == Key.Delete && _viewModel.HasKindSelection)
         {
-            _ = _viewModel.DeleteKindSelectionAsync();
+            _ = _viewModel.DeleteKindSelectionAsync(alone: shift);
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Delete && shift && _viewModel.DeleteSelectedAloneCommand.CanExecute(null))
+        {
+            _viewModel.DeleteSelectedAloneCommand.Execute(null); // the object alone, as before the owner's fireplace
             e.Handled = true;
         }
         else if (e.Key == Key.Delete && _viewModel.DeleteSelectedCommand.CanExecute(null))

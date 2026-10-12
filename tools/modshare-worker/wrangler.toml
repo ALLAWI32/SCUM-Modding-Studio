@@ -1,0 +1,21 @@
+# Cloudflare Worker behind SCUM Modding Studio's "Share your mod" gallery. Deploy steps: README.md.
+# No secret goes in this file: the moderator's PUBLIC key is set with `npx wrangler@4 secret put MODERATOR_PUBLIC_KEY`,
+# and the private key stays in Desktop\ScumStudio-ModShare\moderator.key on the owner's PC.
+name = "scum-modshare"
+main = "worker.js"
+compatibility_date = "2025-09-15"
+workers_dev = true
+
+[[r2_buckets]]
+binding = "MODS"
+bucket_name = "scum-modshare"
+
+[[kv_namespaces]]
+binding = "KV"
+id = "<paste the id from wrangler kv namespace create>"
+
+[vars]
+MAX_ZIP_BYTES = "3145728"     # 3 MiB per package (the app refuses bigger packages before sending)
+MAX_UPLOADS_PER_HOUR = "5"    # per address
+MAX_UPLOADS_PER_DAY = "300"   # all addresses together; also keeps KV writes under the free 1,000 a day
+MAX_INDEX_ENTRIES = "1000"    # gallery rows; uploads answer 507 beyond it

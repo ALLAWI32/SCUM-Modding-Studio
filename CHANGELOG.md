@@ -5,6 +5,317 @@ project uses [semantic versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.2.0] - 2026-10-12
+
+### New in this release
+- **3D previews closer to the game** (owner: "any 3D asset you show me in the program I want at the ORIGINAL resolution …
+  the REAL colours"): every 3D view is now drawn at twice its size and filtered down, so edges are smooth and leaves and
+  fences shimmer less, and the Assets preview has an Expand button that makes it as tall as the details panel and the
+  panel wider. A Sun switch shows the model in the island's sun at 13:30, with its sky and its shadow on a floor, as it
+  stands in the game (the soft studio light stays the default, every side readable). A Scale switch, on by default, puts
+  a 1.8 m person beside anything from 50 cm up and lays a 1 m grid under it (10 cm or 1 cm cells under small items), and
+  the Assets preview reads out the size as length × width × height; its line of parts and triangles is now in the app's
+  language. The Vehicles and Weapons 3D tab loads the textures at full resolution, as the Assets page does (it stopped at
+  1024 px); paint still works on them. A model shows at once with small copies of its textures and the full-size ones
+  land over the next frames (a vehicle's ten materials at 4096 px are about 430 MB, which took 120 ms in one frame), and
+  while the colour picker is dragged the paint is baked at half size, then whole once it rests.
+- **3D previews like in the game** (owner: "any 3D asset you show me … the ORIGINAL textures, the REAL colours"): foliage
+  types (ScotsPine_FT, European_White_Birch_01_FT and the other trees, bushes and grass) now show in the 3D view and get a
+  tile picture; Blueprints draw their components' override materials, a child Blueprint's changed parts, child actors and
+  every instance of an instanced component; vehicle parts such as BPC_WolfsWagen_Door_FrontLeft find their mesh; glass
+  and water are see-through as on the Map; SpeedTree colour textures and the master materials' own colours are used; a
+  craftable without a model shows its inventory icon. Tile pictures are made again once.
+- **Smoother trees and grass** (owner: "no shimmering/noise in the trees"): the 3D view now draws with 4 samples a pixel.
+  Leaves, grass and fences are cut out by the share of the pixel they cover instead of all or nothing, so far trees no
+  longer sparkle while the camera moves (about 40 % less frame-to-frame flicker on a test forest) and keep the density
+  they have up close (a far card used to fill up to 84 % where its leaves cover 35 %); every edge of the scene is
+  smoothed too. Measured at 1080p on an RTX 5080 (median frame): a forest of 20 000 leaf cards 0.94 ms → 1.00 ms, a
+  grid of 4 096 boxes 0.29 ms → 0.35 ms; the extra buffers take about 66 MB of graphics memory at 1080p.
+  Settings › *Anti-aliased foliage* (on) turns it off for the previous look.
+- **Delete takes everything that belongs to the object** (owner: "when I delete it, everything of it must be deleted:
+  the fire object itself, its sound, its particles"; Hektor before him: "if you delete a camp, fire animations remain
+  behind"): every delete in the Map (the Delete key or button, a part, a Ctrl+click or brush selection, Ctrl+A /
+  Ctrl+Shift+A, Delete all of a mesh or class) also deletes the object's fire, light, smoke, sound and decal at its spot
+  and the actors attached to it. Attached and child actors go at once; anything else is first listed by the 3D view,
+  highlighted, with what it is, why it goes, how far and in which level: **Delete all (N)** (Enter) or **Only this
+  object**, Esc deletes nothing. A sound or light nearer to another object is greyed as belonging to it and stays unless
+  ticked. Deleting a part of a kept building (its fireplace) also deletes that part's own fire, light and sound. It is
+  one edit: one Ctrl+Z brings everything back. Shift+Delete deletes the object alone, and Settings › *Delete with
+  everything attached* (on by default) switches it off. The AI's `delete_actors` does the same by default (below).
+  - What a running server already saved stays there: items a deleted spawner already spawned and fires players lit. The
+    list says so; they go only when the game removes them.
+  - A fire or light component with another part of the building hanging under it (a damage box under the flames) stays,
+    so that part keeps its place; the message after the delete names it. Nothing it hangs on ever stops the delete.
+  - Projects with a deleted part of a building (the new `deleteComponents` edit) cannot be opened by older studios.
+  - Not yet seen in game: the export side (inert components, attached actors following their parent) is proven by
+    reading the written packages back; a fire deleted this way still needs a look on a local server.
+- **The map shows what the game will have**: a deleted building's stored child actors and the mesh-less lights and
+  sounds attached to a deleted object are hidden (the export takes them along), and a lake's or river's mesh-less sounds
+  and effects in the shared water level now show over the loaded area, so they can be picked and deleted with their
+  water.
+- **AI delete takes what belongs to the object** (owner: "If I delete a fire place, the fire stays burning in game ... When
+  I delete it, EVERYTHING of it must be deleted"): the MCP tools `delete_actors` and `delete_all_of_kind` now also delete
+  the fire, light, smoke, sound and decal actors at the object's spot and the actors attached to it, in the same edit, so
+  one undo brings everything back. A sound or light nearer to another object stays with it and is listed as kept, as
+  is a trade post, spawner or volume hung on the object; a building's stored child actors still leave with it in the
+  export, so restoring the building brings them back. The answer also says that what a running server already saved
+  (spawned items, fires players lit) stays there.
+  `companions: false` deletes only the named actors, as before.
+- **Level dump shows effects and volumes**: `level dump --json` names what each particle, Niagara, Wwise, sound and decal
+  component plays (`assetPath`), the box of trigger shapes and volume brushes (`localBounds`) and the volumes players swim
+  in (`waterVolume`). A child actor's Wwise sound that stores no place of its own now stands at its fire instead of at
+  the world's origin.
+- **A clear square behind the icon under the pointer** (owner: "a clear square behind the icon when I hover"): icon and
+  toolbar buttons (title strip, status bar, page headers, the Map toolbar) show a raised square with a hairline frame
+  and a bright glyph on hover, and a soft accent while pressed; nothing moves when the pointer comes and goes. A
+  greyed-out button stays flat and dim, and its hover text still shows, so it says why it is off.
+- **"Shows in" on the Craftables page** (owner: "every craftable gets a 'Shows in' category … sofas/chairs/tables
+  default to Furniture, houses to Building"): each craftable picks the section of the game's crafting menu its
+  recipe appears in, from the sections the game's own recipes use (read from the game files, named in plain words),
+  and a "Made in" badge says whether it is built (placed in the world with resources, like base building) or crafted
+  into the inventory. Without a choice a sofa goes where the game's sofas are, a building (a mesh of the game's
+  buildings) where the game's walls are, and everything else where its template recipe is. Only the game's sections
+  exist: a new section name would need the game's tag list and menu, which a mod cannot add, and a section of the
+  other kind is refused at export with a warning.
+- **Choose what the Map header shows** (owner: "show only what I want"): every item of the Map header (Maximize, Pop
+  out, Quality, Time, Spawns, Snap, Frame, Shape, Paste, Add object, Export, the status chips …) has a switch, in the
+  settings button at the end of the header and in Settings › Map toolbar. Both stay in step and the choice is kept for
+  the next start; Show all and Defaults put it back (the default hides only Pop out). The header makes room for what is
+  left and nothing overlaps from 1280×720 to 2560×1440.
+- **No Drone mode any more** (owner: "flying is simply how the 3D view works"): the Drone button is gone. Hold the right
+  mouse button to look around and fly with W/A/S/D (Q/E down and up, Shift faster); the wheel sets the speed while you
+  hold it and zooms otherwise. Tab still keeps looking without holding (Esc lets go), and its hint now reads in the
+  right order in Arabic.
+- **Map panels lined up**: the World tree, the 3D view and Properties start on one line; the entity list and History
+  share one row that the splitter moves together and end with the World tree; the four panel headers are one height.
+- **Quality names translated**: the quality pickers of the Map header and Settings show Performance, Balanced, High and
+  Ultra in the UI language (they showed the English names in every language), and the Properties panel's x, y, z /
+  pitch, yaw, roll hints follow the language too.
+- **Load the whole island or only one sector** (owner: "load only this sector"): the Map no longer opens the whole island
+  by itself; it asks. *Whole island* streams the levels around the camera as you fly, as before. *Only this sector*
+  loads one cell (the one you flew into or last picked in the World tree, named beside the switch, or any picked in
+  the list) completely in one phase, with a progress bar and Cancel, and then loads nothing else while you fly inside
+  it; *Load more* streams the rest of the island again. The header switches between the two at any time.
+- **Share your mod: the package and Get** (owner: "Share your mod … ONLY the project's own edits … NEVER game assets or
+  paks"): a shared mod is a small zip of the project's own edits for the chosen sectors (or the whole map), its
+  craftables and the economy sections of its traders, with a picture. Nothing else can go in: no game file, no pak, no
+  imported 3D model, no folder of your PC; a package that holds one, names a file outside itself, is too large or
+  unpacks to more than it says is refused. What you built and deleted again stays out, and a copy of an object you
+  added in another sector brings that sector along. Get applies the mod to your project as one step (Ctrl+Z takes it
+  back): an object, a copied tree or a trader whose name your project already uses is renamed, edits that clash with
+  yours (you moved the same building) are reported before anything is written, and a different game build is pointed
+  out. Remove takes the mod back again, its craftables and economy sections included.
+- **Share your mod: the gallery connection and the moderator key** (owner: "Share your mod", "upload your work"): the
+  app talks to the mod gallery (a small Cloudflare Worker the owner runs) to upload a package of up to 3 MiB, read the
+  gallery, fetch a mod's picture and download a mod. A download stops at its size limit whatever the server claims, and
+  no gallery address, no network or a refusal comes back as a reason the page can show, never as a crash. The app
+  carries no secret (the report webhook was the lesson): uploading needs none, and removing a mod needs the moderator
+  key, a file only on the owner's PC that `scumstudio modshare keygen` creates. The Worker keeps only its public half;
+  a removal is signed, is refused five minutes later and cannot be sent twice.
+- **Share your mod** (owner: "Share your mod", "upload your work"): a Share button next to Discord and Support opens a
+  card with Share, Gallery and Added to this project. You type a name once (kept on this PC, no account; names may
+  repeat, and Remove my name forgets it), tick the sectors to share (each with its number of edits, or Whole map), and
+  when the project has them its island-wide edits, vehicle and weapon edits, craftables and the economy of those
+  sectors' traders. Only the project's own edits travel, in a small package: never game files or paks, and craftables
+  made from an imported 3D model stay on your PC. A name, a description of up to 600 characters and a picture go
+  along: Take a picture in the Map steps the card aside, you fly the camera to the spot and press Capture for that
+  view drawn again at 1080 p (up to 2560 wide, without the grid), or Use an image file. The Gallery shows each mod's
+  picture, maker, description, sectors, size and date; Get downloads it (in memory, nothing is left on disk) and first
+  shows what it adds per sector, which objects get a new name because yours use theirs, a different game build, or a
+  clash with your own edits (then nothing is added). Add to my project adds it as one step: Ctrl+Z takes its edits
+  back, and Remove under Added to this project takes all of it back, craftables and economy too. The Moderate tab
+  appears only when the owner's key file is on the PC.
+- **Share your mod: the gallery's hosting** (owner: "Share your mod", "upload your work"): `tools/modshare-worker` is
+  the small Cloudflare Worker (free tier: one R2 bucket, one KV namespace) that keeps the shared mods, with a README that
+  walks the owner through deploying it. It takes only the project's own edits: a package of up to 3 MiB whose files are
+  the manifest, the edits, craftables, economy and two JPEG pictures, nothing else; a game package or pak inside, bytes
+  hidden between the files or a zip bomb are refused before anything is stored. Five uploads per address an hour and
+  300 a day; the gallery lists the newest first. Removing a mod needs a signature from the moderator key on the owner's
+  PC; the Worker holds only the public half, refuses a signature older than five minutes and one it has already seen.
+
+### Fixes
+- **No more flickering trees and bushes near a placed bridge** (Discord, defolt_0999: "flickering trees and bushes near
+  the bridge"): "Clear grass under it" also removed the bushes under a placed object, and to do so rewrote whole foliage
+  components of the landscape square (every bush, acacia, olive, fig, aloe or cactus of that kind in it, without the
+  game's ready-made draw data). In the game the trees and bushes of that square blinked as you walked. The option now
+  clears only the landscape grass and the spawns under the object; the bushes and trees there stay exactly as the game
+  has them, and the Map no longer hides them.
+- **Far trees switch to their lighter models where the game does** (owner: "graphics like the game"): a cluster of
+  spread-out trees measured its distance from the nearest corner of a box that could span kilometres, so far trees were
+  drawn at full detail (and shimmered) while a turned object switched too late; each copy now uses its own size and
+  distance.
+- **Dusk and dawn without light from below**: between 21:00 and 21:13 and between 05:47 and 06:00 the sun kept lighting
+  the island from under the horizon and then jumped to the moon; the light now fades out and hands over smoothly.
+- **No freeze when the quality is raised, graphics memory freed, no crash after a paste or a bend**: raising the
+  quality re-sent every texture in one frame (now over the next frames while the old ones stay on screen); popping the
+  3D view out and docking it back kept the old textures in graphics memory; and a texture shared with a pasted or bent
+  copy could be freed under it ("disposed texture" error).
+- **Clicks and the brush go through the gaps between leaves**: a click between the leaves of a tree selected the tree,
+  and the brush planted on its invisible card; now only the leaves themselves are hit.
+- **Distant trees cast their shade**: far from the camera a canopy was drawn but cast no shadow (its leaves were cut
+  by a different rule in the shadow pass).
+- **No light line across leaf cards; two-sided surfaces lit by UE's rule**: leaves lit from one side showed a
+  dark/bright line that slid across them as the camera moved. Every surface seen from both sides now takes its light
+  as UE does: the front of each triangle with its normal, the back with the normal turned around (mirrored objects
+  keep their front). Grass whose normals point up is lit on its front and darker from behind, as UE draws a two-sided
+  material, and the rims of rounded objects no longer flip at the outline.
+- **Wwise sounds are orange effect pins on the map** (owner: "If I delete a fire place, the fire stays burning in game:
+  the flames, the heat, the smoke, the fire light and the sound, without the object"): a mesh-less `AkAmbientSound` (or
+  any actor with an `Ak*` or `*Sound*` class) is now an orange effect pin like the fire's lights and emitters (it was a
+  grey marker) and shows and hides with the Effects pins. Behind it, a companions finder says what belongs to an
+  object being deleted: its stored child actors and the actors attached to it, the mesh-less lights, emitters, sounds,
+  fire, smoke and decals at its spot, the fire, light and sound components of a deleted building part, a lake's other
+  side, and the volumes around it (off by default, except a lake's swim volume, which goes with the lake when the
+  deleted water covers most of it; a post-process volume is never offered). A trade post, spawner, sentry spawner or
+  volume hung on the deleted object is offered unticked with a note, never taken by default. A kept object nearer to
+  an effect keeps it, a campfire's sound by a deleted lake stays unless ticked, an effect hanging
+  from a kept lamp post stays with the post, and a kept house round a fireplace never keeps the fireplace's fire.
+- **A fire Blueprint whose last drawn part is deleted goes whole**: a hidden collision box, a helper or an editor-only
+  mesh the map never draws no longer keeps it standing, so its flames, light and heat go with it instead of the part
+  only shrinking to nothing. An editor-grid part the placement repaints is drawn, so it still keeps its building.
+- **Ctrl+Shift+A, Delete on the whole island**: a level the reader cannot take no longer loses the whole delete with
+  "Looking for ..." left in the status line; that level is left out and logged, the rest is deleted.
+- **A deleted fireplace takes its fire along in the export** (owner: "If I delete a fire place, the fire stays burning
+  in game: the flames, the heat, the smoke, the fire light and the sound, without the object"): a part of a kept
+  building can now be deleted for real (its fire, light and sound components become inert in the pak, one Ctrl+Z brings
+  them back), and one delete of an object and what belongs to it is a single undo step. An object whose every part the
+  map draws is gone now leaves whole even when it also has hidden, helper or editor-grid meshes, or instances beside its
+  parts (a burning barrel or tyre stack kept burning). A fire, light or sound actor hung on a deleted object goes with
+  it in the export, even from a project made before this. What the studio did not delete with it (an object with a mesh
+  of its own left unticked or deleted alone with Shift+Delete, a lamp on a shelf, a bridge's fence on a bent deck, and
+  any trader, spawner or volume, which the export never deletes on its own) is written where it stood, a mesh socket's
+  offset and scale included, instead of round the world's origin; so is a bent piece hung on a socket. The export report names any fire, light, sound or decal still standing at a
+  deleted object, and says plainly that items a deleted spawner already gave out stay in running worlds (only the game
+  removes those). Not yet seen in game: the written levels are proven by reading them back; a fire deleted this way, and
+  a detached lamp's place, still need a look on a local server.
+- **A deleted sentry spawner leaves its zone's list**: its guarded zone manager no longer lists an empty spawner (and a
+  copied spawner no longer joins behind one). Read back from the written level; not yet seen on a server.
+- **The brush stops when you let go** (owner: "it plants randomly, a huge number of trees very fast"): pressing the right
+  or middle button during a stroke, another control or window taking the mouse, Alt+Tab or another app in front no
+  longer leave the stroke running, which kept planting on every hover and every timer tick with no button held. The
+  stroke now ends once, after its last dab, and stays one Ctrl+Z. The brush circle lies over the ground, slopes and
+  hills included, instead of a flat disc cut by them.
+- **The brush plants cleanly** (owner: "with a short interval it plants at random, a huge number of trees very fast, in
+  some places and not in others, sometimes on half the road"): the spacing is now measured at each tree's foot on the
+  ground, not at the height under the cursor, so a cursor resting on a canopy no longer stacks trees on top of each
+  other. A sweep spreads the palette evenly inside the circle; the timer plants exactly one object per interval at the
+  free spot nearest the centre and says when the circle is full. Nothing is planted on roads, tracks, paths, runways,
+  yards, water or rocks: the landscape's paint layers (EraseFoliage included), the road pieces, runway and concrete
+  meshes, lakes, rivers and the sea level are checked; pebbles and debris under 50 cm no longer leave a spot out. Trees
+  and bushes planted as objects keep others off their trunk instead of their whole crown, and trees pass over
+  undergrowth (keeping 1 m from a bush's heart), so empty ground between them gets planted. The spacing also holds up
+  and down steep slopes at wide spacings. In a level opened without its landscape a cursor resting on a canopy or a
+  roof plants at that tree's or house's foot, not up in the crown, and no two plants come closer than the spacing at
+  any height. Hovering marks every spot a click plants (green) and leaves out (red); a circle too large to mark them
+  all marks an even share and the bar says how many a click plants. The brush bar shows
+  how many were planted and left out, and the notification says why ("12 on roads or paths, 3 in water"). The new "On
+  objects too" option also plants on roofs and floors. One Ctrl+Z still undoes a whole stroke.
+- **The update no longer fails on a held .old file, and keeps your files** (Discord, seviscache: "Access to the path
+  …\ScumStudio.App.exe.old is denied", also as admin; restarting the app fixed it): Windows cannot delete a program
+  that still runs, and an older copy kept running from the `.old` file of the previous update (a second window, or
+  Claude Desktop's connection `scumstudio.exe mcp --connect`), so the update stopped there. Such a file is now left
+  alone and the backup gets a name of its own. The new version is first unpacked and checked beside the app (each file
+  complete, the right version) and only then swapped in by renames, so closing the app midway never leaves a broken exe.
+  The next start deletes only the backups the update made, in the app's own folder, where every start used to delete
+  every `.old` file below it, yours included. A download that receives nothing for 60 seconds stops with a message, and
+  Cancel stops it at any time. The AI connection and then the project are closed before the new version starts, so it
+  reopens the project at once; if the new version cannot start, the card says so with a Close now button instead of
+  offering to install again. This takes effect from the next update: the update to this version is still installed by
+  the old version's own updater, so if it shows "Access to the path … .old is denied", close the other window and
+  Claude Desktop (or restart the app, as seviscache did) and update again.
+- **One app window, and a project open elsewhere says so** (Discord, zarkos6175: "Two copies of the app open → project
+  not saved"): the second copy could not read the project the first one had open, showed a raw "used by another
+  process" error and then refused every edit, and on Linux nothing stopped two windows from writing the same journal.
+  Starting ScumStudio while it is already open now brings the open window to the front instead of opening a second
+  one, also while it downloads or installs an update. A project is locked while it is open (a hidden `.lock` file in its folder, held only by the open window, so a
+  crash leaves no stale lock), and another window or a `scumstudio` command that edits it is told the project is open
+  elsewhere ("This project is open in another SCUM Modding Studio window") while the window keeps the project it had
+  open. Opening the project that is already open in this window keeps it as it is, and `scumstudio project export`
+  only reads the project, so it works while the app has it open; an AI that asks `scumstudio mcp` to open the project
+  it already has keeps working on it instead of being refused by its own lock. After an update the new version waits
+  for the old one to close, and closing the app lets go of the project first.
+- **A failed write can no longer break the project's history**: when the disk filled up or a USB or network folder
+  dropped while an edit, undo or redo was being saved, the failed record stayed behind under a number the next edit
+  reused, and the project no longer opened (or, after closing, the edit that had failed came back). A failed write is
+  now cut off again before the error is shown, and a project an older version damaged this way opens again: the failed
+  records are dropped with a warning and the original journal is kept as `journal.jsonl.bak`.
+- **A click while levels stream in no longer edits another object** (owner: "a mod made with the studio must never
+  change or remove anything the game or the players already have"): while the next levels were being sent to the
+  graphics card, a click, Delete or drag on a level that was going away could select, delete or move an unrelated
+  object of the level that came in its place. A new level never takes the number of a level still on screen, and a
+  click or drag on a level that is going away does nothing (the object snaps back).
+- **Vehicles and Weapons keep their value names on a small window**: from 1024 to 1280 px the value names got no room
+  and the item's name vanished behind the spawn command; the list and the clone column now give way first. Every value
+  box says what to type, with the reason first when the game cannot read the value.
+- **Shell texts in every language**: the console counters ("3 warn", "1 err") and the search field's Ctrl K chip were
+  English in every language (German now reads Strg+K, also in the shell's hover texts).
+- **Craftables page**: the kinds and materials (list chips and pickers) are named in the app's language instead of
+  their English code names, and the list has the same header strip as the other panels.
+- The Map's loading line could end on a stale "Preparing …" step instead of the load's result: the progress reports ran
+  on the thread pool and a late one overwrote the final status. They now arrive on the UI thread, and reports of a load
+  that was replaced or has finished are dropped.
+- **Your own exported paks are no longer read as game files** (Qraox: "it also completely changed all the built items on
+  my server"; jenni_1129: "after pak is not work in game crash"): an earlier export copied into `Content\Paks`, as the
+  Build page says, was read as part of the game, so every craftable it shipped was left out of the next export as
+  "already exists in the game files" and its registry came back as the game's. The open project's paks, its Craftables
+  pak and every `pakchunk9xx-*_P.pak` are now left out when the game files are opened, by the app, the server export, the
+  command line and the MCP server; the status bar names the paks it left out. An export under a mod name of its own
+  leaves out that name's paks from the client's game files as well as the server's, so both cooks see the same game.
+  Other mods' paks are still read.
+- **Names ending in a number are written as the game stores them**: the engine reads `ConcreteBlock002_1` as the name
+  `ConcreteBlock002` with the number 2, the rule behind the checkpoint-46 crash, but clones, craftables, added imports,
+  material parameters and new DataTable rows wrote the whole text with no number. So an item craftable made from a bow
+  kept the game's recipe name (`CR_Improvised_Bow_20`) inside its new package, a furniture craftable on a numbered mesh
+  pointed at a mesh name the game does not have, the numbered parts of a weapon family (`SK_Winchester_1897`) kept the
+  game's names inside the copy, and an AK-47 given AK-15 magazines imported their mount under another name than the
+  magazines use. All of them now use the game's rule, and so do the names a copied package's own properties hold (a
+  name, a soft path, an enum value). Where the data cannot be read (a Blueprint's compiled code), a name whose number
+  would change is refused with its name, and a name without a number follows the rename whole, as before, with a
+  warning in the export report.
+- **Clone names that end in `_` and a number are refused** (`Hunter_2` is the name `Hunter` with a number to the game):
+  `Hunter2` or `Hunter_v2` work; a numbered part of a family gets `_v<number>` (`SK_Winchester_v1897`). When a new name
+  already exists, the message now says which pak has it.
+- **Craftables keep their asset names for life** (Qraox: "it also completely changed all the built items on my server"):
+  a craftable's asset name (`CR_SS_…`, `BP_SS_…`, the paths the game saves placed objects by) was made from its name each
+  time, so renaming a craftable gave it new packages and what players had built from it was gone. The asset name is now
+  kept in `craftables.json` from the first time the project is opened, a rename keeps it, and the page shows it under the
+  name box ("Asset name: SS_Chair"). New asset names never end in '_' and a number, which the game reads as a different
+  name (Shelf 1 becomes `SS_Shelf_v1`, the second 'Couch 01' `SS_Couch_01_v2`, a second import of a model `SS_Table_v2`),
+  and names in Arabic, Chinese, with punctuation or differing only in case get asset names of their own: 'كرسي 01' and
+  'طاولة 01' no longer share one, which left one of them out of the export. A row that would still be left out (a
+  hand-edited file) says so inline and names the craftable that has its asset name.
+- **An export never drops the craftables players already have** (Qraox, the same report): when a craftable's new package
+  already exists in what the studio reads as the game (an earlier Craftables pak copied into the Paks folder, or another
+  mod with the same path), the craftable was left out as "already exists in the game files", so the new Craftables pak
+  no longer had it. The export now stops with an error that names that pak. The same goes for a piece of furniture, a
+  station or a generator whose mesh is not in the game files, or only in another mod's pak, and for one whose every
+  ingredient is: the error says what to change instead of quietly removing what players built. An item recipe, which
+  removes nothing players own, is still left out with a warning.
+- **Craftables only use what every player has** (found while looking into jenni_1129's crash, "when i add new item in
+  crafting meau open game it will crush"; the crash itself is not confirmed fixed yet): a mesh or ingredient tag that
+  only another mod's pak has is no longer shipped as an object or recipe that players without that pak cannot load: an
+  ingredient like that is left out of the recipe with a warning naming that pak, and a mesh stops the export as above.
+  One from a mod imported into the project is kept and ships with it in the main pak. A DLC mesh is now pointed at by
+  the path the game knows it by (`/<Pack>/…`), and a station, generator or piece of furniture whose template shows no
+  mesh says that it keeps the stock look.
+- **A mod only adds** (Qraox: "it also completely changed all the built items on my server"; jenni_1129: "after pak is
+  not work in game crash"): the registry a pak ships (`AssetRegistry.bin`, the game reads only the highest pak's) is now
+  always the game's own one with every record as it is, plus the records of what the pak adds. It was the registry the
+  studio happened to read: another installed mod's, an imported mod's copied as it was, or the studio's own from an
+  earlier export, so stock items and other mods' items could vanish from the game. An imported mod's new records are kept
+  for the packages that ship with it, two imported mods' registries no longer replace each other, and a craftable or
+  clone exported again gets today's record instead of the old one. The game's own records are never rewritten, and game
+  files without the game's registry (only another mod's) register nothing, with a warning, instead of shipping that one.
+- **The Craftables pak holds only new packages**: a Power craftable (a copy of the generator) no longer ships the game's
+  trader table, and the export stops, naming each path, before it would ship anything the game already has. An imported
+  model whose folder in craftables.json points outside its own `imports/<name>` folder is left out with a warning.
+- **One clone that cannot be built no longer stops the export**: it is left out with a warning and the other vehicles,
+  items and craftables are still built; a part of a family that cannot be read is left out without the others pointing
+  at it; a recipe no longer asks for a station that could not be built (that ingredient is left out, and a recipe that
+  asked for nothing else is left out with its craftable); numbered names (`Weapon_Deagle_357`, `CR_Improvised_Bow_20`)
+  are registered like the game stores them.
+- **Imported mods**: a mod import that stopped half-way is no longer read over the game or carried into the pak.
+
 ## [3.1.0] - 2026-10-09
 
 ### New in this release

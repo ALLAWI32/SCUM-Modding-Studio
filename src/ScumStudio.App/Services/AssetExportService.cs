@@ -27,6 +27,12 @@ public static class AssetExportService
         && !className.Contains("Widget", StringComparison.OrdinalIgnoreCase)
         && !className.Contains("Anim", StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>True for foliage types (<c>FoliageType_InstancedStaticMesh</c>: most of the island's trees, bushes and grass).</summary>
+    public static bool IsFoliageTypeClass(string? className) => ScumStudio.Viewport.MeshPreviewLoader.IsFoliageTypeClass(className);
+
+    /// <summary>True for what the 3D preview draws: meshes, Blueprints with a model and foliage types.</summary>
+    public static bool IsModelClass(string? className) => IsMeshClass(className) || IsBlueprintClass(className) || IsFoliageTypeClass(className);
+
     /// <summary>True for materials and material instances (not physical materials, functions or parameter collections).</summary>
     public static bool IsMaterialClass(string? className) =>
         className is not null && className.Contains("Material", StringComparison.OrdinalIgnoreCase)

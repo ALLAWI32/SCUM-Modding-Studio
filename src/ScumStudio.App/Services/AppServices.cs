@@ -179,10 +179,12 @@ public sealed class AppServices : IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
+        // The project (its journal and lock) first: a start after this one, an update's new version among them, opens it at
+        // once instead of after the thumbnail renderer's join (up to 5 s) and the MCP server's stop (up to 3 s).
+        Projects.Dispose();
         Economy.Dispose();
         Thumbnails.Dispose();
         Mcp.Dispose();
-        Projects.Dispose();
         Workspace.Dispose();
         LoggerFactory.Dispose();
     }

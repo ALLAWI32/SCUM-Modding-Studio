@@ -4,6 +4,8 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:vm="using:ScumStudio.App.ViewModels"
         xmlns:c="using:ScumStudio.App.Controls"
+        xmlns:loc="using:ScumStudio.App.Localization"
+        xmlns:local="using:ScumStudio.App.Views"
         mc:Ignorable="d" d:DesignWidth="1440" d:DesignHeight="860"
         x:Class="ScumStudio.App.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
@@ -93,7 +95,7 @@
             <c:GlyphIcon Kind="Icon.Search" IconSize="14" Margin="10,0,0,0" IsHitTestVisible="False"
                          HorizontalAlignment="Left" VerticalAlignment="Center" Foreground="{DynamicResource TextMutedBrush}" />
             <Border Classes="kbd" HorizontalAlignment="Right" Margin="0,0,7,0" IsHitTestVisible="False">
-              <TextBlock Text="Ctrl K" />
+              <TextBlock Text="{Tr Shell.Search.Shortcut}" />
             </Border>
           </Panel>
 
@@ -101,6 +103,14 @@
           <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center" Margin="0,0,6,0">
             <Button x:Name="DiscordButton" Classes="ghost" Padding="8,3" Command="{Binding OpenDiscordCommand}" ToolTip.Tip="{Tr Discord.Button.Tip}">
               <c:GlyphIcon Kind="Icon.Discord" IconSize="15" Foreground="{DynamicResource DiscordBrush}" />
+            </Button>
+            <!-- Share your mod: upload the project's edits, get other players' from the gallery (named only where every language has room). -->
+            <Button x:Name="ShareButton" Classes="ghost" Padding="8,3" Command="{Binding OpenShareCommand}" ToolTip.Tip="{Tr Share.Button.Tip}">
+              <StackPanel Orientation="Horizontal" Spacing="6">
+                <c:GlyphIcon Kind="Icon.Share" IconSize="14" Foreground="{DynamicResource AccentBrush}" />
+                <TextBlock Text="{Tr Share.Button}" FontSize="12"
+                           IsVisible="{Binding $parent[Window].Bounds.Width, Converter={x:Static vm:MainWindowViewModel.ShareLabelFits}}" />
+              </StackPanel>
             </Button>
             <Button x:Name="SupportButton" Classes="ghost" Padding="10,3" Command="{Binding OpenSupportCommand}" ToolTip.Tip="{Tr Support.Button.Tip}">
               <StackPanel Orientation="Horizontal" Spacing="6">
@@ -143,10 +153,24 @@
               <TextBlock Grid.Column="1" Text="{Tr Shell.ConsoleTitle}" Classes="panelTitle" />
               <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center" Margin="4,0,0,0">
                 <Border Classes="badge warn" ToolTip.Tip="{Tr Shell.Warnings}">
-                  <TextBlock Text="{Binding Log.WarningCount, StringFormat='{}{0} warn'}" />
+                  <TextBlock x:Name="LogWarningsBadge">
+                    <TextBlock.Text>
+                      <MultiBinding Converter="{x:Static local:MainWindow.LocalizedCount}" ConverterParameter="Shell.Log.Warnings">
+                        <Binding Path="Log.WarningCount" />
+                        <Binding Path="Language" Source="{x:Static loc:Loc.Instance}" />
+                      </MultiBinding>
+                    </TextBlock.Text>
+                  </TextBlock>
                 </Border>
                 <Border Classes="badge error" ToolTip.Tip="{Tr Shell.Errors}">
-                  <TextBlock Text="{Binding Log.ErrorCount, StringFormat='{}{0} err'}" />
+                  <TextBlock x:Name="LogErrorsBadge">
+                    <TextBlock.Text>
+                      <MultiBinding Converter="{x:Static local:MainWindow.LocalizedCount}" ConverterParameter="Shell.Log.Errors">
+                        <Binding Path="Log.ErrorCount" />
+                        <Binding Path="Language" Source="{x:Static loc:Loc.Instance}" />
+                      </MultiBinding>
+                    </TextBlock.Text>
+                  </TextBlock>
                 </Border>
               </StackPanel>
               <Button Grid.Column="3" Classes="ghost small" Content="{Tr Common.Copy}" Click="OnCopyLogClick" ToolTip.Tip="{Tr Shell.CopyConsole.Tip}" />
@@ -292,12 +316,16 @@
               <TextBlock Grid.Row="1" Text="{Binding UpdateStatus}" Classes="caption wrap" VerticalAlignment="Center" />
               <Button Grid.Row="1" Grid.Column="1" Content="{Tr Update.ReleasePage}" Classes="ghost" Command="{Binding OpenReleasePageCommand}" ToolTip.Tip="{Tr Update.ReleasePage.Tip}" />
               <Button Grid.Row="1" Grid.Column="2" Content="{Tr Update.Later}" Classes="ghost" Command="{Binding CloseUpdateCommand}" IsEnabled="{Binding !IsUpdating}" ToolTip.Tip="{Tr Update.Later.Tip}" />
-              <Button Grid.Row="1" Grid.Column="3" x:Name="InstallUpdateButton" Classes="accent" Command="{Binding InstallUpdateCommand}" ToolTip.Tip="{Tr Update.Install.Tip}">
-                <StackPanel Orientation="Horizontal" Spacing="6">
-                  <c:GlyphIcon Kind="Icon.Download" IconSize="14" />
-                  <TextBlock Text="{Tr Update.Install}" />
-                </StackPanel>
-              </Button>
+              <Panel Grid.Row="1" Grid.Column="3">
+                <Button x:Name="InstallUpdateButton" Classes="accent" Command="{Binding InstallUpdateCommand}" IsVisible="{Binding IsInstallShown}" ToolTip.Tip="{Tr Update.Install.Tip}">
+                  <StackPanel Orientation="Horizontal" Spacing="6">
+                    <c:GlyphIcon Kind="Icon.Download" IconSize="14" />
+                    <TextBlock Text="{Tr Update.Install}" />
+                  </StackPanel>
+                </Button>
+                <Button x:Name="CancelUpdateButton" Classes="ghost" Content="{Tr Update.Cancel}" Command="{Binding CancelUpdateCommand}" IsVisible="{Binding IsDownloading}" ToolTip.Tip="{Tr Update.Cancel.Tip}" />
+                <Button x:Name="CloseNowButton" Classes="accent" Content="{Tr Update.CloseNow}" Command="{Binding CloseNowCommand}" IsVisible="{Binding IsRestartNeeded}" ToolTip.Tip="{Tr Update.CloseNow.Tip}" />
+              </Panel>
             </Grid>
           </Border>
           <ScrollViewer HorizontalScrollBarVisibility="Disabled">
@@ -401,6 +429,9 @@
         </DockPanel>
       </Border>
     </Panel>
+
+    <!-- ===================================================================== Share card (SharePageView: no background, so the Map takes the input while a picture is framed) -->
+    <ContentControl x:Name="ShareHost" Content="{Binding Share}" ZIndex="21" />
 
     <!-- ===================================================================== What's new (once, after an update) -->
     <Panel x:Name="WhatsNewOverlay" IsVisible="{Binding IsWhatsNewOpen}" ZIndex="22">

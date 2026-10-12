@@ -203,6 +203,104 @@ public sealed class LevelPackageEditorTests
     }
 
     [Fact]
+    public void NeutralizesComponentsOfAKeptActorAndLeavesTheOtherExportsByteIdentical()
+    {
+        // Owner: the fire, light and sound of a deleted fireplace part go; the building and everything else stay as they were.
+        var package = Synthetic();
+        var (bytes, report) = LevelPackageEditor.Apply(package, new LevelEditRequest { DeleteComponents = [("StaticMeshActor_1", "Door")] });
+
+        Assert.Equal(["StaticMeshActor_1.Door"], report.NeutralizedComponents);
+        Assert.Equal(1, report.NeutralizedExports);
+        Assert.Empty(report.RemovedActors);
+        Assert.Empty(report.Warnings);
+        var edited = CookedPackage.Parse(bytes.UAsset, bytes.UExp);
+        var door = ExportNamed(edited, "Door", "StaticMeshActor_1");
+        Assert.Equal("Object", edited.GetExportClassName(door));
+        Assert.Empty(edited.ReadProperties(door).Properties);
+        for (var i = 0; i < package.Exports.Count; i++)
+        {
+            if (i != door)
+            {
+                Assert.Equal(package.GetExportBytes(i), edited.GetExportBytes(i));
+            }
+        }
+
+        var document = LoadThroughCue4Parse(bytes, "A_0_TestLevel", SyntheticLevels.LevelPath);
+        Assert.Equal(new[] { "StaticMeshActor_1", "Rocks_Actor", "BP_Lamp_C_1" }, document.Actors.Select(a => a.Name));
+        Assert.Null(document.FindActor("StaticMeshActor_1")!.FindComponent("Door"));
+    }
+
+    [Fact]
+    public void DetachRemovesAttachParentAndKeepsTheWorldPlace()
+    {
+        // Audit F053: a kept child of a deleted parent is taken off it and written where it stood in the world.
+        var original = SyntheticLevels.BuildLevel();
+        var before = LoadThroughCue4Parse(original, "A_0_TestLevel", SyntheticLevels.LevelPath).FindActor("StaticMeshActor_1")!.FindComponent("Door")!;
+        Assert.NotNull(before.AttachParent);
+        var world = TransformValue.FromTransform(before.WorldTransform);
+
+        var (bytes, report) = LevelPackageEditor.Apply(CookedPackage.Parse(original.UAsset, original.UExp), new LevelEditRequest
+        {
+            Transforms = [new TransformPatch("StaticMeshActor_1", "Door", world)],
+            Detach = [("StaticMeshActor_1", "Door")],
+        });
+
+        Assert.Empty(report.Warnings);
+        Assert.Equal(new[] { "StaticMeshActor_1.Door", "StaticMeshActor_1.Door (detached)" }, report.PatchedTransforms);
+        var edited = CookedPackage.Parse(bytes.UAsset, bytes.UExp);
+        var props = edited.ReadProperties(ExportNamed(edited, "Door", "StaticMeshActor_1"));
+        Assert.Null(props.Find("AttachParent"));
+        Assert.NotNull(props.Find("StaticMesh"));
+        var after = LoadThroughCue4Parse(bytes, "A_0_TestLevel", SyntheticLevels.LevelPath).FindActor("StaticMeshActor_1")!.FindComponent("Door")!;
+        Assert.Null(after.AttachParent);
+        Assert.True(FVector.Distance(after.WorldTransform.Translation, before.WorldTransform.Translation) < 0.5f,
+            $"{after.WorldTransform.Translation} vs {before.WorldTransform.Translation}");
+    }
+
+    [Fact]
+    public void ADeletedSentrySpawnerLeavesTheGuardedZoneManagersList()
+    {
+        // Audit F059/F187: a deleted stock spawner stayed listed (as an inert object) and a copy was appended behind it.
+        var p = new SyntheticLevelPackage();
+        var world = p.Export("A_4_Military", p.ScriptClass(Engine, "World"), 0);
+        var level = p.Export("PersistentLevel", p.ScriptClass(Engine, "Level"), world);
+        var spawnerClass = p.ScriptClass("/Script/SCUM", "SentrySpawner2");
+        var spawners = new List<int>();
+        for (var i = 1; i <= 3; i++)
+        {
+            var spawner = p.Export($"SentrySpawner_{i}", spawnerClass, level);
+            var root = p.Export("Root", p.ScriptClass(Engine, "SceneComponent"), spawner);
+            p.SetPayload(spawner, p.Properties(t => t.Object("RootComponent", root)));
+            p.SetPayload(root, p.Properties(t => t.Vector("RelativeLocation", i * 1000, 0, 0)));
+            spawners.Add(spawner);
+        }
+
+        var manager = p.Export("BP_GuardedZoneManager_2", p.ScriptClass("/Script/SCUM", "BP_GuardedZoneManager_C"), level);
+        p.SetPayload(manager, p.Properties(t => t.ObjectArray("_sentrySpawners", [.. spawners])));
+        p.SetPayload(world, p.Properties(native: w =>
+        {
+            w.I32(level);
+            w.I32(0);
+            w.I32(0);
+        }));
+        p.SetPayload(level, p.Properties(native: w => LevelTail(w, [.. spawners, manager])));
+        var built = p.Build();
+        var package = CookedPackage.Parse(built.UAsset, built.UExp);
+
+        var (bytes, report) = LevelPackageEditor.Apply(package, new LevelEditRequest
+        {
+            DeleteActors = ["SentrySpawner_1"],
+            Copies = [new ActorCopy("SentrySpawner_2", "SentrySpawner_2_Copy", TransformValue.At(2500, 0, 0), "Root")],
+        });
+
+        Assert.Equal(["SentrySpawner_1"], report.RemovedActors);
+        var edited = CookedPackage.Parse(bytes.UAsset, bytes.UExp);
+        var list = (ArrayValue)edited.ReadProperties(ExportNamed(edited, "BP_GuardedZoneManager_2", "PersistentLevel")).Find("_sentrySpawners")!.Value;
+        Assert.Equal(new[] { "SentrySpawner_2", "SentrySpawner_3", "SentrySpawner_2_Copy" },
+            list.Items.OfType<ObjectValue>().Select(o => edited.ResolveName(edited.Exports[o.Index - 1].ObjectName)));
+    }
+
+    [Fact]
     public void TheLevelScriptActorIsNeverMadeInert()
     {
         // The level's own native pointers (LevelScriptActor, Model) are typed: a plain Object there would be read wrong.
@@ -640,10 +738,10 @@ public sealed class LevelPackageEditorTests
     public void ANumberedMeshReusesTheLevelsOwnImport()
     {
         // As the cooker stores them: "/Game/X/ConcreteBlock002_1" is the name "/Game/X/ConcreteBlock002" with number 2.
-        Assert.Equal(("/Game/X/ConcreteBlock002", 2), LevelPackageEditor.SplitNumber("/Game/X/ConcreteBlock002_1"));
-        Assert.Equal(("Rocket_04", 0), LevelPackageEditor.SplitNumber("Rocket_04"));
-        Assert.Equal(("Rocket", 1), LevelPackageEditor.SplitNumber("Rocket_0"));
-        Assert.Equal(("SplineMeshComponent0", 0), LevelPackageEditor.SplitNumber("SplineMeshComponent0"));
+        Assert.Equal(("/Game/X/ConcreteBlock002", 2), FNameRef.Split("/Game/X/ConcreteBlock002_1"));
+        Assert.Equal(("Rocket_04", 0), FNameRef.Split("Rocket_04"));
+        Assert.Equal(("Rocket", 1), FNameRef.Split("Rocket_0"));
+        Assert.Equal(("SplineMeshComponent0", 0), FNameRef.Split("SplineMeshComponent0"));
 
         List<string> names = ["None", "/Script/CoreUObject", "Package", "/Script/Engine", "StaticMesh", "/Game/X/ConcreteBlock002", "ConcreteBlock002"];
         List<ImportEntry> imports =

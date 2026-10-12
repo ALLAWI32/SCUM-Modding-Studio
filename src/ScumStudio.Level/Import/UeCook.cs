@@ -317,15 +317,20 @@ public static class UeCook
         }
     }
 
-    /// <summary><c>SS_</c> + the file name, numbered when the project already has an import of that name.</summary>
-    private static string NewToken(string projectDirectory, string sourceFile)
+    /// <summary>
+    /// <c>SS_</c> + the file name (<see cref="CraftablesFile.NewTokenFor"/>), then <c>_v2</c>, <c>_v3</c> … when the project
+    /// already has an import of that name in any case (package names are): never '_' and a number at the end, which UE would
+    /// cook as a numbered FName.
+    /// </summary>
+    internal static string NewToken(string projectDirectory, string sourceFile)
     {
-        var stem = CraftablesFile.TokenOf(Path.GetFileNameWithoutExtension(sourceFile));
-        stem = stem == "SS_" ? "SS_Model" : stem;
+        var imports = new DirectoryInfo(Path.Combine(projectDirectory, ImportsFolder));
+        var taken = (imports.Exists ? imports.EnumerateDirectories().Select(d => d.Name) : []).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var stem = CraftablesFile.NewTokenFor(Path.GetFileNameWithoutExtension(sourceFile), []);
         var token = stem;
-        for (var n = 2; Directory.Exists(Path.Combine(projectDirectory, ImportsFolder, token)); n++)
+        for (var n = 2; taken.Contains(token); n++)
         {
-            token = $"{stem}_{n}";
+            token = $"{stem}_v{n}";
         }
 
         return token;

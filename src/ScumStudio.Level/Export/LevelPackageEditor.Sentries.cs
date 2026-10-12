@@ -74,6 +74,42 @@ public static partial class LevelPackageEditor
         return created;
     }
 
+    /// <summary>
+    /// Deleted spawners leave their guarded zone manager's <c>_sentrySpawners</c> (audit F059/F187: an inert object stayed
+    /// listed, and a copy joined behind it). The entry is removed, not emptied, so the manager never walks a list holding a
+    /// null spawner. Runs on the payload <see cref="JoinSentrySpawners"/> wrote, so a list a copy just joined is cleaned too.
+    /// </summary>
+    private static void ForgetSentrySpawners(CookedPackage package, int levelIndex, IReadOnlyList<string> removed, IList<ReadOnlyMemory<byte>> data)
+    {
+        if (removed.Count == 0)
+        {
+            return;
+        }
+
+        var gone = new HashSet<string>(removed, StringComparer.OrdinalIgnoreCase);
+        bool Removed(int index) => index > 0 && index <= package.Exports.Count && package.Exports[index - 1].OuterIndex == levelIndex + 1
+                                   && gone.Contains(package.ResolveName(package.Exports[index - 1].ObjectName));
+        for (var i = 0; i < package.Exports.Count; i++)
+        {
+            if (!package.GetExportClassName(i).Contains("GuardedZoneManager", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var payload = data[i].ToArray();
+            if (PropertyReader.ReadPayload(package, payload, i).Find(SentrySpawnersProperty) is not { Value: ArrayValue list } tag)
+            {
+                continue;
+            }
+
+            var listed = list.Items.OfType<ObjectValue>().Select(o => o.Index).ToList();
+            if (listed.Any(Removed))
+            {
+                data[i] = WriteObjectArray(payload, tag, listed.Where(index => !Removed(index)).ToList());
+            }
+        }
+    }
+
     private static bool IsSentrySpawner(CookedPackage source, string actor)
     {
         try

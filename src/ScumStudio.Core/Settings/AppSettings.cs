@@ -54,6 +54,12 @@ public sealed record AppSettings
     /// <summary>The built-in MCP server that lets AI assistants drive the editor (off by default).</summary>
     public McpServerSettings Mcp { get; init; } = new();
 
+    /// <summary>Address of the "Share your mod" gallery server; null = this build's default.</summary>
+    public string? ModShareUrl { get; init; }
+
+    /// <summary>Name shown with the mods this user shares (no account; names may repeat); null = not set.</summary>
+    public string? ModShareName { get; init; }
+
     /// <summary>
     /// Properties present in the file but unknown to this build; preserved on save. Not for application use.
     /// </summary>
@@ -92,6 +98,8 @@ public sealed record AppSettings
                RecentProjects.SequenceEqual(other.RecentProjects, StringComparer.Ordinal) &&
                Ui == other.Ui &&
                Mcp == other.Mcp &&
+               ModShareUrl == other.ModShareUrl &&
+               ModShareName == other.ModShareName &&
                AdditionalPropertiesEqual(AdditionalProperties, other.AdditionalProperties);
     }
 
@@ -113,6 +121,8 @@ public sealed record AppSettings
 
         hash.Add(Ui);
         hash.Add(Mcp);
+        hash.Add(ModShareUrl);
+        hash.Add(ModShareName);
         hash.Add(AdditionalProperties?.Count ?? 0);
         return hash.ToHashCode();
     }
@@ -198,6 +208,12 @@ public sealed record UiPreferences
     public bool ClearGrassUnderNewObjects { get; init; } = true;
 
     /// <summary>
+    /// A delete takes what belongs to the object with it (its fire, light, smoke and sound at the spot, attached and child
+    /// actors); off, or with Shift+Delete: the object alone.
+    /// </summary>
+    public bool DeleteWithCompanions { get; init; } = true;
+
+    /// <summary>
     /// Show a spawn place as the object that spawns there (a car, a zombie, a sentry; they glint, so the view keeps
     /// drawing); off: as a simple marker shape, lighter on the PC (Discord feature request).
     /// </summary>
@@ -208,6 +224,12 @@ public sealed record UiPreferences
 
     /// <summary>Light and shade the 3D view (sun, sky light, shadows, reflections); off: every surface in its own colour, no shadow pass.</summary>
     public bool Lighting { get; init; } = true;
+
+    /// <summary>
+    /// Smooth edges and steady leaves and grass in the 3D view (4 samples a pixel, masked leaves cut by coverage; owner: "no
+    /// shimmering/noise in the trees"). Off: one sample, the previous look, lighter on the PC.
+    /// </summary>
+    public bool AntiAliasedFoliage { get; init; } = true;
 }
 
 /// <summary>3D view quality presets (faster on weaker PCs, more detail on strong ones).</summary>

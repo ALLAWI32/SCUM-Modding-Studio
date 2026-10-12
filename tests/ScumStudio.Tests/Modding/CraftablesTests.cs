@@ -60,7 +60,7 @@ public sealed class CraftablesTests
         Assert.False(RecipeRules.IsAllowedSource("/Game/ConZ_Files/Characters/Animals/Wolf/BP_Wolf", "BlueprintGeneratedClass"));
         Assert.False(RecipeRules.IsAllowedSource("/Game/ConZ_Files/Vehicles/Wheeled/BPC_Rager", "BlueprintGeneratedClass"));
         Assert.False(RecipeRules.IsAllowedSource("/Game/X/SK_Thing", "SkeletalMesh"));
-        Assert.Equal("SS_Oak_table_2", CraftablesFile.TokenOf(" Oak table #2 "));
+        Assert.Equal("SS_Oak_table_2", CraftablesFile.LegacyTokenOf(" Oak table #2 "));
     }
 
     [Fact]
@@ -68,18 +68,18 @@ public sealed class CraftablesTests
     {
         // The owner names things in Arabic: two Arabic names must not both become "SS_" (craft-7); the token stays the same
         // from one export to the next, and a long name still makes a valid asset name.
-        var table = CraftablesFile.TokenOf("طاولة");
-        var chair = CraftablesFile.TokenOf("كرسي");
+        var table = CraftablesFile.LegacyTokenOf("طاولة");
+        var chair = CraftablesFile.LegacyTokenOf("كرسي");
         Assert.NotEqual(table, chair);
-        Assert.True(CloneFamilyPlanner.IsValidName(table) && CloneFamilyPlanner.IsValidName(chair), table + " " + chair);
-        Assert.Equal(table, CraftablesFile.TokenOf(" طاولة "));
-        Assert.True(CloneFamilyPlanner.IsValidName(CraftablesFile.TokenOf(new string('x', 80))));
+        Assert.True(CraftablesFile.IsValidToken(table) && CraftablesFile.IsValidToken(chair), table + " " + chair);
+        Assert.Equal(table, CraftablesFile.LegacyTokenOf(" طاولة "));
+        Assert.True(CraftablesFile.IsValidToken(CraftablesFile.LegacyTokenOf(new string('x', 80))));
 
         // A name that had a valid token keeps it (players' placed objects are saved by class path): a long Latin name is not
         // cut, a mixed name keeps its Latin token.
         var longName = new string('L', 50);
-        Assert.Equal("SS_" + longName, CraftablesFile.TokenOf(longName));
-        Assert.Equal("SS_Table", CraftablesFile.TokenOf("Table طاولة"));
+        Assert.Equal("SS_" + longName, CraftablesFile.LegacyTokenOf(longName));
+        Assert.Equal("SS_Table", CraftablesFile.LegacyTokenOf("Table طاولة"));
     }
 
     [Fact]
@@ -118,8 +118,8 @@ public sealed class CraftablesTests
         {
             Items =
             [
-                new Craftable { Name = "Oak Table", Source = "/Game/A/SM_T", Mesh = "/Game/A/SM_T", Ingredients = [new("CI_Plank", 3)], Station = "Bench" },
-                new Craftable { Name = "Sun", Source = "/Game/A/SM_S", Mesh = "/Game/A/SM_S", Kind = CraftKind.Power, Power = new(25, 300, 0, true) },
+                new Craftable { Name = "Oak Table", Token = "SS_Oak_Table", Source = "/Game/A/SM_T", Mesh = "/Game/A/SM_T", Ingredients = [new("CI_Plank", 3)], Station = "Bench" },
+                new Craftable { Name = "Sun", Token = "SS_Sun", Source = "/Game/A/SM_S", Mesh = "/Game/A/SM_S", Kind = CraftKind.Power, Power = new(25, 300, 0, true) },
             ],
         };
         var dir = Path.Combine(Path.GetTempPath(), "scumstudio-craft-" + Guid.NewGuid().ToString("N"));
@@ -130,6 +130,13 @@ public sealed class CraftablesTests
             var back = CraftablesFile.Load(dir);
             Assert.Equal(file.ToJson(), back.ToJson());
             Assert.Contains("\"Power\"", File.ReadAllText(Path.Combine(dir, CraftablesFile.FileName)), StringComparison.Ordinal);
+
+            // The chosen crafting menu section is kept; no choice writes nothing, and a file from before it loads as none.
+            Assert.DoesNotContain("\"Category\"", File.ReadAllText(Path.Combine(dir, CraftablesFile.FileName)), StringComparison.Ordinal);
+            var sofa = new Craftable { Name = "Sofa", Source = "/Game/A/SM_Sofa", Mesh = "/Game/A/SM_Sofa", Category = "CraftingCategory.Placeables.Furniture" };
+            (file with { Items = [.. file.Items, sofa] }).Save(dir);
+            Assert.Equal("CraftingCategory.Placeables.Furniture", CraftablesFile.Load(dir).Items[^1].Category);
+            Assert.Null(CraftablesFile.Parse("""{ "Items": [ { "Name": "Old", "Source": "/Game/A/SM_O", "Mesh": "/Game/A/SM_O", "Kind": "Furniture" } ] }""").Items[0].Category);
             new CraftablesFile().Save(dir);
             Assert.Empty(CraftablesFile.Load(dir).Items);
         }
@@ -353,9 +360,9 @@ public sealed class CraftablesTests
         [
             new Craftable { Name = "Stool", Source = table, Mesh = table, Ingredients = [new("CI_Plnk", 2), new("CI_Plank", 3)], Station = "Bench" },
             new Craftable { Name = "Lamp", Source = table, Mesh = table, Ingredients = [new("CI_Plank", 1)], Station = "Broken Bench" },
-            new Craftable { Name = "Bench", Source = table, Mesh = table, Kind = CraftKind.Station },
-            new Craftable { Name = "bench", Source = table, Mesh = table, Kind = CraftKind.Station },
-            new Craftable { Name = "Broken Bench", Source = table, Mesh = "/Game/ConZ_Files/Nowhere/SM_Nothing", Kind = CraftKind.Station },
+            new Craftable { Name = "Bench", Token = "SS_Bench", Source = table, Mesh = table, Kind = CraftKind.Station },
+            new Craftable { Name = "bench", Token = "SS_bench", Source = table, Mesh = table, Kind = CraftKind.Station },
+            new Craftable { Name = "Broken Bench", Token = "SS_BENCH", Source = table, Mesh = table, Kind = CraftKind.Station }, // a missing mesh stops the export now
         ]);
 
         string Recipe(string name) => plan.Entries.Single(e => e.Name == name).Recipe;
@@ -464,8 +471,8 @@ public sealed class CraftablesTests
                 ProjectDirectory = Path.Combine(dir, "project"),
                 Items =
                 [
-                    new Craftable { Name = "Oak Table", Source = table, Mesh = table, Ingredients = [new("CI_Plank", 3)] },
-                    new Craftable { Name = "Oak-Table", Source = "x.obj", Mesh = Import("SS_Left"), Imported = "imports/SS_Left", Ingredients = [new("CI_Plank", 3)] },
+                    new Craftable { Name = "Oak Table", Token = "SS_Oak_Table", Source = table, Mesh = table, Ingredients = [new("CI_Plank", 3)] },
+                    new Craftable { Name = "Oak-Table", Token = "SS_Oak_Table", Source = "x.obj", Mesh = Import("SS_Left"), Imported = "imports/SS_Left", Ingredients = [new("CI_Plank", 3)] },
                     new Craftable { Name = "Crate", Source = "y.obj", Mesh = Import("SS_Kept"), Imported = "imports/SS_Kept", Ingredients = [new("CI_Plank", 2)] },
                 ],
             };

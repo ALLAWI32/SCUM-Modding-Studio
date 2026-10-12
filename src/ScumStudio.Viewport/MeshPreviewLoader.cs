@@ -1,6 +1,8 @@
 using System.Numerics;
+using System.Reflection;
 using CUE4Parse.UE4.Assets.Exports;
 using CUE4Parse.UE4.Assets.Exports.Animation;
+using CUE4Parse.UE4.Assets.Exports.Component.StaticMesh;
 using CUE4Parse.UE4.Assets.Exports.SkeletalMesh;
 using CUE4Parse.UE4.Assets.Exports.StaticMesh;
 using CUE4Parse.UE4.Assets.Exports.Texture;
@@ -15,6 +17,7 @@ using ScumStudio.Assets.Meshes;
 using ScumStudio.Assets.Textures;
 using ScumStudio.Core.Geometry;
 using ScumStudio.Core.Mathematics;
+using UePackage = CUE4Parse.UE4.Assets.Package;
 
 namespace ScumStudio.Viewport;
 
@@ -66,6 +69,23 @@ public sealed class MeshPreviewLoader
 {
     private const int MaxClassDepth = 8;
 
+    /// <summary>Child actor components inside child actors followed at most (a cycle stops at its first repeat).</summary>
+    private const int MaxChildActorDepth = 4;
+
+    /// <summary>Mesh components one Blueprint places at most, child actors included (instances apart: they never take a later component's place).</summary>
+    private const int MaxComponents = MaxAttachments * 8;
+
+    /// <summary>Instance parts one Blueprint draws at most, child actors included (an instance of a two-material mesh is two).</summary>
+    private const int MaxInstanceParts = 4096;
+
+    /// <summary>Vertices one Blueprint's instance parts add at most (the Map's stand-in copies every instance into one mesh).</summary>
+    private const long MaxInstanceVertices = 1 << 20;
+
+    // CUE4Parse 1.2.2 decomposes each instance's FMatrix approximately; the level reader decomposes the stored matrix
+    // exactly (Cue4ParseLevelReader.ConvertInstance), and so does the preview.
+    private static readonly FieldInfo? InstanceMatrixField =
+        typeof(FInstancedStaticMeshInstanceData).GetField("Transform", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+
     /// <summary>
     /// Chassis (0), the parts in its slots (1) and theirs: a Rager's doors hang on its body sides (2). Which parts a stock
     /// vehicle has comes from its world spawn preset (see <see cref="StockParts"/>), not from the depth.
@@ -101,9 +121,48 @@ public sealed class MeshPreviewLoader
     /// <summary>The LOD taken for each part, from the mesh's LOD list (null = the finest with render data).</summary>
     public Func<IReadOnlyList<MeshLodInfo>, int>? LodOf { get; init; }
 
-    /// <summary>Loads one static or skeletal mesh (LOD 0) with a part per material.</summary>
+    /// <summary>True for foliage types (<c>FoliageType_InstancedStaticMesh</c>: most of the island's trees, bushes and grass).</summary>
+    public static bool IsFoliageTypeClass(string? className) =>
+        className is not null && className.StartsWith("FoliageType", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Loads what an asset of class <paramref name="className"/> looks like in game: a foliage type's tree, bush or grass,
+    /// a Blueprint's model (null when it shows no mesh), else the mesh at <paramref name="objectPath"/>. The one entry the
+    /// Assets page's 3D view and its tile pictures share.
+    /// </summary>
+    /// <exception cref="InvalidDataException">The object is not a mesh, or a foliage type's mesh cannot be loaded.</exception>
+    public PreviewModel? Load(string objectPath, string packagePath, string? className) =>
+        IsFoliageTypeClass(className) ? LoadFoliageType(objectPath)
+        : className is not null && className.Contains("Blueprint", StringComparison.OrdinalIgnoreCase) ? LoadBlueprint(packagePath)
+        : LoadMesh(objectPath);
+
+    /// <summary>
+    /// Loads the mesh a foliage type paints with the materials it puts on it (at scale 1: the game varies each instance's
+    /// scale within the type's range), or an actor foliage type's Blueprint.
+    /// </summary>
+    /// <exception cref="InvalidDataException">The type names no mesh, or its mesh cannot be loaded.</exception>
+    public PreviewModel LoadFoliageType(string objectPath)
+    {
+        var type = ResolveFoliageType(objectPath);
+        var leaf = objectPath[(objectPath.LastIndexOfAny(['/', '.']) + 1)..];
+        if (type.Mesh is null && type.ActorClass is { } actor && LoadBlueprint(PackageOf(actor)) is { } model)
+        {
+            return model with { Name = leaf };
+        }
+
+        var meshPath = type.Mesh ?? throw new InvalidDataException(type.ActorClass is { } actorClass ? $"{objectPath}: its actor {actorClass} shows no mesh." : $"{objectPath} names no mesh.");
+        var mesh = TryLoadMeshObject(meshPath) ?? throw new InvalidDataException($"{objectPath}: its mesh {meshPath} could not be loaded.");
+        var parts = new List<PreviewPart>();
+        AddMeshParts(parts, mesh, meshPath, FTransform.Identity, overrides: type.OverrideMaterials);
+        return new PreviewModel(leaf, parts, _textures);
+    }
+
+    /// <summary>
+    /// Loads one static or skeletal mesh (LOD 0) with a part per material; <paramref name="overrideMaterials"/> replace the
+    /// materials of their slots (a null or empty entry keeps the mesh's own).
+    /// </summary>
     /// <exception cref="InvalidDataException">The object is not a mesh.</exception>
-    public PreviewModel LoadMesh(string objectPath)
+    public PreviewModel LoadMesh(string objectPath, IReadOnlyList<string?>? overrideMaterials = null)
     {
         var obj = _catalog.LoadObject(objectPath);
         if (!MeshExtractor.IsMesh(obj))
@@ -112,8 +171,24 @@ public sealed class MeshPreviewLoader
         }
 
         var parts = new List<PreviewPart>();
-        AddMeshParts(parts, obj, objectPath, FTransform.Identity);
+        AddMeshParts(parts, obj, objectPath, FTransform.Identity, overrides: overrideMaterials);
         return new PreviewModel(obj.Name, parts, _textures);
+    }
+
+    /// <summary>The mesh a foliage type paints, the materials it puts on the mesh's slots and, for an actor foliage type, its actor class.</summary>
+    internal sealed record FoliageTypeMesh(string? Mesh, IReadOnlyList<string?> OverrideMaterials, string? ActorClass);
+
+    /// <summary>
+    /// Reads the foliage type at <paramref name="objectPath"/>: its <c>Mesh</c>, <c>OverrideMaterials</c> (by slot) and
+    /// <c>ActorClass</c> (<c>FoliageType_Actor</c>), as object paths.
+    /// </summary>
+    internal FoliageTypeMesh ResolveFoliageType(string objectPath)
+    {
+        var type = _catalog.LoadObject(objectPath);
+        var mesh = type.GetOrDefault<FPackageIndex>("Mesh") is { IsNull: false } m && PathOf(m) is { Length: > 0 } path ? path : null;
+        var overrides = (type.GetOrDefault<FPackageIndex[]>("OverrideMaterials") ?? []).Select(o => o is { IsNull: false } ? PathOf(o) : null).ToList();
+        var actor = type.GetOrDefault<FPackageIndex>("ActorClass") is { IsNull: false } a && PathOf(a) is { Length: > 0 } cls ? cls : null;
+        return new FoliageTypeMesh(mesh, overrides, actor);
     }
 
     /// <summary>
@@ -168,44 +243,62 @@ public sealed class MeshPreviewLoader
     /// extra meshes SCUM's NPC classes name (<c>_additionalComplexMeshes</c>: hair, beards, placed with the head). A
     /// character is posed from frame 0 of the idle its body plays (<c>AnimationData.AnimToPlay</c>, else the Idle
     /// sequence its AnimBlueprint names): skeletal parts are skinned into that pose and sockets follow the posed bones.
+    /// A child Blueprint's changes to inherited components (<c>InheritableComponentHandler</c>) win over the parent's
+    /// templates, a component's <c>OverrideMaterials</c> replace its mesh's slot materials, a child actor component brings
+    /// its class's components (<see cref="MaxChildActorDepth"/> levels deep at most) and an instanced component draws each instance
+    /// (the Blueprint's instances share one budget, <see cref="MaxInstanceParts"/>, apart from its components').
     /// </summary>
-    private void AddComponents(List<PreviewPart> parts, string packagePath)
+    private void AddComponents(List<PreviewPart> parts, string packagePath, List<ComponentMesh>? resolved = null, int childDepth = 0, Walk? walk = null)
     {
-        // ponytail: InheritableComponentHandler overrides of parent components are not applied (rarely move a mesh).
-        var chain = new List<CUE4Parse.UE4.Assets.IPackage>();
-        for (var current = packagePath; current is not null && chain.Count < MaxClassDepth;)
-        {
-            if (!_catalog.TryLoadPackage(current, out var package))
-            {
-                break;
-            }
-
-            chain.Add(package);
-            current = package.GetExports().OfType<UStruct>().FirstOrDefault(s => s.SuperStruct is { IsNull: false }) is { } cls
-                ? PackageOf(PathOf(cls.SuperStruct!))
-                : null;
-        }
+        var chain = ClassChain(packagePath);
+        walk ??= new Walk(packagePath);
 
         // The class defaults' components by name (the child class's template first) and the class defaults themselves.
         var components = new Dictionary<string, List<UObject>>(StringComparer.OrdinalIgnoreCase);
         var defaults = new List<UObject>();
         foreach (var package in chain)
         {
-            var exports = package.GetExports().ToList();
-            if (exports.FirstOrDefault(e => e.Name.StartsWith("Default__", StringComparison.Ordinal)) is not { } cdo)
+            var map = package.ExportMap;
+            var cdoIndex = Array.FindIndex(map, e => OuterOf(e) < 0 && e.ObjectName.Text.StartsWith("Default__", StringComparison.Ordinal));
+            if (cdoIndex < 0 || ExportAt(package, cdoIndex) is not { } cdo)
             {
                 continue;
             }
 
             defaults.Add(cdo);
-            foreach (var export in exports.Where(e => e.Outer is { } outer && outer.Name == cdo.Name))
+            for (var i = 0; i < map.Length; i++)
             {
+                if (OuterOf(map[i]) != cdoIndex || ExportAt(package, i) is not { } export)
+                {
+                    continue;
+                }
+
                 if (!components.TryGetValue(export.Name, out var templates))
                 {
                     components[export.Name] = templates = [];
                 }
 
                 templates.Add(export);
+            }
+        }
+
+        // Inherited construction-script components a child class changes (its InheritableComponentHandler records), the
+        // child class's template first: they come before the owner's own template, so the child's mesh and materials win.
+        var inherited = new Dictionary<string, List<UObject>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var handler in chain.SelectMany(p => ExportsOfClass(p, "InheritableComponentHandler")))
+        {
+            foreach (var record in handler.GetOrDefault<FStructFallback[]>("Records") ?? [])
+            {
+                if (record?.GetOrDefault<FStructFallback>("ComponentKey") is { } key && key.TryGetValue(out FName variable, "SCSVariableName") && !variable.IsNone
+                    && TryLoad<UObject>(record.GetOrDefault<FPackageIndex>("ComponentTemplate")) is { } template)
+                {
+                    if (!inherited.TryGetValue(variable.Text, out var templates))
+                    {
+                        inherited[variable.Text] = templates = [];
+                    }
+
+                    templates.Add(template);
+                }
             }
         }
 
@@ -223,15 +316,12 @@ public sealed class MeshPreviewLoader
 
         foreach (var name in components.Keys.ToList())
         {
-            if (Visible(components[name]) && MeshOf(name) is { } mesh)
-            {
-                AddMeshParts(parts, mesh, PathOfObject(mesh), WorldOf(name, 0), pose);
-            }
+            Place(components[name], WorldOf(name, 0));
         }
 
         for (var i = chain.Count - 1; i >= 0; i--)
         {
-            foreach (var scs in chain[i].GetExports().Where(e => e.ExportType == "SimpleConstructionScript"))
+            foreach (var scs in ExportsOfClass(chain[i], "SimpleConstructionScript"))
             {
                 foreach (var rootNode in scs.GetOrDefault<FPackageIndex[]>("RootNodes") ?? [])
                 {
@@ -253,16 +343,90 @@ public sealed class MeshPreviewLoader
             }
         }
 
-        UObject? MeshOf(string name)
+        UObject? MeshOf(string name) => components.TryGetValue(name, out var templates) && MeshPathOf(templates) is { } path ? MeshAt(path) : null;
+
+        UObject? MeshAt(string path)
         {
-            if (meshes.TryGetValue(name, out var known))
+            if (!meshes.TryGetValue(path, out var mesh))
             {
-                return known;
+                meshes[path] = mesh = TryLoadMeshObject(path);
             }
 
-            var mesh = components.TryGetValue(name, out var templates) ? LoadMeshOf(templates) : null;
-            meshes[name] = mesh;
             return mesh;
+        }
+
+        // A visible component's mesh where the component sits (recorded also when the mesh cannot be loaded), with the
+        // materials it overrides; an instanced component's mesh once per instance, a child actor's class where it sits.
+        void Place(List<UObject> templates, FTransform world)
+        {
+            if (!Visible(templates))
+            {
+                return;
+            }
+
+            if (TryGet<FPackageIndex>(templates, "ChildActorClass", out var childClass) && PackageOf(PathOf(childClass)) is { Length: > 0 } child
+                && !child.StartsWith("/Script/", StringComparison.OrdinalIgnoreCase) && childDepth < MaxChildActorDepth && walk.Expanding.Add(child))
+            {
+                var firstPart = parts.Count;
+                var firstResolved = resolved?.Count ?? 0;
+                AddComponents(parts, child, resolved, childDepth + 1, walk);
+                walk.Expanding.Remove(child);
+                for (var i = firstPart; i < parts.Count; i++)
+                {
+                    parts[i] = parts[i] with { Transform = parts[i].Transform * world };
+                }
+
+                for (var i = firstResolved; i < (resolved?.Count ?? 0); i++)
+                {
+                    resolved![i] = resolved[i] with { Transform = resolved[i].Transform * world };
+                }
+            }
+
+            if (MeshPathOf(templates) is not { } path)
+            {
+                return;
+            }
+
+            var overrides = TryGet<FPackageIndex[]>(templates, "OverrideMaterials", out var materials) ? materials.Select(m => m is { IsNull: false } ? PathOf(m) : null).ToList() : null;
+            if (Instances(templates) is not { Length: > 0 } instances)
+            {
+                walk.Components++;
+                resolved?.Add(new ComponentMesh(path, world, overrides));
+                if (MeshAt(path) is { } mesh)
+                {
+                    AddMeshParts(parts, mesh, path, world, pose, overrides);
+                }
+
+                return;
+            }
+
+            // The mesh's parts once, then a copy per instance sharing their geometry (uploaded once by PreviewScene), as
+            // many as the Blueprint's instance budget leaves (an instance whose mesh cannot be loaded counts as one part).
+            var first = parts.Count;
+            if (MeshAt(path) is { } instanced)
+            {
+                AddMeshParts(parts, instanced, path, FTransform.Identity, null, overrides);
+            }
+
+            var shared = parts.GetRange(first, parts.Count - first);
+            parts.RemoveRange(first, shared.Count);
+            var perInstance = Math.Max(1, shared.Count);
+            var vertices = shared.Sum(p => (long)p.Mesh.VertexCount);
+            var take = Math.Min(instances.Length, (MaxInstanceParts - walk.InstanceParts) / perInstance);
+            take = (int)Math.Max(0, vertices > 0 ? Math.Min(take, (MaxInstanceVertices - walk.InstanceVertices) / vertices) : take);
+            if (take < instances.Length)
+            {
+                _logger.LogDebug("{Blueprint}: {Mesh} draws {Taken} of its {Count} instances (instance budget)", packagePath, path, take, instances.Length);
+            }
+
+            walk.InstanceParts += take * perInstance;
+            walk.InstanceVertices += take * vertices;
+            foreach (var instance in instances.Take(take))
+            {
+                var at = ConvertInstance(instance) * world;
+                resolved?.Add(new ComponentMesh(path, at, overrides));
+                parts.AddRange(shared.Select(p => p with { Transform = at }));
+            }
         }
 
         // A component's place: its relative transform under its parent (on the parent's socket when attached to one).
@@ -291,7 +455,7 @@ public sealed class MeshPreviewLoader
 
         void AddNode(FPackageIndex index, string? parentName, FTransform fallback, int depth)
         {
-            if (depth > 32 || parts.Count >= MaxAttachments * 8 || TryLoad<UObject>(index) is not { } node)
+            if (depth > 32 || walk.Components >= MaxComponents || TryLoad<UObject>(index) is not { } node)
             {
                 return;
             }
@@ -300,18 +464,16 @@ public sealed class MeshPreviewLoader
             var variable = node.GetOrDefault<FName>("InternalVariableName").Text;
             if (TryLoad<UObject>(node.GetOrDefault<FPackageIndex>("ComponentTemplate")) is { } template)
             {
+                List<UObject> templates = variable is { Length: > 0 } && inherited.TryGetValue(variable, out var changed) ? [.. changed, template] : [template];
                 var socket = node.GetOrDefault<FName>("AttachToName").Text;
-                world = Relative([template]) * (OnSocket(parentName, socket) ?? FTransform.Identity) * world;
+                world = Relative(templates) * (OnSocket(parentName, socket) ?? FTransform.Identity) * world;
                 if (variable is { Length: > 0 })
                 {
                     worlds[variable] = world;
-                    components.TryAdd(variable, [template]);
+                    components.TryAdd(variable, templates);
                 }
 
-                if (Visible([template]) && (variable is { Length: > 0 } ? MeshOf(variable) : LoadMeshOf([template])) is { } mesh)
-                {
-                    AddMeshParts(parts, mesh, PathOfObject(mesh), world, pose);
-                }
+                Place(variable is { Length: > 0 } ? components[variable] : templates, world);
             }
 
             foreach (var child in node.GetOrDefault<FPackageIndex[]>("ChildNodes") ?? [])
@@ -319,17 +481,82 @@ public sealed class MeshPreviewLoader
                 AddNode(child, variable, world, depth + 1);
             }
         }
+    }
 
-        UObject? LoadMeshOf(List<UObject> templates)
+    /// <summary>A mesh a Blueprint component draws: its path, its place in the Blueprint and the materials it puts on the mesh's slots.</summary>
+    internal sealed record ComponentMesh(string Mesh, FTransform Transform, IReadOnlyList<string?>? OverrideMaterials);
+
+    /// <summary>The meshes <see cref="LoadBlueprint"/> places for the Blueprint's components, with those that cannot be loaded.</summary>
+    internal IReadOnlyList<ComponentMesh> ResolveComponents(string packagePath)
+    {
+        var resolved = new List<ComponentMesh>();
+        AddComponents([], packagePath, resolved);
+        return resolved;
+    }
+
+    /// <summary>The mesh a component's templates name (skeletal first), or null.</summary>
+    private string? MeshPathOf(List<UObject> templates)
+    {
+        foreach (var property in (ReadOnlySpan<string>)["SkeletalMesh", "StaticMesh"])
         {
-            foreach (var property in (ReadOnlySpan<string>)["SkeletalMesh", "StaticMesh"])
+            if (TryGet<FPackageIndex>(templates, property, out var index) && IsMesh(index) && PathOf(index) is { Length: > 0 } path)
             {
-                if (TryGet<FPackageIndex>(templates, property, out var index) && IsMesh(index) && PathOf(index) is { Length: > 0 } path)
-                {
-                    return TryLoadMeshObject(path);
-                }
+                return path;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// The Blueprint's package and its Blueprint parents' (child first), from the class export's <c>SuperIndex</c> in each
+    /// export map: no class is deserialized, so a class CUE4Parse cannot read does not end the chain.
+    /// </summary>
+    private List<UePackage> ClassChain(string packagePath)
+    {
+        var chain = new List<UePackage>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        for (var current = packagePath; current is { Length: > 0 } && chain.Count < MaxClassDepth && seen.Add(current);)
+        {
+            if (!_catalog.TryLoadPackage(current, out var loaded) || loaded is not UePackage package)
+            {
+                break;
             }
 
+            chain.Add(package);
+            var cls = Array.FindIndex(package.ExportMap, e => OuterOf(e) < 0 && e.SuperIndex is { IsNull: false });
+            var parent = cls < 0 ? string.Empty : PackageOf(PathOf(package.ExportMap[cls].SuperIndex));
+            current = parent.StartsWith("/Script/", StringComparison.OrdinalIgnoreCase) ? null : parent;
+        }
+
+        return chain;
+    }
+
+    private static int OuterOf(FObjectExport export) => export.OuterIndex is { IsExport: true } outer ? outer.Index - 1 : -1;
+
+    /// <summary>The exports of <paramref name="package"/> whose class is the engine class <paramref name="className"/>.</summary>
+    private IEnumerable<UObject> ExportsOfClass(UePackage package, string className)
+    {
+        for (var i = 0; i < package.ExportMap.Length; i++)
+        {
+            if (package.ExportMap[i].ClassIndex is { IsImport: true } c && package.ImportMap[-c.Index - 1].ObjectName.Text == className
+                                                                       && ExportAt(package, i) is { } export)
+            {
+                yield return export;
+            }
+        }
+    }
+
+    /// <summary>Export <paramref name="index"/> of <paramref name="package"/>, or null when CUE4Parse cannot read it.</summary>
+    private UObject? ExportAt(UePackage package, int index)
+    {
+        try
+        {
+            return ((CUE4Parse.UE4.Assets.IPackage)package).GetExport(index);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogDebug("Export {Index} of {Package} could not be read: {Message}", index, package.Name, ex.Message);
             return null;
         }
     }
@@ -347,6 +574,47 @@ public sealed class MeshPreviewLoader
 
         value = default!;
         return false;
+    }
+
+    /// <summary>The instances (component space) of an instanced static mesh component, the child class's template first; empty for others.</summary>
+    private static FInstancedStaticMeshInstanceData[] Instances(List<UObject> templates)
+    {
+        foreach (var template in templates)
+        {
+            if (template is UInstancedStaticMeshComponent { PerInstanceSMData: { Length: > 0 } data })
+            {
+                return data;
+            }
+        }
+
+        return [];
+    }
+
+    /// <summary>
+    /// What one Blueprint's walk has used, its child actors' included: the mesh components placed, the instance parts and
+    /// their vertices (<see cref="MaxComponents"/>, <see cref="MaxInstanceParts"/>), and the child actor classes being expanded.
+    /// </summary>
+    private sealed class Walk(string root)
+    {
+        public HashSet<string> Expanding { get; } = new(StringComparer.OrdinalIgnoreCase) { root };
+
+        public int Components { get; set; }
+
+        public int InstanceParts { get; set; }
+
+        public long InstanceVertices { get; set; }
+    }
+
+    private static FTransform ConvertInstance(FInstancedStaticMeshInstanceData data)
+    {
+        if (InstanceMatrixField?.GetValue(data) is CUE4Parse.UE4.Objects.Core.Math.FMatrix m)
+        {
+            return FTransform.FromMatrix(new Matrix4x4(m.M00, m.M01, m.M02, m.M03, m.M10, m.M11, m.M12, m.M13, m.M20, m.M21, m.M22, m.M23, m.M30, m.M31, m.M32, m.M33));
+        }
+
+        var t = data.TransformData;
+        return new FTransform(new FQuat(t.Rotation.X, t.Rotation.Y, t.Rotation.Z, t.Rotation.W).GetNormalized(),
+            new FVector(t.Translation.X, t.Translation.Y, t.Translation.Z), new FVector(t.Scale3D.X, t.Scale3D.Y, t.Scale3D.Z));
     }
 
     private static bool Visible(List<UObject> templates) =>
@@ -462,21 +730,14 @@ public sealed class MeshPreviewLoader
     /// </summary>
     public string? FindMeshPath(string packagePath)
     {
-        var current = packagePath;
-        for (var depth = 0; current is not null && depth < MaxClassDepth; depth++)
+        var chain = ClassChain(packagePath);
+        foreach (var package in chain)
         {
-            if (!_catalog.TryLoadPackage(current, out var package))
-            {
-                return null;
-            }
-
             string? staticMesh = null;
-            string? parent = null;
-            foreach (var export in package.GetExports())
+            for (var i = 0; i < package.ExportMap.Length; i++)
             {
-                if (export is UStruct { SuperStruct: { IsNull: false } super })
+                if (package.ExportMap[i].SuperIndex is { IsNull: false } || ExportAt(package, i) is not { } export || export is UStruct)
                 {
-                    parent ??= PackageOf(PathOf(super));
                     continue;
                 }
 
@@ -496,11 +757,15 @@ public sealed class MeshPreviewLoader
             {
                 return staticMesh;
             }
-
-            current = parent;
         }
 
-        return null;
+        // SCUM's attachment parts (BPC_WolfsWagen_Door_FrontLeft) name their mesh only softly, in MeshSetup.Mesh (child
+        // class first). Other mesh references on an item's defaults (its magazine, a dropped variant) are not its look:
+        // the Map's loot stand-ins come from here and such an item keeps its icon.
+        return chain.Select(p => Array.FindIndex(p.ExportMap, e => OuterOf(e) < 0 && e.ObjectName.Text.StartsWith("Default__", StringComparison.Ordinal)) is var cdo and >= 0
+                ? ExportAt(p, cdo) : null)
+            .Select(d => d?.GetOrDefault<FStructFallback>("MeshSetup")?.GetOrDefault<FSoftObjectPath>("Mesh").AssetPathName.Text)
+            .FirstOrDefault(p => p is { Length: > 0 } && p != "None");
     }
 
     /// <summary>
@@ -605,7 +870,8 @@ public sealed class MeshPreviewLoader
     /// Adds one part per material of <paramref name="mesh"/> (sections sharing a material are merged); a mesh without
     /// render data is skipped. A skeletal mesh is skinned into <paramref name="pose"/> when one is given (<see cref="Skinning"/>).
     /// </summary>
-    private void AddMeshParts(List<PreviewPart> parts, UObject mesh, string meshPath, FTransform transform, IReadOnlyDictionary<string, FTransform>? pose = null)
+    private void AddMeshParts(List<PreviewPart> parts, UObject mesh, string meshPath, FTransform transform, IReadOnlyDictionary<string, FTransform>? pose = null,
+        IReadOnlyList<string?>? overrides = null)
     {
         if (!_meshes.TryGetValue(meshPath, out var data))
         {
@@ -640,11 +906,11 @@ public sealed class MeshPreviewLoader
             }
         }
 
-        var groups = data.Sections.GroupBy(s => s.MaterialName, StringComparer.OrdinalIgnoreCase).ToList();
+        var groups = GroupSections(data, overrides);
         foreach (var group in groups)
         {
-            var (texture, tint, clip) = ResolveMaterial(group.Key);
-            var (normal, roughness) = texture is null ? (null, Vector2.Zero) : ResolveSurface(group.Key, clip);
+            var (texture, tint, clip, roughness) = ResolveMaterial(group.Material);
+            var normal = texture is null ? null : ResolveNormal(group.Material);
             MeshData part;
             if (groups.Count == 1)
             {
@@ -653,7 +919,7 @@ public sealed class MeshPreviewLoader
             else
             {
                 var indices = new List<uint>();
-                foreach (var section in group)
+                foreach (var section in group.Sections)
                 {
                     indices.AddRange(new ArraySegment<uint>(data.Indices, section.FirstIndex, section.IndexCount));
                 }
@@ -661,22 +927,31 @@ public sealed class MeshPreviewLoader
                 part = MeshData.Create(data.Name, data.Positions, indices.ToArray(), data.Normals, data.Uv0);
             }
 
-            var name = group.Key.Length == 0 ? data.Name : data.Name + " / " + group.Key[(group.Key.LastIndexOfAny(['/', '.']) + 1)..];
-            parts.Add(new PreviewPart(name, part, texture, transform, tint, clip) { Material = group.Key, NormalPath = normal, Roughness = roughness });
+            var name = group.Material.Length == 0 ? data.Name : data.Name + " / " + group.Material[(group.Material.LastIndexOfAny(['/', '.']) + 1)..];
+            parts.Add(new PreviewPart(name, part, texture, transform, tint, clip) { Material = group.Material, NormalPath = normal, Roughness = roughness });
         }
     }
 
     /// <summary>
-    /// The material's base-colour texture (decoded once per path), the tint to draw with (null = the texture as is) and
-    /// the alpha clip. A groom (MetaHuman hair, beard, mustache cards) has no colour texture, only a coverage atlas in its
-    /// <c>Alpha</c> parameter: it is drawn as dark strands cut out by that atlas (<see cref="CoverageMask"/>) instead of
-    /// solid cards wrapping the head.
+    /// The sections of <paramref name="data"/> by the material they are drawn with: the component's override for the
+    /// section's slot when it names one (by slot index: two slots sharing a material can take different overrides), else
+    /// the mesh's own slot material. Sections ending up with the same material are merged into one part.
     /// </summary>
-    private (string? TexturePath, Vector4? Tint, float Clip) ResolveMaterial(string materialPath)
+    internal static IReadOnlyList<(string Material, IReadOnlyList<MeshSection> Sections)> GroupSections(MeshData data, IReadOnlyList<string?>? overrides) =>
+        data.Sections.GroupBy(s => overrides is not null && s.SlotIndex >= 0 && s.SlotIndex < overrides.Count && overrides[s.SlotIndex] is { Length: > 0 } o ? o : s.MaterialName,
+                StringComparer.OrdinalIgnoreCase)
+            .Select(g => (g.Key, (IReadOnlyList<MeshSection>)g.ToList())).ToList();
+
+    /// <summary>
+    /// The material's base-colour texture (decoded once per path) and its look (<see cref="MaterialLooks"/>). A groom
+    /// (MetaHuman hair, beard, mustache cards) has no colour texture, only a coverage atlas in its <c>Alpha</c> parameter:
+    /// it is drawn as dark strands cut out by that atlas (<see cref="CoverageMask"/>) instead of solid cards wrapping the head.
+    /// </summary>
+    private (string? TexturePath, Vector4? Tint, float Clip, Vector2 Roughness) ResolveMaterial(string materialPath)
     {
         if (TextureSize <= 0 || string.IsNullOrEmpty(materialPath))
         {
-            return (null, Untextured, 0f);
+            return (null, MaterialLooks.Untextured, 0f, Vector2.Zero);
         }
 
         if (!_materials.TryGetValue(materialPath, out var material))
@@ -694,39 +969,28 @@ public sealed class MeshPreviewLoader
             _materials[materialPath] = material;
         }
 
-        var scale = material?.BaseColorScale is { } s ? new Vector4(s, 1f) : (Vector4?)null; // SCUM's masters: x tint x brightness
         if (material?.BaseColorTexture is { } texturePath && Decoded(texturePath, () => DecodeTexture(texturePath)))
         {
-            return (texturePath, material.IsTranslucent ? null : scale, material.OpacityMaskClip ?? 0f);
+            var (tint, clip, roughness) = MaterialLooks.Of(material, materialPath, textured: true);
+            return (texturePath, tint, clip, roughness);
         }
 
         if (material?.Textures.FirstOrDefault(IsCoverage) is { } coverage && Decoded(coverage.TexturePath + MaskSuffix, () => CoverageMask(coverage.TexturePath)))
         {
-            return (coverage.TexturePath + MaskSuffix, GroomTint, 0.5f);
+            return (coverage.TexturePath + MaskSuffix, GroomTint, 0.5f, Vector2.Zero);
         }
 
-        return (null, material?.SurfaceColor ?? Untextured, 0f);
+        var look = MaterialLooks.Of(material, materialPath, textured: false);
+        return (null, look.Tint, look.Clip, look.Roughness);
     }
 
-    /// <summary>The material's normal map (decoded once per path) and, for an opaque one, its roughness range.</summary>
-    private (string? NormalPath, Vector2 Roughness) ResolveSurface(string materialPath, float clip)
-    {
-        if (!_materials.TryGetValue(materialPath, out var material) || material is null)
-        {
-            return (null, Vector2.Zero);
-        }
-
-        var roughness = clip == 0f && !material.IsTranslucent && material.RoughnessRange is { } r ? r : Vector2.Zero;
-        return material.NormalTexture is { } path && Decoded(path, () => DecodeTexture(path))
-            ? (path, roughness)
-            : (null, roughness);
-    }
+    /// <summary>The material's normal map (decoded once per path), or null.</summary>
+    private string? ResolveNormal(string materialPath) =>
+        _materials.TryGetValue(materialPath, out var material) && material?.NormalTexture is { } path && Decoded(path, () => DecodeTexture(path)) ? path : null;
 
     private TextureImage DecodeTexture(string path) => ForGpu
         ? TextureDecoder.DecodeForGpu(_catalog.LoadObject<UTexture2D>(path), maxSize: TextureSize)
         : TextureDecoder.Decode(_catalog.LoadObject<UTexture2D>(path), maxSize: TextureSize);
-
-    private static Vector4 Untextured => new(0.6f, 0.6f, 0.6f, 1f);
 
     /// <summary>Dark hair for groom cards drawn through their coverage atlas.</summary>
     private static Vector4 GroomTint => new(0.10f, 0.075f, 0.06f, 1f);
@@ -966,11 +1230,21 @@ public sealed class MeshPreviewLoader
         }
     }
 
+    /// <summary>The class name of an import (<c>StaticMesh</c>, <c>BlueprintGeneratedClass</c> …) from the import map; empty for others.</summary>
+    private static string ImportClass(FPackageIndex index) =>
+        index.IsImport && index.Owner is UePackage package && -index.Index - 1 < package.ImportMap.Length ? package.ImportMap[-index.Index - 1].ClassName.Text : string.Empty;
+
+    /// <summary>True when <paramref name="index"/> is a static or skeletal mesh: by its import's class, else by loading it.</summary>
     private static bool IsMesh(FPackageIndex index)
     {
         if (index.IsNull)
         {
             return false;
+        }
+
+        if (ImportClass(index) is "StaticMesh" or "SkeletalMesh")
+        {
+            return true;
         }
 
         try
@@ -994,18 +1268,6 @@ public sealed class MeshPreviewLoader
         {
             _logger.LogDebug("Mesh {Mesh} could not be loaded: {Message}", objectPath, ex.Message);
             return null;
-        }
-    }
-
-    private string PathOfObject(UObject obj)
-    {
-        try
-        {
-            return AssetPaths.NormalizeObjectPath(obj.GetPathName(), _catalog.ProjectName);
-        }
-        catch (Exception ex) when (ex is not OutOfMemoryException)
-        {
-            return obj.Name;
         }
     }
 

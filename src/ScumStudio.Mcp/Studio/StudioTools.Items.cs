@@ -115,7 +115,7 @@ public sealed partial class StudioTools
             "#SpawnVehicle BPC_<newName> finds it. 'caption' sets its in-game name.",
             ToolSchema.Object()
                 .String("template", "Stock asset name or path (Weapon_RPK-74, BPC_WolfsWagen, …).", required: true)
-                .String("newName", "Items: the new asset name (Weapon_RPK-74_Gold). Vehicles: the new token (Hunter → BPC_Hunter).", required: true)
+                .String("newName", "Items: the new asset name (Weapon_RPK-74_Gold). Vehicles: the new token (Hunter → BPC_Hunter). Letters, digits, _ and -, not ending in _<number>, which the engine reads as an FName number (Hunter2 or Hunter_v2, not Hunter_2).", required: true)
                 .String("caption", "In-game name written to the clone's entity setup.")
                 .Boolean("includeAttachments", "Vehicles: also clone the attachment classes (default true).")
                 .Boolean("includeSpawnPresets", "Vehicles: also clone the manual spawn presets (default true).")

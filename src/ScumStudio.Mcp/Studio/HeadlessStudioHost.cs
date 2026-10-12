@@ -24,6 +24,7 @@ public sealed class HeadlessStudioHost : IStudioHost, IDisposable
 
     private readonly ILogger _logger;
     private AssetCatalog? _catalog;
+    private IReadOnlyList<string> _ownNames = [];
     private Project? _project;
 
     /// <summary>Creates the host (nothing open yet).</summary>
@@ -59,22 +60,42 @@ public sealed class HeadlessStudioHost : IStudioHost, IDisposable
             throw new InvalidOperationException($"No source given: pass 'path' (the game's SCUM\\Content\\Paks folder or an extracted folder) or set {SourceVariable} in the MCP server configuration.");
         }
 
-        source = Path.GetFullPath(source.Trim().Trim('"'));
+        return Task.FromResult(Open(Path.GetFullPath(source.Trim().Trim('"')), OwnNames(null)));
+    }
+
+    private IReadOnlyList<string> OwnNames(string? modName) => _project is { } project ? OwnPaks.ProjectNames(project.Manifest.Name, modName) : [];
+
+    // The open project's exported paks (and this export's) are not game files: the client source leaves out the same paks
+    // as the server's, so it is opened again when a project or a mod name changes which paks are read.
+    private void LeaveOutOwnPaks(string? modName)
+    {
+        var names = OwnNames(modName);
+        if (_catalog?.SourcePath is { } source && OwnPaks.ChangesSkips(source, _ownNames, names))
+        {
+            _logger.LogInformation("{Message}", Open(source, names));
+        }
+    }
+
+    private string Open(string source, IReadOnlyList<string> ownNames)
+    {
         var key = AesKeyText.FromEnvironmentOrStore();
+        var skipped = new List<string>();
         var catalog = AssetCatalog.Open(source, new AssetCatalogOptions
         {
             AesKey = string.IsNullOrWhiteSpace(key) ? null : AesKeyText.Normalize(key),
             Logger = _logger,
+            PakFileFilter = OwnPaks.Filter(ownNames, skipped),
         });
         _catalog?.Dispose();
         _catalog = catalog;
+        _ownNames = ownNames;
         var world = WorldIndex.FromCatalog(catalog);
         World = world.Packages.Count == 0 ? null : world;
         var locked = catalog.UnmountedContainerCount;
         _logger.LogInformation("Opened {Source}: {Packages} packages.", catalog.DisplayName, catalog.PackageFiles.Count);
-        return Task.FromResult($"Opened {catalog.DisplayName}." + (locked > 0
+        return $"Opened {catalog.DisplayName}." + (locked > 0
             ? $" {locked} encrypted pak(s) could not be mounted: set {AesKeyText.EnvironmentVariable} in the MCP server's environment."
-            : string.Empty));
+            : string.Empty) + (skipped.Count > 0 ? $" Not read as game files (the studio's own exported mod paks): {string.Join(", ", skipped)}." : string.Empty);
     }
 
     /// <inheritdoc />
@@ -98,15 +119,21 @@ public sealed class HeadlessStudioHost : IStudioHost, IDisposable
         var project = await Project.CreateAsync(directory, name.Trim(), sources: sources, cancellationToken: cancellationToken).ConfigureAwait(false);
         _project?.Dispose();
         _project = project;
+        LeaveOutOwnPaks(null);
         return project;
     }
 
     /// <inheritdoc />
     public async Task<Project> OpenProjectAsync(string path, CancellationToken cancellationToken)
     {
-        var project = await Project.OpenAsync(path, cancellationToken: cancellationToken).ConfigureAwait(false);
-        _project?.Dispose();
-        _project = project;
+        if (_project is not { } project || !IsFolderOf(project, path))
+        {
+            project = await Project.OpenAsync(path, cancellationToken: cancellationToken).ConfigureAwait(false);
+            _project?.Dispose();
+            _project = project;
+        }
+
+        LeaveOutOwnPaks(null);
         if (_catalog is null && project.Manifest.Sources.FirstOrDefault(s => s.Role == ProjectSourceRole.Client) is { } source
             && (File.Exists(source.Path) || Directory.Exists(source.Path)))
         {
@@ -134,6 +161,7 @@ public sealed class HeadlessStudioHost : IStudioHost, IDisposable
     public async Task<IReadOnlyList<ExportResult>> ExportAsync(ExportOptions options, bool includeServer, CancellationToken cancellationToken)
     {
         var project = _project ?? throw new InvalidOperationException("No project is open.");
+        LeaveOutOwnPaks(options.ModName);
         var catalog = _catalog ?? throw new InvalidOperationException("No game files are open.");
         var exporter = new ProjectExporter(_logger);
         var results = new List<ExportResult>
@@ -149,6 +177,7 @@ public sealed class HeadlessStudioHost : IStudioHost, IDisposable
             {
                 AesKey = string.IsNullOrWhiteSpace(key) ? null : AesKeyText.Normalize(key),
                 Logger = _logger,
+                PakFileFilter = OwnPaks.Filter(OwnNames(options.ModName)),
             });
             results.Add(await exporter.ExportAsync(project, serverCatalog, options, ProjectSourceRole.Server, null, cancellationToken).ConfigureAwait(false));
         }
@@ -175,4 +204,11 @@ public sealed class HeadlessStudioHost : IStudioHost, IDisposable
         _project?.Dispose();
         _catalog?.Dispose();
     }
+
+    /// <summary>True when <paramref name="path"/> is <paramref name="project"/>'s folder: opening it again would clash with its own lock.</summary>
+    private static bool IsFolderOf(Project project, string path) =>
+        Project.Find(path) is { } directory && string.Equals(
+            Path.TrimEndingDirectorySeparator(project.DirectoryPath),
+            Path.TrimEndingDirectorySeparator(directory),
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
 }

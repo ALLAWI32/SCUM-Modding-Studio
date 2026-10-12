@@ -12,7 +12,7 @@ namespace ScumStudio.Viewport;
 /// to the next (render thread, GL context current): when the levels around a moving camera change, only meshes the new set
 /// adds are uploaded, and <see cref="Stage"/> sends those a few milliseconds a frame before the scene switches. What the
 /// last <see cref="KeepUploads"/> uploads did not use and no node draws is freed by <see cref="Trim"/>. Scenes uploaded
-/// with a cache do not own these meshes; <see cref="Clear"/> forgets everything once the GL context is gone.
+/// with a cache do not own these meshes; <see cref="Clear"/> frees everything before the GL context goes.
 /// </summary>
 public sealed class GpuMeshCache
 {
@@ -58,6 +58,21 @@ public sealed class GpuMeshCache
 
         _textures[path] = entry with { Used = _generation };
         _taken?.Add(path);
+        return entry.Texture;
+    }
+
+    /// <summary>
+    /// The cached texture of <paramref name="path"/>, counted as used by the current upload (a mesh the scene owns draws
+    /// with it), or null when the cache does not hold it.
+    /// </summary>
+    internal GpuTexture? Keep(string path)
+    {
+        if (!_textures.TryGetValue(path, out var entry))
+        {
+            return null;
+        }
+
+        _textures[path] = entry with { Used = _generation };
         return entry.Texture;
     }
 
@@ -138,11 +153,12 @@ public sealed class GpuMeshCache
 
     /// <summary>
     /// Counts the meshes <paramref name="nodes"/> draw (and their textures) as used by the current upload: a clone of a level
-    /// that went, a pin or a replaced mesh keeps what it draws on the GPU while it is drawn.
+    /// that went, a pin or a replaced mesh keeps what it draws on the GPU while it is drawn. So do <paramref name="putBack"/>,
+    /// the meshes a bend or a replaced mesh gives back to its node when undone.
     /// </summary>
-    internal void KeepDrawn(IEnumerable<SceneNode> nodes)
+    internal void KeepDrawn(IEnumerable<SceneNode> nodes, IEnumerable<MeshHandle> putBack)
     {
-        var drawn = new HashSet<int>();
+        var drawn = putBack.Select(m => m.Id).ToHashSet();
         foreach (var node in nodes)
         {
             if (node.Mesh is { } mesh)
@@ -266,11 +282,26 @@ public sealed class GpuMeshCache
         }
     }
 
-    /// <summary>Forgets every entry without touching GL (the context and its objects are gone).</summary>
+    /// <summary>
+    /// Deletes every cached texture (meshes', terrain ground and layer weights) and forgets every entry, with the GL context
+    /// still current and before the renderer, which deletes the meshes, is disposed (the viewport's GL de-init). The context
+    /// shares its objects with the window's, so a texture only forgotten stayed in video memory at every pop-out and dock-back.
+    /// </summary>
     public void Clear()
     {
         _staging?.Cancel.Cancel();
         _staging = null;
+        foreach (var entry in _textures.Values)
+        {
+            entry.Texture.Dispose();
+        }
+
+        foreach (var entry in _terrain.Values)
+        {
+            entry.Texture?.Dispose();
+            entry.Weights?.Dispose();
+        }
+
         _meshes.Clear();
         _textures.Clear();
         _terrain.Clear();
@@ -282,7 +313,12 @@ public sealed class GpuMeshCache
         public Staging(PreparedLevelScene scene, GpuMeshCache cache)
         {
             Scene = scene;
-            Textures = new Queue<(string, TextureImage)>(scene.Textures.Where(t => !cache._textures.ContainsKey(t.Key)).Select(t => (t.Key, t.Value)));
+
+            // A texture the cache holds blurrier (the quality went up) is sharpened here too, a few a frame, not all in the
+            // frame that shows the scene (owner: "the app freezes as I fly").
+            Textures = new Queue<(string, TextureImage)>(scene.Textures
+                .Where(t => !cache._textures.TryGetValue(t.Key, out var known) || t.Value.Width > known.Texture.Width)
+                .Select(t => (t.Key, t.Value)));
             Terrain = new Queue<PreparedTerrain>(scene.Terrain.Where(t => !cache._terrain.ContainsKey(t)));
             var meshes = scene.Meshes.Values.Where(m => !cache._meshes.ContainsKey(m.MeshPath)).ToList();
             var token = Cancel.Token;

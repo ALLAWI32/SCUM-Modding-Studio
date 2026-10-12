@@ -16,8 +16,8 @@ namespace ScumStudio.Level.Export;
 /// keeps grass out of the four quads it touches. The weightmaps (and the <c>EraseFoliage</c> layer the level designers
 /// painted under roads) only colour the ground in a cooked build.</para>
 /// <para>The edit therefore zeroes, in place (same length, every other byte as cooked), each grass density sample whose
-/// quads touch an object's footprint, and the export deletes the bushes and grass instances (SCUM's
-/// <c>FoliageInstancedBush</c>/<c>FoliageInstancedGrass</c> components, not trees or rocks) whose base stands inside it.</para>
+/// quads touch an object's footprint. The tile's painted foliage (bushes, trees, rocks) stays as cooked: collapsing the
+/// bushes under it rewrote whole SCUM foliage components and made trees and bushes blink in game (3.2 hotfix).</para>
 /// </summary>
 public static class GrassClearing
 {

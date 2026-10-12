@@ -156,8 +156,8 @@ public sealed partial class MapPageViewModel
     private FTransform WorldOf(ActorItemViewModel item, SelectedInstance? sel) =>
         sel is null ? RootWorldOf(item, CurrentRootTransform(item)) : CurrentInstanceTransform(sel).ToTransform() * SpaceOf(sel);
 
-    /// <summary>Deletes every member in one journal step.</summary>
-    private void DeleteGroup()
+    /// <summary>Deletes every member in one journal step, with what belongs to each unless <paramref name="alone"/>.</summary>
+    private async Task DeleteGroupAsync(bool alone)
     {
         if (_services.Projects.Current is not { } project)
         {
@@ -195,9 +195,27 @@ public sealed partial class MapPageViewModel
         // A deleted actor takes its instances and parts with it: their own edits would only make the batch undo-unsafe.
         var gone = ops.OfType<DeleteActorOp>().Select(d => d.Target).ToHashSet(ActorRef.Comparer);
         ops.RemoveAll(o => o is not DeleteActorOp && o.GetPrimaryTarget() is { } target && gone.Contains(target));
+        if (ops.Count == 0)
+        {
+            ClearKindSelection();
+            return;
+        }
 
-        ApplyGroupOps(ops, Loc.F("Map.Group.Deleted", ops.Count));
-        ClearKindSelection();
+        // What was picked: the whole actors, and the parts scaled to nothing (their own fire and light go as components).
+        var seeds = ops.Select(o => o switch
+        {
+            DeleteActorOp d => new DeleteSeed(d.Target),
+            SetTransformOp { Component: { } part } t => new DeleteSeed(t.Target, part),
+            _ => null,
+        }).OfType<DeleteSeed>().ToList();
+        var title = Loc.F("Map.Group.Deleted", ops.Count);
+        var name = members.Select(m => m.Item).Distinct().Count() == 1 ? members[0].Item.Name : Loc.F("Map.Companions.Objects", members.Count);
+        await DeleteWithCompanionsAsync(new DeleteRequest(name, ops, seeds, PreparedScene?.Documents ?? [])
+        {
+            Title = title,
+            Notify = done => _services.Notifications.Info(title, done.Describe() + Loc.T("Map.CtrlZUndoes")),
+            Refresh = () => { ClearKindSelection(); RefreshEdits(); },
+        }, alone).ConfigureAwait(true);
     }
 
     /// <summary>
@@ -205,7 +223,8 @@ public sealed partial class MapPageViewModel
     /// the actor drawn: every other mesh part is already scaled to nothing and every other instance deleted. The actor is
     /// then deleted whole, so what no part can pick goes with it: a fire barrel's flames, light and heat, a building's
     /// collision boxes, lights, decals and child actors (Hektor: fires burning in the air where a camp was; the owner's
-    /// outpost: invisible walls where buildings were).
+    /// outpost: invisible walls where buildings were). Only what the map draws counts: a hidden collision box, a helper or
+    /// an editor-only mesh no click can reach kept a fire Blueprint standing however many parts were deleted.
     /// </summary>
     private bool LeavesNothingDrawn(ActorItemViewModel item, IReadOnlyCollection<SelectedInstance> removed)
     {
@@ -215,9 +234,10 @@ public sealed partial class MapPageViewModel
         }
 
         var holders = item.Actor.InstanceTransforms.Select(i => i.ComponentName).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        foreach (var c in item.Actor.Components.Where(c => c.StaticMeshPath is not null && !holders.Contains(c.Name)))
+        foreach (var c in item.Actor.Components.Where(c => !holders.Contains(c.Name) && DrawnByMap(item.Actor, c, MeshAsset)))
         {
             if (!removed.Any(r => r.Instance is null && string.Equals(r.Component.Name, c.Name, StringComparison.OrdinalIgnoreCase))
+                && !state.IsDeleted(item.Reference, c.Name)
                 && state.GetTransformOverride(item.Reference, c.Name)?.Scale != FVector.Zero)
             {
                 return false;
@@ -229,6 +249,14 @@ public sealed partial class MapPageViewModel
         return instances.All(i => state.IsDeleted(i)
             || removed.Any(r => r.Instance is { } ri && ri.InstanceIndex == i.Index && string.Equals(ri.ComponentName, i.Component, StringComparison.OrdinalIgnoreCase)));
     }
+
+    /// <summary>
+    /// True when the map draws mesh part <paramref name="c"/>: a drawn part (<see cref="PartRules.IsDrawnPart"/>) whose mesh is
+    /// not editor-only, or one the placement repaints (<c>OverrideMaterials</c>: drawn as a variant with those materials).
+    /// </summary>
+    internal static bool DrawnByMap(ActorRecord actor, ComponentRecord c, Func<string, PreparedMeshAsset?> meshAsset) =>
+        PartRules.IsDrawnPart(actor, c)
+        && (meshAsset(c.StaticMeshPath!)?.IsEditorOnly != true || c.OverrideMaterials?.Any(m => !string.IsNullOrEmpty(m)) == true);
 
     /// <summary>
     /// Remembers every member as it is now, for <see cref="TryPasteGroup"/>: the object itself, where it stands and, for one

@@ -6,6 +6,7 @@ using ScumStudio.App.Localization;
 using ScumStudio.App.Services;
 using ScumStudio.Assets.Catalog;
 using ScumStudio.Level.Export;
+using ScumStudio.Modding.Catalog;
 using ScumStudio.Modding.Crafting;
 
 namespace ScumStudio.App.ViewModels;
@@ -258,7 +259,10 @@ public sealed partial class CraftGalleryViewModel : ViewModelBase
     [RelayCommand]
     private Task AddAsync(AssetItemViewModel? tile) => tile is null ? Task.CompletedTask : _pick(tile.Entry.PackagePath);
 
-    /// <summary>A tile's 3D picture from the Assets page's thumbnail cache.</summary>
+    /// <summary>
+    /// A tile's 3D picture from the Assets page's thumbnail cache; an item that draws no mesh (Frag_Grenade) shows the
+    /// inventory icon its entity setup (<c>X_ES</c>) names instead of an empty tile.
+    /// </summary>
     private async Task<Bitmap?> ThumbnailAsync(AssetItemViewModel item, CancellationToken cancellationToken)
     {
         if (_catalog is not { } catalog)
@@ -267,6 +271,13 @@ public sealed partial class CraftGalleryViewModel : ViewModelBase
         }
 
         var png = await _services.Thumbnails.GetAssetAsync(catalog, item.Entry, cancellationToken).ConfigureAwait(true);
+        var entitySetup = item.Entry.PackagePath + "_ES";
+        if (png is null && catalog.TryGetPackageFile(entitySetup, out _)
+                        && await Task.Run(() => InventoryIcons.FindIconPath(catalog, entitySetup), cancellationToken).ConfigureAwait(true) is { } icon)
+        {
+            png = await _services.Thumbnails.GetTextureAsync(catalog, icon, cancellationToken).ConfigureAwait(true);
+        }
+
         return png is null ? null : await Task.Run(() => new Bitmap(png), cancellationToken).ConfigureAwait(true);
     }
 }

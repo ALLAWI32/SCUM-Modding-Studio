@@ -9,6 +9,7 @@ using ScumStudio.App.Services;
 using ScumStudio.Assets.Catalog;
 using ScumStudio.Assets.Meshes;
 using ScumStudio.Level.Import;
+using ScumStudio.Modding.Cloning;
 using ScumStudio.Modding.Crafting;
 
 namespace ScumStudio.App.ViewModels;
@@ -30,6 +31,8 @@ public sealed partial class CraftablesPageViewModel : PageViewModel, IDisposable
     private AssetCatalog? _itemsOf;
     private string _lastSaved = new CraftablesFile().ToJson();
     private CancellationTokenSource? _importCancel;
+    private Task<IReadOnlyList<CraftCategory>>? _sections;
+    private AssetCatalog? _sectionsOf;
 
     /// <summary>Creates the page.</summary>
     public CraftablesPageViewModel(AppServices services, Action? openSetup = null)
@@ -40,11 +43,16 @@ public sealed partial class CraftablesPageViewModel : PageViewModel, IDisposable
         _services.Projects.Changed += OnProjectChanged;
         _services.Workspace.CatalogChanged += OnCatalogChanged;
         Gallery = new CraftGalleryViewModel(services, PickAsync, AddedSources);
-        Items.CollectionChanged += (_, _) =>
+        Items.CollectionChanged += (_, e) =>
         {
             if (!_loading)
             {
                 Gallery.MarkAdded(); // Show marks them once for the whole list
+            }
+
+            if (e.NewItems is { } added)
+            {
+                _ = ApplySectionsAsync(added.OfType<CraftableRowViewModel>().ToList());
             }
         };
         Load();
@@ -96,6 +104,9 @@ public sealed partial class CraftablesPageViewModel : PageViewModel, IDisposable
     /// <summary>Materials of the recipe rules.</summary>
     public IReadOnlyList<CraftMaterial> Materials { get; } = Enum.GetValues<CraftMaterial>();
 
+    /// <summary><see cref="Materials"/> named in the current language (the material picker).</summary>
+    public IReadOnlyList<CraftChoice> MaterialChoices { get; } = Enum.GetValues<CraftMaterial>().Select(m => CraftChoice.Of(m)).ToList();
+
     /// <summary>Ingredient tags offered by the editor (any other <c>CI_*</c> tag can be typed).</summary>
     public IReadOnlyList<string> Tags { get; } = RecipeRules.CommonTags;
 
@@ -131,7 +142,8 @@ public sealed partial class CraftablesPageViewModel : PageViewModel, IDisposable
             }
 
             Remember();
-            var row = new CraftableRowViewModel(craftable with { Name = name }, OnRowChanged, PictureAsync);
+            var token = CraftablesFile.NewTokenFor(name, Items.Select(i => i.Token));
+            var row = new CraftableRowViewModel(craftable with { Name = name, Token = token }, OnRowChanged, PictureAsync);
             Items.Add(row);
             SelectedItem = row;
             Save();
@@ -145,7 +157,8 @@ public sealed partial class CraftablesPageViewModel : PageViewModel, IDisposable
 
     /// <summary>
     /// A craftable for <paramref name="path"/>: its mesh, a name from the asset, the guessed kind, material and size, the
-    /// suggested recipe. An item of the game (weapon, food, clothes …) becomes an Item craftable shown by its Blueprint.
+    /// suggested recipe. An item of the game (weapon, food, clothes …) becomes an Item craftable shown by its Blueprint. Its
+    /// token is given when it is added, after its name is made unique (<see cref="CraftablesFile.NewTokenFor"/>).
     /// </summary>
     public static Craftable? Describe(AssetCatalog catalog, string path)
     {
@@ -183,6 +196,54 @@ public sealed partial class CraftablesPageViewModel : PageViewModel, IDisposable
         _importCancel?.Cancel(); // the engine stops with the page
         _services.Projects.Changed -= OnProjectChanged;
         _services.Workspace.CatalogChanged -= OnCatalogChanged;
+    }
+
+    /// <inheritdoc />
+    public override void OnLanguageChanged()
+    {
+        base.OnLanguageChanged();
+        foreach (var row in Items)
+        {
+            row.OnLanguageChanged();
+            row.RefreshSections();
+        }
+    }
+
+    /// <summary>
+    /// Gives <paramref name="rows"/> the sections of the game's crafting menu (read once per catalog on a worker) and an
+    /// item's template recipe, for their "Shows in" lists.
+    /// </summary>
+    private async Task ApplySectionsAsync(IReadOnlyList<CraftableRowViewModel> rows)
+    {
+        if (_services.Workspace.Catalog is not { } catalog || rows.Count == 0)
+        {
+            return;
+        }
+
+        if (_sections is null || !ReferenceEquals(_sectionsOf, catalog))
+        {
+            _sectionsOf = catalog;
+            _sections = Task.Run(() => CraftCategories.Read(catalog));
+        }
+
+        try
+        {
+            var sections = await _sections.ConfigureAwait(true);
+            var templates = await Task.Run(() => rows.Select(r => r.IsItem ? CraftablesPlanner.ItemTemplate(catalog, CraftablesPlanner.GamePath(PackageMap.Normalize(r.Source))) : null).ToList()).ConfigureAwait(true);
+            if (!ReferenceEquals(_services.Workspace.Catalog, catalog))
+            {
+                return; // the new catalog's sections follow (OnCatalogChanged)
+            }
+
+            for (var i = 0; i < rows.Count; i++)
+            {
+                rows[i].SetSections(sections, templates[i]);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or InvalidOperationException or ArgumentException)
+        {
+            _services.Logger.LogWarning("Crafting sections not read: {Message}", ex.Message);
+        }
     }
 
     partial void OnAddQueryChanged(string value)
@@ -269,6 +330,7 @@ public sealed partial class CraftablesPageViewModel : PageViewModel, IDisposable
                 ? null
                 : CraftablesFile.Load(project.DirectoryPath);
             var taken = (other?.Items.Select(i => i.Name) ?? Items.Select(i => i.Name)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var tokens = other?.Items.Select(i => i.Token) ?? Items.Select(i => i.Token);
             var leaf = Path.GetFileNameWithoutExtension(file);
             var material = RecipeRules.GuessMaterial([leaf]);
             var name = leaf;
@@ -280,6 +342,7 @@ public sealed partial class CraftablesPageViewModel : PageViewModel, IDisposable
             var craftable = new Craftable
             {
                 Name = name,
+                Token = CraftablesFile.NewTokenFor(name, tokens),
                 Source = file,
                 Mesh = model.Mesh,
                 Imported = model.Folder,
@@ -380,6 +443,13 @@ public sealed partial class CraftablesPageViewModel : PageViewModel, IDisposable
         if (!_loading)
         {
             Remember();
+            if (row.TokenTakenBy is not null)
+            {
+                // Left out for a token another craftable keeps (a hand-edited file): it never shipped with it, so an edit
+                // gives it one of its own.
+                row.Token = CraftablesFile.NewTokenFor(row.Name, Items.Where(i => i != row).Select(i => i.Token));
+            }
+
             Save();
         }
     }
@@ -407,6 +477,17 @@ public sealed partial class CraftablesPageViewModel : PageViewModel, IDisposable
         }
 
         RefreshStations();
+        RefreshTokens();
+    }
+
+    /// <summary>Marks the rows the export would leave out for a token another craftable keeps (<see cref="CraftablesPlanner.TokenOwners"/>).</summary>
+    private void RefreshTokens()
+    {
+        var owners = CraftablesPlanner.TokenOwners(Items.Select(i => i.ToModel()).ToList());
+        for (var i = 0; i < Items.Count; i++)
+        {
+            Items[i].TokenTakenBy = owners[i];
+        }
     }
 
     /// <summary>A new station list only when the names changed (a new list resets the station boxes' selection).</summary>
@@ -424,7 +505,13 @@ public sealed partial class CraftablesPageViewModel : PageViewModel, IDisposable
     {
         _undo.Clear();
         CanUndo = false;
-        Show(_services.Projects.Current is { } project ? CraftablesFile.Load(project.DirectoryPath) : new CraftablesFile());
+        var file = _services.Projects.Current is { } project ? CraftablesFile.Load(project.DirectoryPath) : new CraftablesFile();
+        Show(file);
+        if (file.TokensAdded)
+        {
+            Save(); // the tokens a file from before 3.2 gets on load are kept from now on, whatever the names become
+        }
+
         SelectedItem = Items.FirstOrDefault();
         OnPropertyChanged(nameof(HasProject));
         OnPropertyChanged(nameof(HasCatalog));
@@ -442,6 +529,7 @@ public sealed partial class CraftablesPageViewModel : PageViewModel, IDisposable
         _loading = false;
         _lastSaved = File.ToJson();
         RefreshStations();
+        RefreshTokens();
         Gallery.MarkAdded();
     }
 
@@ -452,6 +540,7 @@ public sealed partial class CraftablesPageViewModel : PageViewModel, IDisposable
         OnPropertyChanged(nameof(HasCatalog));
         OnAddQueryChanged(AddQuery);
         Gallery.Load(_services.Workspace.Catalog);
+        _ = ApplySectionsAsync(Items.ToList());
     });
 
     /// <summary>The 3D picture of a craftable's mesh (the Assets page's thumbnails); an imported model's from its own cooked files.</summary>
@@ -491,6 +580,8 @@ public sealed partial class CraftableRowViewModel : ThumbnailItem
     private readonly Func<Craftable, CancellationToken, Task<Bitmap?>> _picture;
     private readonly Craftable _source;
     private bool _quiet;
+    private IReadOnlyList<CraftCategory> _categories = [];
+    private string? _itemTemplate;
 
     /// <summary>Creates the row of <paramref name="craftable"/>; <paramref name="changed"/> runs after each edit.</summary>
     public CraftableRowViewModel(Craftable craftable, Action<CraftableRowViewModel> changed, Func<Craftable, CancellationToken, Task<Bitmap?>> picture)
@@ -500,8 +591,11 @@ public sealed partial class CraftableRowViewModel : ThumbnailItem
         _picture = picture;
         _quiet = true;
         _name = craftable.Name;
+        _token = craftable.Token ?? CraftablesFile.LegacyTokenOf(craftable.Name);
         _kind = craftable.Kind;
         _material = craftable.Material;
+        _category = craftable.Category;
+        KindChoices = Kinds.Select(k => CraftChoice.Of(k)).ToList();
         _station = craftable.Station ?? string.Empty;
         _needsPower = craftable.NeedsPower;
         _radius = (decimal)craftable.Power.RadiusMeters;
@@ -509,11 +603,13 @@ public sealed partial class CraftableRowViewModel : ThumbnailItem
         _fuel = (decimal)craftable.Power.FuelPerMinute;
         _dayOnly = craftable.Power.DayOnly;
         SetIngredients(craftable.Ingredients);
+        RefreshSections();
         _quiet = false;
     }
 
     private string _name;
     private string _station;
+    private string? _category;
 
     /// <summary>Name in game. Empty or null writes are ignored (a text box being recycled sends them; a craftable keeps a name).</summary>
     public string Name
@@ -541,13 +637,30 @@ public sealed partial class CraftableRowViewModel : ThumbnailItem
         }
     }
 
+    /// <summary>The token of its assets (<c>CR_</c>/<c>BP_</c> + it), fixed when it was first saved: a rename keeps it.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(AssetName), nameof(TokenTaken))]
+    private string _token;
+
+    /// <summary>The craftable that keeps this one's token (the export leaves this one out), or null.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(TokenTaken))]
+    private string? _tokenTakenBy;
+
+    /// <summary>"Asset name: SS_Oak_Table", under the name box.</summary>
+    public string AssetName => Loc.F("Craftables.AssetName", Token);
+
+    /// <summary>The inline note when <see cref="TokenTakenBy"/> is set, or null.</summary>
+    public string? TokenTaken => TokenTakenBy is { } owner ? Loc.F("Craftables.TokenTaken", owner, Token) : null;
+
     /// <summary>What it becomes.</summary>
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(IsPower), nameof(IsBuilt))]
+    [NotifyPropertyChangedFor(nameof(IsPower), nameof(IsBuilt), nameof(IsBuilding), nameof(KindChoice))]
     private CraftKind _kind;
 
     /// <summary>Main material.</summary>
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(MaterialChoice))]
     private CraftMaterial _material;
 
     /// <summary>The station must have power (kept; the game's data cannot hold it).</summary>
@@ -585,6 +698,73 @@ public sealed partial class CraftableRowViewModel : ThumbnailItem
     /// <summary>Placed as a base element (shows the station it needs).</summary>
     public bool IsBuilt => Kind != CraftKind.Power;
 
+    /// <summary>Made by a building recipe (placed in the world, built with resources), not crafted into the inventory.</summary>
+    public bool IsBuilding => CraftCategories.IsPlaceable(Kind);
+
+    /// <summary><see cref="Kinds"/> named in the current language (the kind picker).</summary>
+    public IReadOnlyList<CraftChoice> KindChoices { get; }
+
+    /// <summary><see cref="Kind"/> as a named choice (the picker and the list's chip).</summary>
+    public CraftChoice KindChoice
+    {
+        get => CraftChoice.Of(Kind);
+        set
+        {
+            if (value?.Value is CraftKind kind)
+            {
+                Kind = kind;
+            }
+        }
+    }
+
+    /// <summary><see cref="Material"/> as a named choice (the picker and the list's chip).</summary>
+    public CraftChoice MaterialChoice
+    {
+        get => CraftChoice.Of(Material);
+        set
+        {
+            if (value?.Value is CraftMaterial material)
+            {
+                Material = material;
+            }
+        }
+    }
+
+    /// <summary>
+    /// The crafting menu section it shows in (a gameplay tag of the game's, <see cref="Sections"/>), or null for its
+    /// default. Empty writes clear it.
+    /// </summary>
+    public string? Category
+    {
+        get => _category;
+        set
+        {
+            if (SetProperty(ref _category, string.IsNullOrEmpty(value) ? null : value))
+            {
+                OnPropertyChanged(nameof(SelectedSection));
+            }
+        }
+    }
+
+    /// <summary>
+    /// "Game default (…)" and the game's crafting menu sections of its recipe class (building or crafting), plus a chosen
+    /// one the game files do not list (kept, the export reports it).
+    /// </summary>
+    public IReadOnlyList<CraftSectionChoice> Sections { get; private set; } = [];
+
+    /// <summary>The entry of <see cref="Sections"/> for <see cref="Category"/>. Null writes are ignored (the box sends one while its list is renewed).</summary>
+    public CraftSectionChoice? SelectedSection
+    {
+        get => Sections.FirstOrDefault(s => s.Tag == Category) ?? Sections.FirstOrDefault();
+        set
+        {
+            if (value is not null)
+            {
+                Category = value.Tag;
+            }
+        }
+    }
+
     /// <summary>Largest extent in metres.</summary>
     public float SizeMeters => _source.SizeMeters;
 
@@ -598,13 +778,22 @@ public sealed partial class CraftableRowViewModel : ThumbnailItem
     public Craftable ToModel() => _source with
     {
         Name = Name.Trim(),
+        Token = Token,
         Kind = Kind,
         Material = Material,
+        Category = Category,
         Station = string.IsNullOrWhiteSpace(Station) ? null : Station,
         NeedsPower = NeedsPower,
         Power = new PowerSettings((float)Radius, (float)Output, (float)Fuel, DayOnly),
         Ingredients = Ingredients.Where(i => !string.IsNullOrWhiteSpace(i.Tag)).Select(i => new CraftIngredient(i.Tag.Trim(), (int)i.Amount, i.IsTool)).ToList(),
     };
+
+    /// <summary>Re-reads the texts composed here in the new UI language.</summary>
+    public void OnLanguageChanged()
+    {
+        OnPropertyChanged(nameof(AssetName));
+        OnPropertyChanged(nameof(TokenTaken));
+    }
 
     /// <summary>Replaces the ingredient rows.</summary>
     public void SetIngredients(IEnumerable<CraftIngredient> ingredients)
@@ -620,6 +809,39 @@ public sealed partial class CraftableRowViewModel : ThumbnailItem
         _quiet = quiet;
     }
 
+    /// <summary>The game's crafting menu sections (<see cref="CraftCategories.Read"/>) and, for an item, its template recipe.</summary>
+    internal void SetSections(IReadOnlyList<CraftCategory> categories, string? itemTemplate)
+    {
+        _categories = categories;
+        _itemTemplate = itemTemplate;
+        RefreshSections();
+    }
+
+    /// <summary>Builds <see cref="Sections"/> again (kind, sections or language changed).</summary>
+    internal void RefreshSections()
+    {
+        var template = Kind switch
+        {
+            CraftKind.Station => CraftablesPlanner.StationRecipe,
+            CraftKind.Power => CraftablesPlanner.PowerRecipe,
+            CraftKind.Item => _itemTemplate,
+            _ => CraftablesPlanner.FurnitureRecipe,
+        };
+        var fallback = template is null ? null : CraftCategories.DefaultFor(ToModel(), _categories, template);
+        var placeable = IsBuilding;
+        var listed = _categories.Where(c => c.Placeable == placeable).Select(c => new CraftSectionChoice(c.Tag, CraftSectionChoice.LabelOf(c.Tag)))
+            .OrderBy(c => c.Label, StringComparer.CurrentCultureIgnoreCase).ToList();
+        if (Category is { } chosen && listed.All(c => c.Tag != chosen))
+        {
+            listed.Insert(0, new CraftSectionChoice(chosen, CraftSectionChoice.LabelOf(chosen)));
+        }
+
+        var game = fallback is not null ? CraftSectionChoice.LabelOf(fallback.Tag) : template is null ? "…" : PackageMap.Leaf(template);
+        Sections = [new CraftSectionChoice(null, Loc.F("Craftables.ShowsIn.Default", game)), .. listed];
+        OnPropertyChanged(nameof(Sections));
+        OnPropertyChanged(nameof(SelectedSection));
+    }
+
     /// <inheritdoc />
     protected override Task<Bitmap?> LoadThumbnailAsync(CancellationToken cancellationToken) => _picture(_source, cancellationToken);
 
@@ -627,11 +849,23 @@ public sealed partial class CraftableRowViewModel : ThumbnailItem
     protected override void OnPropertyChanged(System.ComponentModel.PropertyChangedEventArgs e)
     {
         base.OnPropertyChanged(e);
-        if (e.PropertyName is nameof(Name) or nameof(Kind) or nameof(Material) or nameof(Station) or nameof(NeedsPower)
+        if (e.PropertyName is nameof(Name) or nameof(Kind) or nameof(Material) or nameof(Category) or nameof(Station) or nameof(NeedsPower)
             or nameof(Radius) or nameof(Output) or nameof(Fuel) or nameof(DayOnly))
         {
             Changed();
         }
+    }
+
+    // A building section is no section of a crafting recipe (and back): the new kind shows in its default. Its default
+    // can follow the kind too, so the list is built again.
+    partial void OnKindChanged(CraftKind oldValue, CraftKind newValue)
+    {
+        if (CraftCategories.IsPlaceable(oldValue) != CraftCategories.IsPlaceable(newValue))
+        {
+            _category = null;
+        }
+
+        RefreshSections();
     }
 
     private void Remove(IngredientRowViewModel row)
@@ -696,4 +930,49 @@ public sealed partial class IngredientRowViewModel : ObservableObject
 
     [RelayCommand]
     private void Remove() => _remove(this);
+}
+
+/// <summary>A kind or material of the Craftables page (picker entry and list chip), named in the current language.</summary>
+public sealed class CraftChoice : ObservableObject
+{
+    private static readonly Dictionary<Enum, CraftChoice> All = Enum.GetValues<CraftKind>().Cast<Enum>()
+        .Concat(Enum.GetValues<CraftMaterial>().Cast<Enum>()).ToDictionary(v => v, v => new CraftChoice(v));
+
+    private CraftChoice(Enum value)
+    {
+        Value = value;
+        Key = $"Craftables.{(value is CraftKind ? "Kind" : "Material")}.{value}";
+        Loc.Instance.LanguageChanged += (_, _) => OnPropertyChanged(nameof(Label)); // one instance per value, for the app's lifetime
+    }
+
+    /// <summary>The <see cref="CraftKind"/> or <see cref="CraftMaterial"/>.</summary>
+    public Enum Value { get; }
+
+    /// <summary>Its string key (<c>Craftables.Kind.Furniture</c>).</summary>
+    public string Key { get; }
+
+    /// <summary>Its name.</summary>
+    public string Label => Loc.T(Key);
+
+    /// <summary>The choice of <paramref name="value"/>.</summary>
+    public static CraftChoice Of(Enum value) => All[value];
+
+    /// <inheritdoc />
+    public override string ToString() => Label;
+}
+
+/// <summary>A section of the game's crafting menu in the "Shows in" picker.</summary>
+/// <param name="Tag">Its gameplay tag; null for the craftable's default section.</param>
+/// <param name="Label">Its name.</param>
+public sealed record CraftSectionChoice(string? Tag, string Label)
+{
+    /// <summary>
+    /// The name of a section in the current language, part by part (<see cref="CraftCategories.Segments"/>, keys
+    /// <c>Craftables.Category.&lt;Part&gt;</c>); a part without a key is the game's tag in plain English, like an asset name.
+    /// </summary>
+    public static string LabelOf(string tag) =>
+        string.Join(" › ", CraftCategories.Segments(tag).Select(s => Loc.Instance.Or("Craftables.Category." + s, CraftCategories.Humanize(s))));
+
+    /// <inheritdoc />
+    public override string ToString() => Label;
 }

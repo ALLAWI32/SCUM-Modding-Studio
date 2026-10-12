@@ -72,6 +72,7 @@ public sealed class OutpostLeftoversRealTests
         map.BrushAt(new FVector(572000f, -221000f, 270f));
         Assert.True(map.HasGroup);
         await map.DeleteKindSelectionAsync();
+        map.Companions?.DeleteAllCommand.Execute(null); // what belongs to the brushed objects is listed first
         var state = project.State;
         _output.WriteLine($"{state.DeletedActors.Count} actors, {state.DeletedInstances.Count} instances deleted, {state.TransformOverrides.Count()} parts scaled");
         foreach (var name in Gone)
@@ -94,6 +95,42 @@ public sealed class OutpostLeftoversRealTests
             Assert.DoesNotContain(exterior, a => a.Name is "BP_Barrel_FirePit24" or "BP_Debris_Tire_Stack_11" or "BP_HuntersGrotto_LIGHT2_2");
             var bossHouse = Written(result, "SCUM/Content/ConZ_Files/Maps/The_Island/B_4_Outpost_Ext_BossHouse.umap", BossHouse);
             Assert.DoesNotContain(bossHouse, a => a.Name == "BP_HuntersGrotto_EXT_B_4");
+        }
+    }
+
+    [Fact]
+    public async Task OneClickOnAFireBarrelOrASmokingTyreStackLeavesNoFireWithinTwoMetres()
+    {
+        if (Environment.GetEnvironmentVariable("SCUM_PAKS") is not { Length: > 0 } paks || !Directory.Exists(paks))
+        {
+            return; // not asked for
+        }
+
+        // The owner: "If I delete a fire place, the fire stays burning in game". A click and Delete, not the brush.
+        using var ctx = AppTestContext.Create();
+        ctx.Services.Keys.Set(AesKeyText.FromEnvironmentOrStore()!);
+        ctx.Services.UpdateSettings(s => s with { GamePaksFolder = paks });
+        await ctx.Services.Workspace.ConnectAsync(ProgressSink.Null);
+        var world = WorldIndex.FromCatalog(ctx.Services.Workspace.Catalog!);
+        var levels = MapPageViewModel.CellPackages(world, new MapCell('B', 4)).Where(p => p.Contains("B_4_Outpost", StringComparison.Ordinal)).ToList();
+        using var map = new MapPageViewModel(ctx.Services);
+        await map.LoadCompletion;
+        var project = await ctx.Services.Projects.CreateAsync(ctx.Combine("projects"), "OneClick");
+        await map.LoadLevelsAsync(levels);
+
+        var smoking = map.AllActors.First(a => System.Text.RegularExpressions.Regex.IsMatch(a.Actor.ClassName, "^BP_Debris_Tire_Stack_0[2-5]_C$"));
+        foreach (var target in new[] { map.AllActors.Single(a => a.Name == "BP_Barrel_FirePit24"), smoking })
+        {
+            map.SelectedInstanceKey = null;
+            map.SelectedActor = target;
+            map.DeleteSelectedCommand.Execute(null);
+            _output.WriteLine($"{target.Name}: {map.Companions?.Rows.Count ?? 0} listed: {string.Join(", ", map.Companions?.Rows.Select(r => r.Name + " " + r.RuleText) ?? [])}");
+            map.Companions?.DeleteAllCommand.Execute(null);
+            Assert.True(project.State.IsDeleted(target.Reference), target.Name);
+            var at = target.Actor.WorldTransform.Translation;
+            var left = map.AllActors.Where(a => !project.State.IsDeleted(a.Reference) && SpawnMarkers.IsPinOnly(a.Actor, out var effect) && effect
+                                                && FVector.Distance(a.Actor.WorldTransform.Translation, at) < 200f).Select(a => a.Name).ToList();
+            Assert.True(left.Count == 0, target.Name + " left: " + string.Join(", ", left));
         }
     }
 

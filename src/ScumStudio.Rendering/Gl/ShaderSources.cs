@@ -34,6 +34,7 @@ internal static class ShaderSources
         flat out uint vPickId;
         flat out uint vFlags;
         flat out vec2 vSurface;
+        flat out float vSide;
 
         void main()
         {
@@ -42,6 +43,7 @@ internal static class ShaderSources
             float det = determinant(m);
             mat3 normalMatrix = abs(det) > 1e-12 ? transpose(inverse(m)) : m;
             vNormal = normalMatrix * aNormal;
+            vSide = sign(det); // a mirrored instance turns its triangles' winding around
             if (uBillboard != 0)
             {
                 // A camera-facing card (an item's inventory icon): the mesh's x/y span the camera's right and up at the
@@ -49,6 +51,7 @@ internal static class ShaderSources
                 vec3 origin = (iModel * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
                 world = vec4(origin + uCameraRight * (aPosition.x * length(iModel[0].xyz)) + uCameraUp * (aPosition.y * length(iModel[1].xyz)), 1.0);
                 vNormal = cross(uCameraRight, uCameraUp);
+                vSide = 0.0;
             }
 
             vUv = aUv;
@@ -77,6 +80,7 @@ internal static class ShaderSources
         flat in uint vPickId;
         flat in uint vFlags;
         flat in vec2 vSurface;
+        flat in float vSide;
 
         uniform sampler2D uTexture;
         uniform sampler2D uNormalMap;
@@ -84,6 +88,8 @@ internal static class ShaderSources
         uniform vec2 uRoughness;
         uniform int uHasTexture;
         uniform float uAlphaCutoff;
+        uniform int uAlphaToCoverage;
+        uniform int uReversedWinding;
         uniform vec4 uSectionTint;
         uniform vec3 uSkyColor;
         uniform vec3 uGroundColor;
@@ -119,7 +125,18 @@ internal static class ShaderSources
         uniform vec4 uLayerHasNhr;
 
         layout(location = 0) out vec4 oColor;
-        """ + "\n" + Atmosphere + "\n" + """
+        """ + "\n" + Atmosphere + "\n" + Masked + "\n" + """
+        // Alpha to coverage (anti-aliased foliage on a multisampled target): up close the cut is a ramp one pixel wide
+        // across the cutoff instead of a hard step; from mip 0 to 2 it fades into the mip's average alpha, the share of
+        // the pixel the leaves cover, so a distant canopy neither sparkles nor thins out. A cutoff below one half draws
+        // leaves a little wider than their texels up close, and the far share grows by as much.
+        float maskedCoverage(float alpha, float masked, float lod)
+        {
+            float edge = clamp((masked - uAlphaCutoff) / max(fwidth(masked), 1e-4) + 0.5, 0.0, 1.0);
+            float share = clamp(alpha * (1.5 - uAlphaCutoff), 0.0, 1.0);
+            return mix(edge, share, smoothstep(0.0, 2.0, lod));
+        }
+
         // Sun visibility at this fragment: 3x3 filtered taps of the shadow map, pushed off the surface along the normal by
         // a texel and a half (no acne on the terrain), fading out toward the edge of the shadowed square.
         float sunShadow(vec3 n)
@@ -180,16 +197,29 @@ internal static class ShaderSources
             vec4 albedo = vTint * uSectionTint; // node tint x material colour
             vec2 groundBump = vec2(0.0); // terrain: the paint layers' normal maps (tangent X, Y along world X, Z)
             float paintMask = 1.0;
+            float coverage = 1.0;
             if (uHasTexture != 0)
             {
                 vec4 texel = texture(uTexture, vUv);
                 albedo = vTint * vec4(min(uSectionTint.rgb * texel.rgb, vec3(1.0)), uSectionTint.a * texel.a); // UE clamps base colour to 1
                 paintMask = texel.a; // shiny paint: the texture's alpha says where the paint is
-                // Masked material: leaves and grass are cut out of their cards. Far mips average the leaves with the gaps
-                // between them, so alpha is sharpened with the mip level and a distant forest keeps its leaves.
-                if (uAlphaCutoff > 0.0 && albedo.a * (1.0 + max(textureQueryLod(uTexture, vUv).x, 0.0) * 0.25) < uAlphaCutoff)
+                // Masked material: leaves and grass are cut out of their cards, or covered by share with alpha to coverage.
+                if (uAlphaCutoff > 0.0)
                 {
-                    discard;
+                    float lod = textureQueryLod(uTexture, vUv).x;
+                    float masked = maskedAlpha(albedo.a, lod);
+                    if (uAlphaToCoverage != 0)
+                    {
+                        coverage = maskedCoverage(albedo.a, masked, lod);
+                        if (coverage <= 0.0)
+                        {
+                            discard;
+                        }
+                    }
+                    else if (masked < uAlphaCutoff)
+                    {
+                        discard;
+                    }
                 }
 
                 if (uTerrainDetail != 0)
@@ -253,16 +283,21 @@ internal static class ShaderSources
             vec3 n = vNormal;
             float len = length(n);
             n = len > 1e-8 ? n / len : toCamera;
-            // Two-sided: always shade the side facing the camera, whatever the winding.
-            if (dot(n, toCamera) < 0.0)
+            // Two-sided as in UE (TwoSidedSign): the back of a triangle, by its winding, is shaded with the normal turned
+            // around, one side per triangle (bent leaf normals no longer flip along a line that moves with the camera). A
+            // mirrored instance turns the winding around, and so does a mesh wound against its normals; a billboard faces
+            // the camera.
+            float side = (gl_FrontFacing ? vSide : -vSide) * (uReversedWinding != 0 ? -1.0 : 1.0);
+            if (len > 1e-8 && side < 0.0)
             {
                 n = -n;
             }
 
             // Opaque and masked surfaces cover the pixel: a texture's alpha (a far leaf mip, a spec mask) must not let the
-            // window behind the view show through (distant trees came out white). Stand-ins (spawn models) glint: their
-            // opacity breathes a fifth either way over 1.5 s.
-            float alpha = uOpaque != 0 ? 1.0 : albedo.a * (uShimmer != 0 ? 1.0 + 0.2 * sin(uTime * 4.1887902) : 1.0);
+            // window behind the view show through (distant trees came out white); with alpha to coverage the alpha is the
+            // share of samples covered, and the target stores 1. Stand-ins (spawn models) glint: their opacity breathes a
+            // fifth either way over 1.5 s.
+            float alpha = uOpaque != 0 ? coverage : albedo.a * (uShimmer != 0 ? 1.0 + 0.2 * sin(uTime * 4.1887902) : 1.0);
             vec3 geometric = n;
             if (uHasNormalMap != 0 && uHasTexture != 0)
             {
@@ -551,30 +586,51 @@ internal static class ShaderSources
         }
         """;
 
+    /// <summary>
+    /// Shared by the colour, shadow and ID passes: the alpha a masked section (leaves, grass, fences) is cut by, so its
+    /// leaves are seen, cast shade and are picked in the same places.
+    /// </summary>
+    private const string Masked = """
+        // The texture's alpha raised with the mip level: far mips average the leaves with the gaps between them, and a
+        // distant forest keeps its leaves. Cut where it falls below uAlphaCutoff.
+        float maskedAlpha(float alpha, float lod)
+        {
+            return alpha * (1.0 + max(lod, 0.0) * 0.25);
+        }
+        """;
+
     /// <summary>Shadow pass: depth only; masked sections (leaves) cut their holes so they cast the leaves' shape.</summary>
     public const string ShadowFragment = """
         #version 430 core
         in vec2 vUv;
         uniform sampler2D uTexture;
         uniform float uAlphaCutoff;
-
+        """ + "\n" + Masked + "\n" + """
         void main()
         {
-            if (uAlphaCutoff > 0.0 && texture(uTexture, vUv).a < uAlphaCutoff)
+            if (uAlphaCutoff > 0.0 && maskedAlpha(texture(uTexture, vUv).a, textureQueryLod(uTexture, vUv).x) < uAlphaCutoff)
             {
                 discard;
             }
         }
         """;
 
-    /// <summary>ID pass: writes the per-instance pick code to an R32UI attachment.</summary>
+    /// <summary>ID pass: writes the per-instance pick code to an R32UI attachment; masked sections only where their leaves are.</summary>
     public const string PickFragment = """
         #version 430 core
+        in vec2 vUv;
         flat in uint vPickId;
+        uniform sampler2D uTexture;
+        uniform float uAlphaCutoff;
         layout(location = 0) out uint oId;
-
+        """ + "\n" + Masked + "\n" + """
         void main()
         {
+            if (uAlphaCutoff > 0.0 && maskedAlpha(texture(uTexture, vUv).a, textureQueryLod(uTexture, vUv).x) < uAlphaCutoff)
+            {
+                discard;
+            }
+
             oId = vPickId;
         }
         """;

@@ -22,6 +22,10 @@ public sealed class ModdingTests(ITestOutputHelper output)
     private const string Rpg = Weapons + "Weapon_RPG7";
     private const string WolfsWagen = "/Game/ConZ_Files/Vehicles/Car/WolfsWagen/BPC_WolfsWagen";
 
+    // The fixture archive is loose files: no game pak holds its registry (orig_extra's), so the build says it is not the stock one.
+    private static bool IsFixtureWarning(string warning) =>
+        warning.Contains("not the game's stock registry", StringComparison.Ordinal);
+
     private static AssetCatalog OpenStock() =>
         AssetCatalog.OpenLoose(FixturePaths.OrigRoot, new AssetCatalogOptions { LooseOverlays = [FixturePaths.OrigExtraRoot] });
 
@@ -210,7 +214,7 @@ public sealed class ModdingTests(ITestOutputHelper output)
             [Rpg] = [new("Default__Weapon_RPG7_C", "MaxRange", "900")],
         });
         var result = AssetModBuilder.Build(catalog, request);
-        Assert.Empty(result.Warnings);
+        Assert.All(result.Warnings, w => Assert.True(IsFixtureWarning(w), w));
         Assert.Equal(3, result.Packages.Count);
         Assert.Equal(2, result.Packages.Count(p => p.IsClone));
         Assert.Contains(result.Packages, p => !p.IsClone && p.PackagePath == Rpg);
@@ -264,7 +268,7 @@ public sealed class ModdingTests(ITestOutputHelper output)
             [plan.NewPrimary] = [new(mass.Export.Replace("WolfsWagen", "Hunter", StringComparison.Ordinal), mass.Path, "700")],
         });
         var result = AssetModBuilder.Build(catalog, request);
-        Assert.Empty(result.Warnings);
+        Assert.All(result.Warnings, w => Assert.True(IsFixtureWarning(w), w));
         Assert.Equal(plan.Packages.Count, result.Packages.Count);
         var hunter = result.Packages.Single(p => p.PackagePath == plan.NewPrimary);
         var tuned = TunableReader.Read(CookedPackage.Parse(hunter.Bytes.UAsset, hunter.Bytes.UExp, null, plan.NewPrimary));
@@ -287,7 +291,7 @@ public sealed class ModdingTests(ITestOutputHelper output)
         Assert.Contains(plan.Packages, p => p.Value.EndsWith("/Sea_Hawk_ES", StringComparison.Ordinal));
         Assert.Contains(plan.Packages, p => p.Value.EndsWith("/SeaHawkManualSpawnPreset", StringComparison.Ordinal));
         var result = AssetModBuilder.Build(catalog, new AssetModRequest([plan], new Dictionary<string, IReadOnlyList<TunableEdit>>()));
-        Assert.Empty(result.Warnings);
+        Assert.All(result.Warnings, w => Assert.True(IsFixtureWarning(w), w));
         Assert.Contains(result.Registered, r => r.PrimaryAssetType == "Vehicle");
     }
 }

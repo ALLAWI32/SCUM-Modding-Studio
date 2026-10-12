@@ -24,7 +24,7 @@ public sealed partial class MapPageViewModel
     private readonly object _readGate = new();
     private Cue4ParseLevelReader? _reader;
     private AssetCatalog? _readerCatalog;
-    private LevelData? _waterData;
+    private LevelDocument? _waterDocument; // all of WaterSplines, parsed once: shown in part (WaterOver), searched whole by the companions finder
     private int _readGeneration;
     private IReadOnlyList<string> _streamed = [];
 
@@ -75,6 +75,10 @@ public sealed partial class MapPageViewModel
     [ObservableProperty]
     private bool _lighting = true;
 
+    /// <summary>Smooth edges and steady leaves in the 3D view (Settings).</summary>
+    [ObservableProperty]
+    private bool _antiAliasedFoliage = true;
+
     /// <summary>The pins are made again with their new look: the levels shown are prepared once more (a level whose pins changed is rebuilt).</summary>
     partial void OnSpawnModelsShownChanged(bool value)
     {
@@ -91,6 +95,7 @@ public sealed partial class MapPageViewModel
             var ui = _services.Settings.Load().Ui;
             RenderQuality = ui.RenderQuality;
             (AnimateWater, Lighting) = (ui.AnimateWater, ui.Lighting);
+            AntiAliasedFoliage = ui.AntiAliasedFoliage;
             SpawnModelsShown = ui.SpawnModels;
         });
 
@@ -222,8 +227,8 @@ public sealed partial class MapPageViewModel
 
             if (world?.Find("WaterSplines") is { IsMap: true } water && !packagePaths.Contains(water.PackagePath, StringComparer.OrdinalIgnoreCase))
             {
-                _waterData ??= _reader!.ReadLevel(water.PackagePath, ct);
-                if (WaterOver(_waterData, world, packagePaths) is { } rivers)
+                _waterDocument ??= LevelDocument.FromData(_reader!.ReadLevel(water.PackagePath, ct));
+                if (WaterOver(_waterDocument, world, packagePaths) is { } rivers)
                 {
                     documents.Add(rivers);
                 }
@@ -271,7 +276,7 @@ public sealed partial class MapPageViewModel
             _reader = new Cue4ParseLevelReader(catalog, new Cue4ParseLevelReaderOptions(), _services.Logger);
             _readerCatalog = catalog;
             _documents.Clear();
-            _waterData = null;
+            _waterDocument = null;
         }
     }
 }

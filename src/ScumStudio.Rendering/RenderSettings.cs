@@ -172,7 +172,8 @@ public sealed record RenderSettings
     /// <summary>
     /// These settings at <paramref name="hour"/> (0-24) on SCUM's clock: the sun rises at <see cref="Sunrise"/>, sets at
     /// <see cref="Sunset"/> and stands as high as the island's own sun at 13:30 (27°, so 13:30 looks exactly like
-    /// <see cref="Outdoor"/>); near the horizon the light turns golden and the sky orange. The night is the game's
+    /// <see cref="Outdoor"/>); near the horizon the light turns golden and the sky orange, and the sun's light fades out
+    /// as it reaches the horizon, where the moon takes over. The night is the game's
     /// (BP_WeatherController2): the day lit by a moon of 0.5 lux instead of a 10 lux sun, tinted (0.70, 0.76, 1) × #FFF6EE,
     /// plus a 0.05 lux night light, seen through the game's auto exposure and dark-tone lift (<see cref="GameExposure"/>).
     /// </summary>
@@ -193,9 +194,11 @@ public sealed record RenderSettings
         const float Moon = 0.05f, NightLight = 0.005f;
         var moonTint = new Vector3(0.698f, 0.704f, 0.855f); // _moonLightTint × the Moon light's #FFF6EE
         var nightTint = new Vector3(0.698f, 0.764f, 1f); // _nightLightColor
-        var sunUp = elevation > -2f;
-        var sun = Vector3.Lerp(new Vector3(1.7f, 0.95f, 0.5f), LightColor, day) * Smooth(-3f, 4f, elevation);
-        var moon = moonTint * (Luma(LightColor) * Moon * (1f - Smooth(-12f, -2f, elevation)));
+        // The sun fades out over its last 6° above the horizon and the moon fades in below it, so the key light hands over
+        // at the horizon where both are dark: no light from below, no jump in colour or direction
+        var sunUp = elevation >= 0f;
+        var sun = Vector3.Lerp(new Vector3(1.7f, 0.95f, 0.5f), LightColor, day) * Smooth(0f, 6f, elevation);
+        var moon = moonTint * (Luma(LightColor) * Moon * (1f - Smooth(-12f, 0f, elevation)));
         var lit = this with
         {
             TimeOfDay = hour,

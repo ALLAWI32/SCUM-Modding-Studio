@@ -67,9 +67,9 @@ public sealed partial class ProjectExporter
 
     /// <summary>
     /// "Clear grass under it" (see <see cref="GrassClearing"/>): every landscape tile under a footprint becomes a changed
-    /// level. Its bushes and grass instances standing inside a footprint are deleted (written like the editor's instance
-    /// deletes, on top of the tile as this export already wrote it, if it did), and its components' cooked grass densities
-    /// are zeroed under the footprints in place. Nothing is journaled: the setting on the objects is the edit.
+    /// level (on top of the tile as this export already wrote it, if it did): its components' cooked grass densities are
+    /// zeroed under the footprints in place, and nothing else changes; its foliage (bushes, trees) stays as cooked.
+    /// Nothing is journaled: the setting on the objects is the edit.
     /// </summary>
     private void ClearGrassUnder(AssetCatalog catalog, Cue4ParseLevelReader reader, List<Vector2[]> footprints, string staging,
         List<ExportedLevel> levels, List<string> warnings, CancellationToken cancellationToken)
@@ -92,22 +92,12 @@ public sealed partial class ProjectExporter
                     continue;
                 }
 
-                // The foliage: bushes and grass whose base stands inside a footprint. Read first: the reader maps SCUM's own
-                // foliage classes before the package is loaded and cached (the landscape read below would cache it without).
+                // The tile's foliage stays exactly as cooked (hotfix, defolt_0999 2026-10-12: "flickering trees and bushes
+                // near the bridge"): collapsing the bushes under a placed object rewrote whole foliage components of the tile
+                // (SCUM's FoliageInstancedBush/Tree, every instance of that mesh in the tile) without their cooked draw copy,
+                // and in game the trees and bushes of that square blinked as the player moved. Only the grass is cleared.
+                // Read first: the reader maps SCUM's own foliage classes before the package is loaded and cached.
                 var document = LevelDocument.Load(already ? writtenReader : reader, tile, cancellationToken);
-                var foliage = new EditState();
-                foreach (var actor in document.Actors)
-                {
-                    foreach (var instance in actor.InstanceTransforms)
-                    {
-                        var at = new Vector2(instance.WorldTransform.Translation.X, instance.WorldTransform.Translation.Y);
-                        if (actor.FindComponent(instance.ComponentName) is { } component && GrassClearing.IsClearedFoliage(component)
-                            && boxes.Any(b => at.X >= b.Min.X && at.X <= b.Max.X && at.Y >= b.Min.Y && at.Y <= b.Max.Y && GrassClearing.Contains(b.Poly, at)))
-                        {
-                            foliage.Apply(new DeleteInstanceOp(new InstanceRef(tile, actor.Name, instance.ComponentName, instance.InstanceIndex)));
-                        }
-                    }
-                }
 
                 // The grass: each component's footprints in its quad coordinates.
                 var perComponent = new Dictionary<string, (int Stride, List<Vector2[]> Polygons)>(StringComparer.Ordinal);
@@ -127,20 +117,18 @@ public sealed partial class ProjectExporter
                     }
                 }
 
-                if (perComponent.Count == 0 && foliage.IsEmpty)
+                if (perComponent.Count == 0)
                 {
                     continue;
                 }
 
                 var (uasset, uexp, ubulk) = ReadPackageFiles(source, file);
-                var request = foliage.IsEmpty ? null : PlanLevel(foliage, tile, document, warnings);
-                var (bytes, report) = request is null
-                    ? (new PackageBytes(uasset, uexp), new LevelEditReport
-                    {
-                        LevelExport = "PersistentLevel", ActorsBefore = document.Actors.Count, ActorsAfter = document.Actors.Count,
-                        RemovedActors = [], PatchedTransforms = [], AddedNames = [], Warnings = [],
-                    })
-                    : LevelPackageEditor.Apply(CookedPackage.Parse(uasset, uexp, ubulk, tile), request);
+                var bytes = new PackageBytes(uasset, uexp);
+                var report = new LevelEditReport
+                {
+                    LevelExport = "PersistentLevel", ActorsBefore = document.Actors.Count, ActorsAfter = document.Actors.Count,
+                    RemovedActors = [], PatchedTransforms = [], AddedNames = [], Warnings = [],
+                };
 
                 var cleared = 0;
                 var package = CookedPackage.Parse(bytes.UAsset, bytes.UExp, null, tile);
@@ -163,7 +151,7 @@ public sealed partial class ProjectExporter
                     cleared += GrassClearing.Clear(payload, maps, GrassClearing.ClearedSamples(target.Stride, target.Polygons));
                 }
 
-                if (cleared == 0 && request is null)
+                if (cleared == 0)
                 {
                     continue;
                 }
@@ -194,8 +182,7 @@ public sealed partial class ProjectExporter
                     levels.Add(new ExportedLevel(tile, virtualPath, merged));
                 }
 
-                _logger.LogInformation("{Level}: grass cleared under placed objects ({Samples} density sample(s), {Instances} bush/grass instance(s)).",
-                    tile, cleared, report.DeletedInstances);
+                _logger.LogInformation("{Level}: grass cleared under placed objects ({Samples} density sample(s)).", tile, cleared);
             }
             catch (Exception ex) when (ex is InvalidDataException or IOException or InvalidOperationException or NotSupportedException or ArgumentException)
             {

@@ -162,7 +162,9 @@ public sealed class LevelDocument
             c.IsSynthesized ? c.TemplatePath : null,
             c.IsVisible ? null : false,
             c.ChildActorClassPath,
-            c.ChildActor is { } child && actorNames.TryGetValue(child, out var childName) ? childName : null)).ToList();
+            c.ChildActor is { } child && actorNames.TryGetValue(child, out var childName) ? childName : null,
+            c.AssetPath,
+            c.LocalBounds is { } b ? new BoundsDto(FVector.FromVector3(b.Min), FVector.FromVector3(b.Max)) : null)).ToList();
         var instances = includeInstances && a.InstanceTransforms.Count > 0
             ? a.InstanceTransforms.Select(i => new InstanceDto(i.ComponentName, i.InstanceIndex, TransformValue.FromTransform(i.WorldTransform))).ToList()
             : null;
@@ -179,7 +181,8 @@ public sealed class LevelDocument
             a.SynthesizedComponentCount > 0 ? a.SynthesizedComponentCount : null,
             a.ParentComponent is { } pc && componentNames.TryGetValue(pc, out var parentComponent) ? parentComponent : null,
             components,
-            instances);
+            instances,
+            a.WaterVolume ? true : null);
     }
 
     /// <summary>World transform for display: the stored value for unattached components (exact rotator), else derived.</summary>
@@ -208,7 +211,8 @@ public sealed class LevelDocument
         int? SynthesizedCount,
         string? ParentComponent,
         IReadOnlyList<ComponentDto> Components,
-        IReadOnlyList<InstanceDto>? Instances);
+        IReadOnlyList<InstanceDto>? Instances,
+        bool? WaterVolume);
 
     private sealed record ComponentDto(
         int Index,
@@ -225,7 +229,11 @@ public sealed class LevelDocument
         string? Template,
         bool? Visible,
         string? ChildActorClass,
-        string? ChildActor);
+        string? ChildActor,
+        string? AssetPath,
+        BoundsDto? LocalBounds);
+
+    private sealed record BoundsDto(FVector Min, FVector Max);
 
     private sealed record InstanceDto(string Component, int Index, TransformValue World);
 
@@ -341,6 +349,7 @@ public sealed class LevelDocument
                 PatrolPoints = actor.PatrolPoints ?? [],
                 TraderMarkers = actor.TraderMarkers ?? [],
                 IsItemContainer = actor.IsItemContainer,
+                WaterVolume = actor.WaterVolume,
             };
         }
 
@@ -374,6 +383,8 @@ public sealed class LevelDocument
                 LootPresets = c.LootPresets ?? [],
                 CollisionProfile = c.CollisionProfile,
                 BoxExtent = c.BoxExtent,
+                AssetPath = c.AssetPath,
+                LocalBounds = c.LocalBounds,
                 PropertyNames = c.PropertyNames,
                 UsesTemplateValues = c.UsesTemplateValues,
                 IsSynthesized = c.IsSynthesized,

@@ -49,6 +49,8 @@ public sealed class EditOpTests
             new SetSpawnPointsOp(new ActorRef(Outpost, "ItemSpawnerGroup_1"), "SpawnerComponent", "SpawnerMarkers", [new SpawnPoint(0, Somewhere)], []),
             new ReplaceMeshOp(house, null, Rock, "/Game/ConZ_Files/Models/Rocks/SM_Boulder.SM_Boulder"),
             new ReplaceMeshOp(new ActorRef(Port, "LandscapeStreamingProxy_0"), "SplineMeshComponent_12", Rock, "/Game/ConZ_Files/Models/Roads/SM_Road_02.SM_Road_02"),
+            new DeleteComponentsOp(house, ["P_Fire", "FireLight", "Ak_Fire"]),
+            new RestoreComponentsOp(house, ["P_Fire"]),
         ];
         return ops.Select(o => new object[] { o });
     }

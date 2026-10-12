@@ -481,6 +481,190 @@ public sealed class LevelViewportBrushTests
         window.Close();
     }
 
+    /// <summary>
+    /// Audit F115: the right button pressed during a stroke kept it painting after the left one was let go: until the
+    /// right one came up when the system reports the buttons still held (Windows), for ever when it does not (the last
+    /// press then names the right button). Every hover and every timer tick planted with no button held.
+    /// </summary>
+    [AvaloniaFact]
+    public void ASecondButtonDuringAStrokeDoesNotLeaveItRunning()
+    {
+        foreach (var held in new[] { false, true })
+        {
+            var viewport = new LevelViewport { BrushMode = true, BrushRadius = 5 };
+            var window = new Window { Width = 800, Height = 600, Content = viewport };
+            window.Show();
+            HeadlessUi.Pump();
+            viewport.Camera.Position = new Vector3(0f, 3000f, 0f);
+            viewport.Camera.Pitch = -60f;
+            var events = new List<string>();
+            viewport.BrushPainted += (_, _) => events.Add("dab");
+            viewport.BrushStrokeEnded += (_, _) => events.Add("end");
+            RawInputModifiers Held(RawInputModifiers buttons) => held ? buttons : RawInputModifiers.None;
+
+            window.MouseDown(new Point(400, 300), MouseButton.Left, Held(RawInputModifiers.LeftMouseButton));
+            window.MouseMove(new Point(450, 300), RawInputModifiers.LeftMouseButton);
+            window.MouseDown(new Point(450, 300), MouseButton.Right, Held(RawInputModifiers.LeftMouseButton | RawInputModifiers.RightMouseButton));
+            HeadlessUi.Pump();
+            events.Add("left up");
+            window.MouseUp(new Point(450, 300), MouseButton.Left, Held(RawInputModifiers.RightMouseButton));
+            window.MouseMove(new Point(480, 320), Held(RawInputModifiers.RightMouseButton));
+            window.MouseUp(new Point(480, 320), MouseButton.Right);
+            window.MouseMove(new Point(300, 200));
+            window.MouseMove(new Point(200, 150));
+            HeadlessUi.Pump();
+
+            var before = events.TakeWhile(e => e != "left up").ToList();
+            Assert.NotEmpty(before);
+            Assert.All(before, e => Assert.Equal("dab", e));
+            Assert.Equal($"held {held}: end", $"held {held}: " + string.Join(", ", events.SkipWhile(e => e != "left up").Skip(1)));
+            window.Close();
+        }
+    }
+
+    /// <summary>A stroke whose mouse is taken (by another control, or let go by the view) ends there, once: its release will not come.</summary>
+    [AvaloniaFact]
+    public void LosingTheCaptureEndsTheStrokeOnce()
+    {
+        foreach (var takesIt in new[] { true, false })
+        {
+            var viewport = new LevelViewport { BrushMode = true, BrushRadius = 5 };
+            var other = new Border { Width = 20, Height = 20, Background = Brushes.Black, HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Left, VerticalAlignment = Avalonia.Layout.VerticalAlignment.Top };
+            var window = new Window { Width = 800, Height = 600, Content = new Panel { Children = { viewport, other } } };
+            window.Show();
+            HeadlessUi.Pump();
+            viewport.Camera.Position = new Vector3(0f, 3000f, 0f);
+            viewport.Camera.Pitch = -60f;
+            IPointer? pointer = null;
+            viewport.AddHandler(InputElement.PointerPressedEvent, (_, e) => pointer = e.Pointer, Avalonia.Interactivity.RoutingStrategies.Tunnel, handledEventsToo: true);
+            var events = new List<string>();
+            viewport.BrushPainted += (_, _) => events.Add("dab");
+            viewport.BrushStrokeEnded += (_, _) => events.Add("end");
+
+            window.MouseDown(new Point(400, 300), MouseButton.Left, RawInputModifiers.LeftMouseButton);
+            window.MouseMove(new Point(450, 300), RawInputModifiers.LeftMouseButton);
+            Assert.Same(viewport, pointer!.Captured);
+            pointer.Capture(takesIt ? other : null);
+            window.MouseMove(new Point(500, 300), RawInputModifiers.LeftMouseButton);
+            window.MouseUp(new Point(500, 300), MouseButton.Left);
+            window.MouseMove(new Point(300, 200));
+            window.MouseMove(new Point(200, 150));
+            HeadlessUi.Pump();
+
+            Assert.Equal($"taken {takesIt}: dab, dab, end", $"taken {takesIt}: " + string.Join(", ", events));
+            window.Close();
+        }
+    }
+
+    /// <summary>Without a button the brush says where it is (the planned spots are shown before the click); while painting it only paints.</summary>
+    [AvaloniaFact]
+    public void HoveringReportsWhereTheBrushIs()
+    {
+        var viewport = new LevelViewport { BrushMode = true, BrushRadius = 5 };
+        var window = new Window { Width = 800, Height = 600, Content = viewport };
+        window.Show();
+        HeadlessUi.Pump();
+        viewport.Camera.Position = new Vector3(0f, 3000f, 0f);
+        viewport.Camera.Pitch = -60f;
+        var events = new List<string>();
+        var hovers = new List<FVector>();
+        viewport.BrushHovered += (_, at) =>
+        {
+            events.Add("hover");
+            hovers.Add(at);
+        };
+        viewport.BrushPainted += (_, _) => events.Add("dab");
+        viewport.BrushStrokeEnded += (_, _) => events.Add("end");
+
+        window.MouseMove(new Point(300, 250));
+        HeadlessUi.Pump();
+        Assert.Equal(["hover"], events);
+        Assert.True(FVector.Distance(OnGround(viewport, 300, 250), hovers[0]) < 1f, hovers[0].ToString());
+
+        window.MouseDown(new Point(400, 300), MouseButton.Left, RawInputModifiers.LeftMouseButton);
+        window.MouseMove(new Point(450, 300), RawInputModifiers.LeftMouseButton);
+        window.MouseUp(new Point(450, 300), MouseButton.Left);
+        HeadlessUi.Pump();
+        // The end hands the brush back to the preview where the stroke stopped.
+        Assert.Equal(["hover", "dab", "dab", "end", "hover"], events);
+        Assert.True(FVector.Distance(OnGround(viewport, 450, 300), hovers[1]) < 1f, hovers[1].ToString());
+
+        window.MouseMove(new Point(600, 400));
+        HeadlessUi.Pump();
+        Assert.Equal("hover", events[^1]);
+        Assert.True(FVector.Distance(OnGround(viewport, 600, 400), hovers[^1]) < 1f, hovers[^1].ToString());
+        window.Close();
+    }
+
+    [Fact]
+    public void TheSpotsAreMarkedWhereTheyAre()
+    {
+        var spots = new List<(FVector At, bool Plants)> { (new FVector(1200, -800, 350), true), (new FVector(-300, 40, 10), false) };
+
+        var lines = LevelViewport.SpotMarks(spots).ToList();
+
+        Assert.Equal(16, lines.Count);
+        foreach (var (spot, i) in spots.Select((s, i) => (s, i)))
+        {
+            var ring = lines.Skip(i * 8).Take(8).ToList();
+            var centre = UeToGl.Point(spot.At) + new Vector3(0f, 20f, 0f);
+            Assert.All(ring, l => Assert.Equal(spot.Plants ? LevelViewport.SpotPlants : LevelViewport.SpotLeftOut, l.Color));
+            Assert.All(ring, l => Assert.Equal(35f, Vector3.Distance(centre, l.Start), 0.01f));
+            Assert.All(ring, l => Assert.Equal(centre.Y, l.Start.Y, 0.01f)); // lying flat, 20 cm above the spot
+            Assert.Equal(centre, ring.Aggregate(Vector3.Zero, (sum, l) => sum + l.Start) / 8f, new Vector3EqualityComparer(0.01f));
+            Assert.Equal(ring[0].Start, ring[^1].End); // closed
+        }
+
+        Assert.NotEqual(LevelViewport.SpotPlants, LevelViewport.SpotLeftOut);
+    }
+
+    [Fact]
+    public void TheRingLiesOnTheGround()
+    {
+        static float? Slope(float x, float y) => 500f + (0.1f * x) - (0.05f * y);
+        var centre = UeToGl.Point(new FVector(4000, -2500, 900));
+
+        var draped = LevelViewport.DrapedRing(centre, 1000f, Slope, 64);
+        var flat = LevelViewport.DrapedRing(centre, 1000f, (_, _) => null, 64);
+
+        Assert.Equal(65, draped.Length);
+        Assert.Equal(GizmoMath.RingPoints(centre, 1000f, 64), flat); // no terrain: the flat ring
+        for (var i = 0; i < draped.Length; i++)
+        {
+            var ue = UeToGl.ToUePoint(draped[i]);
+            var was = UeToGl.ToUePoint(flat[i]);
+            Assert.Equal(was.X, ue.X, 0.01f);
+            Assert.Equal(was.Y, ue.Y, 0.01f);
+            Assert.Equal(Slope(ue.X, ue.Y)!.Value + 30f, ue.Z, 0.01f);
+        }
+    }
+
+    [Fact]
+    public void OnTheGroundTheCentreIgnoresWhatIsAbove()
+    {
+        var ground = new Vector3(100f, 0f, 200f);
+        var canopy = new Vector3(100f, 2000f, 200f); // a tree top 20 m above the terrain
+        var picks = 0;
+        Vector3? Pick()
+        {
+            picks++;
+            return canopy;
+        }
+
+        Assert.Equal(ground, LevelViewport.BrushHit(Pick, () => ground, onGround: true));
+        Assert.Equal(0, picks); // the GPU pick is not even asked
+        Assert.Equal(canopy, LevelViewport.BrushHit(Pick, () => null, onGround: true)); // no terrain there: what is drawn
+        Assert.Equal(canopy, LevelViewport.BrushHit(Pick, () => ground, onGround: false)); // selecting: what the cursor is on
+        Assert.Equal(ground, LevelViewport.BrushHit(() => null, () => ground, onGround: false));
+    }
+
+    private sealed class Vector3EqualityComparer(float tolerance) : IEqualityComparer<Vector3>
+    {
+        public bool Equals(Vector3 a, Vector3 b) => Vector3.Distance(a, b) <= tolerance;
+
+        public int GetHashCode(Vector3 v) => 0;
+    }
+
     /// <summary>Where the mouse ray at pixel (<paramref name="x"/>, <paramref name="y"/>) meets the ground plane (UE height 0).</summary>
     private static FVector OnGround(LevelViewport viewport, int x, int y)
     {

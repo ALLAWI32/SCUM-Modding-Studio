@@ -1,3 +1,4 @@
+using ScumStudio.Core.Geometry;
 using ScumStudio.Core.Mathematics;
 using ScumStudio.Level.Model;
 
@@ -155,6 +156,23 @@ public sealed record LevelExportData
 
     /// <summary>Box components: <c>BoxExtent</c>, the half size in component space (the engine's 32 cm when not stored); null for other components.</summary>
     public FVector? BoxExtent { get; init; }
+
+    /// <summary>
+    /// What an effect, sound or decal component plays or shows, as stored or in a template: a particle system's
+    /// <c>Template</c>, a Niagara system's <c>Asset</c>, a Wwise <c>AkAudioEvent</c>, an audio component's <c>Sound</c>, a
+    /// decal's <c>DecalMaterial</c>; null for other components.
+    /// </summary>
+    public string? AssetPath { get; init; }
+
+    /// <summary>
+    /// Shape and brush components: the box around the shape in component space, before the component's scale (box, sphere
+    /// and capsule from their sizes, engine defaults when not stored; a volume's brush from its <c>BrushBodySetup</c>); null
+    /// for other components.
+    /// </summary>
+    public BoundingBox? LocalBounds { get; init; }
+
+    /// <summary>Volume actors: <c>bWaterVolume</c> as stored or in the archetype (players swim in it).</summary>
+    public bool WaterVolume { get; init; }
 
     /// <summary>Sentry spawner actors: <c>PatrolPoints</c> relative to the spawner; null for other actors.</summary>
     public IReadOnlyList<FVector>? PatrolPoints { get; init; }

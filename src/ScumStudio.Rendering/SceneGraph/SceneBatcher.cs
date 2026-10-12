@@ -9,7 +9,7 @@ namespace ScumStudio.Rendering.SceneGraph;
 /// <param name="First">Index of the first instance in <see cref="RenderBatch.Instances"/>.</param>
 /// <param name="Count">Number of instances.</param>
 /// <param name="Bounds">World bounds of these instances.</param>
-/// <param name="Radius">Bounding sphere radius of the largest single instance (world units), for projected-size tests.</param>
+/// <param name="Radius">Bounding sphere radius of the largest single instance (world units, the same however it is turned), for projected-size tests.</param>
 /// <param name="MaxDrawDistance">Cull distance shared by these instances (<see cref="SceneNode.MaxDrawDistance"/>; 0 = none).</param>
 public readonly record struct InstanceCluster(int First, int Count, BoundingBox Bounds, float Radius, float MaxDrawDistance);
 
@@ -43,20 +43,23 @@ public sealed class RenderBatch
     /// <summary>World bounds of all instances (only ever grows while records are patched in place).</summary>
     public BoundingBox Bounds { get; internal set; }
 
-    /// <summary>Spatial clusters covering <see cref="Instances"/> in order, each at most <see cref="SceneBatcher.ClusterSize"/> instances.</summary>
+    /// <summary>
+    /// Spatial clusters covering <see cref="Instances"/> in order, each at most <see cref="SceneBatcher.ClusterSize"/>
+    /// instances within <see cref="SceneBatcher.ClusterSpan"/>.
+    /// </summary>
     public InstanceCluster[] Clusters { get; }
 
     /// <summary>Pick code of the first instance: instance <c>i</c> has code <c>FirstCode + i</c> (written as 0 when its node has no id).</summary>
     public uint FirstCode { get; }
 }
 
-/// <summary>Result of <see cref="SceneBatcher.Build"/>.</summary>
+/// <summary>Result of <see cref="SceneBatcher.Build(Scene)"/>.</summary>
 /// <param name="Batches">One batch per mesh with at least one visible instance, ordered by mesh id.</param>
 /// <param name="InstanceCount">Visible mesh instances over all batches.</param>
 public sealed record BatchResult(IReadOnlyList<RenderBatch> Batches, int InstanceCount)
 {
     /// <summary>
-    /// Maps a pick code produced with this result (see <see cref="SceneBatcher.Build"/>) back to its batch and node.
+    /// Maps a pick code produced with this result (see <see cref="SceneBatcher.Build(Scene)"/>) back to its batch and node.
     /// Returns false for 0 or out-of-range codes.
     /// </summary>
     public bool TryResolvePickCode(uint code, out RenderBatch? batch, out SceneNode? node)
@@ -104,6 +107,13 @@ public sealed class SceneBatcher
 {
     /// <summary>Largest number of instances per cluster (smaller clusters cull finer but cost more frustum tests).</summary>
     public const int ClusterSize = 16;
+
+    /// <summary>
+    /// Widest spread of instance centres (world units, 20 m) a cluster may have, or 4 × its largest instance's radius when
+    /// that is more: a sparser run is split further (down to single instances), so the copies of a mesh scattered over a
+    /// level each get the LOD and cull distance of where they stand, not of the nearest copy.
+    /// </summary>
+    public const float ClusterSpan = 2000f;
 
     private readonly List<InstanceUpdate> _updates = [];
     private Scene? _scene;
@@ -220,7 +230,8 @@ public sealed class SceneBatcher
                 var bounds = Frustum.TransformBounds(mesh.Bounds, world);
                 var c = ClusterOf(batch.Clusters, i);
                 var cluster = batch.Clusters[c];
-                batch.Clusters[c] = cluster with { Bounds = cluster.Bounds.Union(bounds), Radius = MathF.Max(cluster.Radius, bounds.Extent.Length()) };
+                var radius = InstanceRadius(mesh.Bounds.Extent.Length(), world, bounds);
+                batch.Clusters[c] = cluster with { Bounds = cluster.Bounds.Union(bounds), Radius = MathF.Max(cluster.Radius, radius) };
                 batch.Bounds = batch.Bounds.Union(bounds);
             }
 
@@ -306,8 +317,14 @@ public sealed class SceneBatcher
     /// <summary>Builds the batches of <paramref name="scene"/> (no caching).</summary>
     public static BatchResult Build(Scene scene) => Build(scene, claim: false);
 
+    /// <summary>
+    /// Builds the batches as the batcher did before sparse runs were split: clusters by instance count only, radii from
+    /// the world boxes. The baseline of the cluster benchmark in the tests.
+    /// </summary>
+    internal static BatchResult BuildCountOnly(Scene scene) => Build(scene, claim: false, countOnly: true);
+
     /// <summary>Builds the batches of <paramref name="scene"/>; with <paramref name="claim"/> its nodes remember their records (see <see cref="SceneNode.SlotOwner"/>).</summary>
-    private static BatchResult Build(Scene scene, bool claim)
+    private static BatchResult Build(Scene scene, bool claim, bool countOnly = false)
     {
         ArgumentNullException.ThrowIfNull(scene);
         var perMesh = Collect(scene.Root, null);
@@ -318,7 +335,7 @@ public sealed class SceneBatcher
         foreach (var id in ids)
         {
             var (mesh, items) = perMesh[id];
-            batches.Add(BuildBatch(mesh, items, code));
+            batches.Add(BuildBatch(mesh, items, code, countOnly));
             code += (uint)items.Count;
         }
 
@@ -363,16 +380,19 @@ public sealed class SceneBatcher
     }
 
     /// <summary>The batch of one mesh: its instances sorted into clusters, numbered from <paramref name="firstCode"/>.</summary>
-    private static RenderBatch BuildBatch(MeshHandle mesh, List<(Matrix4x4 World, SceneNode Node)> items, uint firstCode)
+    private static RenderBatch BuildBatch(MeshHandle mesh, List<(Matrix4x4 World, SceneNode Node)> items, uint firstCode, bool countOnly = false)
     {
         var worldBounds = new BoundingBox[items.Count];
+        var radii = new float[items.Count];
         var centres = new Vector3[items.Count];
         var order = new int[items.Count];
         var cull = new float[items.Count];
         var mixedCull = false;
+        var meshRadius = mesh.Bounds.Extent.Length();
         for (var i = 0; i < items.Count; i++)
         {
             worldBounds[i] = Frustum.TransformBounds(mesh.Bounds, items[i].World);
+            radii[i] = countOnly ? worldBounds[i].Extent.Length() : InstanceRadius(meshRadius, items[i].World, worldBounds[i]);
             centres[i] = worldBounds[i].Center;
             order[i] = i;
             cull[i] = items[i].Node.MaxDrawDistance;
@@ -402,7 +422,7 @@ public sealed class SceneBatcher
                     hi++;
                 }
 
-                Split(worldBounds, centres, order, keys, lo, hi, distance, clusters);
+                Split(worldBounds, radii, centres, order, keys, lo, hi, distance, countOnly ? float.PositiveInfinity : ClusterSpan, clusters);
                 lo = hi;
             }
         }
@@ -472,36 +492,51 @@ public sealed class SceneBatcher
     }
 
     /// <summary>
+    /// Bounding sphere radius of an instance as UE's <c>FBoxSphereBounds::TransformBy</c> gives it: the mesh's radius times
+    /// the instance's largest axis scale, at most the half-diagonal of its world box. Turning an instance never changes it
+    /// (the world box's half-diagonal grows up to 1.7× when it turns).
+    /// </summary>
+    private static float InstanceRadius(float meshRadius, in Matrix4x4 world, in BoundingBox worldBounds)
+    {
+        var x = new Vector3(world.M11, world.M12, world.M13).LengthSquared();
+        var y = new Vector3(world.M21, world.M22, world.M23).LengthSquared();
+        var z = new Vector3(world.M31, world.M32, world.M33).LengthSquared();
+        return MathF.Min(meshRadius * MathF.Sqrt(MathF.Max(x, MathF.Max(y, z))), worldBounds.Extent.Length());
+    }
+
+    /// <summary>
     /// Splits <c>order[lo..hi)</c> at the median along the longest axis of the instance centres until a run has at most
-    /// <see cref="ClusterSize"/> instances, appending one cluster per run (a k-d tree whose leaves are stored in order).
+    /// <see cref="ClusterSize"/> instances whose centres spread at most <paramref name="span"/> or 4 × their largest radius
+    /// (see <see cref="ClusterSpan"/>), appending one cluster per run (a k-d tree whose leaves are stored in order).
     /// <paramref name="keys"/> is scratch space of the same length as <paramref name="order"/>.
     /// </summary>
-    private static void Split(BoundingBox[] worldBounds, Vector3[] centres, int[] order, float[] keys, int lo, int hi, float maxDrawDistance, List<InstanceCluster> clusters)
+    private static void Split(BoundingBox[] worldBounds, float[] radii, Vector3[] centres, int[] order, float[] keys, int lo, int hi, float maxDrawDistance, float span,
+        List<InstanceCluster> clusters)
     {
-        if (hi - lo <= ClusterSize)
+        var min = new Vector3(float.PositiveInfinity);
+        var max = new Vector3(float.NegativeInfinity);
+        var radius = 0f;
+        for (var i = lo; i < hi; i++)
+        {
+            var c = centres[order[i]];
+            min = Vector3.Min(min, c);
+            max = Vector3.Max(max, c);
+            radius = MathF.Max(radius, radii[order[i]]);
+        }
+
+        var size = max - min;
+        if (hi - lo <= 1 || (hi - lo <= ClusterSize && MathF.Max(size.X, MathF.Max(size.Y, size.Z)) <= MathF.Max(span, 4f * radius)))
         {
             var bounds = BoundingBox.Empty;
-            var radius = 0f;
             for (var i = lo; i < hi; i++)
             {
                 bounds = bounds.Union(worldBounds[order[i]]);
-                radius = MathF.Max(radius, worldBounds[order[i]].Extent.Length());
             }
 
             clusters.Add(new InstanceCluster(lo, hi - lo, bounds, radius, maxDrawDistance));
             return;
         }
 
-        var min = new Vector3(float.PositiveInfinity);
-        var max = new Vector3(float.NegativeInfinity);
-        for (var i = lo; i < hi; i++)
-        {
-            var c = centres[order[i]];
-            min = Vector3.Min(min, c);
-            max = Vector3.Max(max, c);
-        }
-
-        var size = max - min;
         var axis = size.X >= size.Y && size.X >= size.Z ? 0 : size.Y >= size.Z ? 1 : 2;
         for (var i = lo; i < hi; i++)
         {
@@ -510,8 +545,8 @@ public sealed class SceneBatcher
 
         var mid = lo + ((hi - lo) / 2);
         SelectKth(keys, order, lo, hi - 1, mid);
-        Split(worldBounds, centres, order, keys, lo, mid, maxDrawDistance, clusters);
-        Split(worldBounds, centres, order, keys, mid, hi, maxDrawDistance, clusters);
+        Split(worldBounds, radii, centres, order, keys, lo, mid, maxDrawDistance, span, clusters);
+        Split(worldBounds, radii, centres, order, keys, mid, hi, maxDrawDistance, span, clusters);
     }
 
     /// <summary>

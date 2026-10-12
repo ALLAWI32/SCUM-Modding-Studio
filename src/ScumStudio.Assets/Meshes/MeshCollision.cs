@@ -54,6 +54,23 @@ public static class MeshCollision
         }
 
         var geom = setup.AggGeom;
+        var boxes = Boxes(setup);
+        var flag = setup.Properties.FirstOrDefault(p => p.Name.Text == "CollisionTraceFlag")?.Tag?.GenericValue?.ToString() ?? string.Empty;
+        var g = setup.BodySetupGuid;
+        var profile = setup.TryGetValue(out CUE4Parse.UE4.Assets.Objects.FStructFallback def, "DefaultInstance")
+                      && def.TryGetValue(out CUE4Parse.UE4.Objects.UObject.FName name, "CollisionProfileName") && !name.IsNone ? name.Text : null;
+        return new MeshCollisionInfo(boxes, geom?.ConvexElems?.Length ?? 0, geom?.BoxElems?.Length ?? 0, geom?.SphereElems?.Length ?? 0, geom?.SphylElems?.Length ?? 0, flag,
+            (g.A, g.B, g.C, g.D)) { DefaultProfile = profile, LetsThrough = LetsThrough(setup, boxes.Count + (geom?.ConvexElems?.Length ?? 0) > 0 || flag == "CTF_UseComplexAsSimple") };
+    }
+
+    /// <summary>
+    /// A body's simple shapes (<c>AggGeom</c>) as boxes in its own space: a mesh's collision, or a volume's brush
+    /// (<c>BrushBodySetup</c>, whose convex hulls are the volume's shape).
+    /// </summary>
+    public static IReadOnlyList<CollisionBox> Boxes(UBodySetup setup)
+    {
+        ArgumentNullException.ThrowIfNull(setup);
+        var geom = setup.AggGeom;
         var boxes = new List<CollisionBox>();
         foreach (var b in geom?.BoxElems ?? [])
         {
@@ -93,12 +110,7 @@ public static class MeshCollision
             boxes.Add(new CollisionBox(V(s.Center), new FRotator(s.Rotation.Pitch, s.Rotation.Yaw, s.Rotation.Roll), new FVector(d, d, s.Length + d)));
         }
 
-        var flag = setup.Properties.FirstOrDefault(p => p.Name.Text == "CollisionTraceFlag")?.Tag?.GenericValue?.ToString() ?? string.Empty;
-        var g = setup.BodySetupGuid;
-        var profile = setup.TryGetValue(out CUE4Parse.UE4.Assets.Objects.FStructFallback def, "DefaultInstance")
-                      && def.TryGetValue(out CUE4Parse.UE4.Objects.UObject.FName name, "CollisionProfileName") && !name.IsNone ? name.Text : null;
-        return new MeshCollisionInfo(boxes, geom?.ConvexElems?.Length ?? 0, geom?.BoxElems?.Length ?? 0, geom?.SphereElems?.Length ?? 0, geom?.SphylElems?.Length ?? 0, flag,
-            (g.A, g.B, g.C, g.D)) { DefaultProfile = profile, LetsThrough = LetsThrough(setup, boxes.Count + (geom?.ConvexElems?.Length ?? 0) > 0 || flag == "CTF_UseComplexAsSimple") };
+        return boxes;
     }
 
     private static readonly string[] Blockers = ["Pawn", "PhysicsBody"];

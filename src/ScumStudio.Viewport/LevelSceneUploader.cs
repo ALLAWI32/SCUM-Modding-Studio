@@ -25,6 +25,10 @@ public sealed class LevelScene : IDisposable
     private readonly List<MeshHandle> _handles = []; // owned by the scene (not the cache's)
     private readonly List<GpuTexture> _textures = []; // owned by the scene (not the cache's)
     private readonly HashSet<string> _ownedMeshPaths = new(StringComparer.OrdinalIgnoreCase);
+
+    // The cache's textures that meshes the scene owns draw with (added meshes, bent and reshaped copies, pins), by mesh id:
+    // no cached mesh may use them any more, so each update keeps them (owner: "Cannot access a disposed object" after a paste).
+    private readonly Dictionary<int, string[]> _borrowed = [];
     private Dictionary<string, MeshHandle> _meshHandles = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<uint, List<ScenePlacement>> _byId = [];
     private readonly Dictionary<uint, List<(SceneNode Node, ScenePlacement? Source)>> _clones = [];
@@ -86,7 +90,7 @@ public sealed class LevelScene : IDisposable
             }
         }
 
-        var handle = LevelSceneUploader.AddMesh(_renderer, mesh.Asset, _gpuTextures);
+        var handle = AddOwnedMesh(mesh.Asset);
         _handles.Add(handle);
         _meshHandles[mesh.Asset.MeshPath] = handle;
         _extraAssets[mesh.Asset.MeshPath] = mesh.Asset;
@@ -114,7 +118,7 @@ public sealed class LevelScene : IDisposable
                 current.Node.Mesh = current.Straight;
             }
 
-            _renderer.RemoveMesh(current.Bent);
+            RemoveOwnedMesh(current.Bent);
             _bent.Remove(selectableId);
         }
 
@@ -137,7 +141,7 @@ public sealed class LevelScene : IDisposable
         }
 
         var lods = asset.Lods.Select(l => SplineMeshDeformer.DeformPieces(l, spline)).ToList();
-        var bent = LevelSceneUploader.AddMesh(_renderer, asset with { MeshPath = path + "#bent", Mesh = lods[0], Lods = lods }, _gpuTextures);
+        var bent = AddOwnedMesh(asset with { MeshPath = path + "#bent", Mesh = lods[0], Lods = lods });
         _bent[selectableId] = (bent, node, node.Mesh!, spline);
         node.Mesh = bent;
     }
@@ -169,7 +173,7 @@ public sealed class LevelScene : IDisposable
                 current.Node.Mesh = current.Straight;
             }
 
-            _renderer.RemoveMesh(current.Bent);
+            RemoveOwnedMesh(current.Bent);
             _bentSegments.Remove(key);
         }
 
@@ -197,7 +201,7 @@ public sealed class LevelScene : IDisposable
         }
 
         var lods = straight.Lods.Select(l => SplineMeshDeformer.Deform(l, spline, straight.Mesh.Bounds)).ToList();
-        var bent = LevelSceneUploader.AddMesh(_renderer, straight with { MeshPath = placement.MeshPath + "#reshaped", Mesh = lods[0], Lods = lods }, _gpuTextures);
+        var bent = AddOwnedMesh(straight with { MeshPath = placement.MeshPath + "#reshaped", Mesh = lods[0], Lods = lods });
         _bentSegments[key] = (bent, node, shown, spline, meshPath);
         node.Mesh = bent;
     }
@@ -657,6 +661,14 @@ public sealed class LevelScene : IDisposable
             }
         }
 
+        foreach (var path in _borrowed.Values.SelectMany(p => p))
+        {
+            if (Cache?.Keep(path) is { } kept)
+            {
+                gpuTextures.TryAdd(path, kept);
+            }
+        }
+
         _gpuTextures = gpuTextures;
         var texturesMs = clock.Elapsed.TotalMilliseconds;
         var meshHandles = new Dictionary<string, MeshHandle>(StringComparer.OrdinalIgnoreCase);
@@ -731,7 +743,7 @@ public sealed class LevelScene : IDisposable
         HasShimmer = next.Meshes.Values.Any(m => m.Shimmer) || _extraAssets.Values.Any(m => m.Shimmer);
         Ground = next.Ground;
         Prepared = next;
-        Cache?.KeepDrawn(Scene.Nodes); // what clones, pins and swapped meshes draw stays on the GPU too
+        Cache?.KeepDrawn(Scene.Nodes, PutBack()); // what clones, pins and swapped meshes draw stays on the GPU too
         var nodesMs = clock.Elapsed.TotalMilliseconds - texturesMs - meshesMs - terrainMs;
         UploadTimings = new UploadTimings(texturesMs, meshesMs, nodesMs, terrainMs, Cache?.LastUploaded ?? meshHandles.Count);
     }
@@ -855,6 +867,31 @@ public sealed class LevelScene : IDisposable
         return mesh;
     }
 
+    /// <summary>Uploads a mesh the scene owns, drawing with the scene's textures; those it takes from the cache are noted as borrowed.</summary>
+    private MeshHandle AddOwnedMesh(PreparedMeshAsset asset)
+    {
+        var handle = LevelSceneUploader.AddMesh(_renderer, asset, _gpuTextures);
+        var borrowed = LevelPrepareCache.TexturePathsOf(asset).Where(p => _gpuTextures.TryGetValue(p, out var t) && !_textures.Contains(t)).ToArray();
+        if (Cache is not null && borrowed.Length > 0)
+        {
+            _borrowed[handle.Id] = borrowed;
+        }
+
+        return handle;
+    }
+
+    private void RemoveOwnedMesh(MeshHandle mesh)
+    {
+        _renderer.RemoveMesh(mesh);
+        _borrowed.Remove(mesh.Id);
+    }
+
+    /// <summary>The meshes a bend or a replaced mesh gives back to its node when undone (they may be the cache's).</summary>
+    private IEnumerable<MeshHandle> PutBack() =>
+        _bent.Values.Select(b => b.Straight)
+            .Concat(_bentSegments.Values.Select(b => b.Straight))
+            .Concat(_swappedActors.Values.Concat(_swappedParts.Values).SelectMany(s => s.Nodes.Select(n => n.Own)));
+
     private static bool SamePlacements(List<ScenePlacement> drawn, List<ScenePlacement>? next)
     {
         if (next is null || drawn.Count != next.Count)
@@ -946,7 +983,7 @@ public sealed class LevelScene : IDisposable
             _swappedActors.Remove(id);
             if (_bent.Remove(id, out var bent))
             {
-                _renderer.RemoveMesh(bent.Bent);
+                RemoveOwnedMesh(bent.Bent);
             }
         }
 
@@ -954,7 +991,7 @@ public sealed class LevelScene : IDisposable
         _addedInstances.RemoveWhere(k => ids.Contains(k.SelectableId));
         foreach (var key in _bentSegments.Keys.Where(k => ids.Contains(k.SelectableId)).ToList())
         {
-            _renderer.RemoveMesh(_bentSegments[key].Bent);
+            RemoveOwnedMesh(_bentSegments[key].Bent);
             _bentSegments.Remove(key);
         }
 
@@ -1147,7 +1184,7 @@ public sealed class LevelScene : IDisposable
                     continue;
                 }
 
-                handle = LevelSceneUploader.AddMesh(_renderer, asset, _gpuTextures); // a sentry without a point before: no capsule uploaded yet
+                handle = AddOwnedMesh(asset); // a sentry without a point before: no capsule uploaded yet
                 _handles.Add(handle);
                 _meshHandles[pin.MeshPath] = handle;
                 _ownedMeshPaths.Add(pin.MeshPath);
@@ -1272,6 +1309,7 @@ public sealed class LevelScene : IDisposable
 
         _bent.Clear();
         _bentSegments.Clear();
+        _borrowed.Clear();
 
         foreach (var texture in _textures)
         {
@@ -1406,7 +1444,7 @@ public static class LevelSceneUploader
         return PreparedMesh.FromLods(asset.Lods, asset.LodScreenSizes.ToArray(), MeshSpace.Unreal, 1f);
     }
 
-    // Average linear colour of each layer texture (computed once per decoded image).
+    // Average linear colour of a layer texture the preparer built no mip chain for (none today; computed once per decoded image).
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<TextureImage, StrongBox<Vector3>> LayerMeans = new();
 
     /// <summary>
@@ -1480,31 +1518,13 @@ public static class LevelSceneUploader
                 }
             }
 
-            means[k] = LayerMeans.GetValue(image, MeanColour).Value;
+            // The 1×1 mip the preparer's worker built for the bake: worked out here texel by texel, it held the render thread
+            // some 20 ms per new layer as the ground streamed in.
+            means[k] = images.Find(path)?.Mean ?? LayerMeans.GetValue(image, i => new StrongBox<Vector3>(new LinearMipChain(i).Mean)).Value;
             tiling[k] = 1f / top[k].Style.TilingCm;
         }
 
         return new TerrainDetailTextures(weightTexture, gpu, new Vector4(tiling[0], tiling[1], tiling[2], tiling[3]), means, normals);
-
-        static StrongBox<Vector3> MeanColour(TextureImage image)
-        {
-            double r = 0, g = 0, b = 0;
-            var count = image.Width * image.Height;
-            for (var i = 0; i < count; i++)
-            {
-                r += SrgbToLinear(image.Rgba[i * 4]);
-                g += SrgbToLinear(image.Rgba[(i * 4) + 1]);
-                b += SrgbToLinear(image.Rgba[(i * 4) + 2]);
-            }
-
-            return new StrongBox<Vector3>(count == 0 ? Vector3.One : new Vector3((float)(r / count), (float)(g / count), (float)(b / count)));
-        }
-
-        static double SrgbToLinear(byte value)
-        {
-            var c = value / 255.0;
-            return c <= 0.04045 ? c / 12.92 : Math.Pow((c + 0.055) / 1.055, 2.4);
-        }
     }
 
     /// <summary>Uploads a baked terrain texture (sRGB, mipmapped, clamp-to-edge so components meet without seams).</summary>

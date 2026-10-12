@@ -146,6 +146,12 @@ public sealed partial class LevelViewport : OpenGlControlBase
     /// <summary>Move the sea's waves (<see cref="RenderSettings.AnimateWater"/>); off: still water.</summary>
     public static readonly StyledProperty<bool> AnimateWaterProperty = AvaloniaProperty.Register<LevelViewport, bool>(nameof(AnimateWater), true);
 
+    /// <summary>
+    /// Draw with 4 samples a pixel: smooth edges, and leaves and grass cut by coverage, steady while the camera moves
+    /// (<see cref="SceneRenderer.CreateTarget"/>); off: one sample, the previous look.
+    /// </summary>
+    public static readonly StyledProperty<bool> AntiAliasedFoliageProperty = AvaloniaProperty.Register<LevelViewport, bool>(nameof(AntiAliasedFoliage), true);
+
     /// <summary>Auto-snap: a dragged object jumps flush against (or in line with) a neighbour that comes within 30 cm.</summary>
     public static readonly StyledProperty<bool> AutoSnapProperty =
         AvaloniaProperty.Register<LevelViewport, bool>(nameof(AutoSnap), defaultValue: true);
@@ -179,6 +185,14 @@ public sealed partial class LevelViewport : OpenGlControlBase
     /// <summary>Radius of the brush circle in metres.</summary>
     public static readonly StyledProperty<double> BrushRadiusProperty =
         AvaloniaProperty.Register<LevelViewport, double>(nameof(BrushRadius), 10d);
+
+    /// <summary>The spots the brush is about to plant (UE world, on the ground), marked in the view: Plants = false where one is left out.</summary>
+    public static readonly StyledProperty<IReadOnlyList<(FVector At, bool Plants)>?> BrushSpotsProperty =
+        AvaloniaProperty.Register<LevelViewport, IReadOnlyList<(FVector At, bool Plants)>?>(nameof(BrushSpots));
+
+    /// <summary>The brush circle stands on the terrain under the cursor, not on the canopy or roof the cursor is over (planting).</summary>
+    public static readonly StyledProperty<bool> BrushOnGroundProperty =
+        AvaloniaProperty.Register<LevelViewport, bool>(nameof(BrushOnGround));
 
     /// <summary>One-line statistics of the last frame (read-only).</summary>
     public static readonly StyledProperty<string> FrameInfoProperty =
@@ -240,6 +254,7 @@ public sealed partial class LevelViewport : OpenGlControlBase
     private float? _brushGroundY;
     private bool _brushing;
     private bool _brushEndPending;
+    private IPointer? _brushPointer;
     private Point _lastPointer;
     private Point _pressPointer;
     private bool _looking;
@@ -254,6 +269,8 @@ public sealed partial class LevelViewport : OpenGlControlBase
     private bool _grabPending;
     private uint _grabId;
     private InstanceKey? _grabInstance;
+    private PreparedLevelScene? _grabScene; // the numbering _grabId is in (the scene drawn when it was picked)
+    private PreparedLevelScene? _dragScene; // the Scene a drag began in: its preview's id is in that numbering
     private Vector3 _grabPointGl;
     private bool _freeDragging;
     private Vector3 _freeMove;
@@ -308,11 +325,13 @@ public sealed partial class LevelViewport : OpenGlControlBase
         TimeOfDayProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.RequestNextFrameRendering());
         LightingProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.RequestNextFrameRendering());
         AnimateWaterProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.RequestNextFrameRendering());
+        AntiAliasedFoliageProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.RequestNextFrameRendering());
         ScaleHandlesProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.RequestNextFrameRendering());
         LegHandleProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.RequestNextFrameRendering());
         SelectedRootWorldProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.RequestNextFrameRendering());
         CanScaleProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.RequestNextFrameRendering());
         ExtraMeshesProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.MarkDirty(ref c._clonesDirty));
+        BrushSpotsProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.RequestNextFrameRendering());
     }
 
     /// <summary>Raised on the UI thread when a gizmo drag ends: the actor's root should move to <see cref="TransformDragEventArgs.RootWorld"/>.</summary>
@@ -556,6 +575,16 @@ public sealed partial class LevelViewport : OpenGlControlBase
         set => SetValue(AnimateWaterProperty, value);
     }
 
+    /// <inheritdoc cref="AntiAliasedFoliageProperty" />
+    public bool AntiAliasedFoliage
+    {
+        get => GetValue(AntiAliasedFoliageProperty);
+        set => SetValue(AntiAliasedFoliageProperty, value);
+    }
+
+    /// <summary>Samples a pixel of the target (<see cref="AntiAliasedFoliage"/>).</summary>
+    private int TargetSamples => AntiAliasedFoliage ? 4 : 1;
+
     /// <inheritdoc cref="TimeOfDayProperty" />
     public double TimeOfDay
     {
@@ -644,8 +673,31 @@ public sealed partial class LevelViewport : OpenGlControlBase
     /// </summary>
     public event EventHandler<(FVector From, FVector To)>? BrushPainted;
 
-    /// <summary>Raised on the UI thread when the painting button is let go, after the stroke's last <see cref="BrushPainted"/>.</summary>
+    /// <summary>
+    /// Raised on the UI thread when the painting button is let go (or the stroke is lost: another button, the capture,
+    /// another app in front), once, after the stroke's last <see cref="BrushPainted"/>.
+    /// </summary>
     public event EventHandler? BrushStrokeEnded;
+
+    /// <summary>
+    /// Raised on the UI thread with the circle's centre (UE world) while the brush is not painting: on each hover (at most
+    /// once a frame) and right after <see cref="BrushStrokeEnded"/>, so the planned spots can be shown before the click.
+    /// </summary>
+    public event EventHandler<FVector>? BrushHovered;
+
+    /// <inheritdoc cref="BrushSpotsProperty" />
+    public IReadOnlyList<(FVector At, bool Plants)>? BrushSpots
+    {
+        get => GetValue(BrushSpotsProperty);
+        set => SetValue(BrushSpotsProperty, value);
+    }
+
+    /// <inheritdoc cref="BrushOnGroundProperty" />
+    public bool BrushOnGround
+    {
+        get => GetValue(BrushOnGroundProperty);
+        set => SetValue(BrushOnGroundProperty, value);
+    }
 
     /// <summary>How close (cm) a neighbour's face must come for auto-snap to take it.</summary>
     public float SnapReach { get; set; } = 30f;
@@ -712,6 +764,24 @@ public sealed partial class LevelViewport : OpenGlControlBase
         _pendingScreenshot = path;
         RequestNextFrameRendering();
         return _screenshotResult.Task;
+    }
+
+    private (int Width, int Height)? _pendingCapture;
+    private TaskCompletionSource<(byte[] Rgba, int Width, int Height)>? _captureResult;
+
+    /// <summary>
+    /// Draws the next frame's view once more off screen at <paramref name="width"/> x <paramref name="height"/> (same camera,
+    /// no grid) for "Share your mod"; completes with its top-down RGBA8 pixels.
+    /// </summary>
+    public Task<(byte[] Rgba, int Width, int Height)> CaptureAsync(int width, int height)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(width, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(height, 1);
+        _captureResult?.TrySetCanceled();
+        _captureResult = new TaskCompletionSource<(byte[] Rgba, int Width, int Height)>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _pendingCapture = (width, height);
+        RequestNextFrameRendering();
+        return _captureResult.Task;
     }
 
     /// <summary>True once <paramref name="scene"/> is uploaded and drawn (not merely assigned to <see cref="Scene"/>).</summary>
@@ -901,7 +971,7 @@ public sealed partial class LevelViewport : OpenGlControlBase
             _renderer = new SceneRenderer(_context);
             _renderer.Settings = _renderer.Settings with { ShowGrid = true };
             GpuName = _renderer.Info.Renderer;
-            _target = _renderer.CreateTarget(Math.Max(1, PixelSize().W), Math.Max(1, PixelSize().H));
+            _target = _renderer.CreateTarget(Math.Max(1, PixelSize().W), Math.Max(1, PixelSize().H), TargetSamples);
             _sceneDirty = _pendingScene is not null;
             _backdropDirty = Backdrop is not null;
             RequestNextFrameRendering(); // requests made before the context existed were dropped
@@ -948,7 +1018,7 @@ public sealed partial class LevelViewport : OpenGlControlBase
             return;
         }
 
-        _target.Resize(w, h);
+        _target.Resize(w, h, Math.Min(TargetSamples, _renderer.Info.MaxSamples));
         var quality = RenderQualityProfile.For(Quality);
         var shadows = Quality != RenderQuality.Performance; // sun shadows cost a second geometry pass near the camera
         var hour = (float)TimeOfDay;
@@ -1232,11 +1302,19 @@ public sealed partial class LevelViewport : OpenGlControlBase
             DrawShapeHandles(_renderer);
             if (BrushMode && _brushPointGl is { } brushAt)
             {
-                var ring = GizmoMath.RingPoints(brushAt, (float)BrushRadius * 100f, 64);
+                // Over the ground, not a flat disc cut by every slope; about a point every half metre on big circles.
+                var radius = (float)BrushRadius * 100f;
+                var (detail, island) = (Scene?.HeightField, Backdrop?.HeightField);
+                var ring = DrapedRing(brushAt, radius, (x, y) => detail?.SampleHeight(x, y) ?? island?.SampleHeight(x, y), Math.Clamp((int)(radius / 50f), 64, 256));
                 for (var i = 1; i < ring.Length; i++)
                 {
                     _renderer.Overlay.Add(new OverlayLine(ring[i - 1], ring[i], new Vector4(1f, 0.8f, 0.2f, 1f)));
                 }
+            }
+
+            if (BrushMode && BrushSpots is { Count: > 0 } spots)
+            {
+                _renderer.Overlay.AddRange(SpotMarks(spots));
             }
 
             if (_snappedTo is not null && preview is not null && _snapPiece is { } snapped)
@@ -1289,6 +1367,7 @@ public sealed partial class LevelViewport : OpenGlControlBase
             }
 
             var id = result?.Node.SelectableId ?? 0u;
+            var drawn = _uploadedScene;
             // Shift+click takes the whole actor (all of a road, all of a foliage actor) instead of the one piece under the cursor;
             // a part of a Blueprint is picked on its own only in part mode (or with Alt), a spawn part (its pin or the item it
             // spawns: a house's drill press, a car shop's vehicle box) always, a door's leaf never (ScenePlacement.PickKey).
@@ -1298,13 +1377,14 @@ public sealed partial class LevelViewport : OpenGlControlBase
                 // A fresh duplicate stands on its source: the click (and a drag from it) keeps taking the copy.
                 id = SelectedId;
                 instance = SelectedInstance;
+                drawn = Scene; // the page's numbering
             }
             if (_pickToggle)
             {
                 _pickToggle = false;
                 if (id != 0)
                 {
-                    Dispatcher.UIThread.Post(() => PickToggled?.Invoke(this, (id, instance)));
+                    Dispatcher.UIThread.Post(() => DeliverPick(drawn, id, instance, toggle: true));
                 }
             }
             else
@@ -1316,21 +1396,19 @@ public sealed partial class LevelViewport : OpenGlControlBase
                 _grabPointGl = result?.WorldPosition ?? default;
                 _grabInstance = instance;
                 _grabId = id;
+                _grabScene = drawn;
             }
 
-            Dispatcher.UIThread.Post(() =>
-            {
-                // Instance first: the view model then shows that one tree or rock, not the foliage actor that holds thousands.
-                SelectedInstance = instance;
-                SelectedId = id;
-                ActorPicked?.Invoke(this, id);
-            });
+            Dispatcher.UIThread.Post(() => DeliverPick(drawn, id, instance, toggle: false));
             }
         }
 
         if (_pendingBrush is { } brush)
         {
-            ResolveBrush(_level is { } brushed ? _renderer.Pick(_target, brushed.Scene, _camera, brush.X, brush.Y)?.WorldPosition : null);
+            SceneRenderer renderer = _renderer;
+            RenderTarget pickTarget = _target;
+            var brushed = _level;
+            ResolveBrush(() => brushed is null ? null : renderer.Pick(pickTarget, brushed.Scene, _camera, brush.X, brush.Y)?.WorldPosition);
             RequestNextFrameRendering(); // the circle is drawn where the cursor now is
         }
 
@@ -1374,6 +1452,20 @@ public sealed partial class LevelViewport : OpenGlControlBase
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 tcs?.TrySetException(ex);
+            }
+        }
+
+        if (_pendingCapture is { } capture)
+        {
+            _pendingCapture = null;
+            var done = _captureResult;
+            try
+            {
+                done?.TrySetResult(ViewportCapture.RenderOffscreen(_renderer, _camera, _backdrop?.Scene, _level?.Scene, capture.Width, capture.Height));
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                done?.TrySetException(ex);
             }
         }
 
@@ -1445,6 +1537,11 @@ public sealed partial class LevelViewport : OpenGlControlBase
         base.OnPropertyChanged(change);
         if (change.Property == BrushModeProperty || change.Property == BrushRadiusProperty || change.Property == OrientationProperty)
         {
+            if (!BrushMode)
+            {
+                EndBrushStroke();
+            }
+
             RequestNextFrameRendering(); // the circle shows, hides or changes size
             return;
         }
@@ -1465,6 +1562,7 @@ public sealed partial class LevelViewport : OpenGlControlBase
             _looking = false;
             SetDrone(false);
             UnlockCursor();
+            EndBrushStroke(now: true);
         }
     }
 
@@ -1473,6 +1571,7 @@ public sealed partial class LevelViewport : OpenGlControlBase
     {
         SetDrone(false);
         UnlockCursor();
+        EndBrushStroke(now: true);
         if (_topLevel is WindowBase window)
         {
             window.Deactivated -= OnWindowDeactivated;
@@ -1504,7 +1603,9 @@ public sealed partial class LevelViewport : OpenGlControlBase
         if (BrushMode && point.Properties.IsLeftButtonPressed && !e.KeyModifiers.HasFlag(KeyModifiers.Control))
         {
             // Brush: holding the button paints; nothing is grabbed or moved (Ctrl+click still takes one object out).
+            EndBrushStroke(now: true); // the last stroke's end, if it still waits for its frame, comes first
             _brushing = true;
+            _brushPointer = e.Pointer;
             _brushFromGl = null; // a new stroke
             QueueBrush(point.Position, paint: true);
             e.Pointer.Capture(this);
@@ -1520,6 +1621,7 @@ public sealed partial class LevelViewport : OpenGlControlBase
 
         if (point.Properties.IsLeftButtonPressed && TryHitGizmo(point.Position, out var handle) && SelectedRootWorld is { } root)
         {
+            _dragScene = Scene; // SelectedId is in the page's numbering
             BeginGizmoDrag(handle, point.Position, root);
             e.Pointer.Capture(this);
             RequestNextFrameRendering();
@@ -1562,6 +1664,12 @@ public sealed partial class LevelViewport : OpenGlControlBase
         var position = e.GetPosition(this);
         var delta = position - _lastPointer;
         _lastPointer = position;
+        if (_brushing && e.GetCurrentPoint(this).Properties is { IsLeftButtonPressed: false } held
+            && (held.IsRightButtonPressed || held.IsMiddleButtonPressed || held.IsXButton1Pressed || held.IsXButton2Pressed))
+        {
+            EndBrushStroke(); // the left button came up while another was held: no release is raised for it
+        }
+
         if (_cursorLocked)
         {
             if (Math.Abs(delta.X) < 0.5 && Math.Abs(delta.Y) < 0.5)
@@ -1631,19 +1739,10 @@ public sealed partial class LevelViewport : OpenGlControlBase
     protected override void OnPointerReleased(PointerReleasedEventArgs e)
     {
         base.OnPointerReleased(e);
-        if (_brushing && e.InitialPressMouseButton == MouseButton.Left)
+        if (_brushing && !e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
         {
-            _brushing = false;
-            e.Pointer.Capture(null);
-            if (_pendingBrush is { Paint: true })
-            {
-                _brushEndPending = true; // raised right after that last dab (ResolveBrush)
-            }
-            else
-            {
-                Dispatcher.UIThread.Post(() => BrushStrokeEnded?.Invoke(this, EventArgs.Empty));
-            }
-
+            // Whatever button the release names: after a chord it can be the other one (audit F115).
+            EndBrushStroke();
             e.Handled = true;
             return;
         }
@@ -1695,6 +1794,13 @@ public sealed partial class LevelViewport : OpenGlControlBase
 
         e.Pointer.Capture(null);
         RequestNextFrameRendering();
+    }
+
+    /// <inheritdoc />
+    protected override void OnPointerCaptureLost(PointerCaptureLostEventArgs e)
+    {
+        base.OnPointerCaptureLost(e);
+        EndBrushStroke(); // another control or the system took the mouse: its release will not come here
     }
 
     /// <inheritdoc />
@@ -1811,6 +1917,7 @@ public sealed partial class LevelViewport : OpenGlControlBase
         _looking = false;
         SetDrone(false);
         UnlockCursor();
+        EndBrushStroke(); // nor a button released there keep planting
     }
 
     private void SetDrone(bool on)
@@ -1918,17 +2025,51 @@ public sealed partial class LevelViewport : OpenGlControlBase
         _pendingBrush = ((int)(position.X * scaling), (int)(position.Y * scaling), paint);
         if (_renderer is null)
         {
-            ResolveBrush(null); // no OpenGL (headless): nothing to pick, the ground under the cursor still counts
+            ResolveBrush(NoPick); // no OpenGL (headless): nothing to pick, the ground under the cursor still counts
         }
 
         RequestNextFrameRendering();
     }
 
+    private static readonly Func<Vector3?> NoPick = static () => null;
+
+    /// <summary>
+    /// Ends the brush stroke: <see cref="BrushStrokeEnded"/> once, after the last dab (audit F115: a second button, a lost
+    /// capture or another app in front left the timer planting with no button held). <paramref name="now"/>: no frame
+    /// will come for a dab still waiting for one (the view goes away), so it lands on the ground under the cursor now.
+    /// </summary>
+    private void EndBrushStroke(bool now = false)
+    {
+        var pointer = _brushPointer;
+        _brushPointer = null;
+        if (_brushing)
+        {
+            _brushing = false;
+            _brushEndPending = true;
+        }
+
+        if (_brushEndPending && _pendingBrush is not { Paint: true })
+        {
+            _brushEndPending = false;
+            PostBrushStrokeEnded();
+        }
+        else if (_brushEndPending && now)
+        {
+            ResolveBrush(NoPick); // raises that last dab, then the end
+        }
+
+        if (pointer?.Captured == this)
+        {
+            pointer.Capture(null); // after the flags: the capture-lost call it causes finds nothing left to end
+        }
+    }
+
     /// <summary>
     /// Places the brush circle for the queued cursor position and, while painting, raises <see cref="BrushPainted"/>
-    /// from the stroke's previous centre to this one. <paramref name="hitGl"/> is what the pick found under the cursor.
+    /// from the stroke's previous centre to this one (else <see cref="BrushHovered"/>). <paramref name="pick"/> gives
+    /// what is drawn under the cursor; it is only asked when the centre needs it.
     /// </summary>
-    private void ResolveBrush(Vector3? hitGl)
+    private void ResolveBrush(Func<Vector3?> pick)
     {
         if (_pendingBrush is not { } brush)
         {
@@ -1938,7 +2079,7 @@ public sealed partial class LevelViewport : OpenGlControlBase
         _pendingBrush = null;
         var (w, h) = PixelSize();
         var (origin, direction) = _camera.ScreenRay(brush.X, brush.Y, Math.Max(1, w), Math.Max(1, h));
-        var centre = BrushCentre(origin, direction, hitGl);
+        var centre = BrushCentre(origin, direction, pick);
         _brushPointGl = centre;
         if (brush.Paint)
         {
@@ -1948,25 +2089,43 @@ public sealed partial class LevelViewport : OpenGlControlBase
             if (_brushEndPending)
             {
                 _brushEndPending = false;
-                Dispatcher.UIThread.Post(() => BrushStrokeEnded?.Invoke(this, EventArgs.Empty));
+                PostBrushStrokeEnded();
             }
         }
+        else
+        {
+            var at = UeToGl.ToUePoint(centre);
+            Dispatcher.UIThread.Post(() => BrushHovered?.Invoke(this, at));
+        }
+    }
+
+    /// <summary>Raises <see cref="BrushStrokeEnded"/>, then <see cref="BrushHovered"/> where the stroke stopped (the preview takes over there).</summary>
+    private void PostBrushStrokeEnded()
+    {
+        var at = _brushPointGl is { } gl ? UeToGl.ToUePoint(gl) : (FVector?)null;
+        Dispatcher.UIThread.Post(() =>
+        {
+            BrushStrokeEnded?.Invoke(this, EventArgs.Empty);
+            if (at is { } stopped)
+            {
+                BrushHovered?.Invoke(this, stopped);
+            }
+        });
     }
 
     /// <summary>
     /// The brush circle's centre (GL) for a mouse ray (owner: "everything inside the circle", not only what the cursor is
-    /// on): what the pick hit, else the terrain under the ray, else the level plane of the last ground the brush touched,
-    /// at most <see cref="MaxPickDistanceLarge"/> away across the ground (towards the sky: that far straight ahead), so the
-    /// circle follows the cursor over empty ground and the sky too.
+    /// on): what the pick hit, else the terrain under the ray (with <see cref="BrushOnGround"/> the terrain first), else
+    /// the level plane of the last ground the brush touched, at most <see cref="MaxPickDistanceLarge"/> away across the
+    /// ground (towards the sky: that far straight ahead), so the circle follows the cursor over empty ground and the sky too.
     /// </summary>
-    private Vector3 BrushCentre(Vector3 origin, Vector3 direction, Vector3? hitGl)
+    private Vector3 BrushCentre(Vector3 origin, Vector3 direction, Func<Vector3?> pick)
     {
-        if (hitGl is null && ((Scene?.HeightField?.RaycastGl(origin, direction, _camera.FarPlane) ?? Backdrop?.HeightField?.RaycastGl(origin, direction, _camera.FarPlane)) is { } ground))
-        {
-            hitGl = UeToGl.Point(new FVector(ground.Position.X, ground.Position.Y, ground.Position.Z));
-        }
+        Vector3? Terrain() => (Scene?.HeightField?.RaycastGl(origin, direction, _camera.FarPlane) ?? Backdrop?.HeightField?.RaycastGl(origin, direction, _camera.FarPlane)) is { } ground
+            ? UeToGl.Point(new FVector(ground.Position.X, ground.Position.Y, ground.Position.Z))
+            : null;
 
-        if (hitGl is { } hit)
+        if (BrushHit(pick, Terrain, BrushOnGround) is { } hit)
         {
             _brushGroundY = hit.Y;
             return hit;
@@ -1984,6 +2143,56 @@ public sealed partial class LevelViewport : OpenGlControlBase
         var across = MathF.Min(t > 0f ? t * length : float.MaxValue, MathF.Max(MaxPickDistance, MaxPickDistanceLarge));
         flat /= length;
         return new Vector3(origin.X + (flat.X * across), y, origin.Z + (flat.Y * across));
+    }
+
+    /// <summary>
+    /// What the brush stands on: the pick (a canopy, a roof, the ground) before the terrain, or, <paramref name="onGround"/>,
+    /// the terrain before the pick (planting: the cursor over a tree 20 m up still means the ground under it). Each source
+    /// is asked only when needed: the GPU pick is skipped wherever the terrain answers.
+    /// </summary>
+    internal static Vector3? BrushHit(Func<Vector3?> pick, Func<Vector3?> terrain, bool onGround) =>
+        onGround ? terrain() ?? pick() : pick() ?? terrain();
+
+    private const float SpotMarkRadius = 35f;
+    private const float SpotMarkLift = 20f;
+    private const float RingLift = 30f;
+
+    /// <summary>Colour of a spot the brush will plant.</summary>
+    internal static readonly Vector4 SpotPlants = new(0.3f, 1f, 0.45f, 1f);
+
+    /// <summary>Colour of a spot the brush leaves out (too close, a road, water...).</summary>
+    internal static readonly Vector4 SpotLeftOut = new(1f, 0.35f, 0.3f, 1f);
+
+    /// <summary>Overlay lines for the brush's planned spots: a small ring 20 cm above each, green where it plants, red where it does not.</summary>
+    internal static IEnumerable<OverlayLine> SpotMarks(IReadOnlyList<(FVector At, bool Plants)> spots)
+    {
+        foreach (var (at, plants) in spots)
+        {
+            var ring = GizmoMath.RingPoints(UeToGl.Point(at) + new Vector3(0f, SpotMarkLift, 0f), SpotMarkRadius, 8);
+            for (var i = 1; i < ring.Length; i++)
+            {
+                yield return new OverlayLine(ring[i - 1], ring[i], plants ? SpotPlants : SpotLeftOut);
+            }
+        }
+    }
+
+    /// <summary>
+    /// The brush circle laid over the ground: each point 30 cm above the terrain under it (<paramref name="ground"/>: UE
+    /// X, Y to height, null off the terrain, where the point stays at the centre's height).
+    /// </summary>
+    internal static Vector3[] DrapedRing(Vector3 centreGl, float radiusCm, Func<float, float, float?> ground, int segments = 64)
+    {
+        var ring = GizmoMath.RingPoints(centreGl, radiusCm, segments);
+        for (var i = 0; i < ring.Length; i++)
+        {
+            var ue = UeToGl.ToUePoint(ring[i]);
+            if (ground(ue.X, ue.Y) is { } z)
+            {
+                ring[i].Y = z + RingLift;
+            }
+        }
+
+        return ring;
     }
 
     private void QueuePick(Point position, bool grab, bool whole = false, bool toggle = false, bool part = false)
@@ -2018,15 +2227,42 @@ public sealed partial class LevelViewport : OpenGlControlBase
         }
     }
 
+    /// <summary>
+    /// Hands a pick of <paramref name="drawn"/> (the scene on screen) to the selection, or with <paramref name="toggle"/> to
+    /// the multi-selection. While a new scene is staged the page already reads ids in <see cref="Scene"/>'s numbering: a
+    /// pick on a level that is going away is dropped, never read as the actor that took its slot (F010).
+    /// </summary>
+    internal void DeliverPick(PreparedLevelScene? drawn, uint id, InstanceKey? instance, bool toggle)
+    {
+        if (!LevelScenePreparer.SameActorIn(drawn, Scene, id))
+        {
+            return;
+        }
+
+        if (toggle)
+        {
+            PickToggled?.Invoke(this, (id, instance));
+            return;
+        }
+
+        // Instance first: the view model then shows that one tree or rock, not the foliage actor that holds thousands.
+        SelectedInstance = instance;
+        SelectedId = id;
+        ActorPicked?.Invoke(this, id);
+    }
+
     /// <summary>Starts a free drag once the press's pick has selected an actor and its root transform is known.</summary>
     private bool TryBeginFreeDrag()
     {
-        if (_grabId == 0 || SelectedId != _grabId || SelectedInstance != _grabInstance || SelectedRootWorld is not { } root)
+        // The grab is in the numbering of the scene it was picked in: the same number in the page's may be another actor.
+        if (_grabId == 0 || SelectedId != _grabId || SelectedInstance != _grabInstance || SelectedRootWorld is not { } root
+            || !LevelScenePreparer.SameActorIn(_grabScene, Scene, _grabId))
         {
             return false;
         }
 
         PivotOf(root); // the press may have just selected it: place its pivot before the drag freezes it
+        _dragScene = Scene;
         _freeDragging = true;
         _dragStartRoot = root;
         _freeMove = Vector3.Zero;
@@ -2255,7 +2491,8 @@ public sealed partial class LevelViewport : OpenGlControlBase
         }
 
         _snappedTo = null;
-        if (preview is not null && !preview.Root.Equals(_dragStartRoot, 1e-3f))
+        // A scene shown during the drag whose level took the dragged one's slot: the object snaps back instead of moving another.
+        if (preview is not null && !preview.Root.Equals(_dragStartRoot, 1e-3f) && LevelScenePreparer.SameActorIn(_dragScene, Scene, preview.Id))
         {
             TransformDragged?.Invoke(this, new TransformDragEventArgs(preview.Id, preview.Root, scaled));
         }
@@ -2290,6 +2527,7 @@ public sealed partial class LevelViewport : OpenGlControlBase
                 }
             }
 
+            EndBrushStroke();
             return;
         }
 
@@ -2313,6 +2551,11 @@ public sealed partial class LevelViewport : OpenGlControlBase
         if (_panning && Up(0x04)) // middle button
         {
             _panning = false;
+        }
+
+        if (_brushing && _brushPointer is { Type: PointerType.Mouse } && Up(0x01, 0x02)) // both, as for the look: swapped buttons
+        {
+            EndBrushStroke();
         }
     }
 

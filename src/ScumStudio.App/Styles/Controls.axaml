@@ -15,9 +15,11 @@
   -->
 
   <!-- ===================================================================================== Base -->
-  <!-- Hover descriptions: every control waits 1.5 s before its tooltip opens (ShowDelay is not inherited). -->
+  <!-- Hover descriptions: every control waits 1.5 s before its tooltip opens (ShowDelay is not inherited); a greyed-out
+       control still says what it does and why it is off. -->
   <Style Selector=":is(Control)">
     <Setter Property="ToolTip.ShowDelay" Value="1500" />
+    <Setter Property="ToolTip.ShowOnDisabled" Value="True" />
   </Style>
   <Style Selector="Window">
     <Setter Property="FontFamily" Value="{DynamicResource ContentControlThemeFontFamily}" />
@@ -326,10 +328,11 @@
     <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
     <Setter Property="VerticalAlignment" Value="Center" />
   </Style>
-  <!-- Flat 24 px button that fills the status bar's height. -->
+  <!-- Flat 24 px button that fills the status bar's height; hover draws the same square as a ghost button. -->
   <Style Selector="Button.bar, ToggleButton.bar">
     <Setter Property="Background" Value="Transparent" />
-    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="BorderBrush" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="1" />
     <Setter Property="CornerRadius" Value="5" />
     <Setter Property="MinHeight" Value="0" />
     <Setter Property="Height" Value="23" />
@@ -337,7 +340,11 @@
     <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
   </Style>
   <Style Selector="Button.bar:pointerover /template/ ContentPresenter#PART_ContentPresenter, ToggleButton.bar:pointerover /template/ ContentPresenter#PART_ContentPresenter">
-    <Setter Property="Background" Value="{DynamicResource Surface2Brush}" />
+    <Setter Property="Background" Value="{DynamicResource StrokeBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource ButtonBorderBrushPointerOver}" />
+    <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
+  </Style>
+  <Style Selector="Button.bar:pointerover c|GlyphIcon, ToggleButton.bar:pointerover c|GlyphIcon">
     <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
   </Style>
   <Style Selector="ToggleButton.bar:checked /template/ ContentPresenter#PART_ContentPresenter">
@@ -398,18 +405,40 @@
   <Style Selector="Button.accent:disabled c|GlyphIcon">
     <Setter Property="Foreground" Value="{DynamicResource TextMutedBrush}" />
   </Style>
+  <!--
+    Ghost (icon and toolbar) buttons: no frame at rest; on hover a raised square with a hairline and a bright glyph
+    (owner: "a clear square behind the icon when I hover"): a Stroke fill, 1.3:1 or more on Bg0 to Surface, inside
+    the regular button's hover frame. The 1 px border is always there, transparent at rest, so hovering never moves
+    anything. Glyphs with their own colour (Discord, the heart) keep it.
+  -->
   <Style Selector="Button.ghost, ToggleButton.ghost">
     <Setter Property="Background" Value="Transparent" />
-    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="BorderBrush" Value="Transparent" />
+    <Setter Property="BorderThickness" Value="1" />
     <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
   </Style>
   <Style Selector="Button.ghost:pointerover /template/ ContentPresenter#PART_ContentPresenter, ToggleButton.ghost:pointerover /template/ ContentPresenter#PART_ContentPresenter">
-    <Setter Property="Background" Value="{DynamicResource Surface2Brush}" />
+    <Setter Property="Background" Value="{DynamicResource StrokeBrush}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource ButtonBorderBrushPointerOver}" />
     <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
+  </Style>
+  <Style Selector="Button.ghost:pointerover c|GlyphIcon, ToggleButton.ghost:pointerover c|GlyphIcon">
+    <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
+  </Style>
+  <Style Selector="Button.ghost:pressed /template/ ContentPresenter#PART_ContentPresenter, ToggleButton.ghost:pressed /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="{DynamicResource AccentSoftBrush}" />
   </Style>
   <Style Selector="ToggleButton.ghost:checked /template/ ContentPresenter#PART_ContentPresenter">
     <Setter Property="Background" Value="{DynamicResource AccentSoftBrush}" />
     <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
+  </Style>
+  <!-- Greyed out: no raised fill or frame, and a dim glyph, so an unavailable icon does not look clickable. -->
+  <Style Selector="Button.ghost:disabled /template/ ContentPresenter#PART_ContentPresenter, ToggleButton.ghost:disabled /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="BorderBrush" Value="Transparent" />
+  </Style>
+  <Style Selector="Button.ghost:disabled c|GlyphIcon, ToggleButton.ghost:disabled c|GlyphIcon">
+    <Setter Property="Foreground" Value="{DynamicResource TextMutedBrush}" />
   </Style>
   <Style Selector="Button.danger">
     <Setter Property="Foreground" Value="{DynamicResource DangerBrush}" />
@@ -531,9 +560,10 @@
     <Setter Property="Foreground" Value="{DynamicResource TextMutedBrush}" />
     <Setter Property="Cursor" Value="Hand" />
   </Style>
+  <!-- Hover lifts a tab one step above the selected one's fill; the selected tab keeps its blaze underline and glyph. -->
   <Style Selector="ListBox.nav ListBoxItem:pointerover /template/ ContentPresenter#PART_ContentPresenter">
-    <Setter Property="Background" Value="{DynamicResource Bg1Brush}" />
-    <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+    <Setter Property="Background" Value="{DynamicResource Surface2Brush}" />
+    <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
   </Style>
   <Style Selector="ListBox.nav ListBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter, ListBox.nav ListBoxItem:selected:pointerover /template/ ContentPresenter#PART_ContentPresenter, ListBox.nav ListBoxItem:selected:focus /template/ ContentPresenter#PART_ContentPresenter">
     <Setter Property="Background" Value="{DynamicResource SurfaceBrush}" />
@@ -547,6 +577,9 @@
   </Style>
   <Style Selector="ListBox.nav ListBoxItem c|GlyphIcon">
     <Setter Property="Foreground" Value="{DynamicResource TextMutedBrush}" />
+  </Style>
+  <Style Selector="ListBox.nav ListBoxItem:pointerover c|GlyphIcon">
+    <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
   </Style>
   <Style Selector="ListBox.nav ListBoxItem:selected c|GlyphIcon">
     <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />

@@ -89,6 +89,8 @@ public sealed partial class MapPageViewModel
         RemoveAddedInstanceOp i => (i.Target.ActorRef, i.Target.Component, i.Target.Index),
         SetTransformOp { Component: { } piece } t => (t.Target, piece, InstanceKey.Part),
         SwaySegmentOp s => (s.Target, s.Component, InstanceKey.Segment),
+        DeleteComponentsOp { Components: [var first, ..] } c => (c.Target, first, InstanceKey.Part),
+        RestoreComponentsOp { Components: [var first, ..] } c => (c.Target, first, InstanceKey.Part),
         _ => op.GetPrimaryTarget() is { } actor ? (actor, null, 0) : null,
     };
 }

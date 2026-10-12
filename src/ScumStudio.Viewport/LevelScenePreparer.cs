@@ -452,16 +452,20 @@ public sealed class LevelScenePreparer
 
     /// <summary>
     /// Slots for <paramref name="documents"/> (see <see cref="LevelSceneOptions.DocumentSlots"/>) when they replace
-    /// <paramref name="shown"/>: a level shown there keeps its slot, a new one takes the lowest slot no level of the new
-    /// set holds (so a first load numbers its levels 0, 1, 2, … like their indices).
+    /// <paramref name="shown"/>: a level shown there keeps its slot, a new one takes the lowest slot neither the new set nor
+    /// <paramref name="shown"/> holds (so a first load numbers its levels 0, 1, 2, … like their indices). A level that leaves
+    /// does not hand its slot to one that arrives: the view draws and picks the shown scene until the new one is uploaded,
+    /// and the same id must not name two actors meanwhile (F010). The slots stay below |shown| + |documents|.
     /// </summary>
     public static int[] SlotsAfter(IReadOnlyList<LevelDocument> documents, PreparedLevelScene? shown, int shift = 20)
     {
         ArgumentNullException.ThrowIfNull(documents);
         var previous = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var shownSlots = new HashSet<int>();
         for (var i = 0; shown is not null && i < shown.Documents.Count; i++)
         {
             previous.TryAdd(shown.Documents[i].PackagePath, shown.SlotOf(i));
+            shownSlots.Add(shown.SlotOf(i));
         }
 
         var slots = new int[documents.Count];
@@ -476,7 +480,7 @@ public sealed class LevelScenePreparer
         {
             if (slots[i] < 0)
             {
-                while (used.Contains(free))
+                while (used.Contains(free) || shownSlots.Contains(free))
                 {
                     free++;
                 }
@@ -488,6 +492,42 @@ public sealed class LevelScenePreparer
 
         // Ids must stay below 2^31 (added actors and previews number from there): numbered anew in the unlikely case they would not.
         return slots.Any(s => s >= 1 << (31 - shift)) ? Enumerable.Range(0, documents.Count).ToArray() : slots;
+    }
+
+    /// <summary>
+    /// Whether <paramref name="id"/>, an id in <paramref name="from"/>'s numbering, names the same actor in
+    /// <paramref name="to"/>: an actor of a level that stayed in its slot does (the same document, as the uploader keeps its
+    /// nodes), as do 0 and the ids from 2^31 (added actors and previews, numbered by the page); an id whose slot changed
+    /// hands, whose level was read again (a mod may have changed it) or that one of the scenes does not have, does not.
+    /// The view checks every id that leaves it (a pick, a grab, a drag's end) against the scene the page shows.
+    /// </summary>
+    public static bool SameActorIn(PreparedLevelScene? from, PreparedLevelScene? to, uint id)
+    {
+        if (id == 0 || ReferenceEquals(from, to) || id >= 1u << 31)
+        {
+            return true;
+        }
+
+        if (from is null || to is null || from.IdShift != to.IdShift)
+        {
+            return false;
+        }
+
+        var slot = (int)(id >> from.IdShift);
+        return DocumentIn(from, slot) is { } before && ReferenceEquals(before, DocumentIn(to, slot));
+    }
+
+    private static LevelDocument? DocumentIn(PreparedLevelScene scene, int slot)
+    {
+        for (var i = 0; i < scene.Documents.Count; i++)
+        {
+            if (scene.SlotOf(i) == slot)
+            {
+                return scene.Documents[i];
+            }
+        }
+
+        return null;
     }
 
     /// <summary>Selectable id of an actor: <c>documentIndex &lt;&lt; shift | exportIndex + 1</c> (the document's slot, see <see cref="LevelSceneOptions.DocumentSlots"/>).</summary>

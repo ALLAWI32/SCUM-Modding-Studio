@@ -1,9 +1,11 @@
+using System.Diagnostics;
 using System.Numerics;
 using ScumStudio.Core.Geometry;
 using ScumStudio.Rendering.Cameras;
 using ScumStudio.Rendering.Procedural;
 using ScumStudio.Rendering.Resources;
 using ScumStudio.Rendering.SceneGraph;
+using Xunit.Abstractions;
 
 namespace ScumStudio.Tests.Rendering;
 
@@ -11,6 +13,14 @@ public sealed class LodCullingTests
 {
     private static readonly MeshHandle Cube = new(1, "Cube", new BoundingBox(new Vector3(-50f), new Vector3(50f)));
     private static readonly float TanHalfFov60 = MathF.Tan(30f * MathF.PI / 180f);
+
+    /// <summary>A 4 m wide, 10 m tall tree with three LODs.</summary>
+    private static readonly MeshHandle Tree = new(2, "Tree", new BoundingBox(new Vector3(-200f, 0f, -200f), new Vector3(200f, 1000f, 200f)));
+    private static readonly float[] TreeLods = [1f, 0.3f, 0.1f];
+
+    private readonly ITestOutputHelper _output;
+
+    public LodCullingTests(ITestOutputHelper output) => _output = output;
 
     [Fact]
     public void LodIsChosenByProjectedScreenSize()
@@ -84,6 +94,161 @@ public sealed class LodCullingTests
             {
                 Assert.Equal(cluster.MaxDrawDistance, batch.Nodes[k].MaxDrawDistance);
             }
+        }
+    }
+
+    /// <summary>
+    /// Audit F268: two copies of a tree 5 km apart once formed one cluster whose box held the camera, so both were drawn
+    /// at LOD 0 and the far one was never culled by its 100 m cull distance.
+    /// </summary>
+    [Fact]
+    public void SparseInstancesDoNotShareACluster()
+    {
+        var scene = new Scene();
+        var a = scene.Add(Tree, Matrix4x4.Identity, 1);
+        var b = scene.Add(Tree, Matrix4x4.CreateTranslation(500_000f, 0f, 0f), 2);
+        a.MaxDrawDistance = b.MaxDrawDistance = 10_000f;
+        var batch = Assert.Single(SceneBatcher.Build(scene).Batches);
+
+        // The camera 10 m from tree A: A fills the view (LOD 0), B is 5 km away, far beyond its cull distance.
+        var eye = new Vector3(1000f, 500f, 0f);
+        foreach (var cluster in batch.Clusters)
+        {
+            var lod = LodMath.Classify(cluster, null, eye, TanHalfFov60, 0f, 1f, TreeLods);
+            for (var k = cluster.First; k < cluster.First + cluster.Count; k++)
+            {
+                var expected = ReferenceEquals(batch.Nodes[k], a) ? 0 : -1;
+                Assert.True(lod == expected, $"tree {(expected == 0 ? "A" : "B")} drawn at LOD {lod}, expected {expected} ({batch.Clusters.Length} cluster(s))");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Audit F426: the LOD radius was the half-diagonal of the instance's world box, about 1.3× larger for a cube turned
+    /// 45°; UE scales the mesh's bounding sphere by the instance's largest axis scale, so turning an instance never moves
+    /// its LOD switch.
+    /// </summary>
+    [Fact]
+    public void RotatedInstancesSwitchLodAtTheSameDistance()
+    {
+        static float SwitchDistance(Matrix4x4 transform)
+        {
+            var scene = new Scene();
+            scene.Add(Cube, transform, 1);
+            var cluster = Assert.Single(Assert.Single(SceneBatcher.Build(scene).Batches).Clusters);
+            var (near, far) = (100f, 100_000f);
+            for (var i = 0; i < 40; i++)
+            {
+                var d = (near + far) / 2f;
+                if (LodMath.Classify(cluster, null, new Vector3(d, 0f, 0f), TanHalfFov60, 0f, 1f, [1f, 0.05f]) == 0)
+                {
+                    near = d;
+                }
+                else
+                {
+                    far = d;
+                }
+            }
+
+            return near;
+        }
+
+        var straight = SwitchDistance(Matrix4x4.Identity);
+        var turned = SwitchDistance(Matrix4x4.CreateRotationY(MathF.PI / 4f));
+        Assert.True(MathF.Abs((turned / straight) - 1f) < 0.02f, $"LOD 1 from {straight:0} cm straight, {turned:0} cm turned 45°");
+    }
+
+    /// <summary>
+    /// BENCHMARK (synthetic, no GL), against the count-only clusters the batcher made before: a forest of 5,000 trees on
+    /// 2 × 2 km seen from its edge draws fewer triangles now that each tree takes the LOD of where it stands, and building
+    /// 100,000 instances (a dense 300 × 300 grid of bushes and 10,000 rocks scattered over 10 km) costs about the same.
+    /// The rocks' clusters each hold one rock now, so classifying the clusters of a frame takes longer (printed).
+    /// </summary>
+    [Fact]
+    public void ForestLodTriangleBenchmark()
+    {
+        var random = new Random(7);
+        var forest = new Scene();
+        for (var i = 0; i < 5000; i++)
+        {
+            var turn = Matrix4x4.CreateScale(0.8f + (random.NextSingle() * 0.4f)) * Matrix4x4.CreateRotationY(random.NextSingle() * MathF.Tau);
+            forest.Add(Tree, turn * Matrix4x4.CreateTranslation(random.NextSingle() * 200_000f, 0f, random.NextSingle() * 200_000f), (uint)(i + 1));
+        }
+
+        // The camera 10 m outside the forest's west edge, 2 m up, looking east across it (60° FOV, 16:9, 1080 px: 4 px culled).
+        var camera = new FlyCamera { Position = new Vector3(-1000f, 200f, 100_000f), Yaw = 0f, Pitch = 0f, FieldOfView = 60f };
+        camera.SetClipRange(10f, 1_000_000f);
+        var before = Frame(SceneBatcher.BuildCountOnly(forest));
+        var after = Frame(SceneBatcher.Build(forest));
+        _output.WriteLine($"forest, 5,000 trees: {before.Triangles:N0} triangles in {before.Clusters:N0} clusters before, {after.Triangles:N0} in {after.Clusters:N0} after ({100.0 * after.Triangles / before.Triangles:0.0} %)");
+        Assert.True(after.Triangles <= before.Triangles, $"{after.Triangles:N0} triangles after, {before.Triangles:N0} before");
+
+        var mixed = new Scene();
+        var bush = new MeshHandle(3, "Bush", new BoundingBox(new Vector3(-50f), new Vector3(50f)));
+        var rock = new MeshHandle(4, "Rock", new BoundingBox(new Vector3(-100f), new Vector3(100f)));
+        for (var i = 0; i < 90_000; i++)
+        {
+            mixed.Add(bush, Matrix4x4.CreateTranslation((i % 300) * 200f, 0f, (i / 300) * 200f), (uint)(i + 1));
+        }
+
+        for (var i = 0; i < 10_000; i++)
+        {
+            mixed.Add(rock, Matrix4x4.CreateRotationY(random.NextSingle() * MathF.Tau) * Matrix4x4.CreateTranslation(random.NextSingle() * 1_000_000f, 0f, random.NextSingle() * 1_000_000f), (uint)(100_000 + i));
+        }
+
+        // Interleaved, best of five after a warm-up each: the time of the build itself, not of the collector or the JIT.
+        var (countOnly, split) = (double.MaxValue, double.MaxValue);
+        BatchResult? oldResult = null, newResult = null;
+        for (var round = 0; round < 6; round++)
+        {
+            GC.Collect();
+            var start = Stopwatch.GetTimestamp();
+            oldResult = SceneBatcher.BuildCountOnly(mixed);
+            countOnly = round == 0 ? countOnly : Math.Min(countOnly, Stopwatch.GetElapsedTime(start).TotalMilliseconds);
+            GC.Collect();
+            start = Stopwatch.GetTimestamp();
+            newResult = SceneBatcher.Build(mixed);
+            split = round == 0 ? split : Math.Min(split, Stopwatch.GetElapsedTime(start).TotalMilliseconds);
+        }
+
+        camera.Position = new Vector3(-1000f, 200f, -1000f); // the grid's corner, looking across it
+        camera.Yaw = 45f;
+        var (oldFrame, newFrame) = (Frame(oldResult!), Frame(newResult!));
+        int Rocks(BatchResult result) => result.Batches.Single(b => b.Mesh.Id == rock.Id).Clusters.Length;
+        _output.WriteLine($"100,000 instances: built in {countOnly:0.0} ms before, {split:0.0} ms after; {oldFrame.Clusters:N0} -> {newFrame.Clusters:N0} clusters (rocks {Rocks(oldResult!):N0} -> {Rocks(newResult!):N0})");
+        _output.WriteLine($"100,000 instances, one frame: clusters classified in {oldFrame.Ms:0.000} ms before, {newFrame.Ms:0.000} ms after; {oldFrame.Drawn:N0} -> {newFrame.Drawn:N0} drawn, {oldFrame.Triangles:N0} -> {newFrame.Triangles:N0} triangles");
+        Assert.Equal(oldFrame.Clusters - Rocks(oldResult!), newFrame.Clusters - Rocks(newResult!)); // dense bushes keep their clusters
+        Assert.True(newFrame.Triangles <= oldFrame.Triangles, $"{newFrame.Triangles:N0} triangles after, {oldFrame.Triangles:N0} before");
+        Assert.True(split <= countOnly * 1.25, $"built in {split:0.0} ms, {countOnly:0.0} ms before");
+
+        // Every cluster classified as SceneRenderer.PrepareFrame does (best of 20 passes), at 1,000 / 300 / 50 triangles per LOD.
+        (long Triangles, int Clusters, int Drawn, double Ms) Frame(BatchResult result)
+        {
+            int[] triangles = [1000, 300, 50];
+            var frustum = camera.GetFrustum(16f / 9f);
+            var (best, sum, clusters, drawn) = (double.MaxValue, 0L, 0, 0);
+            for (var round = 0; round < 20; round++)
+            {
+                var start = Stopwatch.GetTimestamp();
+                (sum, clusters, drawn) = (0L, 0, 0);
+                foreach (var batch in result.Batches)
+                {
+                    clusters += batch.Clusters.Length;
+                    foreach (var cluster in batch.Clusters)
+                    {
+                        var lod = LodMath.Classify(cluster, frustum, camera.Position, TanHalfFov60, 4f / 1080f, 1f, TreeLods);
+                        if (lod >= 0)
+                        {
+                            sum += (long)cluster.Count * triangles[lod];
+                            drawn++;
+                        }
+                    }
+                }
+
+                best = Math.Min(best, Stopwatch.GetElapsedTime(start).TotalMilliseconds);
+            }
+
+            return (sum, clusters, drawn, best);
         }
     }
 

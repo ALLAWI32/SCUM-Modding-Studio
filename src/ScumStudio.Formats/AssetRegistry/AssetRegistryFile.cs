@@ -38,15 +38,15 @@ public sealed class AssetRegistryFile
     private int[] _n = new int[11];
     private readonly List<byte[]> _texts = [];
     private readonly ByteWriter _nlNames = new();
-    private byte[] _namesV = [];
+    private readonly ByteWriter _namesV = new();
     private readonly List<int> _namesOff = [];
     private readonly ByteWriter _nlExports = new();
-    private byte[] _exports = [];
+    private readonly ByteWriter _exports = new();
     private readonly List<int> _exportsOff = [];
     private readonly ByteWriter _ansiOff = new();
-    private byte[] _wideOff = [];
+    private readonly ByteWriter _wideOff = new();
     private readonly ByteWriter _ansi = new();
-    private byte[] _wide = [];
+    private readonly ByteWriter _wide = new();
     private readonly ByteWriter _nlPairs = new();
     private byte[] _pairs = [];
     private readonly List<RawAsset> _assets = [];
@@ -108,6 +108,33 @@ public sealed class AssetRegistryFile
     {
         var i = r.U32();
         return (i & 0x80000000) != 0 ? (i & 0x7FFFFFFF, r.I32()) : (i, 0);
+    }
+
+    private static (uint Index, int Number) ReadFName(ReadOnlySpan<byte> span, ref int at)
+    {
+        var i = BinaryPrimitives.ReadUInt32LittleEndian(span[at..]);
+        at += 4;
+        if ((i & 0x80000000) == 0)
+        {
+            return (i, 0);
+        }
+
+        var n = BinaryPrimitives.ReadInt32LittleEndian(span[at..]);
+        at += 4;
+        return (i & 0x7FFFFFFF, n);
+    }
+
+    // The reader's form: a numbered name sets bit 31 of its index and is followed by the number.
+    private static void WriteFName(ByteWriter w, uint index, int number)
+    {
+        if (number == 0)
+        {
+            w.U32(index);
+            return;
+        }
+
+        w.U32(index | 0x80000000);
+        w.I32(number);
     }
 
     private void ParseCore(byte[] d)
@@ -196,7 +223,7 @@ public sealed class AssetRegistryFile
             ReadFName(r);
         }
 
-        _namesV = d.AsSpan(a, r.Position - a).ToArray();
+        _namesV.Raw(d.AsSpan(a, r.Position - a));
         _nlExports.Raw(r.Raw(12 * _n[NNumberlessExportPaths]));
         a = r.Position;
         for (var i = 0; i < _n[NExportPaths]; i++)
@@ -207,11 +234,11 @@ public sealed class AssetRegistryFile
             ReadFName(r);
         }
 
-        _exports = d.AsSpan(a, r.Position - a).ToArray();
+        _exports.Raw(d.AsSpan(a, r.Position - a));
         _ansiOff.Raw(r.Raw(4 * _n[NAnsiOffsets]));
-        _wideOff = r.Raw(4 * _n[NWideOffsets]);
+        _wideOff.Raw(r.Raw(4 * _n[NWideOffsets]));
         _ansi.Raw(r.Raw(_n[NAnsiBytes]));
-        _wide = r.Raw(2 * _n[NWideChars]);
+        _wide.Raw(r.Raw(2 * _n[NWideChars]));
         _nlPairs.Raw(r.Raw(8 * _n[NNumberlessPairs]));
         a = r.Position;
         for (var i = 0; i < _n[NPairs]; i++)
@@ -328,6 +355,17 @@ public sealed class AssetRegistryFile
     private string FormatName(uint index, int number) =>
         number == 0 ? _names[(int)index] : $"{_names[(int)index]}_{number - 1}";
 
+    // A name as the cooker stores it: a trailing _N is the FName number, the rest goes to the name batch.
+    private (uint Index, int Number) Intern(string name)
+    {
+        var (text, number) = FNameRef.Split(name);
+        return ((uint)GetOrAddName(text), number);
+    }
+
+    // The same name in this registry as (index, number) in source.
+    private (uint Index, int Number) Intern(AssetRegistryFile source, (uint Index, int Number) name) =>
+        ((uint)GetOrAddName(source._names[(int)name.Index]), name.Number);
+
     // ---- values ----
 
     /// <summary>Decodes a value id (port of <c>value_str</c>).</summary>
@@ -347,11 +385,11 @@ public sealed class AssetRegistryFile
 
             case AssetRegistryValueKind.WideString:
             {
-                var o = (int)BinaryPrimitives.ReadUInt32LittleEndian(_wideOff.AsSpan(4 * i));
+                var o = (int)BinaryPrimitives.ReadUInt32LittleEndian(_wideOff.WrittenSpan[(4 * i)..]);
                 var sb = new StringBuilder();
                 for (var p = 2 * o; p + 1 < _wide.Length; p += 2)
                 {
-                    var c = (char)BinaryPrimitives.ReadUInt16LittleEndian(_wide.AsSpan(p));
+                    var c = (char)BinaryPrimitives.ReadUInt16LittleEndian(_wide.WrittenSpan[p..]);
                     if (c == 0)
                     {
                         break;
@@ -367,8 +405,8 @@ public sealed class AssetRegistryFile
                 return AssetRegistryValue.NumberlessName(_names[(int)BinaryPrimitives.ReadUInt32LittleEndian(_nlNames.WrittenSpan[(4 * i)..])]);
             case AssetRegistryValueKind.Name:
             {
-                var r = new ByteReader(_namesV, _namesOff[i], _namesV.Length - _namesOff[i]);
-                var (a, b) = ReadFName(r);
+                var at = _namesOff[i];
+                var (a, b) = ReadFName(_namesV.WrittenSpan, ref at);
                 return new AssetRegistryValue(kind, FormatName(a, b)) { NameNumber = b };
             }
 
@@ -383,10 +421,10 @@ public sealed class AssetRegistryFile
 
             case AssetRegistryValueKind.ExportPath:
             {
-                var r = new ByteReader(_exports, _exportsOff[i], _exports.Length - _exportsOff[i]);
-                var (c1, c2) = ReadFName(r);
-                var (o1, o2) = ReadFName(r);
-                var (p1, p2) = ReadFName(r);
+                var at = _exportsOff[i];
+                var (c1, c2) = ReadFName(_exports.WrittenSpan, ref at);
+                var (o1, o2) = ReadFName(_exports.WrittenSpan, ref at);
+                var (p1, p2) = ReadFName(_exports.WrittenSpan, ref at);
                 var cls = FormatName(c1, c2);
                 var obj = FormatName(o1, o2);
                 var pkg = FormatName(p1, p2);
@@ -416,8 +454,8 @@ public sealed class AssetRegistryFile
     }
 
     /// <summary>
-    /// Appends a value to the store and returns its id (port of <c>add_value</c>; supports ANSI strings,
-    /// numberless names, numberless export paths and texts).
+    /// Appends a value to the store and returns its id (port of <c>add_value</c>, plus wide strings and the numbered name
+    /// and export path kinds: a name's trailing <c>_N</c> is stored as its FName number, as the cooker does).
     /// </summary>
     public uint AddValue(AssetRegistryValue value)
     {
@@ -432,6 +470,24 @@ public sealed class AssetRegistryFile
                 _n[NAnsiOffsets]++;
                 _n[NAnsiBytes] = _ansi.Length;
                 return ((uint)(_n[NAnsiOffsets] - 1) << 3) | 0;
+            case AssetRegistryValueKind.WideString:
+                _wideOff.U32((uint)(_wide.Length / 2));
+                _wide.Raw(Encoding.Unicode.GetBytes(value.Text + "\0"));
+                _n[NWideOffsets]++;
+                _n[NWideChars] = _wide.Length / 2;
+                return ((uint)(_n[NWideOffsets] - 1) << 3) | 1;
+            case AssetRegistryValueKind.Name:
+            {
+                // A value read from a registry keeps its stored number; a new one is split like the cooker splits it.
+                var suffix = value.NameNumber == 0 ? null : $"_{value.NameNumber - 1}";
+                return AddNameValue(suffix is not null && value.Text.EndsWith(suffix, StringComparison.Ordinal)
+                    ? ((uint)GetOrAddName(value.Text[..^suffix.Length]), value.NameNumber)
+                    : Intern(value.Text));
+            }
+
+            case AssetRegistryValueKind.ExportPath:
+                var parts = value.ExportPath is { Count: 3 } p ? p : throw new ArgumentException("Export path value needs ExportPath (class, object, package).", nameof(value));
+                return AddExportValue(Intern(parts[0]), Intern(parts[1]), Intern(parts[2]));
             case AssetRegistryValueKind.NumberlessName:
                 _nlNames.U32((uint)GetOrAddName(value.Text));
                 _n[NNumberlessNames]++;
@@ -461,6 +517,55 @@ public sealed class AssetRegistryFile
                 return ((uint)(_n[NTexts] - 1) << 3) | 6;
             default:
                 throw new NotSupportedException($"Adding {value.Kind} values is not supported (assetreg.py add_value).");
+        }
+    }
+
+    private uint AddNameValue((uint Index, int Number) name)
+    {
+        _namesOff.Add(_namesV.Length);
+        WriteFName(_namesV, name.Index, name.Number);
+        _n[NNames]++;
+        return ((uint)(_n[NNames] - 1) << 3) | 3;
+    }
+
+    private uint AddExportValue((uint Index, int Number) cls, (uint Index, int Number) obj, (uint Index, int Number) pkg)
+    {
+        _exportsOff.Add(_exports.Length);
+        foreach (var (index, number) in new[] { cls, obj, pkg })
+        {
+            WriteFName(_exports, index, number);
+        }
+
+        _n[NExportPaths]++;
+        return ((uint)(_n[NExportPaths] - 1) << 3) | 5;
+    }
+
+    // Value valueId of source, appended to this store with its names re-interned and their numbers kept.
+    private uint CopyValue(AssetRegistryFile source, uint valueId)
+    {
+        var i = (int)(valueId >> 3);
+        switch ((AssetRegistryValueKind)(valueId & 7))
+        {
+            case AssetRegistryValueKind.Name:
+            {
+                var at = source._namesOff[i];
+                return AddNameValue(Intern(source, ReadFName(source._namesV.WrittenSpan, ref at)));
+            }
+
+            case AssetRegistryValueKind.ExportPath:
+            {
+                var at = source._exportsOff[i];
+                var span = source._exports.WrittenSpan;
+                var cls = Intern(source, ReadFName(span, ref at));
+                var obj = Intern(source, ReadFName(span, ref at));
+                return AddExportValue(cls, obj, Intern(source, ReadFName(span, ref at)));
+            }
+
+            case AssetRegistryValueKind.AnsiString or AssetRegistryValueKind.WideString or AssetRegistryValueKind.NumberlessName
+                or AssetRegistryValueKind.NumberlessExportPath or AssetRegistryValueKind.LocalizedText:
+                return AddValue(source.GetValue(valueId)); // numberless names and raw texts come back exactly as stored
+            default:
+                throw new NotSupportedException($"Tag value type {valueId & 7} cannot be copied.");
         }
     }
 
@@ -531,22 +636,94 @@ public sealed class AssetRegistryFile
 
     /// <summary>
     /// Appends an asset record cloned from <paramref name="template"/> (its class, bundles, chunk ids and package
-    /// flags) with new names and the given tags (numberless keys), port of <c>add_asset</c>.
+    /// flags) with new names and the given tags (numberless keys), port of <c>add_asset</c>. A name ending in <c>_N</c>
+    /// is stored as its base plus the FName number (<c>BPC_Car_2</c> = (<c>BPC_Car</c>, 3)), as the cooker stores it.
     /// </summary>
     /// <returns>The new record.</returns>
     public AssetData AddAsset(AssetData template, string objectPath, string packagePath, string packageName, string assetName,
         IEnumerable<(string Key, AssetRegistryValue Value)> tags)
     {
+        _assets.Add(NewRecord(template, objectPath, packagePath, packageName, assetName, tags));
+        return GetAsset(_assets.Count - 1);
+    }
+
+    /// <summary>
+    /// Writes a record made like <see cref="AddAsset"/> in place of <paramref name="existing"/> (same position, so other
+    /// records keep their index): a re-registered clone gets its template's current tags, not the ones of an older export.
+    /// </summary>
+    /// <exception cref="ArgumentException"><paramref name="existing"/> is not the record at its index any more.</exception>
+    public AssetData ReplaceAsset(AssetData existing, AssetData template, string objectPath, string packagePath, string packageName, string assetName,
+        IEnumerable<(string Key, AssetRegistryValue Value)> tags)
+    {
+        ArgumentNullException.ThrowIfNull(existing);
+        if (existing.Index < 0 || existing.Index >= _assets.Count || GetAsset(existing.Index) != existing)
+        {
+            throw new ArgumentException($"{existing.ObjectPath} is not the record at index {existing.Index}.", nameof(existing));
+        }
+
+        _assets[existing.Index] = NewRecord(template, objectPath, packagePath, packageName, assetName, tags);
+        return GetAsset(existing.Index);
+    }
+
+    /// <summary>
+    /// Appends a copy of <paramref name="asset"/> of <paramref name="source"/> (another registry): its names (with their
+    /// numbers), every tag, its bundles, chunk ids and package flags, re-interned in this registry's names.
+    /// </summary>
+    /// <exception cref="NotSupportedException">The record has a tag of a kind that cannot be copied.</exception>
+    public AssetData ImportAsset(AssetRegistryFile source, AssetData asset)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(asset);
+        if (asset.Index < 0 || asset.Index >= source._assets.Count || source.GetAsset(asset.Index) != asset)
+        {
+            throw new ArgumentException($"{asset.ObjectPath} is not a record of the source registry.", nameof(asset));
+        }
+
+        var raw = source._assets[asset.Index];
+        if (!asset.HasNumberlessKeys && asset.TagCount > 0)
+        {
+            throw new NotSupportedException($"{asset.ObjectPath}: numbered tag keys cannot be copied.");
+        }
+
+        // Checked before anything is written, so a refused record leaves this registry as it was.
+        var pairs = source._nlPairs.WrittenSpan.Slice(8 * (int)(asset.TagMapHandle & 0xFFFFFFFF), 8 * asset.TagCount);
+        for (var k = 0; k < asset.TagCount; k++)
+        {
+            if ((BinaryPrimitives.ReadUInt32LittleEndian(pairs[((8 * k) + 4)..]) & 7) > (uint)AssetRegistryValueKind.LocalizedText)
+            {
+                throw new NotSupportedException($"{asset.ObjectPath}: a tag value of an unknown type cannot be copied.");
+            }
+        }
+
+        var first = _n[NNumberlessPairs];
+        for (var k = 0; k < asset.TagCount; k++)
+        {
+            var span = pairs[(8 * k)..];
+            var key = (uint)GetOrAddName(source._names[(int)BinaryPrimitives.ReadUInt32LittleEndian(span)]);
+            var vid = CopyValue(source, BinaryPrimitives.ReadUInt32LittleEndian(span[4..]));
+            _nlPairs.U32(key);
+            _nlPairs.U32(vid);
+            _n[NNumberlessPairs]++;
+        }
+
+        var h = (1UL << 63) | ((ulong)asset.TagCount << 32) | (uint)first;
+        var fields = new uint[5];
+        var numbers = new int[5];
+        for (var k = 0; k < 5; k++)
+        {
+            (fields[k], numbers[k]) = Intern(source, (raw.Fields[k], raw.Numbers[k]));
+        }
+
+        _assets.Add(Record(fields, numbers, h, CopyRest(source, raw.Rest)));
+        return GetAsset(_assets.Count - 1);
+    }
+
+    private RawAsset NewRecord(AssetData template, string objectPath, string packagePath, string packageName, string assetName,
+        IEnumerable<(string Key, AssetRegistryValue Value)> tags)
+    {
         ArgumentNullException.ThrowIfNull(template);
         ArgumentNullException.ThrowIfNull(tags);
         var tpl = _assets[template.Index];
-        if (tpl.Numbers[2] != 0)
-        {
-            // Only the class name is taken over from the template (the other names are the new ones, numberless): a
-            // template in a numbered folder (a trader personality under .../Outpost_B_4) is fine.
-            throw new NotSupportedException("Template asset uses a numbered class name.");
-        }
-
         var first = _n[NNumberlessPairs];
         var count = 0;
         foreach (var (key, value) in tags)
@@ -560,21 +737,58 @@ public sealed class AssetRegistryFile
         }
 
         var h = (1UL << 63) | ((ulong)count << 32) | (uint)first;
-        var fields = new uint[]
+        var fields = new uint[5];
+        var numbers = new int[5];
+        (fields[0], numbers[0]) = Intern(objectPath);
+        (fields[1], numbers[1]) = Intern(packagePath);
+        (fields[2], numbers[2]) = (tpl.Fields[2], tpl.Numbers[2]); // the template's class
+        (fields[3], numbers[3]) = Intern(packageName);
+        (fields[4], numbers[4]) = Intern(assetName);
+        return Record(fields, numbers, h, tpl.Rest);
+    }
+
+    private static RawAsset Record(uint[] fields, int[] numbers, ulong handle, byte[] rest)
+    {
+        var w = new ByteWriter(64 + rest.Length);
+        for (var k = 0; k < 5; k++)
         {
-            (uint)GetOrAddName(objectPath), (uint)GetOrAddName(packagePath), tpl.Fields[2],
-            (uint)GetOrAddName(packageName), (uint)GetOrAddName(assetName),
-        };
-        var w = new ByteWriter(64 + tpl.Rest.Length);
-        foreach (var f in fields)
-        {
-            w.U32(f);
+            WriteFName(w, fields[k], numbers[k]);
         }
 
-        w.U64(h);
-        w.Raw(tpl.Rest);
-        _assets.Add(new RawAsset(fields, new int[5], h, tpl.Rest, w.ToArray()));
-        return GetAsset(_assets.Count - 1);
+        w.U64(handle);
+        w.Raw(rest);
+        return new RawAsset(fields, numbers, handle, rest, w.ToArray());
+    }
+
+    // A record's bundles (FName name, TArray<(FName path, FString sub)>), chunk ids and flags, its names re-interned.
+    private byte[] CopyRest(AssetRegistryFile source, byte[] rest)
+    {
+        var r = new ByteReader(rest);
+        var w = new ByteWriter(rest.Length);
+        void Name()
+        {
+            var (index, number) = Intern(source, ReadFName(r));
+            WriteFName(w, index, number);
+        }
+
+        var bundles = r.I32();
+        w.I32(bundles);
+        for (var b = 0; b < bundles; b++)
+        {
+            Name();
+            var count = r.I32();
+            w.I32(count);
+            for (var c = 0; c < count; c++)
+            {
+                Name();
+                var len = r.I32();
+                w.I32(len);
+                w.Raw(r.Raw(len >= 0 ? len : -2 * len));
+            }
+        }
+
+        w.Raw(r.Raw(r.Remaining));
+        return w.ToArray();
     }
 
     /// <summary>
@@ -595,8 +809,9 @@ public sealed class AssetRegistryFile
         var tags = GetTags(template).Select(t => (t.Key, t.Value.Kind switch
         {
             AssetRegistryValueKind.AnsiString => AssetRegistryValue.Ansi(Map(t.Value.Text)),
-            AssetRegistryValueKind.NumberlessName => AssetRegistryValue.NumberlessName(Map(t.Value.Text)),
-            AssetRegistryValueKind.NumberlessExportPath => AssetRegistryValue.NumberlessExport(
+            AssetRegistryValueKind.WideString => AssetRegistryValue.Wide(Map(t.Value.Text)),
+            AssetRegistryValueKind.NumberlessName or AssetRegistryValueKind.Name => AssetRegistryValue.AnyName(Map(t.Value.Text)),
+            AssetRegistryValueKind.NumberlessExportPath or AssetRegistryValueKind.ExportPath => AssetRegistryValue.AnyExport(
                 t.Value.ExportPath![0], Map(t.Value.ExportPath[1]), Map(t.Value.ExportPath[2])),
             AssetRegistryValueKind.LocalizedText => t.Value,
             _ => throw new NotSupportedException($"Cannot clone tag '{t.Key}' of kind {t.Value.Kind}."),
@@ -673,13 +888,13 @@ public sealed class AssetRegistryFile
         }
 
         o.Raw(_nlNames.WrittenSpan);
-        o.Raw(_namesV);
+        o.Raw(_namesV.WrittenSpan);
         o.Raw(_nlExports.WrittenSpan);
-        o.Raw(_exports);
+        o.Raw(_exports.WrittenSpan);
         o.Raw(_ansiOff.WrittenSpan);
-        o.Raw(_wideOff);
+        o.Raw(_wideOff.WrittenSpan);
         o.Raw(_ansi.WrittenSpan);
-        o.Raw(_wide);
+        o.Raw(_wide.WrittenSpan);
         o.Raw(_nlPairs.WrittenSpan);
         o.Raw(_pairs);
         o.U32(StoreEndMagic);

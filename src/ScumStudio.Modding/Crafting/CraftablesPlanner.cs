@@ -18,6 +18,30 @@ namespace ScumStudio.Modding.Crafting;
 /// <param name="Tag">A station's ingredient tag (<c>CI_SS_*</c>), or null.</param>
 public sealed record CraftablePackages(string Name, string Recipe, string Product, string? Item, string? Tag);
 
+/// <summary>
+/// A craftable the export can neither ship nor leave out: a Craftables pak without it would remove what players built with
+/// it. The export stops with the reason (an item craftable, which ships only a recipe, is left out with a warning instead).
+/// </summary>
+public class CraftableExportException(string craftable, string message) : InvalidOperationException(message)
+{
+    /// <summary>The craftable's name.</summary>
+    public string Craftable { get; } = craftable;
+}
+
+/// <summary>
+/// A craftable's new package path already exists in the export source (a mod pak or folder the studio reads). The export
+/// stops: leaving the craftable out would drop what players built, and shipping it would replace a package that is not ours.
+/// </summary>
+public sealed class CraftableConflictException(string craftable, string packagePath, string? container)
+    : CraftableExportException(craftable, $"{craftable}: {packagePath} already exists in {container ?? "the game files"}. The export stops so that it neither leaves this craftable out nor replaces that package: take {container ?? "that pak"} out of what the studio reads as the game (the Paks folder or the project's imported mods), then export again.")
+{
+    /// <summary>The new package path that is taken.</summary>
+    public string PackagePath { get; } = packagePath;
+
+    /// <summary>The pak or folder that has it (<see cref="PackageOrigins.ContainerOf"/>), or null.</summary>
+    public string? Container { get; } = container;
+}
+
 /// <summary>What <see cref="CraftablesPlanner.Plan"/> asks the builder for.</summary>
 /// <param name="Request">Clones, ingredient lists and values for <see cref="AssetModBuilder"/>.</param>
 /// <param name="Entries">The packages of each planned craftable.</param>
@@ -44,6 +68,8 @@ public sealed record CraftablesPlan(AssetModRequest Request, IReadOnlyList<Craft
 /// <c>CraftingCategory.Items.*</c> + display priority: the crafting menu's section), <c>RelevantSkill</c>, <c>Duration</c>
 /// and rewards; the menu shows the item's own name and icon (item recipes have no caption).</item>
 /// </list>
+/// A craftable's <see cref="Craftable.Category"/> (or its default, a building's or a sofa's) moves the copied recipe to
+/// another section of the game's (<see cref="AssetModRequest.RecipeCategories"/>).
 /// Every static mesh the template packages import is pointed at the craftable's mesh (<see cref="ClonePlan.Redirects"/>),
 /// names and captions become the craftable's, and the recipe gets the craftable's ingredients.
 /// </summary>
@@ -109,16 +135,24 @@ public static class CraftablesPlanner
     // IsItem's answers per catalog (two package headers each; the Add box and the gallery ask for thousands).
     private static readonly ConditionalWeakTable<AssetCatalog, ConcurrentDictionary<string, bool>> ItemChecks = new();
 
-    /// <summary>Plans every craftable of <paramref name="craftables"/> (bad or duplicate ones are left out with a warning).</summary>
+    /// <summary>
+    /// Plans every craftable of <paramref name="craftables"/> (bad or duplicate ones are left out with a warning). It reads
+    /// <paramref name="catalog"/> and writes nothing, so an export can run it before it writes any pak. Throws
+    /// <see cref="CraftableExportException"/> for a placed craftable it can neither ship nor leave out: a new package path
+    /// already exists (<see cref="CraftableConflictException"/>), its mesh is not one every player has, or none of its
+    /// ingredients is.
+    /// </summary>
     public static CraftablesPlan Plan(AssetCatalog catalog, IReadOnlyList<Craftable> craftables)
     {
         ArgumentNullException.ThrowIfNull(catalog);
         ArgumentNullException.ThrowIfNull(craftables);
+        craftables = CraftablesFile.WithTokens(craftables);
         var warnings = new List<string>();
         var clones = new List<ClonePlan>();
         var edits = new Dictionary<string, IReadOnlyList<TunableEdit>>(StringComparer.OrdinalIgnoreCase);
         var ingredients = new Dictionary<string, IReadOnlyList<CraftIngredient>>(StringComparer.OrdinalIgnoreCase);
         var entries = new List<CraftablePackages>();
+        var sections = new Dictionary<string, CraftCategory>(StringComparer.OrdinalIgnoreCase);
         var tokens = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         // Stations first, each after the station it needs: a recipe asks for a station's tag only when that station is
@@ -126,16 +160,18 @@ public static class CraftablesPlanner
         var stations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var craftable in BuildOrder(craftables))
         {
-            var token = craftable.Token;
-            if (!CloneFamilyPlanner.IsValidName(token) || !tokens.Add(token))
+            // A stored token is never renamed, so one from before the FName number rule (SS_Chair_01_2) is still planned.
+            var token = craftable.Token!;
+            if (!CraftablesFile.IsValidToken(token) || !tokens.Add(token))
             {
                 warnings.Add($"{craftable.Name}: left out (its asset name {token} is not valid or another craftable has it).");
                 continue;
             }
 
-            if (craftable.Imported is null && !catalog.PackageExists(craftable.Mesh)) // an imported mesh ships in the pak (CraftablesExporter)
+            // What the new packages import must be in every player's game (an imported mesh ships in the pak, CraftablesExporter).
+            if (craftable.Imported is null && Unshippable(catalog, craftable, craftable.Mesh, warnings) is { } meshReason)
             {
-                warnings.Add($"{craftable.Name}: left out ({craftable.Mesh} is not in the game files).");
+                LeaveOut(craftable, "its mesh " + meshReason, "give it a mesh of the game, or import the mod that has it into the project", warnings);
                 continue;
             }
 
@@ -145,17 +181,30 @@ public static class CraftablesPlanner
                 continue;
             }
 
+            if (craftable.Kind == CraftKind.Item && !string.Equals(craftable.Source, craftable.Mesh, StringComparison.OrdinalIgnoreCase)
+                && Unshippable(catalog, craftable, craftable.Source, warnings) is { } itemReason)
+            {
+                warnings.Add($"{craftable.Name}: left out ({itemReason}).");
+                continue;
+            }
+
             // Only tags the game has (a typo would ship a recipe importing a missing package) and built stations' tags.
             var recipe = new List<CraftIngredient>();
+            var dropped = new List<string>();
             foreach (var ingredient in craftable.Ingredients.Count > 0 ? craftable.Ingredients : RecipeRules.Suggest(craftable.Material, craftable.SizeMeters))
             {
-                if (stations.ContainsValue(ingredient.Tag) || catalog.PackageExists(PackageMap.Normalize(RecipeIngredients.TagPath(ingredient.Tag))))
+                if (stations.ContainsValue(ingredient.Tag))
                 {
                     recipe.Add(ingredient);
                 }
+                else if (Unshippable(catalog, craftable, PackageMap.Normalize(RecipeIngredients.TagPath(ingredient.Tag)), warnings) is { } reason)
+                {
+                    warnings.Add($"{craftable.Name}: the ingredient {ingredient.Tag} is left out of the recipe ({reason}).");
+                    dropped.Add(reason);
+                }
                 else
                 {
-                    warnings.Add($"{craftable.Name}: the ingredient {ingredient.Tag} is not a tag of the game; left out of the recipe.");
+                    recipe.Add(ingredient);
                 }
             }
 
@@ -173,13 +222,13 @@ public static class CraftablesPlanner
 
             if (recipe.Count == 0)
             {
-                warnings.Add($"{craftable.Name}: left out (its recipe has no ingredient).");
+                LeaveOut(craftable, "its recipe has no ingredient left: " + string.Join("; ", dropped), "give it ingredients of the game", warnings);
                 continue;
             }
 
             try
             {
-                var (plan, packages) = PlanOne(catalog, craftable, token);
+                var (plan, packages) = PlanOne(catalog, craftable, token, warnings);
                 clones.Add(plan);
                 entries.Add(packages);
                 if (packages.Tag is { } tag)
@@ -188,6 +237,11 @@ public static class CraftablesPlanner
                 }
 
                 ingredients[packages.Recipe] = recipe;
+                if (Section(catalog, craftable, plan, packages, warnings) is { } section)
+                {
+                    sections[packages.Recipe] = section;
+                }
+
                 AddEdits(catalog, craftable, plan, packages, edits);
                 if (craftable.NeedsPower)
                 {
@@ -199,14 +253,79 @@ public static class CraftablesPlanner
                     warnings.Add($"{craftable.Name}: \"works only by day\" is kept but not exported: the generator's data has no day/night switch (native code).");
                 }
             }
-            catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or IOException or InvalidDataException)
+            catch (Exception ex) when (ex is (ArgumentException or InvalidOperationException or IOException or InvalidDataException) and not CraftableExportException)
             {
                 warnings.Add($"{craftable.Name}: left out ({ex.Message}).");
             }
         }
 
-        var request = new AssetModRequest(clones, edits) { Ingredients = ingredients };
+        var request = new AssetModRequest(clones, edits) { Ingredients = ingredients, RecipeCategories = sections };
         return new CraftablesPlan(request, entries, warnings);
+    }
+
+    /// <summary>
+    /// For each of <paramref name="craftables"/>, the name of the craftable before it in the build order that has its token
+    /// (in any case), or null: <see cref="Plan"/> keeps that one and leaves this one out.
+    /// </summary>
+    public static IReadOnlyList<string?> TokenOwners(IReadOnlyList<Craftable> craftables)
+    {
+        ArgumentNullException.ThrowIfNull(craftables);
+        var owners = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var taken = new Dictionary<Craftable, string?>(ReferenceEqualityComparer.Instance);
+        foreach (var craftable in BuildOrder(craftables))
+        {
+            taken[craftable] = craftable.Token is { } token ? owners.GetValueOrDefault(token) : null;
+            if (CraftablesFile.IsValidToken(craftable.Token))
+            {
+                owners.TryAdd(craftable.Token!, craftable.Name);
+            }
+        }
+
+        return craftables.Select(c => taken[c]).ToList();
+    }
+
+    /// <summary>
+    /// Leaves an item craftable out with a warning (it ships only a recipe; what players crafted is the game's item). A placed
+    /// one would vanish from every base that has it, so <see cref="CraftableExportException"/> stops the export instead.
+    /// </summary>
+    private static void LeaveOut(Craftable craftable, string reason, string remedy, List<string> warnings)
+    {
+        if (craftable.Kind != CraftKind.Item)
+        {
+            throw new CraftableExportException(craftable.Name, $"{craftable.Name}: {reason}. The export stops so that it does not leave this craftable out (what players built with it would vanish): {remedy}, then export again.");
+        }
+
+        warnings.Add($"{craftable.Name}: left out ({reason}).");
+    }
+
+    /// <summary>
+    /// Why the craftable's packages cannot import <paramref name="path"/>, or null when they can: the game ships it
+    /// (<see cref="PackageOrigins.IsStock"/>), or an imported mod's folder has it (with a warning: it ships only with that mod,
+    /// in the project's main pak). A package only another mod's pak has would be missing for every player without that pak.
+    /// </summary>
+    private static string? Unshippable(AssetCatalog catalog, Craftable craftable, string path, List<string> warnings)
+    {
+        var package = PackageMap.Normalize(path);
+        if (!catalog.PackageExists(package))
+        {
+            return $"{package} is not in the game files";
+        }
+
+        if (catalog.IsStock(package))
+        {
+            return null;
+        }
+
+        var container = catalog.ContainerOf(package);
+        if (container is not null && Path.IsPathRooted(container)) // a loose folder: an imported mod's overlay (<mod>/SCUM)
+        {
+            var root = container.TrimEnd('/', '\\');
+            var mod = Path.GetFileName(string.Equals(Path.GetFileName(root), catalog.ProjectName, StringComparison.OrdinalIgnoreCase) ? Path.GetDirectoryName(root) : root);
+            warnings.Add($"{craftable.Name}: {package} comes from the imported mod {mod}; it ships only with that mod, in the project's main pak.");
+            return null;
+        }
+
+        return $"{package} is only in the mod pak {container}, not in the game files";
     }
 
     /// <summary>
@@ -244,7 +363,7 @@ public static class CraftablesPlanner
         return order;
     }
 
-    private static (ClonePlan Plan, CraftablePackages Packages) PlanOne(AssetCatalog catalog, Craftable craftable, string token)
+    private static (ClonePlan Plan, CraftablePackages Packages) PlanOne(AssetCatalog catalog, Craftable craftable, string token, List<string> warnings)
     {
         var packages = new List<KeyValuePair<string, string>>();
         var redirects = new List<KeyValuePair<string, string>>();
@@ -290,22 +409,28 @@ public static class CraftablesPlanner
                 break;
         }
 
-        // Every mesh the templates show becomes the craftable's mesh (an item keeps its own: only its recipe is new).
-        var mesh = PackageMap.Normalize(craftable.Mesh);
-        foreach (var stock in packages.SelectMany(p => StaticMeshImports(catalog, p.Key)).Distinct(StringComparer.OrdinalIgnoreCase))
+        // Every mesh the templates show becomes the craftable's mesh, by the path the game knows it by (a DLC mesh imports
+        // /<Pack>/..., not the catalog's /SCUM/Plugins/...); an item keeps its own: only its recipe is new.
+        var mesh = GamePath(PackageMap.Normalize(craftable.Mesh));
+        var shown = packages.SelectMany(p => StaticMeshImports(catalog, p.Key)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        if (craftable.Kind != CraftKind.Item)
         {
-            if (craftable.Kind != CraftKind.Item && !string.Equals(stock, mesh, StringComparison.OrdinalIgnoreCase))
-            {
-                redirects.Add(new(stock, mesh));
-            }
+            redirects.AddRange(shown.Where(s => !string.Equals(s, mesh, StringComparison.OrdinalIgnoreCase)).Select(s => KeyValuePair.Create(s, mesh)));
         }
 
+        // A path the source already has is never shipped over, nor is the craftable silently left out (a pak without it
+        // would remove what players built): the export stops and names the pak.
         foreach (var (_, newPath) in packages)
         {
             if (catalog.PackageExists(newPath))
             {
-                throw new ArgumentException($"{newPath} already exists in the game files; choose another name.");
+                throw new CraftableConflictException(craftable.Name, newPath, catalog.ContainerOf(newPath));
             }
+        }
+
+        if (craftable.Kind != CraftKind.Item && shown.Count == 0)
+        {
+            warnings.Add($"{craftable.Name}: keeps the stock look (the template shows no static mesh import).");
         }
 
         return (new ClonePlan(packages[0].Key, result.Product, packages) { Redirects = redirects }, result);
@@ -353,6 +478,44 @@ public static class CraftablesPlanner
         {
             Edit(tag, PackageMap.Leaf(StationTag), "ClassRepresentativeCaption", name);
         }
+    }
+
+    /// <summary>
+    /// The crafting menu section the copied recipe moves to, or null to keep its template's: the chosen one when it is one
+    /// of the game's sections of the recipe's class (else a warning), otherwise the default for what it is
+    /// (<see cref="CraftCategories.DefaultFor"/>: a building or a sofa may differ from the template's). The game's sections
+    /// are read only for a craftable that may move.
+    /// </summary>
+    private static CraftCategory? Section(AssetCatalog catalog, Craftable craftable, ClonePlan plan, CraftablePackages packages, List<string> warnings)
+    {
+        if (craftable.Category is not { Length: > 0 } && !CraftCategories.HasOwnDefault(craftable))
+        {
+            return null;
+        }
+
+        var sections = CraftCategories.Read(catalog);
+        var template = plan.Packages.First(p => p.Value == packages.Recipe).Key;
+        if (CraftCategories.SectionOf(sections, template) is not { } own)
+        {
+            warnings.Add($"{craftable.Name}: the template {PackageMap.Leaf(template)} names no crafting section; it keeps the template's.");
+            return null;
+        }
+
+        CraftCategory? chosen = null;
+        if (craftable.Category is { Length: > 0 } wanted)
+        {
+            if (CraftCategories.Refusal(craftable, wanted, sections) is { } refusal)
+            {
+                warnings.Add(refusal);
+            }
+            else
+            {
+                chosen = sections.First(c => c.Tag == wanted);
+            }
+        }
+
+        var section = chosen ?? CraftCategories.DefaultFor(craftable, sections, template);
+        return section is null || section.Tag == own.Tag ? null : section;
     }
 
     /// <summary>True when export <paramref name="exportName"/> of <paramref name="package"/> stores <paramref name="property"/>.</summary>

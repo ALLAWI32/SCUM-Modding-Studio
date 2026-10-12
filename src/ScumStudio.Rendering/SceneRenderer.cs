@@ -23,6 +23,7 @@ public sealed class SceneRenderer : IDisposable
 {
     private readonly GL _gl;
     private readonly Dictionary<int, GpuMesh> _meshes = [];
+    private readonly HashSet<int> _reversedWinding = []; // meshes wound against their normals (see WoundAgainstNormals)
     private readonly ShaderProgram _meshProgram;
     private readonly ShaderProgram _pickProgram;
     private readonly ShaderProgram _gridProgram;
@@ -132,6 +133,11 @@ public sealed class SceneRenderer : IDisposable
         var id = _nextMeshId++;
         var gpu = new GpuMesh(_gl, id, mesh, texture, materialTextures, materialAlphaCutoffs, materialTints, shimmer, billboard, materialRoughness);
         _meshes[id] = gpu;
+        if (WoundAgainstNormals(mesh))
+        {
+            _reversedWinding.Add(id);
+        }
+
         GlErrors.Check(_gl, $"uploading mesh '{mesh.Name}'");
         return new MeshHandle(id, mesh.Name, mesh.Bounds);
     }
@@ -212,15 +218,53 @@ public sealed class SceneRenderer : IDisposable
             return false;
         }
 
+        _reversedWinding.Remove(handle.Id);
         mesh.Dispose();
         return true;
     }
 
-    /// <summary>Creates a render target sized to the context (or to an explicit size).</summary>
-    public RenderTarget CreateTarget(int? width = null, int? height = null)
+    /// <summary>
+    /// True when the finest LOD's triangles are wound against their normals almost everywhere (its counter-clockwise side
+    /// is the back of its normals; the studio's spawn shapes are built so), so two-sided shading takes the clockwise side
+    /// of each triangle as its front. Cooked meshes agree with their normals; cards whose normals point up rather than
+    /// along the face stay with their winding, as in UE. Looks at up to about 1500 triangles a section.
+    /// </summary>
+    private static bool WoundAgainstNormals(PreparedMesh mesh)
+    {
+        var v = mesh.Vertices;
+        var (agree, area) = (0.0, 0.0);
+        foreach (var section in mesh.Lods[0].Sections)
+        {
+            var step = Math.Max(1, section.IndexCount / 3 / 1500) * 3;
+            for (var i = section.FirstIndex; i + 2 < section.FirstIndex + section.IndexCount; i += step)
+            {
+                var (a, b, c) = (Vertex(section, i), Vertex(section, i + 1), Vertex(section, i + 2));
+                var face = Vector3.Cross(Position(b) - Position(a), Position(c) - Position(a));
+                var normal = Normal(a) + Normal(b) + Normal(c);
+                var length = normal.Length();
+                if (length > 1e-6f)
+                {
+                    agree += Vector3.Dot(face, normal) / length;
+                    area += face.Length();
+                }
+            }
+        }
+
+        return area > 0.0 && agree < -0.9 * area;
+
+        int Vertex(PreparedSection section, int index) => (section.BaseVertex + (int)mesh.Indices[index]) * PreparedMesh.FloatsPerVertex;
+        Vector3 Position(int o) => new(v[o], v[o + 1], v[o + 2]);
+        Vector3 Normal(int o) => new(v[o + 3], v[o + 4], v[o + 5]);
+    }
+
+    /// <summary>
+    /// Creates a render target sized to the context (or to an explicit size). With <paramref name="samples"/> &gt; 1 it is
+    /// multisampled (up to <see cref="GlInfo.MaxSamples"/>): edges are smoothed and masked leaves are cut by coverage.
+    /// </summary>
+    public RenderTarget CreateTarget(int? width = null, int? height = null, int samples = 1)
     {
         var (w, h) = Context.Size;
-        return new RenderTarget(_gl, width ?? w, height ?? h);
+        return new RenderTarget(_gl, width ?? w, height ?? h, Math.Min(samples, Info.MaxSamples));
     }
 
     /// <summary>Renders <paramref name="scene"/> seen by <paramref name="camera"/> into the colour framebuffer of <paramref name="target"/>.</summary>
@@ -264,6 +308,7 @@ public sealed class SceneRenderer : IDisposable
         _meshProgram.Set("uCameraRight", camera.Right);
         _meshProgram.Set("uCameraUp", camera.Up);
         _meshProgram.Set("uBillboard", 0);
+        _meshProgram.Set("uReversedWinding", 0);
         _meshProgram.Set("uShimmer", 0);
         _meshProgram.Set("uTime", Time);
         _meshProgram.Set("uWaterTime", s.AnimateWater ? Time : 0f);
@@ -290,6 +335,7 @@ public sealed class SceneRenderer : IDisposable
             _gl.ActiveTexture(TextureUnit.Texture0);
         }
         _meshProgram.Set("uOpaque", 1);
+        _meshProgram.Set("uAlphaToCoverage", 0);
         _meshProgram.Set("uTerrainDetail", 0);
         _meshProgram.Set("uWeights", 1);
         _meshProgram.Set("uLayer0", 2);
@@ -310,10 +356,13 @@ public sealed class SceneRenderer : IDisposable
         var sectionTint = new Vector4(-1f);
         var shimmer = false;
         var billboard = false;
+        var reversed = false;
         var water = false;
         GpuTexture? boundNormal = null;
         var roughness = Vector2.Zero;
         List<DrawRange>? translucent = null;
+        // Anti-aliased foliage: on a multisampled target, masked sections in the opaque pass are cut by coverage.
+        var alphaToCoverage = target.Samples > 1;
         foreach (var draw in _draws)
         {
             if (draw.Translucent)
@@ -323,6 +372,15 @@ public sealed class SceneRenderer : IDisposable
             }
 
             DrawRangeNow(draw);
+        }
+
+        if (alphaToCoverage)
+        {
+            _gl.Disable(EnableCap.SampleAlphaToCoverage);
+            _gl.Disable(EnableCap.SampleAlphaToOne);
+            _meshProgram.Set("uAlphaToCoverage", 0);
+            alphaToCoverage = false;
+            cutoff = -1f; // the translucent pass sets its own cut
         }
 
         _gl.BindVertexArray(0);
@@ -427,6 +485,15 @@ public sealed class SceneRenderer : IDisposable
                     _gl.Enable(EnableCap.CullFace);
                 }
 
+                if (alphaToCoverage)
+                {
+                    // The coverage the shader writes as alpha picks the samples; the stored alpha stays 1.
+                    var masked = sectionCutoff > 0f;
+                    SetCap(EnableCap.SampleAlphaToCoverage, masked);
+                    SetCap(EnableCap.SampleAlphaToOne, masked);
+                    _meshProgram.Set("uAlphaToCoverage", masked ? 1 : 0);
+                }
+
                 cutoff = sectionCutoff;
             }
 
@@ -446,6 +513,12 @@ public sealed class SceneRenderer : IDisposable
             {
                 _meshProgram.Set("uBillboard", draw.Mesh.Billboard ? 1 : 0);
                 billboard = draw.Mesh.Billboard;
+            }
+
+            if (_reversedWinding.Contains(draw.Mesh.Id) != reversed)
+            {
+                reversed = !reversed;
+                _meshProgram.Set("uReversedWinding", reversed ? 1 : 0);
             }
 
             if (draw.Mesh.Water != water)
@@ -586,6 +659,7 @@ public sealed class SceneRenderer : IDisposable
         }
 
         _meshes.Clear();
+        _reversedWinding.Clear();
         _meshProgram.Dispose();
         _pickProgram.Dispose();
         _gridProgram.Dispose();
@@ -636,7 +710,10 @@ public sealed class SceneRenderer : IDisposable
         _pickProgram.Set("uCameraRight", camera.Right);
         _pickProgram.Set("uCameraUp", camera.Up);
         _pickProgram.Set("uBillboard", 0);
+        _pickProgram.Set("uTexture", 0);
         var billboard = false;
+        GpuTexture? bound = null;
+        var cutoff = -1f;
         foreach (var draw in _draws)
         {
             // Translucent nodes pick only when they are objects (placed water, glass); the sea lets clicks through.
@@ -648,12 +725,36 @@ public sealed class SceneRenderer : IDisposable
                     billboard = draw.Mesh.Billboard;
                 }
 
+                // Masked sections pick where their leaves are drawn, from both sides: a click between leaves goes through.
+                var sectionCutoff = draw.Texture is null ? 0f : draw.AlphaCutoff;
+                if (sectionCutoff > 0f && !ReferenceEquals(draw.Texture, bound))
+                {
+                    draw.Texture!.Bind(0);
+                    bound = draw.Texture;
+                }
+
+                if (sectionCutoff != cutoff)
+                {
+                    _pickProgram.Set("uAlphaCutoff", sectionCutoff);
+                    if (sectionCutoff > 0f)
+                    {
+                        _gl.Disable(EnableCap.CullFace);
+                    }
+                    else if (Settings.BackfaceCulling)
+                    {
+                        _gl.Enable(EnableCap.CullFace);
+                    }
+
+                    cutoff = sectionCutoff;
+                }
+
                 draw.Mesh.DrawIndirect(draw.FirstCommand, draw.CommandCount);
             }
         }
 
         _gl.BindVertexArray(0);
         _gl.BindBuffer(BufferTargetARB.DrawIndirectBuffer, 0);
+        GpuTexture.UnbindSampler(_gl);
         EndDepthState(reverseZ);
         _gl.Disable(EnableCap.ScissorTest);
         _gl.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
@@ -1218,6 +1319,18 @@ public sealed class SceneRenderer : IDisposable
         _gl.DepthFunc(DepthFunction.Less);
         _gl.ClearDepth(1.0);
         _gl.Disable(EnableCap.CullFace);
+    }
+
+    private void SetCap(EnableCap cap, bool on)
+    {
+        if (on)
+        {
+            _gl.Enable(cap);
+        }
+        else
+        {
+            _gl.Disable(cap);
+        }
     }
 
     private float EncodeClear(float linear) => Settings.EncodeSrgb ? ColorSpace.LinearToSrgb(linear) : linear;

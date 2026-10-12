@@ -20,8 +20,9 @@ namespace ScumStudio.App.ViewModels;
 /// <summary>
 /// Brush paint mode (owner: "choose 5–10 tree types, rocks, bushes, any objects; sweep the circle and it plants them the
 /// way the game's own forest looks, so I don't plant them one by one"). Holding the left button scatters the palette's
-/// objects inside the circle along the stroke, no two closer than the spacing and none on an existing object, each on
-/// the ground or surface under it (<see cref="SupportAt"/>), turned at random and a little bigger or smaller. A tree,
+/// objects evenly inside the circle along the stroke (<see cref="BrushScatter"/>), no two closer than the spacing measured
+/// at their feet, never on roads, water, rocks or (unless allowed) objects, turned at random and a little bigger or
+/// smaller; hovering shows the spots a click plants (<see cref="PaintSpots"/>). A tree,
 /// bush or rock whose mesh the nearest loaded landscape tile has as foliage becomes a new instance of that foliage
 /// (chopped and collided like the stock ones), anything else a new mesh actor or a copy of a placed Blueprint. The stroke
 /// is drawn as it goes and journaled when the button is let go: one History row that undoes together.
@@ -37,11 +38,41 @@ public sealed partial class MapPageViewModel
     /// <summary>Viewport ids of the stroke's not yet journaled actors (above the project's added ids).</summary>
     private const uint PreviewIdBase = 0xC000_0000u;
 
+    /// <summary>How far above the ground a lake or river surface is looked for (cm): it lies over its bed.</summary>
+    private const float WaterProbeAbove = 5000f;
+
+    /// <summary>A water surface counts when it is more than this above the ground (cm): a dry bed's edge does not.</summary>
+    private const float WaterProbeBelow = 10f;
+
+    /// <summary>How far above the ground a road piece, rock or object top under a spot is looked for (cm).</summary>
+    private const float ObjectProbeAbove = 300f;
+
+    /// <summary>How far below the ground such a top still counts (cm): road pieces sink into it a little.</summary>
+    private const float ObjectProbeBelow = 100f;
+
+    /// <summary>
+    /// What is less than this across (cm) neither keeps plants away nor stands under them (pebbles, debris); plants
+    /// (grass, flowers) count from twice that.
+    /// </summary>
+    private const float SmallThing = 50f;
+
+    /// <summary>Lattice spots whose ground a preview stroke keeps (its gathered map cells are bounded too) before it is made again.</summary>
+    private const int PaintSitesKept = 250_000;
+
     private static readonly JsonSerializerOptions PaletteJson = new() { WriteIndented = true };
+
+    private static readonly (PaintVerdict Verdict, string Key)[] PaintSkipKeys =
+    [
+        (PaintVerdict.Road, "Map.Paint.Skipped.Road"), (PaintVerdict.Water, "Map.Paint.Skipped.Water"), (PaintVerdict.Rock, "Map.Paint.Skipped.Rock"),
+        (PaintVerdict.OnObject, "Map.Paint.Skipped.Object"), (PaintVerdict.NoGround, "Map.Paint.Skipped.NoGround"),
+    ];
 
     private ObjectPicker? _paintPicker;
     private IReadOnlyList<ReplaceCandidate>? _paintables;
     private PaintStroke? _stroke;
+    private PaintStroke? _dryStroke; // what the hover preview gathered, taken over by the click while nothing changed
+    private ulong _paintSeed = BrushScatter.Mix((ulong)Environment.TickCount64); // the next stroke's lattice, new after each journaled one
+    private int _paletteVersion;
     private Project? _paletteProject;
     private bool _loadingPalette;
     private PreparedLevelScene? _paintScene;
@@ -51,6 +82,7 @@ public sealed partial class MapPageViewModel
 
     /// <summary>Brush mode: false selects what the circle covers, true plants the palette (<see cref="PaintAt"/>).</summary>
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(BrushOnGround))]
     private bool _brushPaint;
 
     /// <summary>Least distance between two planted objects (and to an existing one), metres.</summary>
@@ -88,6 +120,35 @@ public sealed partial class MapPageViewModel
     /// <summary>Each planted object is turned at random about its upright axis.</summary>
     [ObservableProperty]
     private bool _paintRandomTurn = true;
+
+    /// <summary>Also plant on roofs, floors, bridges and other objects; off (default) only on bare ground.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(BrushOnGround))]
+    private bool _paintOnObjects;
+
+    /// <summary>The spots a click at the hovered circle plants (true) or leaves out (false), at their feet; null with none to show.</summary>
+    [ObservableProperty]
+    private IReadOnlyList<(FVector At, bool Plants)>? _paintSpots;
+
+    /// <summary>"12 planted · 3 left out" of the open or last stroke; empty before one.</summary>
+    [ObservableProperty]
+    private string _paintReportText = string.Empty;
+
+    /// <summary>What a click plants and leaves out when the hovered circle has more spots than <see cref="PaintMarkCap"/>; else empty.</summary>
+    [ObservableProperty]
+    private string _paintMarksText = string.Empty;
+
+    /// <summary>
+    /// Spot marks handed to the view, at most (8 lines each): the preview tries every spot of the circle (a 100 m one has
+    /// up to ~18k), and above this it marks an even share of them and says so (<see cref="PaintMarksText"/>).
+    /// </summary>
+    internal int PaintMarkCap { get; set; } = 6000;
+
+    /// <summary>Strokes made so far, the hover preview's included (each gathers the ground under the circle anew).</summary>
+    internal int PaintStrokesMade { get; private set; }
+
+    /// <summary>True when the brush plants on bare ground only: the viewport lays the circle on the landscape.</summary>
+    public bool BrushOnGround => BrushPaint && !PaintOnObjects;
 
     /// <summary>The spacing range as text ("1–3 m", or "3.5 m" when both ends are the same).</summary>
     public string PaintSpacingText => Math.Abs(PaintSpacingMax - PaintSpacing) < 0.05
@@ -179,6 +240,7 @@ public sealed partial class MapPageViewModel
 
     private void OnPaletteChanged()
     {
+        _paletteVersion++;
         OnPropertyChanged(nameof(HasPaintPalette));
         OnPropertyChanged(nameof(PaintPaletteText));
         SavePaintPalette();
@@ -208,6 +270,8 @@ public sealed partial class MapPageViewModel
 
     partial void OnPaintRandomTurnChanged(bool value) => SavePaintPalette();
 
+    partial void OnPaintOnObjectsChanged(bool value) => SavePaintPalette();
+
     partial void OnBrushPaintChanged(bool value)
     {
         EndPaintStroke();
@@ -217,9 +281,22 @@ public sealed partial class MapPageViewModel
             _ = BrushIndexNow();
             PreparePaintScene(scene);
         }
+
+        if (!value)
+        {
+            ShowPaintSpots(null);
+            PaintReportText = string.Empty;
+        }
     }
 
-    partial void OnBrushSelectChanged(bool value) => EndPaintStroke();
+    partial void OnBrushSelectChanged(bool value)
+    {
+        EndPaintStroke();
+        if (!value)
+        {
+            ShowPaintSpots(null);
+        }
+    }
 
     /// <summary>The palette file of the open project (null without one).</summary>
     private string? PaletteFile => _services.Projects.Current is { } project ? Path.Combine(project.DirectoryPath, PaintPaletteFileName) : null;
@@ -233,7 +310,7 @@ public sealed partial class MapPageViewModel
 
         try
         {
-            var data = new PaintPaletteFile([.. PaintPalette.Select(p => p.Choice.ObjectPath)], PaintSpacing, PaintRandomSize, PaintRandomTurn, PaintSpacingMax);
+            var data = new PaintPaletteFile([.. PaintPalette.Select(p => p.Choice.ObjectPath)], PaintSpacing, PaintRandomSize, PaintRandomTurn, PaintSpacingMax, PaintOnObjects);
             File.WriteAllText(file, JsonSerializer.Serialize(data, PaletteJson));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -271,6 +348,7 @@ public sealed partial class MapPageViewModel
                 PaintSpacingMax = Math.Clamp(data.SpacingMax > 0 ? data.SpacingMax : data.Spacing, PaintSpacing, 20); // older files: one spacing
                 PaintRandomSize = data.RandomSize;
                 PaintRandomTurn = data.RandomTurn;
+                PaintOnObjects = data.OnObjects;
             }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
@@ -326,12 +404,7 @@ public sealed partial class MapPageViewModel
     /// </summary>
     public void PaintAt(FVector centre, FVector? from = null)
     {
-        if (_stroke is { } open && !ReferenceEquals(open.Scene, PreparedScene))
-        {
-            EndPaintStroke(); // the loaded levels changed under the stroke
-        }
-
-        var stroke = _stroke ??= BeginPaintStroke(centre);
+        var stroke = OpenPaintStroke();
         if (stroke.Kinds.Count == 0)
         {
             return; // nothing to plant (said once when the stroke began)
@@ -346,28 +419,26 @@ public sealed partial class MapPageViewModel
         var before = stroke.Planted;
         for (var i = 0; i < pieces; i++)
         {
-            var (t0, t1) = (i / (float)pieces, (i + 1) / (float)pieces);
-            PaintPiece(stroke, Vector2.Lerp(a, b, t0), Vector2.Lerp(a, b, t1), start.Z + ((centre.Z - start.Z) * t0), start.Z + ((centre.Z - start.Z) * t1), radius);
+            PaintPiece(stroke, Vector2.Lerp(a, b, i / (float)pieces), Vector2.Lerp(a, b, (i + 1) / (float)pieces), radius, centre.Z);
         }
 
         if (stroke.Planted > before)
         {
             ShowPaintPreview(stroke);
         }
+
+        ReportPaint(stroke);
+        PreviewPaintAt(centre);
     }
 
     /// <summary>
-    /// One tick of the timer mode: one object at a random free spot inside the circle at <paramref name="centre"/> (the
-    /// spacing still applies; nothing when the circle is full). It joins the open stroke, journaled by <see cref="EndPaintStroke"/>.
+    /// One tick of the timer mode: one object at the free spot nearest <paramref name="centre"/> inside the circle (the
+    /// spacing and the ground rules still apply); nothing when the circle is full, which is said once a stroke. It joins
+    /// the open stroke, journaled by <see cref="EndPaintStroke"/>.
     /// </summary>
     public void PaintOneAt(FVector centre)
     {
-        if (_stroke is { } open && !ReferenceEquals(open.Scene, PreparedScene))
-        {
-            EndPaintStroke(); // the loaded levels changed under the stroke
-        }
-
-        var stroke = _stroke ??= BeginPaintStroke(centre);
+        var stroke = OpenPaintStroke();
         if (stroke.Kinds.Count == 0)
         {
             return;
@@ -375,23 +446,89 @@ public sealed partial class MapPageViewModel
 
         var radius = (float)BrushRadius * 100f;
         var c = new Vector2(centre.X, centre.Y);
-        GatherPaintObstacles(stroke, c - new Vector2(radius + stroke.Spacing), c + new Vector2(radius + stroke.Spacing));
-        LoadSupports(stroke, c - new Vector2(radius), c + new Vector2(radius));
-        for (var attempt = 0; attempt < 24; attempt++)
+        PrepareCircle(stroke, c, c, radius);
+        stroke.Plane = PaintPlane(stroke, centre);
+        var nearest = BrushScatter.Nearest(stroke.Seed, stroke.Cell, c, radius, stroke.LeastSpacing, stroke.Spacing, stroke.Tried);
+        if (BrushScatter.Next(nearest, stroke.Tried, spot => TryPlant(stroke, spot, centre.Z, null)) is not null)
         {
-            var h = Mix(stroke.Seed ^ ((ulong)++stroke.Ticks * 0x9E3779B97F4A7C15UL));
-            var at = c + (new Vector2(MathF.Cos(Unit(h, 0) * MathF.Tau), MathF.Sin(Unit(h, 0) * MathF.Tau)) * (radius * MathF.Sqrt(Unit(h, 1))));
-            var keep = stroke.LeastSpacing + ((stroke.Spacing - stroke.LeastSpacing) * Unit(h, 7));
-            if (!TooClose(stroke, at, centre.Z, keep))
-            {
-                Plant(stroke, at, centre.Z, h);
-                ShowPaintPreview(stroke);
-                return;
-            }
+            ShowPaintPreview(stroke);
         }
+        else if (!stroke.SaidFull)
+        {
+            stroke.SaidFull = true;
+            _services.Notifications.Info(Loc.T("Map.Paint"), Loc.T("Map.Paint.Full"));
+        }
+
+        ReportPaint(stroke);
+        PreviewPaintAt(centre);
     }
 
-    /// <summary>Journals the open stroke as one edit ("Planted N objects"); nothing when it planted nothing.</summary>
+    /// <summary>
+    /// Shows in <see cref="PaintSpots"/> what a click (or the next timer tick) at <paramref name="centre"/> plants and leaves
+    /// out: every spot of the circle with the same obstacles and ground rules, tried and taken back. What it gathered is
+    /// kept for the click.
+    /// </summary>
+    public void PreviewPaintAt(FVector centre)
+    {
+        if (!BrushPaint || (_stroke ?? DryPaintStroke()) is not { Kinds.Count: > 0 } stroke)
+        {
+            ShowPaintSpots(null);
+            return;
+        }
+
+        var spots = new List<(FVector At, bool Plants)>();
+        var (planted, skipped) = (stroke.Index.Count, stroke.Skipped.Count);
+        var radius = (float)BrushRadius * 100f;
+        var c = new Vector2(centre.X, centre.Y);
+        try
+        {
+            if (PaintTimed)
+            {
+                PrepareCircle(stroke, c, c, radius);
+                stroke.Plane = PaintPlane(stroke, centre);
+                foreach (var spot in BrushScatter.Nearest(stroke.Seed, stroke.Cell, c, radius, stroke.LeastSpacing, stroke.Spacing, stroke.Tried))
+                {
+                    if (TryPlant(stroke, spot, centre.Z, spots))
+                    {
+                        break; // one a tick
+                    }
+                }
+            }
+            else
+            {
+                PaintPiece(stroke, c, c, radius, centre.Z, spots);
+            }
+        }
+        finally
+        {
+            stroke.Index.Rollback(planted);
+            stroke.Skipped.Rollback(skipped);
+        }
+
+        ShowPaintSpots(spots);
+    }
+
+    /// <summary>Hands the preview's spots to the view: all of them, or an even share above <see cref="PaintMarkCap"/> (then said with the counts).</summary>
+    private void ShowPaintSpots(List<(FVector At, bool Plants)>? spots)
+    {
+        if (spots is null || spots.Count <= PaintMarkCap)
+        {
+            PaintSpots = spots;
+            PaintMarksText = string.Empty;
+            return;
+        }
+
+        // The spots come in their random hash order (the timer's nearest first), so every n-th of each kind is an even share
+        // of the circle; each kind has half the marks, so the timer's one green spot is never thinned out by red ones.
+        var half = Math.Max(1, PaintMarkCap / 2);
+        var plants = spots.Count(s => s.Plants);
+        var (everyPlant, everyLeft) = (Math.Max(1, (plants + half - 1) / half), Math.Max(1, (spots.Count - plants + half - 1) / half));
+        var (p, l) = (0, 0);
+        PaintSpots = spots.Where(s => s.Plants ? p++ % everyPlant == 0 : l++ % everyLeft == 0).ToList();
+        PaintMarksText = Loc.F("Map.Paint.Marks", plants, spots.Count - plants);
+    }
+
+    /// <summary>Journals the open stroke as one edit ("Planted N objects", what was left out and why); nothing when it planted nothing.</summary>
     public void EndPaintStroke()
     {
         if (_stroke is not { } stroke)
@@ -400,8 +537,15 @@ public sealed partial class MapPageViewModel
         }
 
         _stroke = null;
+        LogPaintBlocks(stroke);
+        var left = LeftOutText(stroke);
         if (stroke.Ops.Count == 0)
         {
+            if (left.Length > 0)
+            {
+                _services.Notifications.Info(Loc.T("Map.Paint"), left);
+            }
+
             return;
         }
 
@@ -412,7 +556,8 @@ public sealed partial class MapPageViewModel
             {
                 // The journal change refreshes the edits: its objects replace the stroke's preview.
                 var entry = _services.Projects.Apply(new BatchOp(title, stroke.Ops));
-                _services.Notifications.Info(title, entry.Op.Describe() + Loc.T("Map.CtrlZUndoes"));
+                _paintSeed = BrushScatter.Mix(_paintSeed); // the next stroke's spots differ, so it can fill this one's gaps
+                _services.Notifications.Info(title, entry.Op.Describe() + (left.Length > 0 ? " " + left : string.Empty) + Loc.T("Map.CtrlZUndoes"));
                 return;
             }
             catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or IOException)
@@ -424,22 +569,88 @@ public sealed partial class MapPageViewModel
         RefreshEdits(); // nothing journaled: the preview goes
     }
 
-    private PaintStroke BeginPaintStroke(FVector at)
+    /// <summary>The open stroke, or a new one: the hover preview's when nothing changed since it was gathered.</summary>
+    private PaintStroke OpenPaintStroke()
     {
+        if (_stroke is { } open && !ReferenceEquals(open.Scene, PreparedScene))
+        {
+            EndPaintStroke(); // the loaded levels changed under the stroke
+        }
+
+        if (_stroke is null)
+        {
+            var dry = _dryStroke;
+            _dryStroke = null;
+            _stroke = dry is { Kinds.Count: > 0 } && dry.Key == PaintKeyNow() ? dry : BeginPaintStroke(quiet: false);
+            ReportPaint(_stroke);
+        }
+
+        return _stroke;
+    }
+
+    /// <summary>The hover preview's stroke for the brush as it is now (made again when anything it depends on changed); null without levels, project or palette.</summary>
+    private PaintStroke? DryPaintStroke()
+    {
+        // A palette Blueprint still looked up (or never found) is in the key by its finished lookups, so hovering does not
+        // gather the ground again on every move while it is missing from the stroke.
+        var key = PaintKeyNow();
+        if (_dryStroke is { } dry && dry.Key == key && dry.Gathered.Count < 4096 && dry.Sites.Count < PaintSitesKept)
+        {
+            return dry;
+        }
+
+        return _dryStroke = key.Scene is { Documents.Count: > 0 } && key.Project is not null && PaintPalette.Count > 0 ? BeginPaintStroke(quiet: true) : null;
+    }
+
+    private PaintKey PaintKeyNow()
+    {
+        var project = _services.Projects.Current;
+        var edits = project?.Journal.Applied;
+        var sources = PaintPalette.Count(p => p.Choice.IsBlueprint && _paintSources.TryGetValue(p.Choice.PackagePath, out var t) && t.IsCompleted);
+        return new PaintKey(PreparedScene, WorldBackdrop, project, edits?.Count ?? 0, edits is { Count: > 0 } ? edits[edits.Count - 1] : null, _paletteVersion,
+            sources, PaintSpacing, PaintSpacingMax, BrushRadius, _paintSeed, PaintOnObjects, PaintRandomSize, PaintRandomTurn);
+    }
+
+    private void ReportPaint(PaintStroke stroke) => PaintReportText = Loc.F("Map.Paint.Report", stroke.Planted, stroke.Left.Values.Sum());
+
+    /// <summary>"Left out: 12 on roads or paths, 3 in water." for the stroke's notification; empty when nothing was.</summary>
+    private static string LeftOutText(PaintStroke stroke)
+    {
+        var parts = PaintSkipKeys.Where(k => stroke.Left.GetValueOrDefault(k.Verdict) > 0).Select(k => Loc.F(k.Key, stroke.Left[k.Verdict])).ToList();
+        return parts.Count == 0 ? string.Empty : Loc.F("Map.Paint.Skipped", string.Join(", ", parts));
+    }
+
+    /// <summary>Logs the objects whose drawn box kept the most spots free and the meshes that left the most out (to tell later why a place stayed empty).</summary>
+    private void LogPaintBlocks(PaintStroke stroke)
+    {
+        if (stroke.Blocks.Count > 0 || stroke.Deciders.Count > 0)
+        {
+            _services.Logger.LogInformation("Brush stroke: {Planted} planted, {Left} left out; boxes that kept the most spots free: {Blocks}; meshes under the most left out: {Meshes}",
+                stroke.Planted, stroke.Left.Values.Sum(), Most(stroke.Blocks), Most(stroke.Deciders));
+        }
+
+        static string Most(Dictionary<string, int> counts) =>
+            string.Join(", ", counts.OrderByDescending(b => b.Value).Take(3).Select(b => b.Key + " (" + b.Value.ToString(CultureInfo.InvariantCulture) + ")"));
+    }
+
+    private PaintStroke BeginPaintStroke(bool quiet)
+    {
+        PaintStrokesMade++;
         var scene = PreparedScene;
         var project = _services.Projects.Current;
         var kinds = new List<PaintKind>();
+        (string Title, string Detail, bool Warning)? say = null;
         if (scene is not { Documents.Count: > 0 })
         {
-            _services.Notifications.Warning(Loc.T("Map.NoLevelLoaded"), Loc.T("Map.NoLevelLoadedDetail"));
+            say = (Loc.T("Map.NoLevelLoaded"), Loc.T("Map.NoLevelLoadedDetail"), true);
         }
         else if (project is null)
         {
-            _services.Notifications.Warning(Loc.T("History.NoProject"), Loc.T("Map.NoProject.Adds"));
+            say = (Loc.T("History.NoProject"), Loc.T("Map.NoProject.Adds"), true);
         }
         else if (PaintPalette.Count == 0)
         {
-            _services.Notifications.Info(Loc.T("Map.Paint"), Loc.T("Map.Paint.Empty"));
+            say = (Loc.T("Map.Paint"), Loc.T("Map.Paint.Empty"), false);
         }
         else
         {
@@ -450,7 +661,7 @@ public sealed partial class MapPageViewModel
                 {
                     if (PaintSourceOf(choice) is { } source)
                     {
-                        kinds.Add(new PaintKind(choice.ObjectPath, true, true, false, null, null, source));
+                        kinds.Add(new PaintKind(choice.ObjectPath, true, true, false, null, null, source, PaintClass.Other));
                     }
 
                     continue; // not found yet: the next stroke has it
@@ -459,18 +670,31 @@ public sealed partial class MapPageViewModel
                 var mesh = choice.ObjectPath;
                 EnsureMeshLoaded(mesh);
                 kinds.Add(new PaintKind(mesh, false, IsPlant(mesh) || mesh.Contains("/Rocks/", StringComparison.OrdinalIgnoreCase),
-                    !mesh.Contains("/Buildings/", StringComparison.OrdinalIgnoreCase), MeshBounds(mesh), _foliageCollision.GetValueOrDefault(mesh), null));
+                    !mesh.Contains("/Buildings/", StringComparison.OrdinalIgnoreCase), MeshBounds(mesh), _foliageCollision.GetValueOrDefault(mesh), null,
+                    IsPlant(mesh) ? PlantClass(mesh, null) : PaintClass.Other));
+            }
+        }
+
+        if (!quiet && say is { } message)
+        {
+            if (message.Warning)
+            {
+                _services.Notifications.Warning(message.Title, message.Detail);
+            }
+            else
+            {
+                _services.Notifications.Info(message.Title, message.Detail);
             }
         }
 
         var least = (float)Math.Clamp(PaintSpacing, 1, 20) * 100f;
         var spacing = MathF.Max(least, (float)Math.Clamp(PaintSpacingMax, 1, 20) * 100f); // the index cells hold the largest distance
         var radius = (float)BrushRadius * 100f;
-        var seed = Mix(((ulong)BitConverter.SingleToUInt32Bits(at.X) << 32) | BitConverter.SingleToUInt32Bits(at.Y));
-        return new PaintStroke(project!, scene!, kinds, spacing, MathF.Max(least / 2f, 2f * radius / 150f), MathF.Max(radius, 1000f), seed,
-            PaintRandomSize, PaintRandomTurn)
+        return new PaintStroke(project!, scene!, kinds, spacing, BrushScatter.CellSize(least, radius), _paintSeed, PaintRandomSize, PaintRandomTurn)
         {
             LeastSpacing = least,
+            OnObjects = PaintOnObjects,
+            Key = PaintKeyNow(),
             Target = scene is { Documents.Count: > 0 } ? NewObjectLevel(scene) : null,
         };
     }
@@ -512,50 +736,177 @@ public sealed partial class MapPageViewModel
         }
     }
 
-    /// <summary>Plants along one piece of the stroke (a capsule from <paramref name="a"/> to <paramref name="b"/>).</summary>
-    private void PaintPiece(PaintStroke stroke, Vector2 a, Vector2 b, float za, float zb, float radius)
+    /// <summary>
+    /// Plants along one piece of the stroke (a capsule from <paramref name="a"/> to <paramref name="b"/>): the lattice's spots
+    /// the circle covers for the first time, in their hash order. With <paramref name="preview"/> nothing is planted or
+    /// marked tried: the spots that would be go into it, all of them, in the click's order.
+    /// </summary>
+    private void PaintPiece(PaintStroke stroke, Vector2 a, Vector2 b, float radius, float markZ, List<(FVector At, bool Plants)>? preview = null)
+    {
+        PrepareCircle(stroke, a, b, radius);
+        stroke.Plane = PaintPlane(stroke, new FVector(b.X, b.Y, markZ));
+        foreach (var spot in BrushScatter.Sweep(stroke.Seed, stroke.Cell, a, b, radius, stroke.LeastSpacing, stroke.Spacing, stroke.Tried))
+        {
+            if (preview is null)
+            {
+                stroke.Tried.Add((spot.X, spot.Y));
+            }
+
+            TryPlant(stroke, spot, markZ, preview);
+        }
+    }
+
+    /// <summary>Takes in the obstacles and the ground under the circle swept from <paramref name="a"/> to <paramref name="b"/>.</summary>
+    private void PrepareCircle(PaintStroke stroke, Vector2 a, Vector2 b, float radius)
     {
         GatherPaintObstacles(stroke, Vector2.Min(a, b) - new Vector2(radius + stroke.Spacing), Vector2.Max(a, b) + new Vector2(radius + stroke.Spacing));
         LoadSupports(stroke, Vector2.Min(a, b) - new Vector2(radius), Vector2.Max(a, b) + new Vector2(radius));
+    }
 
-        // The stroke's lattice: one candidate place per cell, fixed by the stroke's seed, each tried once (when the circle
-        // first covers it); the new ones are tried in a random order so no row or column pattern shows.
-        var cell = stroke.Cell;
-        var (min, max) = (Vector2.Min(a, b) - new Vector2(radius), Vector2.Max(a, b) + new Vector2(radius));
-        var fresh = new List<(ulong Hash, Vector2 At, float Z)>();
-        for (var y = (int)MathF.Floor(min.Y / cell); y <= (int)MathF.Floor(max.Y / cell); y++)
+    /// <summary>
+    /// Plants the palette object of <paramref name="spot"/> there when its ground is free (<see cref="SiteOf"/>) and nothing
+    /// stands within its distance of its foot; a spot left out (a road, water...) is counted once per plant it would have
+    /// been. With <paramref name="preview"/> it is only listed there (and held in the spacing until the preview takes it back).
+    /// <paramref name="markZ"/> only places the mark of a spot with no ground under it. With no landscape loaded at all the
+    /// spacing is flat at any height: nothing tells the ground's heights apart there.
+    /// </summary>
+    private bool TryPlant(PaintStroke stroke, PaintSpot spot, float markZ, List<(FVector At, bool Plants)>? preview)
+    {
+        var kind = stroke.Kinds[(int)(BrushScatter.Mix(spot.Hash + 2) % (ulong)stroke.Kinds.Count)];
+        var (verdict, foot, by) = SiteOf(stroke, spot);
+        var window = float.IsNaN(stroke.Plane) ? SpacingIndex.Window(spot.Keep) : float.PositiveInfinity;
+        if (verdict != PaintVerdict.NoGround && TooClose(stroke, spot.At, foot, spot.Keep, kind.Class, window, count: preview is null))
         {
-            for (var x = (int)MathF.Floor(min.X / cell); x <= (int)MathF.Floor(max.X / cell); x++)
+            return false;
+        }
+
+        var at = new FVector(spot.At.X, spot.At.Y, float.IsNaN(foot) ? markZ : foot);
+        if (verdict != PaintVerdict.Plant)
+        {
+            if (!stroke.Skipped.TooClose(spot.At, at.Z, stroke.LeastSpacing, PaintClass.Other))
             {
-                if (stroke.Tried.Contains((x, y)))
+                stroke.Skipped.Add(new Vector3(at.X, at.Y, at.Z), PaintClass.Other);
+                preview?.Add((at, false));
+                if (preview is null)
                 {
-                    continue;
+                    stroke.Left[verdict] = stroke.Left.GetValueOrDefault(verdict) + 1;
+                    if (by is not null)
+                    {
+                        stroke.Deciders[by] = stroke.Deciders.GetValueOrDefault(by) + 1;
+                    }
                 }
+            }
 
-                var h = Mix(stroke.Seed ^ Mix(((ulong)(uint)x << 32) | (uint)y));
-                var at = new Vector2((x + Unit(h, 0)) * cell, (y + Unit(h, 1)) * cell);
-                var ab = b - a;
-                var t = ab.LengthSquared() < 1e-6f ? 0f : Math.Clamp(Vector2.Dot(at - a, ab) / ab.LengthSquared(), 0f, 1f);
-                if (Vector2.DistanceSquared(at, a + (ab * t)) > radius * radius)
-                {
-                    continue; // not under the circle yet
-                }
+            return false;
+        }
 
-                stroke.Tried.Add((x, y));
-                fresh.Add((h, at, za + ((zb - za) * t)));
+        if (preview is null)
+        {
+            return Plant(stroke, kind, spot, foot);
+        }
+
+        stroke.Index.Add(new Vector3(at.X, at.Y, at.Z), kind.Class);
+        preview.Add((at, true));
+        return true;
+    }
+
+    /// <summary>
+    /// What is under <paramref name="spot"/> (kept per lattice cell for the stroke), the height its foot stands at (NaN with
+    /// no ground) and the mesh that decided, if one did: the landscape, whose paint layers and the sea decide, then what a
+    /// mesh right on it is (<see cref="SurfaceUnder"/>); off the loaded landscape, no ground. With no landscape loaded at
+    /// all the stroke's <see cref="PaintStroke.Plane"/> is the ground (not kept: it follows the cursor).
+    /// </summary>
+    private (PaintVerdict Verdict, float Foot, string? By) SiteOf(PaintStroke stroke, PaintSpot spot)
+    {
+        var (x, y) = (spot.At.X, spot.At.Y);
+        if (!float.IsNaN(stroke.Plane))
+        {
+            return SurfaceUnder(stroke, x, y, stroke.Plane);
+        }
+
+        if (stroke.Sites.TryGetValue((spot.X, spot.Y), out var known))
+        {
+            return known;
+        }
+
+        var field = stroke.Scene.HeightField is { } near && near.SampleHeight(x, y) is not null ? near : WorldBackdrop?.HeightField;
+        var site = (Verdict: PaintVerdict.NoGround, Foot: float.NaN, By: (string?)null);
+        if (field?.SampleHeight(x, y) is { } ground)
+        {
+            site = (BrushScatter.GroundVerdict(field.SampleLayers(x, y), ground, stroke.Scene.SeaLevelCm ?? WorldBackdrop?.SeaLevelCm), ground, null);
+            if (site.Verdict == PaintVerdict.Plant)
+            {
+                site = SurfaceUnder(stroke, x, y, ground);
             }
         }
 
-        fresh.Sort((p, q) => p.Hash.CompareTo(q.Hash));
-        foreach (var (h, at, z) in fresh)
+        stroke.Sites[(spot.X, spot.Y)] = site;
+        return site;
+    }
+
+    /// <summary>
+    /// The ground of a stroke with no landscape loaded at all (a level opened without its tile): the cursor's height, or
+    /// the foot of the drawn mesh the cursor rests on, a canopy or a roof (<see cref="BrushScatter.Plane"/>). NaN while
+    /// any landscape is loaded: the spots stand on it, never on the cursor's height (on a canopy that stacked trees).
+    /// </summary>
+    private float PaintPlane(PaintStroke stroke, FVector centre)
+    {
+        if (stroke.Scene.HeightField is not null || WorldBackdrop?.HeightField is not null)
         {
-            // Each place keeps its own distance in the range, so the gaps vary like a grown forest's.
-            var keep = stroke.LeastSpacing + ((stroke.Spacing - stroke.LeastSpacing) * Unit(h, 7));
-            if (!TooClose(stroke, at, z, keep))
+            return float.NaN;
+        }
+
+        var under = stroke.Supports.TryGetValue(SupportCellOf(centre.X, centre.Y), out var here)
+            ? here.Where(s => centre.X >= s.Box.Min.X && centre.X <= s.Box.Max.X && centre.Y >= s.Box.Min.Y && centre.Y <= s.Box.Max.Y)
+                .Select(s => (s.Box.Min.Z, s.Box.Max.Z, IsPlant(s.Mesh) ? s.World.Translation.Z : s.Box.Min.Z))
+            : [];
+        return BrushScatter.Plane(centre.Z, under);
+    }
+
+    /// <summary>
+    /// What a drawn mesh right at <paramref name="ground"/> under (<paramref name="x"/>, <paramref name="y"/>) is: a road
+    /// piece, water or a rock wins over an object; on an object (a roof, a floor) the foot goes onto its top when
+    /// <see cref="PaintOnObjects"/> is on. Foliage and things under <see cref="SmallThing"/> across do not count (the
+    /// spacing keeps plants apart, a pebble does not stop a tree). Plant with nothing there.
+    /// </summary>
+    private (PaintVerdict Verdict, float Foot, string? By) SurfaceUnder(PaintStroke stroke, float x, float y, float ground)
+    {
+        if (!stroke.Supports.TryGetValue(SupportCellOf(x, y), out var here))
+        {
+            return (PaintVerdict.Plant, ground, null);
+        }
+
+        PaintVerdict? found = null;
+        var (top, by) = (float.MinValue, (string?)null);
+        foreach (var s in here)
+        {
+            if (x < s.Box.Min.X || x > s.Box.Max.X || y < s.Box.Min.Y || y > s.Box.Max.Y || MathF.Max(s.Box.Size.X, s.Box.Size.Y) < SmallThing
+                || BrushScatter.SurfaceVerdict(s.Mesh) is not { } kind)
             {
-                Plant(stroke, at, z, h);
+                continue;
+            }
+
+            // Water is looked for from high up (a lake's surface lies over its bed), anything else just above the ground.
+            var water = kind == PaintVerdict.Water;
+            var (from, lowest) = (ground + (water ? WaterProbeAbove : ObjectProbeAbove), ground - (water ? WaterProbeBelow : ObjectProbeBelow));
+            if (s.Box.Min.Z > from || s.Box.Max.Z < lowest || SurfaceOf(s.Mesh, s.Bend)?.HighestBelow(s.World, x, y, from) is not { } z
+                || (water ? z <= lowest : z < lowest))
+            {
+                continue;
+            }
+
+            if (found is null || kind < found || (kind == found && z > top))
+            {
+                (found, top, by) = (kind, z, s.Mesh);
             }
         }
+
+        return found switch
+        {
+            null => (PaintVerdict.Plant, ground, null),
+            PaintVerdict.OnObject when stroke.OnObjects => (PaintVerdict.Plant, top, null),
+            _ => (found.Value, ground, by),
+        };
     }
 
     /// <summary>
@@ -582,35 +933,29 @@ public sealed partial class MapPageViewModel
         }
     }
 
-    /// <summary>True when a planted or existing object is closer to <paramref name="at"/> than <paramref name="keep"/> (cm).</summary>
-    private static bool TooClose(PaintStroke stroke, Vector2 at, float z, float keep)
+    /// <summary>
+    /// True when a plant or object stands closer to <paramref name="at"/> than <paramref name="keep"/> (cm, flat) within
+    /// <paramref name="window"/> of the spot's foot: never the cursor's height, which on a canopy let trees stack.
+    /// </summary>
+    private static bool TooClose(PaintStroke stroke, Vector2 at, float foot, float keep, PaintClass kind, float window, bool count)
     {
-        var (cx, cy) = PaintCellOf(at, stroke.Spacing); // cells as large as the largest spacing: the 3x3 around holds every neighbour
-        var s = keep;
-        for (var dy = -1; dy <= 1; dy++)
+        if (stroke.Index.TooClose(at, foot, keep, kind, window))
         {
-            for (var dx = -1; dx <= 1; dx++)
-            {
-                if (stroke.Points.TryGetValue((cx + dx, cy + dy), out var points))
-                {
-                    foreach (var p in points)
-                    {
-                        if (Vector2.DistanceSquared(new Vector2(p.X, p.Y), at) < s * s && MathF.Abs(p.Z - z) < stroke.Height)
-                        {
-                            return true;
-                        }
-                    }
-                }
-            }
+            return true;
         }
 
-        if (stroke.Boxes.TryGetValue((cx, cy), out var boxes))
+        if (stroke.Boxes.TryGetValue(PaintCellOf(at, stroke.Spacing), out var boxes))
         {
-            var probe = new BrushSweep(at, at, s, z - stroke.Height, z + stroke.Height);
-            foreach (var outline in boxes)
+            var probe = new BrushSweep(at, at, keep, foot - window, foot + window);
+            foreach (var (outline, name) in boxes)
             {
                 if (probe.Touches(outline))
                 {
+                    if (count)
+                    {
+                        stroke.Blocks[name] = stroke.Blocks.GetValueOrDefault(name) + 1;
+                    }
+
                     return true;
                 }
             }
@@ -667,25 +1012,41 @@ public sealed partial class MapPageViewModel
             return; // a part or road piece counts with its whole actor
         }
 
-        if (e is { Kind: BrushKind.Instance, Instance: { StaticMeshPath: { } mesh } instance } && MeshBounds(mesh) is { IsEmpty: false } bounds)
+        var kind = PaintClass.Other;
+        if (e.Kind == BrushKind.Instance)
         {
-            var scale = instance.WorldTransform.Scale3D;
-            var across = MathF.Max(bounds.Size.X * MathF.Abs(scale.X), bounds.Size.Y * MathF.Abs(scale.Y));
-            if (across < (IsPlant(mesh) ? 100f : 50f))
+            var component = e.Item.Actor.FindComponent(e.Instance?.ComponentName ?? e.Key?.Component ?? string.Empty);
+            var mesh = e.Instance?.StaticMeshPath ?? component?.StaticMeshPath;
+            if (e.Instance is { } instance && mesh is not null && MeshBounds(mesh) is { IsEmpty: false } bounds)
             {
-                return; // grass, flowers, pebbles
+                var scale = instance.WorldTransform.Scale3D;
+                var across = MathF.Max(bounds.Size.X * MathF.Abs(scale.X), bounds.Size.Y * MathF.Abs(scale.Y));
+                if (across < (IsPlant(mesh) ? 2f * SmallThing : SmallThing))
+                {
+                    return; // grass, flowers, pebbles
+                }
+
+                if (!IsPlant(mesh))
+                {
+                    outline = BrushOutline.Of(instance.WorldTransform, bounds); // a rock by what it covers, a tree by its trunk
+                }
             }
 
-            if (!IsPlant(mesh))
-            {
-                outline = BrushOutline.Of(instance.WorldTransform, bounds); // a rock by what it covers, a tree by its trunk
-            }
+            kind = IsPlant(mesh) ? PlantClass(mesh!, component) : PaintClass.Other;
+        }
+        else if (e.Kind == BrushKind.Whole && e.Item.Actor.StaticMeshPath is { } mesh && IsPlant(mesh) && outline.Shapes is [var trunk, ..])
+        {
+            // A tree or bush standing as a mesh actor (the game's, or one an earlier stroke planted) keeps others off its
+            // trunk, not off its whole crown: by its box the next stroke left every gap between them empty (owner, 3.1.0).
+            var at = trunk.World.Translation;
+            stroke.Index.Add(new Vector3(at.X, at.Y, at.Z), PlantClass(mesh, null));
+            return;
         }
 
         if (outline.Shapes is null)
         {
             var at = outline.Box.Min;
-            AddPoint(stroke, new Vector3(at.X, at.Y, at.Z));
+            stroke.Index.Add(new Vector3(at.X, at.Y, at.Z), kind);
             return;
         }
 
@@ -703,29 +1064,35 @@ public sealed partial class MapPageViewModel
         {
             for (var x = x0; x <= x1; x++)
             {
-                (stroke.Boxes.TryGetValue((x, y), out var list) ? list : stroke.Boxes[(x, y)] = []).Add(outline);
+                (stroke.Boxes.TryGetValue((x, y), out var list) ? list : stroke.Boxes[(x, y)] = []).Add((outline, e.Item.Name));
             }
         }
     }
 
-    private static void AddPoint(PaintStroke stroke, Vector3 at)
-    {
-        var key = PaintCellOf(new Vector2(at.X, at.Y), stroke.Spacing);
-        (stroke.Points.TryGetValue(key, out var list) ? list : stroke.Points[key] = []).Add(at);
-    }
+    /// <summary>A bush (the game's bush folder, or foliage the game clears like grass) or a tree, for the spacing.</summary>
+    private static PaintClass PlantClass(string mesh, ComponentRecord? component) =>
+        mesh.Contains("/Bush/", StringComparison.OrdinalIgnoreCase) || (component is not null && GrassClearing.IsClearedFoliage(component)) ? PaintClass.Bush : PaintClass.Tree;
 
     private static (int X, int Y) PaintCellOf(Vector2 at, float size) => ((int)MathF.Floor(at.X / size), (int)MathF.Floor(at.Y / size));
 
-    /// <summary>Plants one palette object at <paramref name="at"/>: on the ground under it, turned and sized by its hash.</summary>
-    private void Plant(PaintStroke stroke, Vector2 at, float z, ulong h)
+    /// <summary>
+    /// Plants <paramref name="kind"/> at <paramref name="spot"/> with its foot at <paramref name="foot"/> (a plant's pivot,
+    /// anything else the bottom of its box), turned and sized by the spot's hash; false with nowhere to add it.
+    /// </summary>
+    private bool Plant(PaintStroke stroke, PaintKind kind, PaintSpot spot, float foot)
     {
-        var kind = stroke.Kinds[(int)(Mix(h + 2) % (ulong)stroke.Kinds.Count)];
-        var yaw = stroke.RandomTurn ? Unit(h, 3) * 360f : 0f;
-        var size = stroke.RandomSize && kind.Jitter ? 0.9f + (Unit(h, 4) * 0.25f) : 1f;
-        var world = new FTransform(new FRotator(0f, yaw, 0f), new FVector(at.X, at.Y, GroundAt(at.X, at.Y) ?? z), new FVector(size));
-        world = Planted(world, kind.Bounds, kind.Pivot, stroke.Supports) ?? world;
+        var h = spot.Hash;
+        var yaw = stroke.RandomTurn ? BrushScatter.Unit(h, 3) * 360f : 0f;
+        var size = stroke.RandomSize && kind.Jitter ? 0.9f + (BrushScatter.Unit(h, 4) * 0.25f) : 1f;
+        var world = new FTransform(new FRotator(0f, yaw, 0f), new FVector(spot.At.X, spot.At.Y, foot), new FVector(size));
+        if (!kind.Pivot && kind.Bounds is { IsEmpty: false } bounds)
+        {
+            var bottom = world.TransformPosition(new FVector(bounds.Center.X, bounds.Center.Y, bounds.Min.Z));
+            world = world with { Translation = world.Translation with { Z = world.Translation.Z + (foot - bottom.Z) } };
+        }
+
         var project = stroke.Project;
-        if (!kind.IsBlueprint && FoliageFor(stroke, at, kind.Path) is { } holder)
+        if (!kind.IsBlueprint && FoliageFor(stroke, spot.At, kind.Path) is { } holder)
         {
             // A new tree of the tile's own foliage: chopped and collided like the stock ones.
             var (item, component) = holder;
@@ -735,7 +1102,7 @@ public sealed partial class MapPageViewModel
         }
         else if (stroke.Target is not { } target)
         {
-            return;
+            return false;
         }
         else if (kind.Source is { } source)
         {
@@ -754,7 +1121,8 @@ public sealed partial class MapPageViewModel
         }
 
         stroke.Planted++;
-        AddPoint(stroke, new Vector3(world.Translation.X, world.Translation.Y, world.Translation.Z));
+        stroke.Index.Add(new Vector3(spot.At.X, spot.At.Y, foot), kind.Class);
+        return true;
     }
 
     /// <summary>The foliage component drawing <paramref name="mesh"/> in the loaded landscape tile nearest to <paramref name="at"/>, or null.</summary>
@@ -809,20 +1177,9 @@ public sealed partial class MapPageViewModel
         }
     }
 
-    private static ulong Mix(ulong x)
-    {
-        // splitmix64
-        x += 0x9E3779B97F4A7C15UL;
-        x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9UL;
-        x = (x ^ (x >> 27)) * 0x94D049BB133111EBUL;
-        return x ^ (x >> 31);
-    }
-
-    /// <summary>A number in [0, 1) from <paramref name="h"/> (a different one per <paramref name="i"/>).</summary>
-    private static float Unit(ulong h, int i) => (Mix(h + (ulong)i) >> 40) / (float)(1 << 24);
-
     /// <summary>The palette file: object paths and the brush settings.</summary>
-    private sealed record PaintPaletteFile(List<string>? Items, double Spacing = 3.5, bool RandomSize = true, bool RandomTurn = true, double SpacingMax = 0);
+    private sealed record PaintPaletteFile(List<string>? Items, double Spacing = 3.5, bool RandomSize = true, bool RandomTurn = true, double SpacingMax = 0,
+        bool OnObjects = false);
 
     /// <summary>One palette object as a stroke plants it.</summary>
     /// <param name="Path">Mesh object path or Blueprint class path.</param>
@@ -832,11 +1189,16 @@ public sealed partial class MapPageViewModel
     /// <param name="Bounds">Its mesh's bounds, when loaded.</param>
     /// <param name="Collision">How the game's foliage of this mesh collides (for a mesh actor), or null.</param>
     /// <param name="Source">The placed Blueprint a copy is made of.</param>
+    /// <param name="Class">What it is to the spacing (a tree passes over bushes).</param>
     private sealed record PaintKind(string Path, bool IsBlueprint, bool Pivot, bool Jitter, BoundingBox? Bounds, string? Collision,
-        (string Level, ActorRecord Actor, IReadOnlyList<ScenePlacement> Placements)? Source);
+        (string Level, ActorRecord Actor, IReadOnlyList<ScenePlacement> Placements)? Source, PaintClass Class);
 
-    /// <summary>An open paint stroke: what it planted (ops and preview) and what it keeps away from.</summary>
-    private sealed record PaintStroke(Project Project, PreparedLevelScene Scene, List<PaintKind> Kinds, float Spacing, float Cell, float Height,
+    /// <summary>What a stroke made now depends on: the preview's stroke is taken over by a click only while this is the same.</summary>
+    private sealed record PaintKey(PreparedLevelScene? Scene, PreparedLevelScene? Backdrop, Project? Project, int Edits, JournalEntry? LastEdit, int Palette,
+        int Sources, double Least, double Most, double Radius, ulong Seed, bool OnObjects, bool RandomSize, bool RandomTurn);
+
+    /// <summary>An open paint stroke: what it planted (ops and preview), what it keeps away from and what it left out.</summary>
+    private sealed record PaintStroke(Project Project, PreparedLevelScene Scene, List<PaintKind> Kinds, float Spacing, float Cell,
         ulong Seed, bool RandomSize, bool RandomTurn)
     {
         /// <summary>The ground under the stroke so far (see <see cref="LoadSupports"/>).</summary>
@@ -850,16 +1212,40 @@ public sealed partial class MapPageViewModel
         /// <summary>The smallest distance of the range (cm); <see cref="Spacing"/> is the largest.</summary>
         public float LeastSpacing { get; init; }
 
-        /// <summary>Timer ticks so far (each draws new random spots).</summary>
-        public long Ticks { get; set; }
+        /// <summary>Plants may stand on objects' tops (<see cref="PaintOnObjects"/> when it began).</summary>
+        public bool OnObjects { get; init; }
+
+        /// <summary>What it was made for (<see cref="PaintKeyNow"/>).</summary>
+        public PaintKey? Key { get; init; }
+
+        /// <summary>The timer found the circle full once (said once a stroke).</summary>
+        public bool SaidFull { get; set; }
+
+        /// <summary>The ground of the dab being planted while no landscape is loaded at all (<see cref="PaintPlane"/>); else NaN.</summary>
+        public float Plane { get; set; } = float.NaN;
 
         public HashSet<(int X, int Y)> Tried { get; } = [];
 
         public HashSet<(int X, int Y)> Gathered { get; } = [];
 
-        public Dictionary<(int X, int Y), List<Vector3>> Points { get; } = [];
+        /// <summary>The feet of what it planted and of the plants and things it keeps away from.</summary>
+        public SpacingIndex Index { get; } = new(Spacing);
 
-        public Dictionary<(int X, int Y), List<BrushOutline>> Boxes { get; } = [];
+        /// <summary>The spots it left out, one per plant they would have been (for the counts).</summary>
+        public SpacingIndex Skipped { get; } = new(Spacing);
+
+        public Dictionary<PaintVerdict, int> Left { get; } = [];
+
+        /// <summary>What is under each lattice spot looked at, its foot's height and the mesh that decided (<see cref="SiteOf"/>).</summary>
+        public Dictionary<(int X, int Y), (PaintVerdict Verdict, float Foot, string? By)> Sites { get; } = [];
+
+        /// <summary>Spots each mesh left out (a road piece, a rock, an object), by mesh (logged when the stroke ends).</summary>
+        public Dictionary<string, int> Deciders { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+        public Dictionary<(int X, int Y), List<(BrushOutline Outline, string Name)>> Boxes { get; } = [];
+
+        /// <summary>Spots each actor's box kept free, by actor name (logged when the stroke ends).</summary>
+        public Dictionary<string, int> Blocks { get; } = new(StringComparer.Ordinal);
 
         public List<EditOp> Ops { get; } = [];
 

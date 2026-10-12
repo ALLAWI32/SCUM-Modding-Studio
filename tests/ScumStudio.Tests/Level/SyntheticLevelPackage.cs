@@ -78,6 +78,14 @@ internal sealed class SyntheticLevelPackage
         return _exports.Count;
     }
 
+    /// <summary>Adds a top-level class export (a Blueprint's <c>BP_X_C</c>) whose parent class is <paramref name="superIndex"/>.</summary>
+    public int ClassExport(string name, int classIndex, int superIndex)
+    {
+        var index = Export(name, classIndex, 0);
+        _exports[index - 1] = _exports[index - 1] with { SuperIndex = superIndex };
+        return index;
+    }
+
     public void SetPayload(int exportIndex, byte[] payload) => _payloads[exportIndex - 1] = payload;
 
     /// <summary>Tagged properties + <c>None</c> + the UObject <c>bHasGuid</c> (0), then optional native data.</summary>
@@ -181,6 +189,46 @@ internal sealed class SyntheticLevelPackage
             Header(name, "NameProperty", 8);
             writer.U8(0);
             writer.FName(package.Name(value));
+        }
+
+        public void Float(string name, float value)
+        {
+            Header(name, "FloatProperty", 4);
+            writer.U8(0);
+            writer.F32(value);
+        }
+
+        /// <summary>A byte enum (<c>TEnumAsByte</c>) as cooked: the enum's name in the tag, the value as a name.</summary>
+        public void ByteEnum(string name, string enumName, string value)
+        {
+            Header(name, "ByteProperty", 8);
+            writer.FName(package.Name(enumName));
+            writer.U8(0);
+            writer.FName(package.Name(value));
+        }
+
+        /// <summary>An array of structs serialized as tagged properties (e.g. an InheritableComponentHandler's <c>Records</c>).</summary>
+        public void StructArray(string name, string structName, params Action<TagWriter>[] items)
+        {
+            var body = new ByteWriter();
+            foreach (var item in items)
+            {
+                var t = new TagWriter(package, body);
+                item(t);
+                t.None();
+            }
+
+            var inner = new ByteWriter();
+            new TagWriter(package, inner).Header(name, "StructProperty", body.Length);
+            inner.FName(package.Name(structName));
+            inner.Guid(default);
+            inner.U8(0);
+            Header(name, "ArrayProperty", 4 + inner.Length + body.Length);
+            writer.FName(package.Name("StructProperty"));
+            writer.U8(0);
+            writer.I32(items.Length);
+            writer.Raw(inner.WrittenSpan);
+            writer.Raw(body.WrittenSpan);
         }
 
         private void Struct(string name, string structName, Action<ByteWriter> value)

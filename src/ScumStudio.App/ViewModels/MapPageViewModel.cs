@@ -75,6 +75,7 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
         _orientation = services.UiState.Current.GizmoAxes;
         _renderQuality = ui.RenderQuality;
         (_spawnModelsShown, _animateWater, _lighting) = (ui.SpawnModels, ui.AnimateWater, ui.Lighting);
+        _antiAliasedFoliage = ui.AntiAliasedFoliage;
         _showSpawns = services.UiState.Current.ShowSpawnPoints;
         _timeOfDay = Math.Clamp(services.UiState.Current.TimeOfDay, 0, 24);
         _pickParts = services.UiState.Current.PickParts;
@@ -495,6 +496,7 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
         _services.Projects.Changed -= OnProjectChanged;
         _services.SettingsChanged -= OnSettingsChangedQuality;
         _services.Prefabs.Changed -= OnPrefabsChanged;
+        _toolbar?.Dispose();
     }
 
     /// <summary>The Settings page changed a choice the map shows (the gizmo's orientation).</summary>
@@ -540,9 +542,14 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
             _loadedCell = null;
             LevelLoadCompletion = LoadLevelsAsync([level.PackagePath], landscapeStep: 1);
         }
+        else if (value?.Cell is { } sector && LoadMode == MapLoadMode.Sector)
+        {
+            LevelLoadCompletion = LoadSectorAsync(sector); // only this sector: loaded in full, then nothing else streams
+        }
         else if (value?.Cell is { } cell && World is { } world)
         {
             _loadedCell = cell;
+            FollowPick(cell); // "Only this sector" then takes this cell
             LevelLoadCompletion = LoadLevelsAsync(CellPackages(world, cell), landscapeStep: 4);
         }
     }
@@ -557,10 +564,13 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
 
     /// <summary>
     /// Rivers and lakes live in one shared level (WaterSplines) for the whole island: its water actors with a piece over
-    /// the landscape tiles among <paramref name="packagePaths"/>, or null (no tiles, or none of the water is there).
+    /// the landscape tiles among <paramref name="packagePaths"/>, or null (no tiles, or none of the water is there). A
+    /// lake's sound, foam or mist has no mesh: it comes along when its root is over the tiles, so it can be seen, picked
+    /// and deleted with its water (the owner: "its sound and its effects go too").
     /// </summary>
-    internal static LevelDocument? WaterOver(LevelData data, WorldIndex world, IReadOnlyList<string> packagePaths)
+    internal static LevelDocument? WaterOver(LevelDocument water, WorldIndex world, IReadOnlyList<string> packagePaths)
     {
+        var data = water.Data;
         var tiles = world.Packages
             .Where(p => p.Kind == WorldPackageKind.Landscape && p.Tile is { BoundsValid: true } && packagePaths.Contains(p.PackagePath, StringComparer.OrdinalIgnoreCase))
             .Select(p => p.Tile!)
@@ -570,8 +580,9 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
             return null;
         }
 
-        var keep = LevelDocument.FromData(data).Actors
-            .Where(a => a.Components.Any(c => c.StaticMeshPath is not null && Over(c.WorldTransform.TransformPosition(c.SplineMesh?.StartPos ?? FVector.Zero))))
+        var keep = water.Actors
+            .Where(a => a.Components.Any(c => c.StaticMeshPath is not null && Over(c.WorldTransform.TransformPosition(c.SplineMesh?.StartPos ?? FVector.Zero)))
+                        || (SpawnMarkers.IsPinOnly(a, out _) && Over(a.WorldTransform.Translation)))
             .Select(a => a.ExportIndex)
             .ToHashSet();
         return keep.Count == 0 ? null : LevelDocument.FromData(data with { ActorIndices = data.ActorIndices.Where(keep.Contains).ToList() });
@@ -604,7 +615,12 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
         var cts = _loadCts = new CancellationTokenSource();
         var ct = cts.Token;
         IsLoadingLevel = true;
+        LoadProgress = default;
         LoadStatus = packagePaths.Count == 1 ? Localization.Loc.T("Map.ReadingLevel") : Localization.Loc.F("Map.ReadingLevels", packagePaths.Count);
+
+        // Made here, on the UI thread: made inside the worker it reported on the thread pool, and a late report overwrote
+        // the final status.
+        var progress = new Progress<(int Done, int Total, string Item)>(p => OnLoadProgress(cts, p));
         var world = World;
         try
         {
@@ -628,8 +644,6 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
                     DocumentSlots = LevelScenePreparer.SlotsAfter(documents, shown),
                     SpawnModels = SpawnModelsShown,
                 };
-                var progress = new Progress<(int Done, int Total, string Item)>(p =>
-                    LoadStatus = Localization.Loc.F("Map.Preparing", p.Done + 1, p.Total, p.Item[(p.Item.LastIndexOf('/') + 1)..]));
                 allocated = GC.GetTotalAllocatedBytes();
                 var scene = new LevelScenePreparer(catalog, _services.Logger).Prepare(documents, options, progress, ct, _prepareCache);
                 prepareMb = (GC.GetTotalAllocatedBytes() - allocated) >> 20;
@@ -716,6 +730,11 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
             ClearKindSelection(); // a new pick ends "all of this kind" and the multi-selection (a member of it keeps it)
         }
 
+        if (!_restoringSelection)
+        {
+            CloseCompanions(); // the list waits for a decision on what was picked before
+        }
+
         var id = value?.SelectableId ?? 0u;
         if (SelectedActorId != id)
         {
@@ -760,20 +779,58 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
         Actors = text.Length == 0 ? AllActors : AllActors.Where(a => a.Matches(text)).ToList();
     }
 
+    /// <summary>
+    /// The loaded actors the game loses with the deleted ones although nothing deletes them by name: stored child actors
+    /// and mesh-less actors attached to a deleted actor or component (the export takes them along). One with a mesh of
+    /// its own stays where it stands, so it stays shown.
+    /// </summary>
+    private IEnumerable<uint> GoneWithDeleted(EditState state, Dictionary<ActorRef, ActorItemViewModel> byReference, List<ActorItemViewModel> deleted)
+    {
+        var deletions = new Dictionary<LevelDocument, LevelDeletions>(ReferenceEqualityComparer.Instance);
+        LevelDeletions Of(LevelDocument level) => deletions.TryGetValue(level, out var known) ? known : deletions[level] = new LevelDeletions();
+        foreach (var item in deleted)
+        {
+            Of(item.Level).Actors.Add(item.Name);
+        }
+
+        foreach (var (actor, component) in state.DeletedComponents)
+        {
+            if (byReference.TryGetValue(actor, out var item) && !item.IsDeleted && item.Actor.FindComponent(component) is { ExportIndex: >= 0 } c)
+            {
+                Of(item.Level).Components.Add(c.ExportIndex);
+            }
+        }
+
+        foreach (var gone in HiddenWith(deletions, _dependents))
+        {
+            if (byReference.TryGetValue(gone, out var item))
+            {
+                yield return item.SelectableId;
+            }
+        }
+    }
+
     /// <summary>Recomputes which actors the open project has deleted.</summary>
     public void RefreshHiddenIds()
     {
         var state = _services.Projects.Current?.State;
         var hidden = new HashSet<uint>();
-        var byReference = new Dictionary<ActorRef, uint>(ActorRef.Comparer);
+        var byReference = new Dictionary<ActorRef, ActorItemViewModel>(ActorRef.Comparer);
+        var deleted = new List<ActorItemViewModel>();
         foreach (var actor in AllActors)
         {
             actor.IsDeleted = state?.IsDeleted(actor.Reference) == true;
-            byReference.TryAdd(actor.Reference, actor.SelectableId);
+            byReference.TryAdd(actor.Reference, actor);
             if (actor.IsDeleted)
             {
                 hidden.Add(actor.SelectableId);
+                deleted.Add(actor);
             }
+        }
+
+        if (state is not null)
+        {
+            hidden.UnionWith(GoneWithDeleted(state, byReference, deleted));
         }
 
         var hiddenInstances = new HashSet<InstanceKey>();
@@ -781,14 +838,11 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
         {
             foreach (var instance in state.DeletedInstances)
             {
-                if (byReference.TryGetValue(instance.ActorRef, out var id) && !hidden.Contains(id))
+                if (byReference.TryGetValue(instance.ActorRef, out var item) && !hidden.Contains(item.SelectableId))
                 {
-                    hiddenInstances.Add(InstanceKey.Of(id, instance.Component, instance.Index));
+                    hiddenInstances.Add(InstanceKey.Of(item.SelectableId, instance.Component, instance.Index));
                 }
             }
-
-            // "Clear grass under it": the bushes and grass the export removes under placed objects.
-            hiddenInstances.UnionWith(GrassClearedInstances(state).Where(k => !hidden.Contains(k.SelectableId)));
         }
 
         // Spawn pins off (all of them, or the kinds switched off in the legend).
@@ -1605,7 +1659,13 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
     partial void OnKindSelectionTextChanged(string? value) => DeleteSelectedCommand.NotifyCanExecuteChanged(); // a brushed set has no single selected object
 
     [RelayCommand(CanExecute = nameof(CanDeleteSelected))]
-    private void DeleteSelected()
+    private void DeleteSelected() => DeleteSelection(alone: false);
+
+    /// <summary>Shift+Delete: the selection alone, without the fire, light and sound that belong to it.</summary>
+    [RelayCommand(CanExecute = nameof(CanDeleteSelected))]
+    private void DeleteSelectedAlone() => DeleteSelection(alone: true);
+
+    private void DeleteSelection(bool alone)
     {
         if (!_services.Projects.HasProject)
         {
@@ -1617,7 +1677,7 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
         // (owner: "I select several with Ctrl and Delete removes only the last one").
         if (HasKindSelection)
         {
-            _ = DeleteKindSelectionAsync();
+            _ = DeleteKindSelectionAsync(alone);
             return;
         }
 
@@ -1634,21 +1694,11 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
 
         if (SelectedInstanceInfo() is { } sel)
         {
-            DeleteInstance(sel);
+            DeleteInstance(sel, alone);
             return;
         }
 
-        try
-        {
-            var entry = _services.Projects.Apply(new DeleteActorOp(item.Reference));
-            _services.Notifications.Info(Localization.Loc.T("Map.Deleted"), entry.Op.Describe());
-            RefreshHiddenIds();
-            ActorProperties = DescribeSelected(item);
-        }
-        catch (Exception ex) when (ex is InvalidOperationException or IOException)
-        {
-            _services.Notifications.Error(Localization.Loc.T("Map.DeleteFailed"), ex.Message);
-        }
+        _ = DeleteWithCompanionsAsync(WholeDelete(item) with { Refresh = () => { RefreshHiddenIds(); ActorProperties = DescribeSelected(item); } }, alone);
     }
 
     private bool CanDeleteAllOfMesh() => SelectedActor is { IsDeleted: false } item && KindMeshOf(item) is not null;
@@ -1701,12 +1751,14 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
                 return;
             }
 
-            var entry = _services.Projects.Apply(op);
             var title = string.Create(CultureInfo.CurrentCulture,
                 $"{Localization.Loc.F("Map.DeletedActors", op.Actors.Count, op.Instances.Count > 0 ? Localization.Loc.F("Map.PlusInstances", op.Instances.Count) : string.Empty)}");
-            _services.Notifications.Info(title, entry.Op.Describe() + Localization.Loc.T("Map.CtrlZUndoes"));
-            RefreshHiddenIds();
-            ActorProperties = DescribeSelected(item);
+            var name = string.Create(CultureInfo.CurrentCulture, $"{op.Actors.Count:N0} × {ShortName(path)}");
+            _ = DeleteWithCompanionsAsync(new DeleteRequest(name, [op], op.Actors.Select(a => new DeleteSeed(a)).ToList(), scene.Documents)
+            {
+                Notify = done => _services.Notifications.Info(title, done.Describe() + Localization.Loc.T("Map.CtrlZUndoes")),
+                Refresh = () => { RefreshHiddenIds(); ActorProperties = DescribeSelected(item); },
+            }, alone: false);
         }
         catch (Exception ex) when (ex is InvalidOperationException or IOException)
         {
@@ -1860,11 +1912,11 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
             LoadWorld(index);
             _services.Logger.LogInformation("World index: {Count} packages under {Root}.", index.Packages.Count, index.Root);
 
-            // With the game's paks connected the Map opens on the whole island; a cell or level picked later loads over it.
+            // With the game's paks connected the Map asks how to load: the whole island, or only one sector.
             if (catalog.SourceKind == AssetSourceKind.Paks && PreparedScene is null && WorldBackdrop is null
                 && index.Packages.Any(p => p.Kind == WorldPackageKind.Landscape))
             {
-                _ = OpenWholeIslandAsync();
+                OfferLoadChoice();
             }
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)

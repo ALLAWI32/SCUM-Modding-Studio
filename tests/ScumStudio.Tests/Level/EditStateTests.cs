@@ -228,4 +228,79 @@ public sealed class EditStateTests
         Assert.NotNull(state.Validate(new BatchOp("move", [new SetTransformOp(House, TransformValue.Identity, Somewhere), new SetTransformOp(Crate, TransformValue.Identity, nan)])));
         Assert.Null(state.Validate(new SetTransformOp(House, TransformValue.Identity, TransformValue.At(-262870, -27545, 36663))));
     }
+
+    [Fact]
+    public void DeleteComponentsThenUndoRestoresExactly()
+    {
+        // Owner: "if I delete a fire place, the fire stays burning" - the fire, light and sound of a building's fireplace part.
+        var state = EditState.Replay(Session());
+        var before = state.Describe();
+        var fire = new DeleteComponentsOp(House, ["P_Fire", "FireLight"]);
+        state.Apply(fire);
+
+        Assert.True(state.IsDeleted(House, "p_fire"));
+        Assert.True(state.IsDeleted(House, "FireLight"));
+        Assert.False(state.IsDeleted(House, "Walls"));
+        Assert.False(state.IsDeleted(House));
+        Assert.Equal(2, state.DeletedComponents.Count);
+        Assert.Contains(Outpost, state.ChangedLevels);
+        Assert.Contains("delete-component " + House.ToString().ToLowerInvariant() + ".p_fire", state.Describe(), StringComparison.Ordinal);
+        Assert.Equal(state.Describe(), state.Clone().Describe());
+
+        state.Apply(fire.Inverse());
+        Assert.Equal(before, state.Describe());
+        Assert.Empty(state.DeletedComponents);
+
+        var alone = new EditState();
+        alone.Apply(fire);
+        Assert.False(alone.IsEmpty);
+        Assert.Equal([Outpost], alone.ChangedLevels);
+        alone.Apply(fire.Inverse());
+        Assert.True(alone.IsEmpty);
+    }
+
+    [Fact]
+    public void RefusesDeletingTwiceAndRestoringAKeptComponent()
+    {
+        var state = new EditState();
+        state.Apply(new DeleteComponentsOp(House, ["P_Fire"]));
+
+        Assert.Contains("already deleted", state.Validate(new DeleteComponentsOp(House, ["Ak_Fire", "p_fire"])), StringComparison.Ordinal);
+        Assert.Contains("not deleted", state.Validate(new RestoreComponentsOp(House, ["P_Fire", "FireLight"])), StringComparison.Ordinal);
+        Assert.Contains("listed twice", state.Validate(new DeleteComponentsOp(House, ["FireLight", "firelight"])), StringComparison.Ordinal);
+        Assert.NotNull(state.Validate(new DeleteComponentsOp(House, [])));
+        Assert.NotNull(state.Validate(new DeleteComponentsOp(House, [" "])));
+        Assert.Null(state.Validate(new RestoreComponentsOp(House, ["P_FIRE"])));
+
+        // A deleted actor's parts go with it; an added copy's exports are its source's.
+        state.Apply(new DeleteActorOp(Crate));
+        Assert.Contains("is deleted", state.Validate(new DeleteComponentsOp(Crate, ["P_Fire"])), StringComparison.Ordinal);
+        Assert.True(state.IsDeleted(Crate, "Anything"));
+        var copy = new DuplicateActorOp(House, "House_Copy", Somewhere);
+        state.Apply(copy);
+        Assert.Contains("added", state.Validate(new DeleteComponentsOp(copy.Created, ["P_Fire"])), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ABatchThatDeletesTheActorSkipsItsComponentOpBothWays()
+    {
+        // The finder's batch: the fireplace actor whole and, for another actor, its fire; one undo restores both.
+        foreach (var batch in new[]
+                 {
+                     new BatchOp("Delete fireplace", [new DeleteActorOp(House), new DeleteComponentsOp(House, ["P_Fire"]), new DeleteComponentsOp(Crate, ["Ak_Fire"])]),
+                     new BatchOp("Delete fireplace", [new DeleteComponentsOp(House, ["P_Fire"]), new DeleteActorOp(House), new DeleteComponentsOp(Crate, ["Ak_Fire"])]),
+                 })
+        {
+            var state = new EditState();
+            Assert.Null(state.Validate(batch));
+            state.Apply(batch);
+            Assert.True(state.IsDeleted(House));
+            Assert.True(state.IsDeleted(Crate, "Ak_Fire"));
+            Assert.False(state.IsDeleted(Crate));
+
+            Assert.Null(state.Validate(batch.Inverse()));
+            state.Apply(batch.Inverse());
+            Assert.True(state.IsEmpty, state.Describe());
+        }
+    }
 }

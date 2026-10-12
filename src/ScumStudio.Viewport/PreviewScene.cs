@@ -1,7 +1,10 @@
+using System.Diagnostics;
+using System.Numerics;
 using ScumStudio.Assets.Textures;
 using ScumStudio.Core.Geometry;
 using ScumStudio.Core.Mathematics;
 using ScumStudio.Rendering;
+using ScumStudio.Rendering.Procedural;
 using ScumStudio.Rendering.Resources;
 using ScumStudio.Rendering.SceneGraph;
 
@@ -10,12 +13,24 @@ namespace ScumStudio.Viewport;
 /// <summary>A <see cref="PreviewModel"/> living on the GPU: its scene graph and GL-space bounds (render thread, GL context current).</summary>
 public sealed class PreviewScene : IDisposable
 {
+    /// <summary>The scale figure: a flat mid grey that reads on the studio backdrop and on the sunlit floor.</summary>
+    private static readonly Vector4 FigureTint = new(0.45f, 0.45f, 0.43f, 1f);
+
+    /// <summary>The floor under a sunlit preview: a neutral grey a little darker than the figure.</summary>
+    private static readonly Vector4 GroundTint = new(0.3f, 0.3f, 0.28f, 1f);
+
     private readonly SceneRenderer _renderer;
     private readonly List<MeshHandle> _handles = [];
     private readonly List<(SceneNode Node, MeshHandle Handle)> _parts = [];
     private readonly Dictionary<string, (TextureImage Image, GpuTexture Texture)> _textures = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Queue<(string Path, TextureImage Image)> _staged = new();
+    private MeshHandle? _figureMesh;
+    private MeshHandle? _groundMesh;
+    private SceneNode? _figure;
+    private SceneNode? _ground;
+    private bool _showScale;
 
-    private PreviewScene(SceneRenderer renderer, PreviewModel model)
+    private PreviewScene(SceneRenderer renderer, PreviewModel model, bool staged)
     {
         _renderer = renderer;
         Model = model;
@@ -24,7 +39,7 @@ public sealed class PreviewScene : IDisposable
         foreach (var part in model.Parts)
         {
             id++; // each part is pickable on its own (1-based, the order of Model.Parts)
-            var texture = TextureOf(part, model);
+            var texture = TextureOf(part, model, staged);
             if (!meshes.TryGetValue(part.Mesh, out var handle))
             {
                 var prepared = PreparedMesh.From(part.Mesh, MeshSpace.Unreal, 1f);
@@ -41,7 +56,7 @@ public sealed class PreviewScene : IDisposable
                 handle = renderer.AddMesh(prepared, texture, null, cutoffs);
                 meshes[part.Mesh] = handle;
                 var gpu = renderer.Meshes[handle.Id];
-                gpu.NormalMap = texture is null ? null : NormalOf(part, model);
+                gpu.NormalMap = texture is null ? null : NormalOf(part, model, staged);
                 gpu.Roughness = part.Roughness;
                 _handles.Add(handle);
             }
@@ -50,9 +65,12 @@ public sealed class PreviewScene : IDisposable
             var node = Scene.Add(handle, matrix, id, part.Name);
             Style(node, part);
             _parts.Add((node, handle));
-            Bounds = Bounds.Union(LevelSceneUploader.TransformBounds(handle.Bounds, matrix));
+            ModelBounds = ModelBounds.Union(LevelSceneUploader.TransformBounds(handle.Bounds, matrix));
         }
     }
+
+    /// <summary>The camera yaw the previews open with (<c>MeshPreview</c>, thumbnails): the scale figure faces it.</summary>
+    public const float DefaultViewYaw = -135f;
 
     /// <summary>The model this scene was built from (or last restyled to).</summary>
     public PreviewModel Model { get; private set; }
@@ -60,15 +78,175 @@ public sealed class PreviewScene : IDisposable
     /// <summary>The renderable scene graph.</summary>
     public Scene Scene { get; } = new();
 
-    /// <summary>GL-space bounds of every part.</summary>
-    public BoundingBox Bounds { get; private set; } = BoundingBox.Empty;
+    /// <summary>GL-space bounds of the model's parts.</summary>
+    public BoundingBox ModelBounds { get; private set; } = BoundingBox.Empty;
+
+    /// <summary>GL-space bounds of every part, and of the scale figure while it stands there (what the camera frames).</summary>
+    public BoundingBox Bounds => _figure is { } figure ? ModelBounds.Union(LevelSceneUploader.TransformBounds(figure.Mesh!.Bounds, figure.LocalTransform)) : ModelBounds;
+
+    /// <summary>
+    /// Stands <see cref="ScaleFigure"/> (a 1.8 m person) beside the model on its ground, facing <see cref="DefaultViewYaw"/>:
+    /// one node that is not a part (not pickable, not in <see cref="Model"/>) but counts in <see cref="Bounds"/>. A model
+    /// under <see cref="ScaleFigure.MinModelSize"/> gets none.
+    /// </summary>
+    public bool ShowScale
+    {
+        get => _showScale;
+        set
+        {
+            _showScale = value;
+            var size = ModelBounds.Size;
+            var wanted = value && !ModelBounds.IsEmpty && MathF.Max(size.X, MathF.Max(size.Y, size.Z)) >= ScaleFigure.MinModelSize;
+            if (wanted == _figure is not null)
+            {
+                return;
+            }
+
+            if (_figure is { } old)
+            {
+                Scene.Root.Remove(old);
+                _figure = null;
+                return;
+            }
+
+            _figureMesh ??= Extra(PreparedMesh.From(ScaleFigure.Mesh, MeshSpace.Unreal, 1f));
+            _figure = Scene.Add(_figureMesh, ScaleFigure.Placement(ModelBounds, DefaultViewYaw), 0, nameof(ScaleFigure));
+            _figure.Tint = FigureTint;
+        }
+    }
+
+    /// <summary>
+    /// A wide neutral floor just under the model (the sun's shadows need ground to fall on; beyond the camera's far plane it
+    /// meets the sky like a horizon). Not pickable and not in <see cref="Bounds"/>.
+    /// </summary>
+    public bool Ground
+    {
+        get => _ground is not null;
+        set
+        {
+            if (value == _ground is not null || ModelBounds.IsEmpty)
+            {
+                return;
+            }
+
+            if (_ground is { } old)
+            {
+                Scene.Root.Remove(old);
+                _ground = null;
+                return;
+            }
+
+            // A hair below the model's base so the preview's grid, drawn at the base, lies on the floor instead of in it.
+            var reach = MathF.Max(ModelBounds.Extent.Length(), 100f);
+            _groundMesh ??= Extra(PreparedMesh.From(PrimitiveMeshes.Plane(reach * 100f), MeshSpace.Gl, 1f));
+            var centre = ModelBounds.Center;
+            _ground = Scene.Add(_groundMesh, Matrix4x4.CreateTranslation(centre.X, ModelBounds.Min.Y - (reach * 0.002f), centre.Z), 0, nameof(Ground));
+            _ground.Tint = GroundTint;
+        }
+    }
+
+    /// <summary>Largest edge of the stand-in a staged texture draws with until <see cref="Stage"/> sends it whole.</summary>
+    public const int StandInSize = 256;
+
+    /// <summary>Textures still drawn with their stand-in (<see cref="UploadStaged"/>).</summary>
+    public int PendingTextures => _staged.Count;
 
     /// <summary>Uploads <paramref name="model"/> (textures once per path, a mesh once per part geometry) into <paramref name="renderer"/>.</summary>
     public static PreviewScene Upload(SceneRenderer renderer, PreviewModel model)
     {
         ArgumentNullException.ThrowIfNull(renderer);
         ArgumentNullException.ThrowIfNull(model);
-        return new PreviewScene(renderer, model);
+        return new PreviewScene(renderer, model, staged: false);
+    }
+
+    /// <summary>
+    /// Like <see cref="Upload(SceneRenderer, PreviewModel)"/>, but a texture larger than <see cref="StandInSize"/> goes up as
+    /// a stand-in (its own lower mips) and whole later, through <see cref="Stage"/> a few milliseconds a frame: a vehicle's
+    /// full-size textures are hundreds of MB (ten materials at 4096 px: 427 MB, 120 ms in one frame).
+    /// </summary>
+    public static PreviewScene UploadStaged(SceneRenderer renderer, PreviewModel model)
+    {
+        ArgumentNullException.ThrowIfNull(renderer);
+        ArgumentNullException.ThrowIfNull(model);
+        return new PreviewScene(renderer, model, staged: true);
+    }
+
+    /// <summary>
+    /// Sends staged textures whole until <paramref name="budgetMs"/> is spent (at least one a call), each one replacing its
+    /// stand-in wherever that is drawn. True once none is left; call it once a frame until then.
+    /// </summary>
+    public bool Stage(double budgetMs)
+    {
+        var clock = Stopwatch.StartNew();
+        while (_staged.Count > 0)
+        {
+            if (clock.Elapsed.TotalMilliseconds >= budgetMs)
+            {
+                return false;
+            }
+
+            var (path, image) = _staged.Dequeue();
+            if (!_textures.TryGetValue(path, out var shown) || !ReferenceEquals(shown.Image, image))
+            {
+                continue; // restyled to another image meanwhile
+            }
+
+            var whole = TextureUpload.Create(_renderer, image);
+            _textures[path] = (image, whole);
+            foreach (var (_, handle) in _parts)
+            {
+                var gpu = _renderer.Meshes[handle.Id];
+                if (ReferenceEquals(gpu.Texture, shown.Texture))
+                {
+                    _renderer.SetMeshTexture(handle, whole);
+                }
+
+                if (ReferenceEquals(gpu.NormalMap, shown.Texture))
+                {
+                    gpu.NormalMap = whole;
+                }
+            }
+
+            shown.Texture.Dispose();
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// <paramref name="image"/> at most <see cref="StandInSize"/> on its longest edge: its own lower mips when it is kept
+    /// compressed (null when the chain stops above that size), every n-th pixel when it is RGBA.
+    /// </summary>
+    internal static TextureImage? StandIn(TextureImage image)
+    {
+        ArgumentNullException.ThrowIfNull(image);
+        var skip = 0;
+        while (Math.Max(image.Width, image.Height) >> skip > StandInSize)
+        {
+            skip++;
+        }
+
+        var (w, h) = (Math.Max(1, image.Width >> skip), Math.Max(1, image.Height >> skip));
+        if (image.CompressedMips is { } mips)
+        {
+            return mips.Count > skip ? image with { Width = w, Height = h, MipIndex = image.MipIndex + skip, CompressedMips = mips.Skip(skip).ToArray() } : null;
+        }
+
+        if (image.Rgba.Length < image.Width * image.Height * 4)
+        {
+            return null;
+        }
+
+        var rgba = new byte[w * h * 4];
+        for (var y = 0; y < h; y++)
+        {
+            for (var x = 0; x < w; x++)
+            {
+                Buffer.BlockCopy(image.Rgba, (((y << skip) * image.Width) + (x << skip)) * 4, rgba, ((y * w) + x) * 4, 4);
+            }
+        }
+
+        return image with { Width = w, Height = h, Rgba = rgba };
     }
 
     /// <summary>
@@ -150,21 +328,32 @@ public sealed class PreviewScene : IDisposable
         _handles.Clear();
         _parts.Clear();
         _textures.Clear();
+        _staged.Clear();
+        _figure = _ground = null;
+        _figureMesh = _groundMesh = null;
+    }
+
+    /// <summary>Uploads a mesh of the scene's own (the scale figure, the floor): untextured, released with the scene.</summary>
+    private MeshHandle Extra(PreparedMesh mesh)
+    {
+        var handle = _renderer.AddMesh(mesh);
+        _handles.Add(handle);
+        return handle;
     }
 
     private static void Style(SceneNode node, PreviewPart part)
     {
-        node.Tint = part.Tint ?? System.Numerics.Vector4.One;
+        node.Tint = part.Tint ?? Vector4.One;
         node.Surface = part.Surface;
     }
 
     /// <summary>The part's texture, uploaded once per path and again when the model brings a new image for that path.</summary>
-    private GpuTexture? TextureOf(PreviewPart part, PreviewModel model) => Upload(part.TexturePath, model);
+    private GpuTexture? TextureOf(PreviewPart part, PreviewModel model, bool staged = false) => Upload(part.TexturePath, model, staged);
 
     /// <summary>The part's normal map (linear), uploaded like <see cref="TextureOf"/>.</summary>
-    private GpuTexture? NormalOf(PreviewPart part, PreviewModel model) => Upload(part.NormalPath, model);
+    private GpuTexture? NormalOf(PreviewPart part, PreviewModel model, bool staged = false) => Upload(part.NormalPath, model, staged);
 
-    private GpuTexture? Upload(string? path, PreviewModel model)
+    private GpuTexture? Upload(string? path, PreviewModel model, bool staged)
     {
         if (path is null || !model.Textures.TryGetValue(path, out var image))
         {
@@ -176,7 +365,17 @@ public sealed class PreviewScene : IDisposable
             return known.Texture;
         }
 
-        var texture = TextureUpload.Create(_renderer, image);
+        GpuTexture texture;
+        if (staged && Math.Max(image.Width, image.Height) > StandInSize && StandIn(image) is { } standIn)
+        {
+            texture = TextureUpload.Create(_renderer, standIn);
+            _staged.Enqueue((path, image));
+        }
+        else
+        {
+            texture = TextureUpload.Create(_renderer, image);
+        }
+
         _textures[path] = (image, texture);
         return texture;
     }

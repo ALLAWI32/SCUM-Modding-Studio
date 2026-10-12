@@ -1,0 +1,14 @@
+{
+  "name": "scum-modshare-worker",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Cloudflare Worker behind SCUM Modding Studio's Share your mod gallery",
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/worker.test.mjs",
+    "deploy": "npx wrangler@4 deploy"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

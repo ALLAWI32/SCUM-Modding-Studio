@@ -1,4 +1,6 @@
 using ScumStudio.Assets.Catalog;
+using ScumStudio.Assets.Meshes;
+using ScumStudio.Core.Geometry;
 using ScumStudio.Core.Mathematics;
 using ScumStudio.Level.Editing;
 using ScumStudio.Level.Export;
@@ -12,6 +14,8 @@ namespace ScumStudio.Mcp.Studio;
 public sealed partial class StudioTools
 {
     private static readonly string[] ActorKinds = Enum.GetNames<ActorKind>();
+    private readonly Dictionary<string, BoundingBox?> _meshBounds = new(StringComparer.OrdinalIgnoreCase);
+    private AssetCatalog? _meshBoundsCatalog;
 
     private IEnumerable<McpTool> MapTools()
     {
@@ -202,12 +206,16 @@ public sealed partial class StudioTools
         { Title = "Actor details", ReadOnly = true, Idempotent = true };
 
         yield return new McpTool("delete_actors",
-            "Deletes actors from a level (journaled, undoable). Deleting a building also removes the child actors it spawned when exported.",
+            "Deletes actors from a level (journaled, undoable). By default also deletes what belongs to them: stored child and " +
+            "attached actors, the mesh-less fire, light, smoke, sound and decal actors at their spot (in the app also in the other shown " +
+            "sublevels of the cell), as one undoable edit; the result lists what went, what was kept (and whose it is) and what " +
+            "stays on running servers. Deleting a building also removes the child actors it spawned when exported.",
             ToolSchema.Object()
                 .String("level", "Level name or package path.", required: true)
                 .Strings("actors", "Actor names to delete.", required: true)
+                .Boolean("companions", "Also delete what belongs to each actor (its fire, light, smoke, sound, decals, attached actors; default true). False deletes only the named actors.")
                 .Build(),
-            (call, ct) => Task.FromResult(ApplyPerActor(call, ct, (reference, _, _) => new DeleteActorOp(reference))))
+            DeleteActors)
         { Title = "Delete actors", Destructive = true, Idempotent = true };
 
         yield return new McpTool("restore_actors",
@@ -222,7 +230,8 @@ public sealed partial class StudioTools
         yield return new McpTool("delete_all_of_kind",
             "Deletes every actor of the same kind in one or more levels or a whole cell, as one undoable edit: by static mesh " +
             "(StaticMeshActors, mesh roots and — unless includeInstances is false — every foliage/rock instance drawing it) or by " +
-            "class (e.g. a Blueprint). Give the mesh/class path in 'value' or name an example actor in 'likeActor'.",
+            "class (e.g. a Blueprint). Give the mesh/class path in 'value' or name an example actor in 'likeActor'. By default the " +
+            "fire, light, smoke, sound and decal actors that belong to the deleted actors go in the same edit (see delete_actors).",
             ToolSchema.Object()
                 .Strings("levels", "Level names or paths.")
                 .String("cell", "Instead of levels: every sublevel of this cell (A_0 …).")
@@ -230,6 +239,7 @@ public sealed partial class StudioTools
                 .String("value", "Mesh object path (/Game/…/SM_X.SM_X) or class path (/Game/…/BP_X.BP_X_C or a short class name).")
                 .String("likeActor", "Name of an actor in the first level whose mesh/class to match (instead of value).")
                 .Boolean("includeInstances", "With by=mesh, also delete matching ISM/HISM instances (default true).")
+                .Boolean("companions", "Also delete what belongs to each deleted actor (default true; instances take none).")
                 .Build(),
             DeleteAllOfKind)
         { Title = "Delete all of a kind", Destructive = true };
@@ -388,8 +398,265 @@ public sealed partial class StudioTools
             return Task.FromResult(McpToolResult.Error($"Nothing deleted: {error}"));
         }
 
+        if (call.GetBool("companions", true))
+        {
+            var plan = PlanCompanions(documents, op.Actors.Select(a => new DeleteSeed(a)).ToList(), [op], project.State, op.Describe(), op.Actors.Count != 1,
+                CompanionMeshBounds, cancellationToken);
+            var deleted = $"{op.Actors.Count} actor(s), {op.Instances.Count} instance(s) in {documents.Count} level(s) searched";
+            return Task.FromResult(ApplyWithCompanions(project.State, plan, deleted, []));
+        }
+
         var entry = _host.Apply(op);
         return Task.FromResult(McpToolResult.Text($"#{entry.Seq} {op.Describe()} (searched {documents.Count} level(s))."));
+    }
+
+    /// <summary>
+    /// <c>delete_actors</c>: the named actors and, unless <c>companions</c> is false, what belongs to them (owner, 2026-10-12:
+    /// "When I delete it, EVERYTHING of it must be deleted"), as one edit so one undo brings it all back.
+    /// </summary>
+    private async Task<McpToolResult> DeleteActors(ToolCall call, CancellationToken cancellationToken)
+    {
+        if (!call.GetBool("companions", true))
+        {
+            return ApplyPerActor(call, cancellationToken, (reference, _, _) => new DeleteActorOp(reference));
+        }
+
+        var project = RequireProject();
+        var path = ResolveLevel(call.RequireString("level"));
+        var document = Level(path, cancellationToken);
+        var names = call.GetStrings("actors");
+        if (names.Count == 0)
+        {
+            throw new ToolArgumentException("Give at least one actor name in 'actors'.");
+        }
+
+        var ops = new List<EditOp>();
+        var deleted = new List<string>();
+        var skipped = new List<string>();
+        foreach (var name in names.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            var reference = new ActorRef(path, name);
+            if (document.FindActor(name) is null && !project.State.IsAdded(reference))
+            {
+                skipped.Add($"{name}: not an actor of {document.Name}");
+                continue;
+            }
+
+            var op = new DeleteActorOp(reference);
+            if (project.State.Validate(op) is { } error)
+            {
+                skipped.Add($"{name}: {error}");
+                continue;
+            }
+
+            ops.Add(op);
+            deleted.Add(name);
+        }
+
+        if (ops.Count == 0)
+        {
+            return McpToolResult.Error("Nothing changed.\nSkipped:\n" + string.Join('\n', skipped));
+        }
+
+        var levels = await CompanionLevelsAsync(document, cancellationToken).ConfigureAwait(false);
+        var title = deleted.Count == 1 ? $"Delete {deleted[0]}" : $"Delete {deleted.Count} actors";
+        var plan = PlanCompanions(levels, ops.Select(o => new DeleteSeed(((DeleteActorOp)o).Target)).ToList(), ops, project.State, title, deleted.Count > 1,
+            CompanionMeshBounds, cancellationToken);
+        return ApplyWithCompanions(project.State, plan, deleted, skipped);
+    }
+
+    /// <summary>
+    /// The levels searched for what belongs to actors of <paramref name="document"/>: it, plus the other levels of its cell the
+    /// app shows now (a fire's light can stand in the cell's other sublevel); the headless host shows none.
+    /// </summary>
+    private async Task<List<LevelDocument>> CompanionLevelsAsync(LevelDocument document, CancellationToken cancellationToken)
+    {
+        var levels = new List<LevelDocument> { document };
+        if (_host.Ui is not { } ui || _host.World?.Find(document.PackagePath) is not { Cell: { } cell } world)
+        {
+            return levels;
+        }
+
+        var shown = (await ui.GetStateAsync(cancellationToken).ConfigureAwait(false)).LoadedLevels;
+        foreach (var path in shown.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (!string.Equals(path, world.PackagePath, StringComparison.OrdinalIgnoreCase) && _host.World.Find(path) is { IsMap: true } other && other.Cell == cell)
+            {
+                levels.Add(Level(other.PackagePath, cancellationToken));
+            }
+        }
+
+        return levels;
+    }
+
+    /// <summary>The one edit for a delete and what belongs to it, and the lists the result shows.</summary>
+    internal sealed record CompanionPlan(EditOp Edit, List<object> Taken, List<object> Kept, List<string> Notes);
+
+    /// <summary>
+    /// <see cref="Companions.Find"/> over <paramref name="levels"/>, made one edit (one undo) by
+    /// <see cref="EditOpFactory.DeleteWithCompanions"/>, the app's rule: what is locked, or on with no kept object nearer,
+    /// goes; stored child actors leave with their parent in the export and are not journaled on their own. The rest, and
+    /// what must stay because something kept hangs on it, is listed as kept.
+    /// </summary>
+    internal static CompanionPlan PlanCompanions(IReadOnlyList<LevelDocument> levels, IReadOnlyList<DeleteSeed> seeds, IReadOnlyList<EditOp> seedOps,
+        EditState state, string title, bool many, Func<string, BoundingBox?>? meshBounds, CancellationToken cancellationToken)
+    {
+        var report = Companions.Find(levels, seeds, state, meshBounds, new CompanionOptions { VolumeBounds = VolumeBounds }, cancellationToken);
+        static bool Goes(Companion c) => c.Locked || (c.DefaultOn && c.BelongsTo is null);
+        static string Key(ActorRef actor, string? component) => $"{actor.Level}|{actor.Actor}|{component}";
+        var edit = EditOpFactory.DeleteWithCompanions(levels, seedOps, report.Companions.Where(Goes).ToList(), state, title);
+
+        // What the edit journals after the seed ops, and what is deleted once it is applied (before, or by the seed ops).
+        IReadOnlyList<EditOp> journal = edit is BatchOp all ? all.Ops : [edit];
+        var journaled = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var op in journal.Skip(seedOps.Count))
+        {
+            if (op is DeleteActorOp d)
+            {
+                journaled.Add(Key(d.Target, null));
+            }
+            else if (op is DeleteComponentsOp dc)
+            {
+                journaled.UnionWith(dc.Components.Select(c => Key(dc.Target, c)));
+            }
+        }
+
+        if (edit is BatchOp batch && journaled.Count > 0)
+        {
+            edit = batch with { Title = $"{title} and {journaled.Count} thing(s) that belong to {(many ? "them" : "it")}" };
+        }
+
+        var after = state.Clone();
+        if (after.Validate(edit) is null)
+        {
+            after.Apply(edit);
+        }
+
+        object Taken(Companion c) => new
+        {
+            name = c.Actor.Actor,
+            component = c.Component,
+            @class = c.ClassName,
+            rule = c.Rule.ToString(),
+            distanceM = Round(c.DistanceCm / 100f),
+            level = c.Actor.Level[(c.Actor.Level.LastIndexOf('/') + 1)..],
+        };
+        object Kept(Companion c, string? reason = null) => new
+        {
+            name = c.Actor.Actor,
+            component = c.Component,
+            @class = c.ClassName,
+            rule = c.Rule.ToString(),
+            belongsTo = c.BelongsTo?.Actor,
+            stays = reason ?? (c.HasOwnMesh ? "draws a mesh of its own; stays where it stands" : null),
+        };
+
+        var plan = new CompanionPlan(edit, [], [], []);
+        var childActors = false;
+        foreach (var c in report.Companions)
+        {
+            if (!Goes(c))
+            {
+                plan.Kept.Add(Kept(c));
+            }
+            else if (journaled.Contains(Key(c.Actor, c.Component)) || c is { Component: null, Locked: true, Rule: CompanionRule.ChildActor })
+            {
+                plan.Taken.Add(Taken(c));
+                childActors |= c.Rule == CompanionRule.ChildActor;
+            }
+            else if (!(c.Component is null ? after.IsDeleted(c.Actor) : after.IsDeleted(c.Actor, c.Component)))
+            {
+                plan.Kept.Add(Kept(c, "something that stays hangs on it, so it stays to hold that in place"));
+            }
+        }
+
+        foreach (var note in report.Notes)
+        {
+            var what = note.Component is null ? note.Actor.Actor : $"{note.Actor.Actor}.{note.Component}";
+            plan.Notes.Add(note.Kind switch
+            {
+                CompanionNoteKind.SpawnedItemsStay => $"{what} spawns items: those a running server already spawned stay (players have them, or the server saved them).",
+                CompanionNoteKind.ClassEffectStays => $"{what} is made by its actor's class, not stored in the level: it goes only with the whole actor.",
+                CompanionNoteKind.AttachedKept => $"{what} (a trade post, spawner, volume or level actor) hangs on what is deleted: kept where it stands, with what hangs on it.",
+                _ => $"{what} is a volume mostly outside what is deleted (shared with what stays): kept.",
+            });
+        }
+
+        if (childActors)
+        {
+            plan.Notes.Add("Child actors (rule ChildActor) are not journaled on their own: the export removes them with their parent, " +
+                           "and restoring the parent brings them back.");
+        }
+
+        plan.Notes.Add("What a running server saved stays there: items a spawner already spawned, fires and bases players built, vehicles. " +
+                       "The studio cannot delete those; they go when the game removes them or an admin wipes them.");
+        return plan;
+    }
+
+    /// <summary>Journals the plan's edit (one undo) and reports what went and what stayed.</summary>
+    private McpToolResult ApplyWithCompanions(EditState state, CompanionPlan plan, object deleted, IReadOnlyList<string> skipped)
+    {
+        var edit = plan.Edit;
+        if (state.Validate(edit) is { } error)
+        {
+            return McpToolResult.Error($"Nothing deleted: {error}");
+        }
+
+        var entry = _host.Apply(edit);
+        return McpToolResult.Json(new
+        {
+            edit = $"#{entry.Seq} {edit.Describe()}",
+            deleted,
+            companions = plan.Taken,
+            kept = plan.Kept,
+            notes = plan.Notes,
+            skipped = skipped.Count > 0 ? skipped : null,
+        });
+    }
+
+    /// <summary>Local bounds of a mesh from the open game files (cached per source), or null: the finder then uses a 2 m cube.</summary>
+    private BoundingBox? CompanionMeshBounds(string mesh)
+    {
+        var catalog = RequireCatalog();
+        if (!ReferenceEquals(catalog, _meshBoundsCatalog))
+        {
+            _meshBounds.Clear();
+            _meshBoundsCatalog = catalog;
+        }
+
+        if (!_meshBounds.TryGetValue(mesh, out var bounds))
+        {
+            try
+            {
+                bounds = MeshExtractor.Describe(catalog.LoadObject(mesh)).Bounds is { IsEmpty: false } b ? b : null;
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                bounds = null;
+            }
+
+            _meshBounds[mesh] = bounds;
+        }
+
+        return bounds;
+    }
+
+    /// <summary>World box of a volume from its root's shape or brush bounds (<see cref="ComponentRecord.LocalBounds"/>), or null.</summary>
+    private static BoundingBox? VolumeBounds(ActorRecord actor)
+    {
+        if (actor.Root is not { LocalBounds: { IsEmpty: false } local } root)
+        {
+            return null;
+        }
+
+        var box = BoundingBox.Empty;
+        for (var corner = 0; corner < 8; corner++)
+        {
+            var p = new FVector((corner & 1) == 0 ? local.Min.X : local.Max.X, (corner & 2) == 0 ? local.Min.Y : local.Max.Y, (corner & 4) == 0 ? local.Min.Z : local.Max.Z);
+            box = box.Include(root.WorldTransform.TransformPosition(p).ToVector3());
+        }
+
+        return box;
     }
 
     private Task<McpToolResult> MoveActor(ToolCall call, CancellationToken cancellationToken)

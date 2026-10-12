@@ -52,9 +52,10 @@ public sealed class StreamingUpdateRealTests
         level.SetSelection([moved]);
         var outpostIds = first.Placements.Where(p => p.DocumentIndex == 0).Select(p => p.SelectableId).ToHashSet();
 
-        // The camera flies on: the outpost goes, the exterior comes, the saloon stays (in its slot, so with its ids).
+        // The camera flies on: the outpost goes, the exterior comes, the saloon stays (in its slot, so with its ids). The
+        // exterior never takes the outpost's slot while the outpost is still on screen (F010).
         var second = Prepare([exterior, saloon], first);
-        Assert.Equal([0, 1], second.Slots);
+        Assert.Equal([2, 1], second.Slots);
         Stage(gpu, harness, second, level);
         level.Update(second);
         gpu.Trim(harness.Renderer);

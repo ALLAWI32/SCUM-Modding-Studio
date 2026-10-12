@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using CommunityToolkit.Mvvm.ComponentModel;
 using Microsoft.Extensions.Logging;
 using ScumStudio.App.ViewModels;
@@ -15,6 +16,13 @@ namespace ScumStudio.App.Services;
 /// </summary>
 public sealed partial class ProjectSession : ObservableObject, IDisposable
 {
+    /// <summary>Windows' "used by another process" (also what the project lock reports); another window has the project.</summary>
+    private const int SharingViolation = unchecked((int)0x80070020);
+
+    private const int LockViolation = unchecked((int)0x80070021);
+
+    private static readonly StringComparison PathComparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+
     private readonly AppServices _services;
     private readonly ILogger _logger;
 
@@ -90,12 +98,44 @@ public sealed partial class ProjectSession : ObservableObject, IDisposable
         return project;
     }
 
-    /// <summary>Opens the project in <paramref name="path"/> (the folder, a file in it, or a folder holding just one project).</summary>
+    /// <summary>
+    /// Opens the project in <paramref name="path"/> (the folder, a file in it, or a folder holding just one project). The
+    /// project already open is kept as it is.
+    /// </summary>
     /// <exception cref="FileNotFoundException">No project there (the message says what to pick).</exception>
-    public async Task<Project> OpenAsync(string path, CancellationToken cancellationToken = default)
+    /// <exception cref="IOException">Another window or program has the project open (<c>Project.Locked</c>); the open project stays.</exception>
+    public Task<Project> OpenAsync(string path, CancellationToken cancellationToken = default) => OpenAsync(path, TimeSpan.Zero, cancellationToken);
+
+    /// <summary>Opens the project in <paramref name="path"/>, waiting up to <paramref name="waitWhileLocked"/> while another process holds it.</summary>
+    public async Task<Project> OpenAsync(string path, TimeSpan waitWhileLocked, CancellationToken cancellationToken = default)
     {
         var directory = Project.Find(path) ?? throw new FileNotFoundException(Localization.Loc.F("Projects.NotAProject", path));
-        var project = await Project.OpenAsync(directory, cancellationToken: cancellationToken).ConfigureAwait(false);
+        if (Current is { } open && string.Equals(Path.TrimEndingDirectorySeparator(open.DirectoryPath), Path.TrimEndingDirectorySeparator(directory), PathComparison))
+        {
+            return open; // opening it again would clash with its own journal
+        }
+
+        var waited = Stopwatch.StartNew();
+        Project project;
+        while (true)
+        {
+            try
+            {
+                project = await Project.OpenAsync(directory, cancellationToken: cancellationToken).ConfigureAwait(false);
+                break;
+            }
+            catch (IOException ex) when (ex.HResult is SharingViolation or LockViolation)
+            {
+                if (waited.Elapsed >= waitWhileLocked)
+                {
+                    _logger.LogWarning("Project {Folder} is open in another window or program: {Message}", directory, ex.Message);
+                    throw new IOException(Localization.Loc.T("Project.Locked"), ex) { HResult = ex.HResult };
+                }
+
+                await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken).ConfigureAwait(false);
+            }
+        }
+
         foreach (var warning in project.Journal.Warnings)
         {
             _logger.LogWarning("Journal: {Warning}", warning);
@@ -321,7 +361,7 @@ public sealed partial class ProjectSession : ObservableObject, IDisposable
     {
         try
         {
-            await _services.Workspace.UseModsAsync(Mods, ProgressSink.Null).ConfigureAwait(false);
+            await _services.Workspace.UseModsAsync(Mods, Current is { } project ? Level.Export.OwnPaks.ProjectNames(project.Manifest.Name) : [], ProgressSink.Null).ConfigureAwait(false);
             _services.Dispatcher.Invoke(() => Changed?.Invoke(this, EventArgs.Empty));
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException or InvalidOperationException or DirectoryNotFoundException)

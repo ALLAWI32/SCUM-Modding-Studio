@@ -39,6 +39,8 @@ namespace ScumStudio.Level.Editing;
 [JsonDerivedType(typeof(ReplaceMeshOp), "replaceMesh")]
 [JsonDerivedType(typeof(SetLootOp), "setLoot")]
 [JsonDerivedType(typeof(SetClearGrassOp), "setClearGrass")]
+[JsonDerivedType(typeof(DeleteComponentsOp), "deleteComponents")]
+[JsonDerivedType(typeof(RestoreComponentsOp), "restoreComponents")]
 public abstract record EditOp
 {
     /// <summary>The operation that exactly undoes this one.</summary>
@@ -128,6 +130,58 @@ public sealed record RestoreActorOp(ActorRef Target) : EditOp
 
     /// <inheritdoc />
     public override ActorRef? GetPrimaryTarget() => Target;
+}
+
+/// <summary>
+/// Deletes stored components of an actor that stays (the fire, light and sound of a building's fireplace part; owner:
+/// "when I delete it, everything of it must be deleted"): the export turns each into an inert object, as it does a deleted
+/// actor's exports. Root, synthesized and native components cannot be deleted (see <see cref="EditOpFactory.DeleteComponents"/>).
+/// </summary>
+/// <param name="Target">The actor (stays).</param>
+/// <param name="Components">Component names.</param>
+public sealed record DeleteComponentsOp(ActorRef Target, IReadOnlyList<string> Components) : EditOp
+{
+    /// <inheritdoc />
+    public override EditOp Inverse() => new RestoreComponentsOp(Target, Components);
+
+    /// <inheritdoc />
+    public override string Describe() => string.Create(CultureInfo.InvariantCulture, $"Delete {Components.Count} part(s) of {Target}: {string.Join(", ", Components)}");
+
+    /// <inheritdoc />
+    public override IReadOnlyList<string> GetTouchedLevels() => [Target.Level];
+
+    /// <inheritdoc />
+    public override ActorRef? GetPrimaryTarget() => Target;
+
+    /// <inheritdoc />
+    public bool Equals(DeleteComponentsOp? other) => other is not null && Target == other.Target && Components.SequenceEqual(other.Components);
+
+    /// <inheritdoc />
+    public override int GetHashCode() => HashCode.Combine(Target, Components.Count);
+}
+
+/// <summary>Cancels a <see cref="DeleteComponentsOp"/> (the components are kept again).</summary>
+/// <param name="Target">The actor.</param>
+/// <param name="Components">Component names.</param>
+public sealed record RestoreComponentsOp(ActorRef Target, IReadOnlyList<string> Components) : EditOp
+{
+    /// <inheritdoc />
+    public override EditOp Inverse() => new DeleteComponentsOp(Target, Components);
+
+    /// <inheritdoc />
+    public override string Describe() => string.Create(CultureInfo.InvariantCulture, $"Restore {Components.Count} part(s) of {Target}: {string.Join(", ", Components)}");
+
+    /// <inheritdoc />
+    public override IReadOnlyList<string> GetTouchedLevels() => [Target.Level];
+
+    /// <inheritdoc />
+    public override ActorRef? GetPrimaryTarget() => Target;
+
+    /// <inheritdoc />
+    public bool Equals(RestoreComponentsOp? other) => other is not null && Target == other.Target && Components.SequenceEqual(other.Components);
+
+    /// <inheritdoc />
+    public override int GetHashCode() => HashCode.Combine(Target, Components.Count);
 }
 
 /// <summary>

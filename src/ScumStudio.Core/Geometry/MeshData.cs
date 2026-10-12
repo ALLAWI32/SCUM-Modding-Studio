@@ -6,7 +6,11 @@ namespace ScumStudio.Core.Geometry;
 /// <param name="MaterialName">Material (or material instance) object path or name; empty when unknown.</param>
 /// <param name="FirstIndex">First element in <see cref="MeshData.Indices"/>.</param>
 /// <param name="IndexCount">Number of indices (a multiple of 3; triangle list).</param>
-public sealed record MeshSection(string MaterialName, int FirstIndex, int IndexCount);
+public sealed record MeshSection(string MaterialName, int FirstIndex, int IndexCount)
+{
+    /// <summary>The mesh's material slot the section draws with (the index a component's <c>OverrideMaterials</c> replaces), or -1 when unknown.</summary>
+    public int SlotIndex { get; init; } = -1;
+}
 
 /// <summary>
 /// Renderer-neutral triangle mesh extracted from a cooked asset (one LOD).

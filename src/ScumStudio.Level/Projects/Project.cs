@@ -13,6 +13,10 @@ namespace ScumStudio.Level.Projects;
 /// state with inverse operations. The journal is written through on every change; <see cref="Save"/> writes the manifest
 /// and notes.
 /// </summary>
+/// <remarks>
+/// One writer per project: <see cref="Open"/> and <see cref="Create"/> hold <c>.lock</c> in the folder until disposed, and
+/// a second writer gets <see cref="ProjectLockedException"/>. <see cref="OpenReadOnly"/> reads without the lock.
+/// </remarks>
 public sealed class Project : IDisposable
 {
     /// <summary>Conventional extension of a project folder.</summary>
@@ -30,9 +34,10 @@ public sealed class Project : IDisposable
     private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
 
     private readonly TimeProvider _clock;
+    private readonly ProjectLock? _lock;
     private string _savedNotes;
 
-    private Project(string directory, ProjectManifest manifest, Journal journal, EditState state, string notes, TimeProvider clock)
+    private Project(string directory, ProjectManifest manifest, Journal journal, EditState state, string notes, TimeProvider clock, ProjectLock? projectLock)
     {
         DirectoryPath = directory;
         Manifest = manifest;
@@ -41,6 +46,7 @@ public sealed class Project : IDisposable
         Notes = notes;
         _savedNotes = notes;
         _clock = clock;
+        _lock = projectLock;
     }
 
     /// <summary>Full path of the project folder.</summary>
@@ -51,6 +57,9 @@ public sealed class Project : IDisposable
 
     /// <summary>The edit journal.</summary>
     public Journal Journal { get; }
+
+    /// <summary>True when opened with <see cref="OpenReadOnly"/>: edits and saves are refused.</summary>
+    public bool IsReadOnly => Journal.IsReadOnly;
 
     /// <summary>Net effect of the applied edits.</summary>
     public EditState State { get; }
@@ -96,58 +105,118 @@ public sealed class Project : IDisposable
     public IReadOnlyList<string> PendingAssetSet => State.ChangedAssets;
 
     /// <summary>
-    /// Creates a new project in <paramref name="directory"/> (created when missing; must not already hold a project).
+    /// Creates a new project in <paramref name="directory"/> (created when missing; must not already hold a project) and
+    /// locks it like <see cref="Open"/>.
     /// </summary>
     /// <exception cref="IOException">The folder already contains a <c>project.json</c>.</exception>
+    /// <exception cref="ProjectLockedException">The folder is locked by another window or process.</exception>
     public static Project Create(string directory, string name, string? gameBuild = null, IEnumerable<ProjectSource>? sources = null, TimeProvider? clock = null)
     {
-        var (full, manifest, notes, time) = PrepareCreate(directory, name, gameBuild, sources, clock);
-        AtomicFile.WriteAllBytes(Path.Combine(full, ManifestFileName), SerializeManifest(manifest));
-        File.WriteAllText(Path.Combine(full, NotesFileName), notes, Utf8NoBom);
-        var journal = Journal.Open(Path.Combine(full, JournalFileName), time);
-        return new Project(full, manifest, journal, new EditState(), notes, time);
+        var (full, manifest, notes, time, projectLock) = PrepareCreate(directory, name, gameBuild, sources, clock);
+        try
+        {
+            AtomicFile.WriteAllBytes(Path.Combine(full, ManifestFileName), SerializeManifest(manifest));
+            File.WriteAllText(Path.Combine(full, NotesFileName), notes, Utf8NoBom);
+            var journal = Journal.Open(Path.Combine(full, JournalFileName), time);
+            return new Project(full, manifest, journal, new EditState(), notes, time, projectLock);
+        }
+        catch
+        {
+            projectLock.Dispose();
+            throw;
+        }
     }
 
     /// <summary>Asynchronously creates a new project (see <see cref="Create"/>).</summary>
     /// <exception cref="IOException">The folder already contains a <c>project.json</c>.</exception>
+    /// <exception cref="ProjectLockedException">The folder is locked by another window or process.</exception>
     public static async Task<Project> CreateAsync(
         string directory, string name, string? gameBuild = null, IEnumerable<ProjectSource>? sources = null, TimeProvider? clock = null,
         CancellationToken cancellationToken = default)
     {
-        var (full, manifest, notes, time) = PrepareCreate(directory, name, gameBuild, sources, clock);
-        await AtomicFile.WriteAllBytesAsync(Path.Combine(full, ManifestFileName), SerializeManifest(manifest), cancellationToken: cancellationToken).ConfigureAwait(false);
-        await File.WriteAllTextAsync(Path.Combine(full, NotesFileName), notes, Utf8NoBom, cancellationToken).ConfigureAwait(false);
-        var journal = await Journal.OpenAsync(Path.Combine(full, JournalFileName), time, cancellationToken).ConfigureAwait(false);
-        return new Project(full, manifest, journal, new EditState(), notes, time);
+        var (full, manifest, notes, time, projectLock) = PrepareCreate(directory, name, gameBuild, sources, clock);
+        try
+        {
+            await AtomicFile.WriteAllBytesAsync(Path.Combine(full, ManifestFileName), SerializeManifest(manifest), cancellationToken: cancellationToken).ConfigureAwait(false);
+            await File.WriteAllTextAsync(Path.Combine(full, NotesFileName), notes, Utf8NoBom, cancellationToken).ConfigureAwait(false);
+            var journal = await Journal.OpenAsync(Path.Combine(full, JournalFileName), time, cancellationToken).ConfigureAwait(false);
+            return new Project(full, manifest, journal, new EditState(), notes, time, projectLock);
+        }
+        catch
+        {
+            projectLock.Dispose();
+            throw;
+        }
     }
 
-    /// <summary>Opens the project in <paramref name="path"/> (anything <see cref="Find"/> accepts).</summary>
+    /// <summary>
+    /// Opens the project in <paramref name="path"/> (anything <see cref="Find"/> accepts) for editing. The project stays
+    /// locked until it is disposed: another <see cref="Open"/> or <see cref="Create"/> of the folder, in this process or
+    /// another, throws <see cref="ProjectLockedException"/>; <see cref="OpenReadOnly"/> still reads it.
+    /// </summary>
     /// <exception cref="FileNotFoundException">No <c>project.json</c>.</exception>
     /// <exception cref="InvalidDataException">The manifest or journal is invalid, or the journal does not replay.</exception>
+    /// <exception cref="ProjectLockedException">The project is open in another window or process.</exception>
     public static Project Open(string path, TimeProvider? clock = null)
+    {
+        var directory = ResolveDirectory(path);
+        var projectLock = ProjectLock.Acquire(directory);
+        try
+        {
+            var manifest = DeserializeManifest(File.ReadAllBytes(Path.Combine(directory, ManifestFileName)), directory);
+            var notesPath = Path.Combine(directory, NotesFileName);
+            var notes = File.Exists(notesPath) ? File.ReadAllText(notesPath, Utf8NoBom) : string.Empty;
+            var time = clock ?? TimeProvider.System;
+            var journal = Journal.Open(Path.Combine(directory, JournalFileName), time);
+            return Finish(directory, manifest, journal, notes, time, projectLock);
+        }
+        catch
+        {
+            projectLock.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>Asynchronously opens a project for editing (see <see cref="Open"/>).</summary>
+    /// <exception cref="FileNotFoundException">No <c>project.json</c>.</exception>
+    /// <exception cref="InvalidDataException">The manifest or journal is invalid, or the journal does not replay.</exception>
+    /// <exception cref="ProjectLockedException">The project is open in another window or process.</exception>
+    public static async Task<Project> OpenAsync(string path, TimeProvider? clock = null, CancellationToken cancellationToken = default)
+    {
+        var directory = ResolveDirectory(path);
+        var projectLock = ProjectLock.Acquire(directory);
+        try
+        {
+            var bytes = await File.ReadAllBytesAsync(Path.Combine(directory, ManifestFileName), cancellationToken).ConfigureAwait(false);
+            var manifest = DeserializeManifest(bytes, directory);
+            var notesPath = Path.Combine(directory, NotesFileName);
+            var notes = File.Exists(notesPath) ? await File.ReadAllTextAsync(notesPath, Utf8NoBom, cancellationToken).ConfigureAwait(false) : string.Empty;
+            var time = clock ?? TimeProvider.System;
+            var journal = await Journal.OpenAsync(Path.Combine(directory, JournalFileName), time, cancellationToken).ConfigureAwait(false);
+            return Finish(directory, manifest, journal, notes, time, projectLock);
+        }
+        catch
+        {
+            projectLock.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Opens the project in <paramref name="path"/> for reading only, without the lock, so it works while the project is
+    /// open elsewhere (export). The journal is read as it is on disk (see <see cref="Journal.OpenReadOnly"/>);
+    /// <see cref="Apply"/>, <see cref="Undo"/>, <see cref="Redo"/> and <see cref="Save"/> throw.
+    /// </summary>
+    /// <exception cref="FileNotFoundException">No <c>project.json</c>.</exception>
+    /// <exception cref="InvalidDataException">The manifest or journal is invalid, or the journal does not replay.</exception>
+    public static Project OpenReadOnly(string path)
     {
         var directory = ResolveDirectory(path);
         var manifest = DeserializeManifest(File.ReadAllBytes(Path.Combine(directory, ManifestFileName)), directory);
         var notesPath = Path.Combine(directory, NotesFileName);
         var notes = File.Exists(notesPath) ? File.ReadAllText(notesPath, Utf8NoBom) : string.Empty;
-        var time = clock ?? TimeProvider.System;
-        var journal = Journal.Open(Path.Combine(directory, JournalFileName), time);
-        return Finish(directory, manifest, journal, notes, time);
-    }
-
-    /// <summary>Asynchronously opens a project (see <see cref="Open"/>).</summary>
-    /// <exception cref="FileNotFoundException">No <c>project.json</c>.</exception>
-    /// <exception cref="InvalidDataException">The manifest or journal is invalid, or the journal does not replay.</exception>
-    public static async Task<Project> OpenAsync(string path, TimeProvider? clock = null, CancellationToken cancellationToken = default)
-    {
-        var directory = ResolveDirectory(path);
-        var bytes = await File.ReadAllBytesAsync(Path.Combine(directory, ManifestFileName), cancellationToken).ConfigureAwait(false);
-        var manifest = DeserializeManifest(bytes, directory);
-        var notesPath = Path.Combine(directory, NotesFileName);
-        var notes = File.Exists(notesPath) ? await File.ReadAllTextAsync(notesPath, Utf8NoBom, cancellationToken).ConfigureAwait(false) : string.Empty;
-        var time = clock ?? TimeProvider.System;
-        var journal = await Journal.OpenAsync(Path.Combine(directory, JournalFileName), time, cancellationToken).ConfigureAwait(false);
-        return Finish(directory, manifest, journal, notes, time);
+        var journal = Journal.OpenReadOnly(Path.Combine(directory, JournalFileName));
+        return Finish(directory, manifest, journal, notes, TimeProvider.System, projectLock: null);
     }
 
     /// <summary>True when <paramref name="directory"/> contains a <c>project.json</c>.</summary>
@@ -189,8 +258,10 @@ public sealed class Project : IDisposable
     }
 
     /// <summary>Writes <c>project.json</c> (atomically, with a new modification time) and <c>notes.md</c> when changed.</summary>
+    /// <exception cref="InvalidOperationException">The project is read-only.</exception>
     public void Save()
     {
+        ThrowIfReadOnly();
         Manifest = Manifest with { Modified = _clock.GetUtcNow() };
         AtomicFile.WriteAllBytes(ManifestPath, SerializeManifest(Manifest));
         if (!string.Equals(Notes, _savedNotes, StringComparison.Ordinal))
@@ -201,8 +272,10 @@ public sealed class Project : IDisposable
     }
 
     /// <summary>Asynchronously saves (see <see cref="Save"/>).</summary>
+    /// <exception cref="InvalidOperationException">The project is read-only.</exception>
     public async Task SaveAsync(CancellationToken cancellationToken = default)
     {
+        ThrowIfReadOnly();
         Manifest = Manifest with { Modified = _clock.GetUtcNow() };
         await AtomicFile.WriteAllBytesAsync(ManifestPath, SerializeManifest(Manifest), cancellationToken: cancellationToken).ConfigureAwait(false);
         if (!string.Equals(Notes, _savedNotes, StringComparison.Ordinal))
@@ -213,10 +286,11 @@ public sealed class Project : IDisposable
     }
 
     /// <summary>Validates <paramref name="op"/> against <see cref="State"/>, journals it and applies it.</summary>
-    /// <exception cref="InvalidOperationException">The operation is not valid now (nothing is written).</exception>
+    /// <exception cref="InvalidOperationException">The operation is not valid now, or the project is read-only (nothing is written).</exception>
     public JournalEntry Apply(EditOp op)
     {
         ArgumentNullException.ThrowIfNull(op);
+        ThrowIfReadOnly();
         if (State.Validate(op) is { } error)
         {
             throw new InvalidOperationException($"Cannot apply '{op.Describe()}': {error}");
@@ -228,9 +302,10 @@ public sealed class Project : IDisposable
     }
 
     /// <summary>Undoes the last applied edit; returns it (null when there is nothing to undo).</summary>
-    /// <exception cref="InvalidOperationException">The in-memory state does not accept the inverse (nothing is written).</exception>
+    /// <exception cref="InvalidOperationException">The in-memory state does not accept the inverse, or the project is read-only (nothing is written).</exception>
     public JournalEntry? Undo()
     {
+        ThrowIfReadOnly();
         var applied = Journal.Applied;
         if (applied.Count == 0)
         {
@@ -249,9 +324,10 @@ public sealed class Project : IDisposable
     }
 
     /// <summary>Redoes the last undone edit; returns it (null when there is nothing to redo).</summary>
-    /// <exception cref="InvalidOperationException">The in-memory state does not accept the edit (nothing is written).</exception>
+    /// <exception cref="InvalidOperationException">The in-memory state does not accept the edit, or the project is read-only (nothing is written).</exception>
     public JournalEntry? Redo()
     {
+        ThrowIfReadOnly();
         var redo = Journal.RedoStack;
         if (redo.Count == 0)
         {
@@ -270,24 +346,37 @@ public sealed class Project : IDisposable
     }
 
     /// <inheritdoc />
-    public void Dispose() => Journal.Dispose();
+    public void Dispose()
+    {
+        Journal.Dispose();
+        _lock?.Dispose();
+    }
 
     /// <summary>Serialises a manifest as indented UTF-8 JSON.</summary>
     public static byte[] SerializeManifest(ProjectManifest manifest) =>
         Utf8NoBom.GetBytes(JsonSerializer.Serialize(manifest, LevelJson.Indented) + "\n");
 
-    private static (string Directory, ProjectManifest Manifest, string Notes, TimeProvider Clock) PrepareCreate(
+    private static (string Directory, ProjectManifest Manifest, string Notes, TimeProvider Clock, ProjectLock Lock) PrepareCreate(
         string directory, string name, string? gameBuild, IEnumerable<ProjectSource>? sources, TimeProvider? clock)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(directory);
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         var full = Path.GetFullPath(directory);
-        if (File.Exists(Path.Combine(full, ManifestFileName)))
+        var manifestPath = Path.Combine(full, ManifestFileName);
+        if (File.Exists(manifestPath))
         {
             throw new IOException($"{full} already contains a project.");
         }
 
         Directory.CreateDirectory(full);
+        var projectLock = ProjectLock.Acquire(full);
+        if (File.Exists(manifestPath))
+        {
+            // Created by another process between the check and the lock.
+            projectLock.Dispose();
+            throw new IOException($"{full} already contains a project.");
+        }
+
         var time = clock ?? TimeProvider.System;
         var now = time.GetUtcNow();
         var manifest = new ProjectManifest
@@ -299,10 +388,10 @@ public sealed class Project : IDisposable
             Sources = sources?.ToList() ?? [],
         };
         var notes = $"# {manifest.Name}\n\nNotes for this ScumStudio project.\n";
-        return (full, manifest, notes, time);
+        return (full, manifest, notes, time, projectLock);
     }
 
-    private static Project Finish(string directory, ProjectManifest manifest, Journal journal, string notes, TimeProvider clock)
+    private static Project Finish(string directory, ProjectManifest manifest, Journal journal, string notes, TimeProvider clock, ProjectLock? projectLock)
     {
         try
         {
@@ -341,12 +430,21 @@ public sealed class Project : IDisposable
                 problems.Add($"{label}: {skipped} of {batch.Ops.Count} edits do not replay ({error})");
             }
 
-            return new Project(directory, manifest, journal, state, notes, clock) { ReplayProblems = problems };
+            return new Project(directory, manifest, journal, state, notes, clock, projectLock) { ReplayProblems = problems };
         }
         catch
         {
             journal.Dispose();
+            projectLock?.Dispose();
             throw;
+        }
+    }
+
+    private void ThrowIfReadOnly()
+    {
+        if (IsReadOnly)
+        {
+            throw new InvalidOperationException($"The project in {DirectoryPath} is open read-only.");
         }
     }
 

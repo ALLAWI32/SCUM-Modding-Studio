@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using ScumStudio.Assets.Catalog;
+using ScumStudio.Formats;
 using ScumStudio.Modding.Catalog;
 
 namespace ScumStudio.Modding.Cloning;
@@ -45,8 +46,11 @@ public static partial class CloneFamilyPlanner
     /// <summary>Folder of the manual spawn presets.</summary>
     public const string ManualSpawnPresets = ModdableAssets.ConZ + "Vehicles/SpawningPresets/ManualSpawn";
 
-    /// <summary>True when <paramref name="name"/> is a valid new asset name (letters, digits, '_' and '-', starts with a letter).</summary>
-    public static bool IsValidName(string? name) => name is not null && ValidName().IsMatch(name);
+    /// <summary>
+    /// True when <paramref name="name"/> is a valid new asset name: letters, digits, '_' and '-', starts with a letter, and
+    /// does not end in <c>_&lt;number&gt;</c>, which the engine reads as an FName number (<c>Rager_2</c> is "Rager" number 3).
+    /// </summary>
+    public static bool IsValidName(string? name) => name is not null && ValidName().IsMatch(name) && FNameRef.Split(name).Number == 0;
 
     /// <summary>
     /// Plans an item clone (weapon, magazine, ammunition, projectile): the item and its <c>_ES</c>, and with
@@ -59,7 +63,7 @@ public static partial class CloneFamilyPlanner
         var template = PackageMap.Normalize(itemPackage);
         if (!IsValidName(newName))
         {
-            throw new ArgumentException($"'{newName}' is not a valid asset name (letters, digits, '_' or '-', starting with a letter).", nameof(newName));
+            throw new ArgumentException($"'{newName}' is not a valid asset name (letters, digits, '_' or '-', starting with a letter, not ending in _<number>: Rager2 or Rager_v2, not Rager_2).", nameof(newName));
         }
 
         var folder = PackageMap.Folder(template);
@@ -102,7 +106,7 @@ public static partial class CloneFamilyPlanner
 
         if (!IsValidName(newToken))
         {
-            throw new ArgumentException($"'{newToken}' is not a valid vehicle name (letters, digits, '_' or '-', starting with a letter).", nameof(newToken));
+            throw new ArgumentException($"'{newToken}' is not a valid vehicle name (letters, digits, '_' or '-', starting with a letter, not ending in _<number>: Rager2 or Rager_v2, not Rager_2).", nameof(newToken));
         }
 
         var token = ModdableAssets.VehicleToken(leaf);
@@ -258,23 +262,29 @@ public static partial class CloneFamilyPlanner
 
     /// <summary>
     /// New leaf for a family member: the token replaced (case-insensitive), or its squashed form (no underscores, as in
-    /// <c>KingletMarinerManualSpawnPreset</c>), else the new token prefixed.
+    /// <c>KingletMarinerManualSpawnPreset</c>), else the new token prefixed. A leaf that would end in <c>_&lt;number&gt;</c>
+    /// (a paint mesh <c>SK_Winchester_1897</c>) ends in <c>_v&lt;number&gt;</c> instead, so it never splits into an FName number.
     /// </summary>
     public static string RenameLeaf(string leaf, string token, string newToken)
     {
+        string renamed;
+        var squashed = token.Replace("_", string.Empty, StringComparison.Ordinal);
         if (leaf.Contains(token, StringComparison.OrdinalIgnoreCase))
         {
-            return Regex.Replace(leaf, Regex.Escape(token), newToken.Replace("$", "$$", StringComparison.Ordinal), RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            renamed = Regex.Replace(leaf, Regex.Escape(token), newToken.Replace("$", "$$", StringComparison.Ordinal), RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         }
-
-        var squashed = token.Replace("_", string.Empty, StringComparison.Ordinal);
-        if (squashed.Length > 0 && leaf.Contains(squashed, StringComparison.OrdinalIgnoreCase))
+        else if (squashed.Length > 0 && leaf.Contains(squashed, StringComparison.OrdinalIgnoreCase))
         {
             var newSquashed = newToken.Replace("_", string.Empty, StringComparison.Ordinal).Replace("$", "$$", StringComparison.Ordinal);
-            return Regex.Replace(leaf, Regex.Escape(squashed), newSquashed, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            renamed = Regex.Replace(leaf, Regex.Escape(squashed), newSquashed, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        }
+        else
+        {
+            renamed = newToken + "_" + leaf;
         }
 
-        return newToken + "_" + leaf;
+        var (text, number) = FNameRef.Split(renamed);
+        return number == 0 ? renamed : $"{text}_v{(number - 1).ToString(System.Globalization.CultureInfo.InvariantCulture)}";
     }
 
     private static bool CarriesToken(string leaf, string token) =>
@@ -292,7 +302,7 @@ public static partial class CloneFamilyPlanner
 
             if (catalog.PackageExists(newPath))
             {
-                throw new ArgumentException($"{newPath} already exists in the game files; choose another name.");
+                throw new ArgumentException($"{newPath} already exists in the game files; choose another name. ({catalog.ContainerOf(newPath)})");
             }
         }
 

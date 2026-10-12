@@ -166,18 +166,11 @@ public static partial class SpawnMarkers
     /// <summary>True for an actor that is only a loot spawner (its loot points pick and move as the actor).</summary>
     public static bool IsLootSpawner(ActorRecord actor) => actor.ClassName is "ItemSpawnerGroup" or "WorldItemSpawner";
 
-    // Actors that stand for the level itself, not for a thing in it: never a pin.
-    private static readonly HashSet<string> StructuralClasses = new(StringComparer.Ordinal)
-    {
-        "WorldSettings", "ConZWorldSettings", "LevelBounds", "LevelScriptActor", "InstancedFoliageActor", "Brush", "DefaultPhysicsVolume",
-        "NavMeshBoundsVolume", "RecastNavMesh", "DistantLevelManager", "WorldComposition", "SphereReflectionCapture", "BoxReflectionCapture",
-        "PlanarReflection", "LightmassImportanceVolume", "PrecomputedVisibilityVolume", "CullDistanceVolume", "WorldPartitionMiniMap",
-    };
-
     /// <summary>
     /// True for an actor the map had nothing to draw for: no mesh of its own, no instances, no spawn or trader pin. A fire,
     /// a lamp, an NPC (Hektor, Discord: "if you delete a camp, fire animations remain behind, the tool doesn't show them; the
-    /// traders stay put"). <paramref name="effect"/>: it is a light, particle, sound or fog, not something else.
+    /// traders stay put"). <paramref name="effect"/>: it is a light, particle, sound (Wwise too) or fog, not something else
+    /// (<see cref="ActorRoles"/>). Actors that stand for the level itself are never a pin.
     /// </summary>
     public static bool IsPinOnly(ActorRecord actor, out bool effect)
     {
@@ -185,21 +178,15 @@ public static partial class SpawnMarkers
         effect = false;
         if (actor.RootComponent is null || actor.InstanceTransforms.Count > 0 || actor.TraderMarkers.Count > 0 || IsLootSpawner(actor) || KindOf(actor) is not null
             || actor.Kind is ActorKind.StaticMeshActor or ActorKind.Volume || actor.ClassName.StartsWith("Landscape", StringComparison.Ordinal)
-            || StructuralClasses.Contains(actor.ClassName) || actor.Components.Any(c => c.StaticMeshPath is not null && c.IsVisible && !c.IsInstanced)
+            || ActorRoles.IsStructural(actor.ClassName) || actor.Components.Any(c => c.StaticMeshPath is not null && c.IsVisible && !c.IsInstanced)
             || actor.Components.Any(c => c.SpawnMarkers.Count > 0))
         {
             return false;
         }
 
-        effect = actor.Kind == ActorKind.Light || actor.Components.Any(c => IsEffectClass(c.ClassName)) || IsEffectClass(actor.ClassName);
+        effect = actor.Kind == ActorKind.Light || actor.Components.Any(c => ActorRoles.IsEffectClass(c.ClassName)) || ActorRoles.IsEffectClass(actor.ClassName);
         return true;
     }
-
-    private static bool IsEffectClass(string className) =>
-        className.Contains("Light", StringComparison.Ordinal) || className.Contains("Particle", StringComparison.Ordinal)
-        || className.Contains("Niagara", StringComparison.Ordinal) || className.Contains("Audio", StringComparison.Ordinal)
-        || className.Contains("Fog", StringComparison.Ordinal) || className.Contains("Emitter", StringComparison.Ordinal)
-        || className.Contains("Fire", StringComparison.Ordinal) || className.Contains("Smoke", StringComparison.Ordinal);
 
     /// <summary>
     /// True for a spawn component a building stores that picks and moves on its own, as a part: a world item spawner of one

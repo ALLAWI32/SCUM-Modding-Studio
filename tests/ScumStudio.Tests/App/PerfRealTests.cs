@@ -99,6 +99,11 @@ public sealed class PerfRealTests
         }
 
         clock.Restart();
+        if (map.NeedsLoadChoice)
+        {
+            _ = map.OpenWholeIslandAsync(); // the Map asks how to load (load mode): the island is what this times
+        }
+
         while (map.WorldBackdrop is null && clock.Elapsed < TimeSpan.FromMinutes(5))
         {
             await Task.Delay(20);

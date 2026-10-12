@@ -38,7 +38,8 @@ internal sealed partial class ProjectCommands
             var parse = ctx.ParseResult;
             ctx.ExitCode = await LevelCliSupport.GuardedAsync(logger, async () =>
             {
-                using var project = Project.Open(parse.GetValueForArgument(dir));
+                // Export only reads the project: it works while the app has the project open.
+                using var project = Project.OpenReadOnly(parse.GetValueForArgument(dir));
                 var craftables = parse.GetValueForOption(noCraftables) ? new CraftablesFile() : CraftablesFile.Load(project.DirectoryPath);
                 if (project.State.IsEmpty && craftables.Items.Count == 0)
                 {
@@ -75,7 +76,14 @@ internal sealed partial class ProjectCommands
                         continue;
                     }
 
-                    using var catalog = LevelCliSupport.OpenCatalog(path, aesText, logger);
+                    var skipped = new List<string>();
+                    using var catalog = LevelCliSupport.OpenCatalog(path, aesText, logger,
+                        OwnPaks.Filter(OwnPaks.ProjectNames(project.Manifest.Name, options.ModName), skipped));
+                    if (skipped.Count > 0)
+                    {
+                        logger.LogWarning("Not read as game files (your own exported mod paks): {Paks}.", string.Join(", ", skipped));
+                    }
+
                     meshes ??= new BendSupport(catalog);
                     var result = project.State.IsEmpty ? null
                         : await exporter.ExportAsync(project, catalog, options with { BendMeshes = meshes.Describe }, role, null, ctx.GetCancellationToken()).ConfigureAwait(false);

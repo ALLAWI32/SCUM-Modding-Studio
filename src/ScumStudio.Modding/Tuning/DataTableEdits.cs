@@ -51,15 +51,17 @@ public static class DataTableEdits
         var wide = package.NameEntries.Select(n => n.IsWide).ToList();
         FNameRef Name(string name)
         {
-            var index = names.IndexOf(name);
+            // As the cooker stores it: a row "Knife_2" is the name "Knife" with number 3 (FNameRef.Split).
+            var (text, number) = FNameRef.Split(name);
+            var index = names.IndexOf(text);
             if (index < 0)
             {
                 index = names.Count;
-                names.Add(name);
-                wide.Add(!name.All(char.IsAscii));
+                names.Add(text);
+                wide.Add(!text.All(char.IsAscii));
             }
 
-            return new FNameRef(index, 0);
+            return new FNameRef(index, number);
         }
 
         var payloads = Enumerable.Range(0, package.Exports.Count).Select(i => package.GetExportData(i).ToArray()).ToArray();

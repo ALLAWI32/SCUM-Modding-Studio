@@ -1,3 +1,4 @@
+using ScumStudio.Core.Geometry;
 using ScumStudio.Core.Mathematics;
 
 namespace ScumStudio.Level.Model;
@@ -72,6 +73,19 @@ public sealed record ComponentRecord(
 
     /// <summary>Box components (a car shop's vehicle box): the half size in component space, before the component's scale; null for other components.</summary>
     public FVector? BoxExtent { get; init; }
+
+    /// <summary>
+    /// What an effect, sound or decal component plays or shows (a particle system's template, a Niagara system, a Wwise
+    /// event, a sound, a decal material), stored or from a template; null for other components. A fire's flames and its
+    /// crackle are found by it when the fireplace is deleted.
+    /// </summary>
+    public string? AssetPath { get; init; }
+
+    /// <summary>
+    /// Shape and brush components (trigger boxes, spheres, capsules, a volume's brush): the box around the shape in
+    /// component space, before the component's scale; null for other components or an unreadable brush.
+    /// </summary>
+    public BoundingBox? LocalBounds { get; init; }
 
     /// <summary>Full class path (e.g. <c>/Script/Engine.StaticMeshComponent</c>).</summary>
     public string ClassPath { get; init; } = string.Empty;
@@ -244,6 +258,12 @@ public sealed record ActorRecord(
     /// and copied whole, never as a plain mesh of a part.
     /// </summary>
     public bool IsItemContainer { get; init; }
+
+    /// <summary>
+    /// True for a volume players swim in (<c>bWaterVolume</c> on the actor or its archetype): it goes with the lake or pool
+    /// it fills.
+    /// </summary>
+    public bool WaterVolume { get; init; }
 
     /// <summary>Number of synthesized components (see <see cref="ComponentRecord.IsSynthesized"/>).</summary>
     public int SynthesizedComponentCount => Components.Count(c => c.IsSynthesized);

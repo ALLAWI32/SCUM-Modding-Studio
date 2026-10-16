@@ -27,6 +27,10 @@ public sealed class GpuMeshCacheLifetimeTests
     // One BC1 block: both end colours pure red (RGB565 0xF800), every texel index 0.
     private static readonly byte[] RedBlock = [0x00, 0xF8, 0x00, 0xF8, 0, 0, 0, 0];
 
+    // Pure green (0x07E0), and the purple-blue of a normal map (128, 128, 255: 0x841F).
+    private static readonly byte[] GreenBlock = [0xE0, 0x07, 0xE0, 0x07, 0, 0, 0, 0];
+    private static readonly byte[] PurpleBlock = [0x1F, 0x84, 0x1F, 0x84, 0, 0, 0, 0];
+
     private readonly ITestOutputHelper _output;
 
     public GpuMeshCacheLifetimeTests(ITestOutputHelper output) => _output = output;
@@ -155,6 +159,125 @@ public sealed class GpuMeshCacheLifetimeTests
         }
 
         shown.Dispose();
+    }
+
+    [GlFact]
+    public void AMeshStagedForASceneNeverShownKeepsItsTexturesAlive()
+    {
+        using var gl = GlHarness.Create(32, 32);
+        gl.UseUnlit();
+        var cache = new GpuMeshCache();
+        var red = new Dictionary<string, TextureImage> { ["/Game/T"] = Bc1(16, Bc1Mips(16)) };
+        var level = Show(gl, cache, null, Scene(red, new PreparedMeshAsset("/Game/M1", Quad("M1"), "/Game/T")));
+        level = Show(gl, cache, level, Scene(new Dictionary<string, TextureImage> { ["/Game/U"] = Bc1(8, Bc1Mips(8)) }, new PreparedMeshAsset("/Game/MU", Quad("MU"), "/Game/U")));
+
+        // The camera turns back: a scene with a new mesh M2 drawing the cached T is staged to the end, then passed over for
+        // the next one (the viewport stages only the newest scene), which draws neither. M2 stays cached (staged in this
+        // upload), T was last used two uploads ago.
+        var passed = Scene(red, new PreparedMeshAsset("/Game/M2", Quad("M2"), "/Game/T"));
+        for (var i = 0; !cache.Stage(gl.Renderer, passed, 1000.0); i++)
+        {
+            Assert.True(i < 100_000, "staging never finished");
+            Thread.Yield();
+        }
+
+        level = Show(gl, cache, level, Scene(new Dictionary<string, TextureImage> { ["/Game/V"] = Bc1(8, Bc1Mips(8)) }, new PreparedMeshAsset("/Game/MV", Quad("MV"), "/Game/V")));
+
+        // The camera comes back to M2: the cache hands out M2 as it was staged.
+        level = Show(gl, cache, level, passed);
+        Assert.Equal(1, level.AddClone(CopyId, 0, FTransform.Identity, "M2", placements: [Placement("/Game/M2")]));
+        var drawn = Record.Exception(() => gl.Renderer.Render(gl.Target, level.Scene, TopView()));
+        _output.WriteLine($"M2 staged for a scene passed over, shown two uploads later: {drawn?.GetType().Name ?? "drawn"} {drawn?.Message}");
+        Assert.Null(drawn); // threw "Cannot access a disposed object" (GpuTexture): T was freed while the staged M2 still drew with it
+        AssertRed(gl);
+        level.Dispose();
+    }
+
+    [GlFact]
+    public void EveryDrawShowsItsOwnMaterialsTexturesAfterEvictionAndReupload()
+    {
+        // D06 suspects on the GPU side: a texture unit left bound by the previous draw (a normal map, another mesh's colour),
+        // a freed texture name handed to a new texture, a re-upload landing in the wrong object. Three meshes drawn in one
+        // frame (mesh id order): a red texture with a purple "normal map", a green texture without one, an untextured blue
+        // material; then all of them evicted, the camera elsewhere, and uploaded again with the textures in another order.
+        using var gl = GlHarness.Create(64, 64);
+        gl.UseUnlit();
+        var cache = new GpuMeshCache();
+        var textures = new Dictionary<string, TextureImage>
+        {
+            ["/Game/T_Red"] = Bc1(16, Bc1Mips(16)),
+            ["/Game/T_Normal"] = Bc1(16, Bc1Mips(16, PurpleBlock)),
+            ["/Game/T_Green"] = Bc1(16, Bc1Mips(16, GreenBlock)),
+        };
+        var meshes = new[]
+        {
+            new PreparedMeshAsset("/Game/M_Red", Quad("M_Red", "MI_Red"), null)
+            {
+                MaterialTextures = new Dictionary<string, string> { ["MI_Red"] = "/Game/T_Red", ["MI_Red" + GpuMesh.NormalMapSuffix] = "/Game/T_Normal" },
+            },
+            new PreparedMeshAsset("/Game/M_Green", Quad("M_Green", "MI_Green"), null) { MaterialTextures = new Dictionary<string, string> { ["MI_Green"] = "/Game/T_Green" } },
+            new PreparedMeshAsset("/Game/M_Blue", Quad("M_Blue", "MI_Blue"), null) { MaterialTints = new Dictionary<string, Vector4> { ["MI_Blue"] = new(0f, 0f, 1f, 1f) } },
+        };
+
+        var level = Show(gl, cache, null, Scene(textures, meshes));
+        var first = Drawn(level);
+        var names = Names();
+        for (var i = 0; i < meshes.Length; i++)
+        {
+            level.RemoveClone(CopyId + 1 + (uint)i);
+        }
+
+        level = FlyOn(gl, cache, level, "U"); // every mesh and texture above freed (their GL names free for reuse)
+        var freed = !gl.Renderer.Meshes.Values.Any(m => m.Name.StartsWith("M_", StringComparison.Ordinal));
+        level = Show(gl, cache, level, Scene(textures.Reverse().ToDictionary(t => t.Key, t => t.Value), meshes.Reverse().ToArray()));
+        var again = Drawn(level);
+        _output.WriteLine($"first upload: {first} (texture names {names}); all freed {freed}; uploaded again: {again} (texture names {Names()})");
+
+        Assert.True(freed);
+        Assert.Equal("red True, green True, blue True, other 0", first);
+        Assert.Equal(first, again);
+        level.Dispose();
+
+        // The GL names each mesh's colour and normal map have (a name freed by the eviction may come back for another texture).
+        string Names() => string.Join(", ", gl.Renderer.Meshes.Values.Where(m => m.Name.StartsWith("M_", StringComparison.Ordinal)).OrderBy(m => m.Name, StringComparer.Ordinal)
+            .Select(m => $"{m.Name} {m.Lods[0].Sections[0].Texture?.Handle}/{m.Lods[0].Sections[0].NormalMap?.Handle}"));
+
+        string Drawn(LevelScene scene)
+        {
+            for (var i = 0; i < meshes.Length; i++)
+            {
+                Assert.Equal(1, scene.AddClone(CopyId + 1 + (uint)i, 0, new FTransform(new FVector((i - 1) * 2500f, 0f, 0f)), meshes[i].MeshPath, placements: [Placement(meshes[i].MeshPath)]));
+            }
+
+            var camera = new FlyCamera();
+            camera.SetClipRange(10f, 100_000f);
+            camera.Orbit(Vector3.Zero, 0f, -89f, 15000f);
+            gl.Renderer.Render(gl.Target, scene.Scene, camera);
+            var rgba = gl.Target.ReadColorRgba();
+            var (r, g, b, other) = (0, 0, 0, 0);
+            for (var p = 0; p < rgba.Length; p += 4)
+            {
+                var (pr, pg, pb) = (rgba[p], rgba[p + 1], rgba[p + 2]);
+                if (pr > 240 && pg < 16 && pb < 16)
+                {
+                    r++;
+                }
+                else if (pg > 240 && pr < 16 && pb < 16)
+                {
+                    g++;
+                }
+                else if (pb > 240 && pr < 16 && pg < 16)
+                {
+                    b++;
+                }
+                else if (pr + pg + pb > 0)
+                {
+                    other++; // a normal map, a mix of two textures: anything but the three colours and the clear colour
+                }
+            }
+
+            return $"red {r > 0}, green {g > 0}, blue {b > 0}, other {other}";
+        }
     }
 
     [GlFact]
@@ -318,9 +441,9 @@ public sealed class GpuMeshCacheLifetimeTests
     }
 
     /// <summary>A 20 m two-sided square at the origin (UE space, Z up).</summary>
-    private static MeshData Quad(string name) =>
+    private static MeshData Quad(string name, string? material = null) =>
         MeshData.Create(name, [-1000, -1000, 0, 1000, -1000, 0, -1000, 1000, 0, 1000, 1000, 0], [0u, 1u, 2u, 2u, 1u, 3u, 2u, 1u, 0u, 3u, 1u, 2u],
-            [0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1], [0, 0, 1, 0, 0, 1, 1, 1]);
+            [0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1], [0, 0, 1, 0, 0, 1, 1, 1], material is null ? null : [new MeshSection(material, 0, 12)]);
 
     private static ScenePlacement Placement(string meshPath)
     {
@@ -343,13 +466,13 @@ public sealed class GpuMeshCacheLifetimeTests
         Assert.True(pixel[0] > 240 && pixel[1] < 10 && pixel[2] < 10, $"{pixel[0]},{pixel[1]},{pixel[2]}");
     }
 
-    private static List<byte[]> Bc1Mips(int size)
+    private static List<byte[]> Bc1Mips(int size, byte[]? block = null)
     {
         var mips = new List<byte[]>();
         for (var s = size; s >= 1; s /= 2)
         {
             var blocks = Math.Max(1, s / 4) * Math.Max(1, s / 4);
-            mips.Add(Enumerable.Range(0, blocks).SelectMany(_ => RedBlock).ToArray());
+            mips.Add(Enumerable.Range(0, blocks).SelectMany(_ => block ?? RedBlock).ToArray());
         }
 
         return mips;

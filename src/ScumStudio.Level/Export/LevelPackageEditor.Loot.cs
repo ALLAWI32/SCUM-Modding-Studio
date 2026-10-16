@@ -86,6 +86,10 @@ public static partial class LevelPackageEditor
                             CreateBeforeSerializationDependencies = package.Exports[entry - 1].CreateBeforeSerializationDependencies + 1,
                         };
                     }
+                    else
+                    {
+                        AddCreateBeforeSerialize(exports, preload, entry - 1, [presetImport]); // a copy's entry, appended by this request
+                    }
                 }
                 else
                 {

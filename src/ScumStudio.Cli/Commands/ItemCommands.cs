@@ -69,7 +69,7 @@ internal sealed class ItemCommands : ICommandModule
         var aes = AesOption();
         var filter = new Option<string?>(["--filter", "-f"], "Only values whose name or path contains this text.");
         var json = new Option<bool>("--json", "Print JSON.");
-        var command = new Command("stats", "Show every stored value of a package: '<export>|<path>\\t<kind>\\t<value>' (the keys 'item set' takes).") { source, package, aes, filter, json };
+        var command = new Command("stats", "Show every value of a package (stored, and inherited from a parent class, which 'item set' writes into this package): '<export>|<path>\\t<kind>\\t<value>' (the keys 'item set' takes).") { source, package, aes, filter, json };
         command.SetHandler((InvocationContext ctx) =>
         {
             var logger = CliHost.CreateLogger<ItemCommands>();
@@ -85,7 +85,7 @@ internal sealed class ItemCommands : ICommandModule
                 }
 
                 var text = parse.GetValueForOption(filter);
-                var tunables = TunableReader.Read(ModdableAssets.ReadPackage(catalog, path))
+                var tunables = AssetEditing.ReadValues(catalog, null, path)
                     .Where(t => text is null || t.Path.Contains(text, StringComparison.OrdinalIgnoreCase) || t.Export.Contains(text, StringComparison.OrdinalIgnoreCase))
                     .ToList();
                 if (parse.GetValueForOption(json))
@@ -97,7 +97,7 @@ internal sealed class ItemCommands : ICommandModule
                     Console.Out.WriteLine($"package: {path}");
                     foreach (var t in tunables)
                     {
-                        Console.Out.WriteLine($"{t.Key}\t{t.Kind}{(t.CanEdit ? string.Empty : " (read-only)")}\t{t.Value}");
+                        Console.Out.WriteLine($"{t.Key}\t{t.Kind}{(t.CanEdit ? string.Empty : " (read-only)")}{(t.InheritedFrom is { } parent ? " (inherited from " + parent + ")" : string.Empty)}\t{t.Value}");
                     }
                 }
 
@@ -132,7 +132,7 @@ internal sealed class ItemCommands : ICommandModule
                     return 2;
                 }
 
-                var tunables = TunableReader.Read(ReadForProject(catalog, proj, path));
+                var tunables = AssetEditing.ReadValues(catalog, proj.State, path);
                 var tunable = tunables.FirstOrDefault(t => t.Key == parse.GetValueForArgument(key));
                 if (tunable is null)
                 {
@@ -248,17 +248,4 @@ internal sealed class ItemCommands : ICommandModule
         project.State.AssetClones.SelectMany(c => c.Packages)
             .Select(p => p.New)
             .FirstOrDefault(p => string.Equals(p, nameOrPath, StringComparison.OrdinalIgnoreCase) || string.Equals(PackageMap.Leaf(p), nameOrPath, StringComparison.OrdinalIgnoreCase));
-
-    private static Formats.Packages.CookedPackage ReadForProject(Assets.Catalog.AssetCatalog catalog, Project project, string path)
-    {
-        if (project.State.FindCloneOf(path) is not { } clone)
-        {
-            return ModdableAssets.ReadPackage(catalog, path);
-        }
-
-        var pair = clone.Packages.First(p => string.Equals(p.New, path, StringComparison.OrdinalIgnoreCase));
-        var map = new PackageMap(clone.Packages.Select(p => new KeyValuePair<string, string>(p.Old, p.New)));
-        var cloned = PackageCloner.Clone(ModdableAssets.ReadPackage(catalog, pair.Old), pair.Old, map);
-        return Formats.Packages.CookedPackage.Parse(cloned.Bytes.UAsset, cloned.Bytes.UExp, cloned.UBulk, path);
-    }
 }

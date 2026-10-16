@@ -102,6 +102,14 @@ public sealed partial class MapPageViewModel
             {
                 return new LootSetting(carried.Count > 0, carried);
             }
+
+            // A duplicate with no loot of its own gets its source's in the export (a copy made before copies carried their
+            // edits, or before its source's loot was set): the panel says so too, not "stock" (F204). One set back to its
+            // stock loot keeps that as its own (see EditState's SetLootOp), so it does not come back here.
+            if (item.IsAdded && state.AddedActors.GetValueOrDefault(item.Reference) is DuplicateActorOp duplicate && state.GetLoot(duplicate.Source, component) is { } inherited)
+            {
+                return inherited;
+            }
         }
 
         return new LootSetting(record.LootPresets.Count > 0, record.LootPresets);

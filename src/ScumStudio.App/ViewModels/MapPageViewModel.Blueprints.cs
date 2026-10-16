@@ -109,6 +109,7 @@ public sealed partial class MapPageViewModel
             };
             var entry = _services.Projects.Apply(op);
             _services.Notifications.Info(Localization.Loc.T("Map.Added"), entry.Op.Describe());
+            WarnIfItemSpawners([op]);
             SelectCreated(op);
             return true;
         }

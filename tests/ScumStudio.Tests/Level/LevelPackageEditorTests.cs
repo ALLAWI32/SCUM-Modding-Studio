@@ -7,6 +7,7 @@ using ScumStudio.Formats.Properties;
 using ScumStudio.Level.Export;
 using ScumStudio.Level.Model;
 using ScumStudio.Level.Reading;
+using BoundingBox = ScumStudio.Core.Geometry.BoundingBox;
 using TransformValue = ScumStudio.Level.Model.TransformValue;
 
 namespace ScumStudio.Tests.Level;
@@ -56,13 +57,183 @@ public sealed class LevelPackageEditorTests
 
         var payload = w.ToArray();
         var moved = new FTransform(new FVector(5000, 0, 0));
-        var grown = InstanceRenderData.Refresh(payload, new PropertyBlock { Properties = [] }, arrayEnd, 1, [(0, FTransform.Identity, moved)]);
+        var grown = InstanceRenderData.Refresh(payload, new PropertyBlock { Properties = [] }, arrayEnd, 1, 64, 0, [(0, FTransform.Identity, moved)]);
 
         Assert.Equal(payload.Length, grown.Length);
         var node = arrayEnd + 8 + 8 + 8;
         Assert.Equal(-10f, System.Buffers.Binary.BinaryPrimitives.ReadSingleLittleEndian(grown.AsSpan(node)));
         Assert.Equal(5010f, System.Buffers.Binary.BinaryPrimitives.ReadSingleLittleEndian(grown.AsSpan(node + 16)));
         Assert.Equal(10f, System.Buffers.Binary.BinaryPrimitives.ReadSingleLittleEndian(payload.AsSpan(node + 16))); // the input is left as it was
+    }
+
+    /// <summary>
+    /// defolt_0999 (D05, 3.2.0): trees and bushes blinked after foliage was deleted or moved. A foliage HISM of four trees
+    /// (two leaves of two, drawn in another order than the array) with its cooked draw copy: one tree moved, turned and
+    /// grown, one collapsed. The copy stays and draws each tree where the array has it (random and light map as cooked),
+    /// the clusters are refitted as BuildTree measures them and the component's bounds are the root's.
+    /// </summary>
+    [Fact]
+    public void AnEditedFoliageComponentKeepsItsDrawCopyAndItsClustersHoldTheirInstances()
+    {
+        FTransform[] trees = [new(new FVector(0, 0, 0)), new(new FVector(1000, 0, 0)), new(new FVector(100, 0, 0)), new(new FVector(1100, 0, 0))];
+        int[] reorder = [0, 2, 1, 3]; // array index -> draw index: leaf 1 draws trees 0 and 2, leaf 2 trees 1 and 3
+        var mesh = new BoundingBox(new System.Numerics.Vector3(-50, -50, 0), new System.Numerics.Vector3(150, 50, 400));
+        var boxes = trees.Select(t => HismTail.InstanceBox(t, mesh)).ToArray();
+        var p = new SyntheticLevelPackage();
+        var world = p.Export("A_0_Tile", p.ScriptClass(Engine, "World"), 0);
+        var level = p.Export("PersistentLevel", p.ScriptClass(Engine, "Level"), world);
+        var actor = p.Export("InstancedFoliageActor_0", p.ScriptClass(Engine, "InstancedFoliageActor"), level);
+        var hism = p.Export("FoliageInstancedTree_0", p.ScriptClass(Engine, "HierarchicalInstancedStaticMeshComponent"), actor);
+        p.SetPayload(world, p.Properties(native: w =>
+        {
+            w.I32(level);
+            w.I32(0);
+            w.I32(0);
+        }));
+        p.SetPayload(level, p.Properties(native: w => LevelTail(w, [actor])));
+        p.SetPayload(actor, p.Properties());
+        p.SetPayload(hism, p.Properties(t =>
+        {
+            t.IntArray("SortedInstances", 0, 2, 1, 3);
+            t.Box("BuiltInstanceBounds", new FVector(-50, -50, 0), new FVector(1250, 50, 400));
+            t.TaggedStruct("CacheMeshExtendedBounds", "BoxSphereBounds", b =>
+            {
+                b.Vector("Origin", 50, 0, 200);
+                b.Vector("BoxExtent", 100, 50, 200);
+                b.Float("SphereRadius", 229);
+            });
+            t.IntArray("InstanceReorderTable", reorder);
+        }, w =>
+        {
+            w.I32(0); // LODData
+            w.I32(1); // bCooked
+            w.I32(64);
+            w.I32(trees.Length);
+            foreach (var t in trees)
+            {
+                var m = t.ToMatrixWithScale();
+                foreach (var f in new[] { m.M11, m.M12, m.M13, m.M14, m.M21, m.M22, m.M23, m.M24, m.M31, m.M32, m.M33, m.M34, m.M41, m.M42, m.M43, m.M44 })
+                {
+                    w.F32(f);
+                }
+            }
+
+            w.I32(4); // PerInstanceSMCustomData
+            w.I32(0);
+            var copy = new ByteWriter();
+            copy.I32(1); // bUseHalfFloat
+            copy.I32(trees.Length);
+            copy.I32(0); // NumCustomDataFloats
+            copy.I32(16);
+            copy.I32(trees.Length);
+            for (var d = 0; d < trees.Length; d++)
+            {
+                var t = trees[Array.IndexOf(reorder, d)];
+                copy.F32(t.Translation.X);
+                copy.F32(t.Translation.Y);
+                copy.F32(t.Translation.Z);
+                copy.F32(0.1f * (d + 1)); // PerInstanceRandom
+            }
+
+            copy.I32(8);
+            copy.I32(trees.Length);
+            for (var d = 0; d < trees.Length * 4; d++)
+            {
+                copy.U16((ushort)(1000 + d)); // light map / shadow map biases
+            }
+
+            copy.I32(24);
+            copy.I32(trees.Length);
+            for (var d = 0; d < trees.Length; d++)
+            {
+                foreach (var f in new[] { 1f, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0 })
+                {
+                    copy.U16(BitConverter.HalfToUInt16Bits((Half)f));
+                }
+            }
+
+            copy.I32(4);
+            copy.I32(0);
+            w.I64(copy.Length);
+            w.Raw(copy.WrittenSpan);
+            w.I32(64); // cluster tree: root, then two leaves
+            w.I32(3);
+            void Node(BoundingBox b, int firstChild, int lastChild, int first, int last)
+            {
+                w.F32(b.Min.X);
+                w.F32(b.Min.Y);
+                w.F32(b.Min.Z);
+                w.I32(firstChild);
+                w.F32(b.Max.X);
+                w.F32(b.Max.Y);
+                w.F32(b.Max.Z);
+                w.I32(lastChild);
+                w.I32(first);
+                w.I32(last);
+                foreach (var f in new[] { 1f, 1, 1, 1, 1, 1 })
+                {
+                    w.F32(f);
+                }
+            }
+
+            BoundingBox Union(params int[] i) => new(i.Select(k => boxes[k].Min).Aggregate(System.Numerics.Vector3.Min), i.Select(k => boxes[k].Max).Aggregate(System.Numerics.Vector3.Max));
+            Node(Union(0, 1, 2, 3), 1, 2, 0, 3);
+            Node(Union(0, 2), -1, -1, 0, 1);
+            Node(Union(1, 3), -1, -1, 2, 3);
+        }));
+        var built0 = p.Build();
+        var package = CookedPackage.Parse(built0.UAsset, built0.UExp);
+        var moved = new FTransform(new FRotator(0, 90, 0), new FVector(5000, 3000, 50), new FVector(2, 2, 2));
+
+        var (bytes, report) = LevelPackageEditor.Apply(package, new LevelEditRequest
+        {
+            Instances = [new InstancePatch("InstancedFoliageActor_0", "FoliageInstancedTree_0", 2, moved), new InstancePatch("InstancedFoliageActor_0", "FoliageInstancedTree_0", 3, null)],
+            InstanceHints = [new InstanceArrayHint("InstancedFoliageActor_0", "FoliageInstancedTree_0", trees)],
+        });
+
+        Assert.Equal((1, 1), (report.MovedInstances, report.DeletedInstances));
+        var edited = CookedPackage.Parse(bytes.UAsset, bytes.UExp);
+        var index = ExportNamed(edited, "FoliageInstancedTree_0", "InstancedFoliageActor_0");
+        var before = package.GetExportBytes(index);
+        var payload = edited.GetExportBytes(index);
+        Assert.Equal(before.Length, payload.Length); // the draw copy is still there
+        var now = trees.ToArray();
+        now[2] = moved;
+        now[3] = new FTransform(FQuat.Identity, trees[3].Translation, new FVector(LevelPackageEditor.CollapsedInstanceScale));
+        var block = edited.ReadProperties(index);
+        var (offset, size) = LevelPackageEditor.FindInstanceArray(payload, block.EndOffset, now) ?? throw new InvalidOperationException("instance array not found");
+        var arrayEnd = offset + (size * trees.Length);
+        var check = HismTail.Check(payload, arrayEnd, now, reorder, mesh, requireCopy: true);
+        Assert.Empty(check.Problems);
+
+        // Only the moved and the collapsed trees' origins and rows changed: randoms, light maps and the other two as cooked.
+        var copyAt = arrayEnd + 16;
+        var originsAt = copyAt + 20;
+        var lightAt = originsAt + (16 * 4) + 8;
+        var rowsAt = lightAt + (8 * 4) + 8;
+        Assert.True(before.AsSpan(lightAt, 32).SequenceEqual(payload.AsSpan(lightAt, 32)));
+        for (var d = 0; d < 4; d++)
+        {
+            Assert.Equal(0.1f * (d + 1), System.Buffers.Binary.BinaryPrimitives.ReadSingleLittleEndian(payload.AsSpan(originsAt + (d * 16) + 12)));
+            Assert.Equal(d != 1, before.AsSpan(originsAt + (d * 16), 16).SequenceEqual(payload.AsSpan(originsAt + (d * 16), 16))); // draw 1 moved; draw 3 collapsed in place
+            Assert.Equal(d is 0 or 2, before.AsSpan(rowsAt + (d * 24), 24).SequenceEqual(payload.AsSpan(rowsAt + (d * 24), 24)));
+        }
+
+        // Leaf 1 holds the turned, grown tree exactly; leaf 2 shrank to the tree left; the root and the component's bounds hold both.
+        var treeAt = copyAt + (int)check.CopyBytes + 8;
+        System.Numerics.Vector3 Vec(int at) => new(System.Buffers.Binary.BinaryPrimitives.ReadSingleLittleEndian(payload.AsSpan(at)),
+            System.Buffers.Binary.BinaryPrimitives.ReadSingleLittleEndian(payload.AsSpan(at + 4)), System.Buffers.Binary.BinaryPrimitives.ReadSingleLittleEndian(payload.AsSpan(at + 8)));
+        var turned = HismTail.InstanceBox(moved, mesh);
+        Assert.True(System.Numerics.Vector3.Distance(Vec(treeAt + 64), System.Numerics.Vector3.Min(boxes[0].Min, turned.Min)) < 0.01f, Vec(treeAt + 64).ToString());
+        Assert.True(System.Numerics.Vector3.Distance(Vec(treeAt + 64 + 16), System.Numerics.Vector3.Max(boxes[0].Max, turned.Max)) < 0.01f, Vec(treeAt + 80).ToString());
+        Assert.True(System.Numerics.Vector3.Distance(Vec(treeAt + 128 + 16), boxes[1].Max) < 0.01f, Vec(treeAt + 144).ToString());
+        Assert.Equal(new System.Numerics.Vector3(1), Vec(treeAt + 128 + 40)); // the collapsed tree is not in leaf 2's scale range
+        Assert.True(System.Numerics.Vector3.Distance(new System.Numerics.Vector3(2), Vec(treeAt + 64 + 52)) < 1e-4f); // the grown one is in leaf 1's
+        Assert.True(System.Numerics.Vector3.Distance(new System.Numerics.Vector3(2), Vec(treeAt + 52)) < 1e-4f);
+        Assert.True(System.Numerics.Vector3.Distance(Vec(treeAt + 16), System.Numerics.Vector3.Max(boxes[1].Max, turned.Max)) < 0.01f, Vec(treeAt + 16).ToString());
+        var built = block.Find("BuiltInstanceBounds")!;
+        Assert.True(payload.AsSpan(built.ValueOffset, 12).SequenceEqual(payload.AsSpan(treeAt, 12)));
+        Assert.True(payload.AsSpan(built.ValueOffset + 12, 12).SequenceEqual(payload.AsSpan(treeAt + 16, 12)));
     }
 
     private static CookedPackage Synthetic()

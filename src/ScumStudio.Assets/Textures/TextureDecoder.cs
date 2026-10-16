@@ -45,7 +45,7 @@ public static class TextureDecoder
     {
         ArgumentNullException.ThrowIfNull(texture);
         var mips = texture.PlatformData.Mips;
-        var index = SelectMip(mips.Select(m => (m.SizeX, m.SizeY, m.BulkData?.Data is { Length: > 0 })).ToList(), maxSize);
+        var index = SelectMip(mips, maxSize);
         if (index < 0)
         {
             throw new InvalidDataException($"{texture.Name} has no mip with data (missing .ubulk?).");
@@ -72,7 +72,7 @@ public static class TextureDecoder
         }
 
         var mips = texture.PlatformData.Mips;
-        var index = SelectMip(mips.Select(m => (m.SizeX, m.SizeY, m.BulkData?.Data is { Length: > 0 })).ToList(), maxSize);
+        var index = SelectMip(mips, maxSize);
         if (index < 0)
         {
             throw new InvalidDataException($"{texture.Name} has no mip with data (missing .ubulk?).");
@@ -114,6 +114,43 @@ public static class TextureDecoder
         }
 
         return smallest;
+    }
+
+    private static int SelectMip(FTexture2DMipMap[] mips, int maxSize) =>
+        SelectMip(mips.Length, i => (mips[i].SizeX, mips[i].SizeY), i => mips[i].BulkData?.Data is { Length: > 0 }, maxSize);
+
+    /// <summary>
+    /// <see cref="SelectMip(IReadOnlyList{ValueTuple{int, int, bool}}, int)"/> over <paramref name="count"/> mips whose sizes
+    /// come from the header (<paramref name="size"/>) and whose data is looked at through <paramref name="hasData"/> only
+    /// where it decides: the mips that fit, largest first, then (none fitting with data) the others from the smallest up.
+    /// CUE4Parse reads a mip's payload when its data is first asked for, so the larger mips are never read (audit
+    /// F270/F312/F318: a 4096² texture kept at 512 read and inflated about 21 MB to keep 0.35 MB).
+    /// </summary>
+    internal static int SelectMip(int count, Func<int, (int Width, int Height)> size, Func<int, bool> hasData, int maxSize)
+    {
+        for (var i = 0; i < count; i++)
+        {
+            if (Fits(i) && hasData(i))
+            {
+                return i;
+            }
+        }
+
+        for (var i = count - 1; i >= 0; i--)
+        {
+            if (!Fits(i) && hasData(i))
+            {
+                return i;
+            }
+        }
+
+        return -1;
+
+        bool Fits(int i)
+        {
+            var (w, h) = size(i);
+            return maxSize <= 0 || (w <= maxSize && h <= maxSize);
+        }
     }
 
     /// <summary>Decodes raw block/pixel data of one mip into RGBA8.</summary>

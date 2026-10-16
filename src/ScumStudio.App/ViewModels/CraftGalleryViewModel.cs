@@ -31,6 +31,7 @@ public sealed partial class CraftGalleryViewModel : ViewModelBase
     private IReadOnlyList<(DumpPackage Package, PackageEntry Entry)> _objects = [];
     private IReadOnlyList<(DumpPackage Package, PackageEntry Entry)> _items = [];
     private IReadOnlyList<(DumpPackage Package, PackageEntry Entry)> _other = [];
+    private IReadOnlyList<PackageEntry> _searchList = [];
     private ObjectCategoryNode? _itemsNode;
     private ObjectCategoryNode? _otherNode;
     private CancellationTokenSource? _searchCts;
@@ -84,6 +85,7 @@ public sealed partial class CraftGalleryViewModel : ViewModelBase
     {
         _catalog = catalog;
         _objects = _items = _other = [];
+        _searchList = [];
         Roots = [];
         Tiles = [];
         ResultText = string.Empty;
@@ -114,7 +116,7 @@ public sealed partial class CraftGalleryViewModel : ViewModelBase
                 return;
             }
 
-            (_objects, _items, _other) = (sorted.Objects, sorted.Items, sorted.Other);
+            (_objects, _items, _other, _searchList) = (sorted.Objects, sorted.Items, sorted.Other, sorted.Search);
             var objects = AssetsPageViewModel.CategoryGroup(Loc.T("Assets.Group.World"), ObjectRoots, _objects.Select(o => o.Package));
             string[] itemRoots = [.. AssetsPageViewModel.PickUpRoots, .. _items.Select(i => Root(i.Package.Node)).Distinct().Except(AssetsPageViewModel.PickUpRoots)];
             _itemsNode = AssetsPageViewModel.CategoryGroup(Loc.T("Assets.Group.PickUp"), itemRoots, _items.Select(i => i.Package));
@@ -139,13 +141,22 @@ public sealed partial class CraftGalleryViewModel : ViewModelBase
         }
     }
 
-    /// <summary>Sorts the package index into objects, <paramref name="gameItems"/> and packages the catalogue does not know (on a worker).</summary>
-    private static (List<(DumpPackage Package, PackageEntry Entry)> Objects, List<(DumpPackage Package, PackageEntry Entry)> Items, List<(DumpPackage Package, PackageEntry Entry)> Other) Sort(PackageIndex index, IReadOnlySet<string> gameItems)
+    /// <summary>
+    /// Sorts the package index into objects, <paramref name="gameItems"/> and packages the catalogue does not know (on a
+    /// worker; the ingredient picker lists the same items). <c>Search</c> holds all three in the Assets page's order (the
+    /// catalogue's, then the unknown packages), so a search ranks like the Assets page's (seviscache found
+    /// AnimalBaitFeederItem there and not here).
+    /// </summary>
+    internal static (List<(DumpPackage Package, PackageEntry Entry)> Objects, List<(DumpPackage Package, PackageEntry Entry)> Items, List<(DumpPackage Package, PackageEntry Entry)> Other, List<PackageEntry> Search) Sort(PackageIndex index, IReadOnlySet<string> gameItems)
     {
         var catalogue = new Dictionary<string, DumpPackage>(StringComparer.OrdinalIgnoreCase);
+        var order = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         foreach (var package in AssetDumper.Packages)
         {
-            catalogue.TryAdd(package.PackagePath, package);
+            if (catalogue.TryAdd(package.PackagePath, package))
+            {
+                order[package.PackagePath] = order.Count;
+            }
         }
 
         List<(DumpPackage, PackageEntry)> objects = [], items = [], other = [];
@@ -178,7 +189,8 @@ public sealed partial class CraftGalleryViewModel : ViewModelBase
             }
         }
 
-        return (objects, items, other);
+        var search = objects.Concat(items).OrderBy(o => order[o.Item1.PackagePath]).Concat(other).Select(o => o.Item2).ToList();
+        return (objects, items, other, search);
     }
 
     private static string Root(string node) => node[..(node.IndexOf('.') is var dot and >= 0 ? dot : node.Length)];
@@ -234,8 +246,7 @@ public sealed partial class CraftGalleryViewModel : ViewModelBase
                 return;
             }
 
-            var lists = new[] { _objects, _items, _other };
-            var (matches, total) = await Task.Run(() => AssetsPageViewModel.Filter(lists.SelectMany(l => l).Select(o => o.Entry).ToList(), text, AssetsPageViewModel.MaxListed), cts.Token).ConfigureAwait(true);
+            var (matches, total) = await Task.Run(() => AssetsPageViewModel.Filter(_searchList, text, AssetsPageViewModel.MaxListed), cts.Token).ConfigureAwait(true);
             cts.Token.ThrowIfCancellationRequested();
             Show(matches, total == 0
                 ? Loc.F("Assets.NoMatch", text.Trim())
@@ -271,9 +282,8 @@ public sealed partial class CraftGalleryViewModel : ViewModelBase
         }
 
         var png = await _services.Thumbnails.GetAssetAsync(catalog, item.Entry, cancellationToken).ConfigureAwait(true);
-        var entitySetup = item.Entry.PackagePath + "_ES";
-        if (png is null && catalog.TryGetPackageFile(entitySetup, out _)
-                        && await Task.Run(() => InventoryIcons.FindIconPath(catalog, entitySetup), cancellationToken).ConfigureAwait(true) is { } icon)
+        if (png is null && await Task.Run(() => CraftablesPlanner.EntitySetupOf(catalog, item.Entry.PackagePath) is { } entitySetup
+                            ? InventoryIcons.FindIconPath(catalog, entitySetup) : null, cancellationToken).ConfigureAwait(true) is { } icon)
         {
             png = await _services.Thumbnails.GetTextureAsync(catalog, icon, cancellationToken).ConfigureAwait(true);
         }

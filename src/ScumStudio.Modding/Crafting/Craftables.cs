@@ -24,6 +24,9 @@ public enum CraftKind
     /// stock item recipe of the same kind of item, for its crafting menu category).
     /// </summary>
     Item,
+
+    /// <summary>A base element of the game cloned with its own family: a bed stays a bed (<see cref="Craftable.Element"/>).</summary>
+    Element,
 }
 
 /// <summary>The main material of a craftable; picks the ingredients of its suggested recipe.</summary>
@@ -52,7 +55,12 @@ public enum CraftMaterial
 /// <param name="Tag">The game's ingredient tag (<c>CI_Plank</c>, <c>CI_Group_Toolbox</c>, a station's <c>CI_SS_*</c>).</param>
 /// <param name="Amount">Amount without skill (the higher skill levels need less, as in the game's recipes).</param>
 /// <param name="IsTool">A tool (used, not consumed) instead of a material.</param>
-public sealed record CraftIngredient(string Tag, int Amount, bool IsTool = false);
+/// <param name="Item">
+/// An item of the game picked as the ingredient (package path), or null for <paramref name="Tag"/>: the planner finds the
+/// item's own tag (<see cref="IngredientIndex.Resolve"/>).
+/// </param>
+/// <param name="AddTag">The user allows a new tag on the item's stock entity setup when the item has no tag of its own.</param>
+public sealed record CraftIngredient(string Tag, int Amount, bool IsTool = false, string? Item = null, bool AddTag = false);
 
 /// <summary>Power settings of a <see cref="CraftKind.Power"/> craftable (the generator's entity setup values).</summary>
 /// <param name="RadiusMeters">Power radius, the green circle (game: 10 m, the small generator 5 m).</param>
@@ -98,6 +106,12 @@ public sealed record Craftable
     /// </summary>
     public string? Category { get; init; }
 
+    /// <summary>
+    /// The picture its recipe shows in the crafting menu: a Texture2D the game ships (package path), or null for its own
+    /// (<see cref="CraftablesPlanner.OwnIcon"/>: an item's inventory icon, a base element's recipe icon).
+    /// </summary>
+    public string? Icon { get; init; }
+
     /// <summary>Largest extent of the mesh in metres (for the suggested recipe).</summary>
     public float SizeMeters { get; init; } = 1;
 
@@ -106,6 +120,12 @@ public sealed record Craftable
 
     /// <summary>Name of a <see cref="CraftKind.Station"/> craftable the player must stand next to, or null.</summary>
     public string? Station { get; init; }
+
+    /// <summary>The base element settings (used when <see cref="Kind"/> is <see cref="CraftKind.Element"/>), or null.</summary>
+    public ElementSettings? Element { get; init; }
+
+    /// <summary>Where it goes once made, or null for its kind's own: items and power craft into the bag, the others build.</summary>
+    public CraftUse? Use { get; init; }
 
     /// <summary>The station must have electricity (not a value of the game's data: kept, reported at export).</summary>
     public bool NeedsPower { get; init; }

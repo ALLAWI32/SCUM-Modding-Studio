@@ -54,7 +54,8 @@ public sealed partial class StudioTools
         yield return new McpTool("get_item_values",
             "The stored values of a vehicle/weapon/magazine/ammo/projectile package or its entity setup (_ES) or a vehicle attachment: " +
             "key (export|path, what set_item_values takes), name, type, stock value, current value in the project, enum choices. " +
-            "Cooked Blueprints store only values that differ from their parent class.",
+            "Cooked Blueprints store only values that differ from their parent class; a value the class takes from a parent (a katana's MaxHealth) " +
+            "is listed with inheritedFrom (stock empty when it is in the game code) and set_item_values writes it into this package's own file.",
             ToolSchema.Object()
                 .String("item", "Asset name (Weapon_RPK-74, BPC_WolfsWagen, Weapon_RPK-74_ES, a clone's name) or package path.", required: true)
                 .String("filter", "Words that must all appear in the key (e.g. 'damage', 'mass', 'radius').")
@@ -67,7 +68,7 @@ public sealed partial class StudioTools
                 var path = AssetEditing.ResolvePackage(catalog, state, call.RequireString("item"))
                            ?? throw new ToolArgumentException($"No item or package '{call.GetString("item")}'. Use list_items.");
                 var tokens = Tokens(call.GetString("filter")).ToList();
-                var tunables = TunableReader.Read(AssetEditing.ReadForEditing(catalog, state, path))
+                var tunables = AssetEditing.ReadValues(catalog, state, path)
                     .Where(t => MatchesAll(tokens, t.Key))
                     .ToList();
                 var limit = call.GetInt("limit", 300);
@@ -89,6 +90,7 @@ public sealed partial class StudioTools
                             edited = !TunableValue.AreEqual(t.Kind, current, t.Value) ? true : (bool?)null,
                             choices = t.Kind == TunableKind.Enum ? t.Choices : null,
                             readOnly = t.CanEdit ? (bool?)null : true,
+                            inheritedFrom = t.InheritedFrom,
                         };
                     }),
                 }));
@@ -157,7 +159,7 @@ public sealed partial class StudioTools
             throw new ToolArgumentException("'values' must be a list of {key, value}.");
         }
 
-        var tunables = TunableReader.Read(AssetEditing.ReadForEditing(catalog, project.State, path)).ToDictionary(t => t.Key, StringComparer.Ordinal);
+        var tunables = AssetEditing.ReadValues(catalog, project.State, path).ToDictionary(t => t.Key, StringComparer.Ordinal);
         var done = new List<string>();
         var failed = new List<string>();
         foreach (var item in values.EnumerateArray())

@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using ScumStudio.Assets.Catalog;
 using ScumStudio.Formats;
+using ScumStudio.Formats.Packages;
 using ScumStudio.Modding.Catalog;
 
 namespace ScumStudio.Modding.Cloning;
@@ -151,9 +152,16 @@ public static partial class CloneFamilyPlanner
 
         while (queue.Count > 0)
         {
-            foreach (var referenced in ModdableAssets.ReadImportedPackages(catalog, queue.Dequeue()))
+            var member = queue.Dequeue();
+            foreach (var referenced in ModdableAssets.ReadImportedPackages(catalog, member))
             {
                 Consider(referenced);
+            }
+
+            // D01: a member's own entity setup (the item container's X_ES) names it by a soft path; no member imports it.
+            if (EntitySetupOf(catalog, member) is { } setup)
+            {
+                Consider(setup);
             }
         }
 
@@ -168,6 +176,67 @@ public static partial class CloneFamilyPlanner
             .ToList();
         Validate(catalog, template, packages);
         return new ClonePlan(template, newPrimary, packages);
+    }
+
+    /// <summary>
+    /// The entity setup of <paramref name="package"/>: the <c>X_ES</c> beside it whose name table holds the class
+    /// <c>X.X_C</c> (its <c>Actor</c> soft class, which is how the game finds the setup of an item such as a vehicle's item
+    /// container), or null. A twin that does not name it (a static mesh <c>SM_x_ES</c>) is not one.
+    /// </summary>
+    public static string? EntitySetupOf(AssetCatalog catalog, string package)
+    {
+        ArgumentNullException.ThrowIfNull(catalog);
+        var path = PackageMap.Normalize(package);
+        var setup = path + "_ES";
+        if (path.EndsWith("_ES", StringComparison.OrdinalIgnoreCase) || !catalog.TryGetPackageFile(setup, out var file))
+        {
+            return null;
+        }
+
+        try
+        {
+            var actor = $"{path}.{PackageMap.Leaf(path)}_C";
+            return CookedPackage.Parse(file.Read(), [], null, setup).Names.Contains(actor, StringComparer.OrdinalIgnoreCase) ? setup : null;
+        }
+        catch (Exception ex) when (ex is FormatException or InvalidDataException or IOException or IndexOutOfRangeException or ArgumentOutOfRangeException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// <paramref name="plan"/> with the entity setup (<see cref="EntitySetupOf"/>) of every copied package that it leaves
+    /// behind added as <c>&lt;new&gt;_ES</c>. Without it the copy has no setup of its own, unlike every stock item: a cloned
+    /// vehicle's item container had none (D01: the saved cloned cars crashed the game on the next start). Plans recorded by
+    /// earlier versions lack it; the export completes them. A setup whose new path is taken is left out with a warning.
+    /// </summary>
+    public static ClonePlan WithEntitySetups(AssetCatalog catalog, ClonePlan plan, ICollection<string>? warnings = null)
+    {
+        ArgumentNullException.ThrowIfNull(catalog);
+        ArgumentNullException.ThrowIfNull(plan);
+        var copied = plan.Packages.Select(p => PackageMap.Normalize(p.Key)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var taken = plan.Packages.Select(p => PackageMap.Normalize(p.Value)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var added = new List<KeyValuePair<string, string>>();
+        foreach (var (oldPath, newPath) in plan.Packages)
+        {
+            if (EntitySetupOf(catalog, oldPath) is not { } setup || copied.Contains(setup))
+            {
+                continue;
+            }
+
+            var newSetup = PackageMap.Normalize(newPath) + "_ES";
+            if (taken.Contains(newSetup) || catalog.PackageExists(newSetup))
+            {
+                warnings?.Add($"{plan.NewPrimary}: {setup} is not copied, {newSetup} exists already; {newPath} has no entity setup of its own.");
+                continue;
+            }
+
+            added.Add(new(setup, newSetup));
+            copied.Add(setup);
+            taken.Add(newSetup);
+        }
+
+        return added.Count == 0 ? plan : plan with { Packages = [.. plan.Packages, .. added] };
     }
 
     /// <summary>The materials a clone's paint lives in (car paint and weapon materials); their instances are what it copies.</summary>

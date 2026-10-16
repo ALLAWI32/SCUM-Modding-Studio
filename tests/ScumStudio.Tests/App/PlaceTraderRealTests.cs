@@ -138,7 +138,15 @@ public sealed class PlaceTraderRealTests
         map.SelectedActor = map.AllActors.Single(a => a.Name == op.NewName);
         map.DeleteSelectedCommand.Execute(null);
         Assert.Empty(TraderPosts.Placed(project.State));
-        Assert.False(ctx.Services.Economy.Economy.HasSection("A_3_Armory_1")); // and so is its section
+
+        // Its section is parked (audit F100): out of the page's text and the export, kept in the project's file for an undo.
+        var store = ctx.Services.Economy;
+        Assert.Contains("A_3_Armory_1", store.Parked);
+        Assert.False(store.ForExport().HasSection("A_3_Armory_1"));
+        Assert.DoesNotContain("A_3_Armory_1", store.Text, StringComparison.Ordinal);
+        Assert.True(EconomyOverride.LoadFrom(project.DirectoryPath)!.HasSection("A_3_Armory_1"));
+        ctx.Services.Projects.Undo();
+        Assert.Contains("A_3_Armory_1", store.Text, StringComparison.Ordinal);
     }
 
     [Fact]

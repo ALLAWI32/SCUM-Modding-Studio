@@ -88,9 +88,9 @@ public sealed class LevelDocument
     /// <remarks>
     /// Components created from Blueprint templates rather than stored in the level carry <c>"synthesized": true</c> and
     /// <c>"template"</c> (their actor <c>"synthesizedCount"</c>); <c>"fromTemplate": true</c> marks values looked up on a
-    /// template; <c>"visible": false</c> marks hidden components; child actor components show <c>"childActorClass"</c> and,
-    /// when the level stores the child actor, <c>"childActor"</c> (its name), which in turn shows
-    /// <c>"parentComponent"</c> (<c>Actor.Component</c>).
+    /// template (<c>"markersFromTemplate": true</c> an item spawner's markers); <c>"visible": false</c> marks hidden
+    /// components; child actor components show <c>"childActorClass"</c> and, when the level stores the child actor,
+    /// <c>"childActor"</c> (its name), which in turn shows <c>"parentComponent"</c> (<c>Actor.Component</c>).
     /// </remarks>
     public string ToJson(bool includeInstances = false, bool indented = true)
     {
@@ -158,6 +158,7 @@ public sealed class LevelDocument
             c.StaticMeshPath,
             c.IsInstanced ? c.Instances.Count : null,
             c.UsesTemplateValues ? true : null,
+            c.SpawnMarkersFromTemplate ? true : null,
             c.IsSynthesized ? true : null,
             c.IsSynthesized ? c.TemplatePath : null,
             c.IsVisible ? null : false,
@@ -225,6 +226,7 @@ public sealed class LevelDocument
         string? Mesh,
         int? InstanceCount,
         bool? FromTemplate,
+        bool? MarkersFromTemplate,
         bool? Synthesized,
         string? Template,
         bool? Visible,
@@ -336,6 +338,7 @@ public sealed class LevelDocument
                     instances.Add(new ActorInstance(c.ExportIndex, c.Name, i, c.StaticMeshPath, c.Instances[i], c.Instances[i] * c.WorldTransform)
                     {
                         EndCullDistance = c.InstanceEndCullDistance,
+                        StartCullDistance = c.InstanceStartCullDistance,
                     });
                 }
             }
@@ -347,6 +350,7 @@ public sealed class LevelDocument
                 PropertyNames = actor.PropertyNames,
                 ParentComponent = actor.ParentComponent is { } pc && _exports.ContainsKey(pc) ? pc : null,
                 PatrolPoints = actor.PatrolPoints ?? [],
+                SentryClass = actor.SentryClass,
                 TraderMarkers = actor.TraderMarkers ?? [],
                 IsItemContainer = actor.IsItemContainer,
                 WaterVolume = actor.WaterVolume,
@@ -377,9 +381,11 @@ public sealed class LevelDocument
                 Relative = c.RelativeValue,
                 IsInstanced = c.Instances is not null,
                 InstanceEndCullDistance = c.InstanceEndCullDistance ?? 0,
+                InstanceStartCullDistance = c.InstanceStartCullDistance ?? 0,
                 SplineMesh = c.SplineMesh,
                 OverrideMaterials = c.OverrideMaterials,
                 SpawnMarkers = c.SpawnMarkers ?? [],
+                SpawnMarkersFromTemplate = c.SpawnMarkersFromTemplate,
                 LootPresets = c.LootPresets ?? [],
                 CollisionProfile = c.CollisionProfile,
                 BoxExtent = c.BoxExtent,

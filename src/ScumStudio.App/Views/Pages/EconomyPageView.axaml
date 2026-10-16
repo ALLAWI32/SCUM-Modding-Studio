@@ -5,7 +5,7 @@
              x:Class="ScumStudio.App.Views.Pages.EconomyPageView"
              x:DataType="vm:EconomyPageViewModel">
   <UserControl.Styles>
-    <!-- Stock rows: a picture tile, a coloured mark on the left edge (blaze = changed, olive = added), dimmed when off sale. -->
+    <!-- Stock rows: a picture tile, a mark on the left edge (changed, added, not in the game files), dimmed when off sale. -->
     <Style Selector="Border.itemRow">
       <Setter Property="Padding" Value="6,4,10,4" />
       <Setter Property="CornerRadius" Value="{DynamicResource SmallCornerRadius}" />
@@ -33,6 +33,9 @@
     <Style Selector="Border.itemRow.added Border.mark">
       <Setter Property="Background" Value="{DynamicResource SuccessBrush}" />
     </Style>
+    <Style Selector="Border.itemRow.unknown Border.mark">
+      <Setter Property="Background" Value="{DynamicResource WarningBrush}" />
+    </Style>
     <Style Selector="Border.thumb">
       <Setter Property="Width" Value="42" />
       <Setter Property="Height" Value="42" />
@@ -58,6 +61,10 @@
       <Setter Property="Background" Value="{DynamicResource AccentSoftBrush}" />
       <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
     </Style>
+    <Style Selector="Border.typeTile.unknown">
+      <Setter Property="Background" Value="{DynamicResource WarningSoftBrush}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource WarningBrush}" />
+    </Style>
     <Style Selector="Border.typeTile.hero">
       <Setter Property="Width" Value="54" />
       <Setter Property="Height" Value="54" />
@@ -75,6 +82,33 @@
       <Setter Property="MinHeight" Value="0" />
       <Setter Property="HorizontalContentAlignment" Value="Right" />
     </Style>
+    <Style Selector="TextBox.price.invalid /template/ Border#PART_BorderElement">
+      <Setter Property="BorderBrush" Value="{DynamicResource DangerBrush}" />
+    </Style>
+    <!-- A value's Reset: a small glyph left of its box, there only while the value is not what Reset writes. -->
+    <Style Selector="Button.valueReset">
+      <Setter Property="Padding" Value="2" />
+      <Setter Property="Width" Value="18" />
+      <Setter Property="Height" Value="18" />
+      <Setter Property="MinWidth" Value="0" />
+      <Setter Property="MinHeight" Value="0" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+      <Setter Property="HorizontalContentAlignment" Value="Center" />
+      <Setter Property="VerticalContentAlignment" Value="Center" />
+    </Style>
+    <!-- The Code view: the file as the export writes it, tabs and all. -->
+    <Style Selector="TextBox.code">
+      <Setter Property="FontFamily" Value="{DynamicResource MonoFontFamily}" />
+      <Setter Property="FontSize" Value="12" />
+      <Setter Property="Padding" Value="10,8" />
+      <Setter Property="VerticalContentAlignment" Value="Top" />
+    </Style>
+    <Style Selector="TextBlock.problem.error">
+      <Setter Property="Foreground" Value="{DynamicResource DangerBrush}" />
+    </Style>
+    <Style Selector="TextBlock.problem.warning">
+      <Setter Property="Foreground" Value="{DynamicResource WarningBrush}" />
+    </Style>
   </UserControl.Styles>
 
   <DockPanel>
@@ -88,7 +122,12 @@
           <TextBlock Text="{Binding Subtitle}" Classes="muted" TextTrimming="CharacterEllipsis" />
         </StackPanel>
         <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-          <TextBlock Text="{Tr Economy.NoProject}" Classes="caption" VerticalAlignment="Center" IsVisible="{Binding !HasProject}" />
+          <Border Classes="segmented" VerticalAlignment="Center" IsVisible="{Binding HasCatalog}">
+            <StackPanel Orientation="Horizontal">
+              <ToggleButton x:Name="EconomyNumbersTab" IsChecked="{Binding !IsCodeView}" Content="{Tr Economy.View.Numbers}" ToolTip.Tip="{Tr Economy.View.Tip}" />
+              <ToggleButton x:Name="EconomyCodeTab" IsChecked="{Binding IsCodeView}" Content="{Tr Economy.View.Code}" ToolTip.Tip="{Tr Economy.View.Tip}" />
+            </StackPanel>
+          </Border>
           <!-- Owner: "I don't see where to spawn a trader": a trader of any type goes on the Map where its camera aims -->
           <Button x:Name="PlaceTraderMenuButton" Classes="ghost" ToolTip.Tip="{Tr Economy.PlaceTrader.Tip}">
             <StackPanel Orientation="Horizontal" Spacing="6">
@@ -117,6 +156,13 @@
               </Flyout>
             </Button.Flyout>
           </Button>
+          <!-- Discord: "the economy doesn't have a way to upload its own economy file" -->
+          <Button x:Name="EconomyImportButton" Classes="accent" Command="{Binding ImportCommand}" IsEnabled="{Binding CanEdit}" ToolTip.Tip="{Tr Economy.Import.Tip}">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <c:GlyphIcon Kind="Icon.Download" IconSize="14" />
+              <TextBlock Text="{Tr Economy.Import}" />
+            </StackPanel>
+          </Button>
           <Button x:Name="EconomyExportButton" Classes="accent" Command="{Binding ExportCommand}" ToolTip.Tip="{Tr Economy.Export.Tip}">
             <StackPanel Orientation="Horizontal" Spacing="6">
               <c:GlyphIcon Kind="Icon.Export" IconSize="14" />
@@ -124,6 +170,29 @@
             </StackPanel>
           </Button>
         </StackPanel>
+      </Grid>
+    </Border>
+
+    <!-- Without a project nothing can be kept: every editor is off and this says why (F299). -->
+    <Border DockPanel.Dock="Top" Classes="card" Margin="24,0,24,10" Padding="12,8" IsVisible="{Binding !CanEdit}">
+      <StackPanel Orientation="Horizontal" Spacing="8">
+        <c:GlyphIcon Kind="Icon.Warning" IconSize="14" Foreground="{DynamicResource WarningBrush}" VerticalAlignment="Center" />
+        <TextBlock Text="{Tr Economy.NoProject}" Classes="wrap" VerticalAlignment="Center" />
+      </StackPanel>
+    </Border>
+
+    <!-- What the last import changed, until dismissed. -->
+    <Border DockPanel.Dock="Top" x:Name="ImportSummaryCard" Classes="card" Margin="24,0,24,10" Padding="12,8" IsVisible="{Binding HasImportSummary}">
+      <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
+        <c:GlyphIcon Grid.Column="0" Kind="Icon.Download" IconSize="16" Foreground="{DynamicResource SuccessBrush}" VerticalAlignment="Top" Margin="0,2,0,0" />
+        <StackPanel Grid.Column="1" Spacing="2">
+          <TextBlock Text="{Binding ImportSummary.Title, FallbackValue=''}" FontWeight="SemiBold" Classes="wrap" />
+          <TextBlock Text="{Binding ImportSummary.Traders, FallbackValue=''}" Classes="caption mono wrap" IsVisible="{Binding ImportSummary.HasTraders, FallbackValue=False}" />
+          <TextBlock Text="{Binding ImportSummary.Detail, FallbackValue=''}" Classes="caption wrap" />
+        </StackPanel>
+        <Button Grid.Column="2" Classes="ghost square" VerticalAlignment="Top" Command="{Binding DismissImportCommand}" ToolTip.Tip="{Tr Economy.Import.Dismiss.Tip}">
+          <c:GlyphIcon Kind="Icon.Close" IconSize="13" />
+        </Button>
       </Grid>
     </Border>
 
@@ -142,7 +211,68 @@
         </StackPanel>
       </Border>
 
-      <Grid x:Name="EconomyBody" ColumnDefinitions="300,*" ColumnSpacing="12" IsVisible="{Binding HasCatalog}">
+      <!-- ===== Code: the project's EconomyOverride.json, checked as it is typed ===== -->
+      <Border x:Name="CodePanel" Classes="panel" IsVisible="{Binding IsCodeShown}">
+        <DockPanel Margin="14,12,14,10">
+          <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10" Margin="0,0,0,8">
+            <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+              <Ellipse Classes="dot" Classes.ok="{Binding IsCodeValid}" Classes.error="{Binding HasCodeErrors}" Classes.warn="{Binding HasCodeWarningsOnly}" />
+              <TextBlock x:Name="CodeStatusText" Text="{Binding CodeStatus}" VerticalAlignment="Center" />
+            </StackPanel>
+            <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6">
+              <ComboBox x:Name="CodeScopeBox" ItemsSource="{Binding CodeScopes}" SelectedItem="{Binding SelectedCodeScope}" MinWidth="190" ToolTip.Tip="{Tr Economy.Code.Scope.Tip}" />
+              <ComboBox x:Name="CodeTraderBox" ItemsSource="{Binding Traders}" SelectedItem="{Binding SelectedTrader}" MinWidth="190"
+                        IsVisible="{Binding IsTraderScope}" ToolTip.Tip="{Tr Economy.Code.Scope.Tip}">
+                <ComboBox.ItemTemplate>
+                  <DataTemplate x:DataType="vm:EconomyTraderRow">
+                    <TextBlock Text="{Binding Name}" Classes="mono" />
+                  </DataTemplate>
+                </ComboBox.ItemTemplate>
+              </ComboBox>
+              <Button x:Name="CodeFormatButton" Classes="ghost" Command="{Binding FormatCodeCommand}" IsEnabled="{Binding CanEdit}" ToolTip.Tip="{Tr Economy.Code.Format.Tip}">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                  <c:GlyphIcon Kind="Icon.Check" IconSize="13" />
+                  <TextBlock Text="{Tr Economy.Code.Format}" />
+                </StackPanel>
+              </Button>
+              <Button x:Name="CodeDiscardButton" Classes="ghost" Command="{Binding DiscardCodeCommand}" ToolTip.Tip="{Tr Economy.Code.Discard.Tip}">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                  <c:GlyphIcon Kind="Icon.Undo" IconSize="13" />
+                  <TextBlock Text="{Tr Economy.Code.Discard}" />
+                </StackPanel>
+              </Button>
+            </StackPanel>
+          </Grid>
+
+          <Border DockPanel.Dock="Top" Classes="card" Padding="10,6" Margin="0,0,0,8" IsVisible="{Binding IsCodeDraft}">
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <c:GlyphIcon Kind="Icon.Warning" IconSize="14" Foreground="{DynamicResource DangerBrush}" VerticalAlignment="Center" />
+              <TextBlock x:Name="CodeDraftText" Text="{Binding CodeDraftText}" Classes="wrap" VerticalAlignment="Center" />
+            </StackPanel>
+          </Border>
+
+          <ListBox DockPanel.Dock="Bottom" x:Name="ProblemList" Classes="plain" ItemsSource="{Binding Problems}" MaxHeight="170" Margin="0,8,0,0"
+                   IsVisible="{Binding HasProblems}" SelectionChanged="OnProblemSelected">
+            <ListBox.ItemTemplate>
+              <DataTemplate x:DataType="vm:EconomyProblemRow">
+                <Grid ColumnDefinitions="Auto,130,*" ColumnSpacing="8" Margin="2,1" Background="Transparent" ToolTip.Tip="{Tr Economy.Code.Problem.Tip}">
+                  <Ellipse Grid.Column="0" Classes="dot" Classes.error="{Binding IsError}" Classes.warn="{Binding !IsError}" />
+                  <TextBlock Grid.Column="1" Text="{Binding Location}" Classes="mono caption" VerticalAlignment="Center" />
+                  <TextBlock Grid.Column="2" Text="{Binding Message}" Classes="problem wrap" Classes.error="{Binding IsError}" Classes.warning="{Binding !IsError}" VerticalAlignment="Center" />
+                </Grid>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+
+          <TextBox x:Name="CodeBox" Classes="code" Text="{Binding CodeText}" IsReadOnly="{Binding !CanEdit}"
+                   AcceptsReturn="True" AcceptsTab="True" TextWrapping="NoWrap"
+                   ScrollViewer.HorizontalScrollBarVisibility="Auto" ScrollViewer.VerticalScrollBarVisibility="Auto"
+                   LostFocus="OnCodeLostFocus" ToolTip.Tip="{Tr Economy.Code.Tip}" />
+        </DockPanel>
+      </Border>
+
+      <!-- ===== Numbers ===== -->
+      <Grid x:Name="EconomyBody" ColumnDefinitions="300,*" ColumnSpacing="12" IsVisible="{Binding IsNumbersShown}">
         <!-- Traders: one card each, by map cell -->
         <Border Grid.Column="0" Classes="panel">
           <DockPanel>
@@ -150,12 +280,31 @@
               <TextBlock Text="{Tr Economy.Traders}" Classes="h3" VerticalAlignment="Center" />
               <Border Classes="badge"><TextBlock Text="{Binding Traders.Count}" /></Border>
             </StackPanel>
+            <ToggleButton DockPanel.Dock="Top" x:Name="EconomySettingsButton" Classes="ghost" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Margin="8,4"
+                          IsChecked="{Binding IsSettingsOpen}" ToolTip.Tip="{Tr Economy.Settings.Tip}">
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <c:GlyphIcon Kind="Icon.Sliders" IconSize="14" />
+                <TextBlock Text="{Tr Economy.Settings}" />
+                <Border Classes="badge"><TextBlock Text="{Binding SettingRows.Count}" /></Border>
+              </StackPanel>
+            </ToggleButton>
             <ProgressBar DockPanel.Dock="Top" IsIndeterminate="True" IsVisible="{Binding IsLoading}" Margin="12,4" />
+            <Border DockPanel.Dock="Top" Classes="card" Margin="8,4" Padding="10,8" IsVisible="{Binding TablesFailed}">
+              <StackPanel Spacing="6">
+                <TextBlock Text="{Tr Economy.TablesFailed}" Classes="wrap" FontWeight="SemiBold" />
+                <Button x:Name="EconomyRetryButton" Classes="ghost" Command="{Binding RetryCommand}" ToolTip.Tip="{Tr Economy.Retry.Tip}">
+                  <StackPanel Orientation="Horizontal" Spacing="6">
+                    <c:GlyphIcon Kind="Icon.Refresh" IconSize="13" />
+                    <TextBlock Text="{Tr Economy.Retry}" />
+                  </StackPanel>
+                </Button>
+              </StackPanel>
+            </Border>
             <ListBox x:Name="TraderList" Classes="plain" ItemsSource="{Binding Traders}" SelectedItem="{Binding SelectedTrader}" Margin="4">
               <ListBox.ItemTemplate>
                 <DataTemplate x:DataType="vm:EconomyTraderRow">
                   <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10" Margin="2,3">
-                    <Border Grid.Column="0" Classes="typeTile" Classes.placed="{Binding IsPlaced}" VerticalAlignment="Center">
+                    <Border Grid.Column="0" Classes="typeTile" Classes.placed="{Binding IsPlaced}" Classes.unknown="{Binding IsUnknown}" VerticalAlignment="Center">
                       <c:GlyphIcon Kind="{Binding IconKey}" IconSize="17" HorizontalAlignment="Center" VerticalAlignment="Center" />
                     </Border>
                     <StackPanel Grid.Column="1" Spacing="1" VerticalAlignment="Center">
@@ -163,8 +312,11 @@
                       <TextBlock Text="{Binding Caption}" Classes="caption" TextTrimming="CharacterEllipsis" />
                       <TextBlock Text="{Binding ChangesText}" Classes="caption accent" TextTrimming="CharacterEllipsis" IsVisible="{Binding HasChanges}" />
                     </StackPanel>
-                    <Border Grid.Column="2" Classes="chip" VerticalAlignment="Center">
+                    <Border Grid.Column="2" Classes="chip" VerticalAlignment="Center" IsVisible="{Binding !IsUnknown}">
                       <TextBlock Text="{Binding Cell}" Classes="mono" />
+                    </Border>
+                    <Border Grid.Column="2" Classes="badge warn" VerticalAlignment="Center" IsVisible="{Binding IsUnknown}" ToolTip.Tip="{Tr Economy.UnknownTrader.Tip}">
+                      <TextBlock Text="?" />
                     </Border>
                   </Grid>
                 </DataTemplate>
@@ -173,11 +325,39 @@
           </DockPanel>
         </Border>
 
+        <!-- The server settings of the file: one row each, with its Reset -->
+        <Border Grid.Column="1" x:Name="SettingsPanel" Classes="panel" IsVisible="{Binding IsSettingsOpen}">
+          <DockPanel Margin="14,12,14,8">
+            <StackPanel DockPanel.Dock="Top" Spacing="4" Margin="0,0,0,10">
+              <TextBlock Text="{Tr Economy.Settings}" Classes="h1" FontSize="20" />
+              <TextBlock Text="{Tr Economy.Settings.Tip}" Classes="muted wrap" />
+            </StackPanel>
+            <ListBox x:Name="SettingList" Classes="plain" ItemsSource="{Binding SettingRows}">
+              <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="vm:EconomySettingRow">
+                  <Grid ColumnDefinitions="*,24,170" ColumnSpacing="8" Margin="2,2">
+                    <StackPanel Grid.Column="0" Spacing="1" VerticalAlignment="Center" Background="Transparent" ToolTip.Tip="{Binding Tip}">
+                      <TextBlock Text="{Binding Key}" Classes="mono" TextTrimming="CharacterEllipsis" />
+                      <TextBlock Text="{Binding InvalidText}" Classes="caption error wrap" IsVisible="{Binding IsInvalid}" />
+                    </StackPanel>
+                    <Button Grid.Column="1" Classes="ghost valueReset" Command="{Binding ResetCommand}" IsVisible="{Binding CanReset}" ToolTip.Tip="{Binding ResetTip}">
+                      <c:GlyphIcon Kind="Icon.Undo" IconSize="11" />
+                    </Button>
+                    <CheckBox Grid.Column="2" IsChecked="{Binding Flag}" IsVisible="{Binding IsFlag}" IsEnabled="{Binding IsEditable}" VerticalAlignment="Center" ToolTip.Tip="{Binding Tip}" />
+                    <TextBox Grid.Column="2" Classes="price" Classes.invalid="{Binding IsInvalid}" Text="{Binding Text, UpdateSourceTrigger=LostFocus}" IsVisible="{Binding !IsFlag}"
+                             IsEnabled="{Binding IsEditable}" VerticalAlignment="Center" KeyDown="OnValueKeyDown" ToolTip.Tip="{Binding Tip}" />
+                  </Grid>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+          </DockPanel>
+        </Border>
+
         <!-- The selected trader's stock -->
-        <Border Grid.Column="1" Classes="panel">
+        <Border Grid.Column="1" Classes="panel" IsVisible="{Binding !IsSettingsOpen}">
           <DockPanel IsVisible="{Binding HasTrader}" Margin="14,12,14,8">
             <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,*" ColumnSpacing="14" Margin="0,0,0,10">
-              <Border Grid.Column="0" Classes="typeTile hero" Classes.placed="{Binding IsPlacedTrader}">
+              <Border Grid.Column="0" Classes="typeTile hero" Classes.placed="{Binding IsPlacedTrader}" Classes.unknown="{Binding IsUnknownTrader}">
                 <c:GlyphIcon Kind="{Binding TraderIconKey}" IconSize="26" HorizontalAlignment="Center" VerticalAlignment="Center" />
               </Border>
               <StackPanel Grid.Column="1" Spacing="4" VerticalAlignment="Center">
@@ -186,6 +366,7 @@
                   <Border Classes="chip" VerticalAlignment="Center"><TextBlock Text="{Binding TraderCell}" Classes="mono" /></Border>
                   <Border Classes="chip" VerticalAlignment="Center"><TextBlock Text="{Binding TraderType}" /></Border>
                   <Border Classes="badge accent" IsVisible="{Binding IsPlacedTrader}"><TextBlock Text="{Tr Economy.Badge.Ready}" /></Border>
+                  <Border Classes="badge warn" IsVisible="{Binding IsUnknownTrader}" ToolTip.Tip="{Tr Economy.UnknownTrader.Tip}"><TextBlock Text="{Tr Economy.UnknownTrader}" /></Border>
                 </WrapPanel>
                 <TextBlock Text="{Binding TraderCaption}" Classes="muted" />
               </StackPanel>
@@ -199,13 +380,13 @@
                                HorizontalAlignment="Left" VerticalAlignment="Center" Foreground="{DynamicResource TextMutedBrush}" />
                 </Panel>
                 <ComboBox x:Name="CategoryBox" ItemsSource="{Binding Categories}" SelectedItem="{Binding SelectedCategory}" MinWidth="170" ToolTip.Tip="{Tr Economy.Category.Tip}" />
-                <Button Classes="ghost" Content="{Tr Economy.PricesUp}" Command="{Binding ScalePricesCommand}" CommandParameter="1.1" ToolTip.Tip="{Tr Economy.PricesUp.Tip}" />
-                <Button Classes="ghost" Content="{Tr Economy.PricesDown}" Command="{Binding ScalePricesCommand}" CommandParameter="0.9" ToolTip.Tip="{Tr Economy.PricesDown.Tip}" />
-                <Button Classes="ghost" Content="{Tr Economy.OffSale}" Command="{Binding SetOnSaleCommand}" CommandParameter="false" ToolTip.Tip="{Tr Economy.OffSale.Tip}" />
-                <Button Classes="ghost" Content="{Tr Economy.OnSale}" Command="{Binding SetOnSaleCommand}" CommandParameter="true" ToolTip.Tip="{Tr Economy.OnSale.Tip}" />
-                <Button Classes="ghost" Content="{Tr Economy.ResetTrader}" Command="{Binding ResetTraderCommand}" ToolTip.Tip="{Tr Economy.ResetTrader.Tip}" />
+                <Button Classes="ghost" Content="{Tr Economy.PricesUp}" Command="{Binding ScalePricesCommand}" CommandParameter="1.1" IsEnabled="{Binding CanEdit}" ToolTip.Tip="{Tr Economy.PricesUp.Tip}" />
+                <Button Classes="ghost" Content="{Tr Economy.PricesDown}" Command="{Binding ScalePricesCommand}" CommandParameter="0.9" IsEnabled="{Binding CanEdit}" ToolTip.Tip="{Tr Economy.PricesDown.Tip}" />
+                <Button Classes="ghost" Content="{Tr Economy.OffSale}" Command="{Binding SetOnSaleCommand}" CommandParameter="false" IsEnabled="{Binding CanEdit}" ToolTip.Tip="{Tr Economy.OffSale.Tip}" />
+                <Button Classes="ghost" Content="{Tr Economy.OnSale}" Command="{Binding SetOnSaleCommand}" CommandParameter="true" IsEnabled="{Binding CanEdit}" ToolTip.Tip="{Tr Economy.OnSale.Tip}" />
+                <Button Classes="ghost" Content="{Tr Economy.ResetTrader}" Command="{Binding ResetTraderCommand}" IsEnabled="{Binding CanEdit}" ToolTip.Tip="{Tr Economy.ResetTrader.Tip}" />
               </WrapPanel>
-              <Button Grid.Column="1" x:Name="AddItemsButton" Classes="accent" VerticalAlignment="Top" Command="{Binding ToggleAddCommand}" ToolTip.Tip="{Tr Economy.AddItems.Tip}">
+              <Button Grid.Column="1" x:Name="AddItemsButton" Classes="accent" VerticalAlignment="Top" Command="{Binding ToggleAddCommand}" IsEnabled="{Binding CanEdit}" ToolTip.Tip="{Tr Economy.AddItems.Tip}">
                 <StackPanel Orientation="Horizontal" Spacing="6">
                   <c:GlyphIcon Kind="Icon.Plus" IconSize="14" />
                   <TextBlock Text="{Tr Economy.AddItems}" />
@@ -215,14 +396,15 @@
 
             <Panel>
               <DockPanel>
-                <Grid DockPanel.Dock="Top" ColumnDefinitions="3,42,*,120,92,92,72,62,72,64" ColumnSpacing="8" Margin="6,0,10,4">
+                <Grid DockPanel.Dock="Top" ColumnDefinitions="3,42,*,110,112,112,92,92,62,72,64" ColumnSpacing="8" Margin="6,0,10,4">
                   <TextBlock Grid.Column="2" Text="{Tr Economy.Col.Item}" Classes="caption" />
                   <TextBlock Grid.Column="3" Text="{Tr Economy.Col.Category}" Classes="caption" />
                   <TextBlock Grid.Column="4" Text="{Tr Economy.Col.Price}" Classes="caption" HorizontalAlignment="Right" />
                   <TextBlock Grid.Column="5" Text="{Tr Economy.Col.Sell}" Classes="caption" HorizontalAlignment="Right" />
                   <TextBlock Grid.Column="6" Text="{Tr Economy.Col.Fame}" Classes="caption" HorizontalAlignment="Right" />
-                  <TextBlock Grid.Column="7" Text="{Tr Economy.Col.OnSale}" Classes="caption" HorizontalAlignment="Center" />
-                  <TextBlock Grid.Column="8" Text="{Tr Economy.Col.AfterSale}" Classes="caption" HorizontalAlignment="Center" />
+                  <TextBlock Grid.Column="7" Text="{Tr Economy.Col.Delta}" Classes="caption" HorizontalAlignment="Right" />
+                  <TextBlock Grid.Column="8" Text="{Tr Economy.Col.OnSale}" Classes="caption" HorizontalAlignment="Center" />
+                  <TextBlock Grid.Column="9" Text="{Tr Economy.Col.AfterSale}" Classes="caption" HorizontalAlignment="Center" />
                 </Grid>
 
                 <TextBlock DockPanel.Dock="Bottom" Classes="caption wrap" Text="{Tr Economy.Note}" Margin="2,6,0,0" />
@@ -230,8 +412,8 @@
                 <ListBox x:Name="EconomyItems" Classes="plain" ItemsSource="{Binding Items}">
                   <ListBox.ItemTemplate>
                     <DataTemplate x:DataType="vm:EconomyItemViewModel">
-                      <Border Classes="itemRow" Classes.changed="{Binding IsChanged}" Classes.added="{Binding IsAdded}" Classes.off="{Binding IsOffSale}">
-                        <Grid ColumnDefinitions="3,42,*,120,92,92,72,62,72,64" ColumnSpacing="8">
+                      <Border Classes="itemRow" Classes.changed="{Binding IsChanged}" Classes.added="{Binding IsAdded}" Classes.unknown="{Binding IsUnknown}" Classes.off="{Binding IsOffSale}">
+                        <Grid ColumnDefinitions="3,42,*,110,112,112,92,92,62,72,64" ColumnSpacing="8">
                           <Border Grid.Column="0" Classes="mark" />
                           <Border Grid.Column="1" Classes="thumb">
                             <Panel>
@@ -245,8 +427,10 @@
                             <DockPanel>
                               <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" Spacing="4">
                                 <Border Classes="badge ok" Margin="0,0,2,0" IsVisible="{Binding IsAdded}"><TextBlock Text="{Tr Economy.Badge.Added}" /></Border>
+                                <Border Classes="badge warn" Margin="0,0,2,0" IsVisible="{Binding IsUnknown}" ToolTip.Tip="{Tr Economy.Badge.Unknown.Tip}"><TextBlock Text="{Tr Economy.Badge.Unknown}" /></Border>
                                 <Border Classes="badge" Margin="0,0,2,0" IsVisible="{Binding IsOffSale}"><TextBlock Text="{Tr Economy.Badge.OffSale}" /></Border>
                                 <Border Classes="badge warn" Margin="0,0,2,0" IsVisible="{Binding IsLocked}"><TextBlock Text="{Tr Economy.Badge.Locked}" /></Border>
+                                <Border Classes="badge warn" Margin="0,0,2,0" IsVisible="{Binding SellAboveBuy}"><TextBlock Text="{Tr Economy.Badge.SellAboveBuy}" /></Border>
                               </StackPanel>
                               <TextBlock Classes="caption" TextTrimming="CharacterEllipsis" VerticalAlignment="Center">
                                 <Run Text="{Binding Code}" />
@@ -254,15 +438,48 @@
                                 <Run Text="{Binding DefaultText}" />
                               </TextBlock>
                             </DockPanel>
+                            <TextBlock Classes="caption error wrap" Text="{Binding InvalidText}" IsVisible="{Binding IsInvalid}" />
                           </StackPanel>
                           <TextBlock Grid.Column="3" Text="{Binding Category}" Classes="caption" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
-                          <TextBox Grid.Column="4" x:Name="BuyBox" Classes="price" VerticalAlignment="Center" Text="{Binding PurchasePrice}" IsEnabled="{Binding !IsLocked}" ToolTip.Tip="{Tr Economy.Price.Tip}" />
-                          <TextBox Grid.Column="5" x:Name="SellBox" Classes="price" VerticalAlignment="Center" Text="{Binding SellPrice}" IsEnabled="{Binding !IsLocked}" ToolTip.Tip="{Tr Economy.Sell.Tip}" />
-                          <TextBox Grid.Column="6" x:Name="FameBox" Classes="price" VerticalAlignment="Center" Text="{Binding RequiredFame}" IsEnabled="{Binding !IsLocked}" ToolTip.Tip="{Tr Economy.Fame.Tip}" />
-                          <CheckBox Grid.Column="7" IsChecked="{Binding CanBePurchased}" IsEnabled="{Binding !IsLocked}" HorizontalAlignment="Center" VerticalAlignment="Center" ToolTip.Tip="{Tr Economy.OnSaleBox.Tip}" />
-                          <CheckBox Grid.Column="8" IsChecked="{Binding AfterSaleOnly}" IsEnabled="{Binding !IsLocked}" HorizontalAlignment="Center" VerticalAlignment="Center" ToolTip.Tip="{Tr Economy.AfterSaleBox.Tip}" />
-                          <StackPanel Grid.Column="9" Orientation="Horizontal" Spacing="2" HorizontalAlignment="Right" VerticalAlignment="Center">
-                            <Button Classes="ghost square" Command="{Binding ResetCommand}" IsVisible="{Binding IsChanged}" ToolTip.Tip="{Tr Economy.ResetItem.Tip}">
+                          <!-- Each box is read when it is left or Enter is pressed (F111); its Reset is the glyph on its left. -->
+                          <DockPanel Grid.Column="4" VerticalAlignment="Center">
+                            <Button DockPanel.Dock="Left" Classes="ghost valueReset" Command="{Binding ResetPurchaseCommand}" IsVisible="{Binding CanResetPurchase}" ToolTip.Tip="{Binding PurchaseResetTip}">
+                              <c:GlyphIcon Kind="Icon.Undo" IconSize="10" />
+                            </Button>
+                            <TextBox x:Name="BuyBox" Classes="price" Text="{Binding PurchaseText, UpdateSourceTrigger=LostFocus}" IsEnabled="{Binding IsEditable}" KeyDown="OnValueKeyDown" ToolTip.Tip="{Tr Economy.Price.Tip}" />
+                          </DockPanel>
+                          <DockPanel Grid.Column="5" VerticalAlignment="Center">
+                            <Button DockPanel.Dock="Left" Classes="ghost valueReset" Command="{Binding ResetSellCommand}" IsVisible="{Binding CanResetSell}" ToolTip.Tip="{Binding SellResetTip}">
+                              <c:GlyphIcon Kind="Icon.Undo" IconSize="10" />
+                            </Button>
+                            <TextBox x:Name="SellBox" Classes="price" Text="{Binding SellText, UpdateSourceTrigger=LostFocus}" IsEnabled="{Binding IsEditable}" KeyDown="OnValueKeyDown" ToolTip.Tip="{Tr Economy.Sell.Tip}" />
+                          </DockPanel>
+                          <DockPanel Grid.Column="6" VerticalAlignment="Center">
+                            <Button DockPanel.Dock="Left" Classes="ghost valueReset" Command="{Binding ResetFameCommand}" IsVisible="{Binding CanResetFame}" ToolTip.Tip="{Binding FameResetTip}">
+                              <c:GlyphIcon Kind="Icon.Undo" IconSize="10" />
+                            </Button>
+                            <TextBox x:Name="FameBox" Classes="price" Text="{Binding FameText, UpdateSourceTrigger=LostFocus}" IsEnabled="{Binding IsEditable}" KeyDown="OnValueKeyDown" ToolTip.Tip="{Tr Economy.Fame.Tip}" />
+                          </DockPanel>
+                          <DockPanel Grid.Column="7" VerticalAlignment="Center">
+                            <Button DockPanel.Dock="Left" Classes="ghost valueReset" Command="{Binding ResetDeltaCommand}" IsVisible="{Binding CanResetDelta}" ToolTip.Tip="{Binding DeltaResetTip}">
+                              <c:GlyphIcon Kind="Icon.Undo" IconSize="10" />
+                            </Button>
+                            <TextBox x:Name="DeltaBox" Classes="price" Text="{Binding DeltaText, UpdateSourceTrigger=LostFocus}" Watermark="-1" IsEnabled="{Binding IsEditable}" KeyDown="OnValueKeyDown" ToolTip.Tip="{Tr Economy.Delta.Tip}" />
+                          </DockPanel>
+                          <StackPanel Grid.Column="8" Orientation="Horizontal" Spacing="2" HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <Button Classes="ghost valueReset" Command="{Binding ResetOnSaleCommand}" IsVisible="{Binding CanResetOnSale}" ToolTip.Tip="{Binding OnSaleResetTip}">
+                              <c:GlyphIcon Kind="Icon.Undo" IconSize="10" />
+                            </Button>
+                            <CheckBox IsChecked="{Binding CanBePurchased}" IsEnabled="{Binding IsEditable}" VerticalAlignment="Center" ToolTip.Tip="{Tr Economy.OnSaleBox.Tip}" />
+                          </StackPanel>
+                          <StackPanel Grid.Column="9" Orientation="Horizontal" Spacing="2" HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <Button Classes="ghost valueReset" Command="{Binding ResetAfterSaleCommand}" IsVisible="{Binding CanResetAfterSale}" ToolTip.Tip="{Binding AfterSaleResetTip}">
+                              <c:GlyphIcon Kind="Icon.Undo" IconSize="10" />
+                            </Button>
+                            <CheckBox IsChecked="{Binding AfterSaleOnly}" IsEnabled="{Binding IsEditable}" VerticalAlignment="Center" ToolTip.Tip="{Tr Economy.AfterSaleBox.Tip}" />
+                          </StackPanel>
+                          <StackPanel Grid.Column="10" Orientation="Horizontal" Spacing="2" HorizontalAlignment="Right" VerticalAlignment="Center">
+                            <Button Classes="ghost square" Command="{Binding ResetCommand}" IsVisible="{Binding IsChanged}" IsEnabled="{Binding IsEditable}" ToolTip.Tip="{Tr Economy.ResetItem.Tip}">
                               <c:GlyphIcon Kind="Icon.Undo" IconSize="13" />
                             </Button>
                             <Button x:Name="RemoveItemButton" Classes="ghost square" Command="{Binding RemoveCommand}" IsVisible="{Binding CanRemove}" ToolTip.Tip="{Tr Economy.Remove.Tip}">

@@ -7,6 +7,71 @@ namespace ScumStudio.Tests.Rendering;
 
 public sealed class CameraMathTests
 {
+    /// <summary>
+    /// D09 (seviscache: "If I zoom out, Blato A4 becomes visible again, but if I zoom in, it gets cut off"): a sector shot fitted
+    /// near to the zone still drawn (kilometres away) and nothing reset it. The rule worked out each frame keeps near at
+    /// the chosen distance with reverse-Z, never beyond half the way to what is drawn without it, and far past it all.
+    /// </summary>
+    [Fact]
+    public void TheNearPlaneFollowsWhatIsDrawnNotAnEarlierFraming()
+    {
+        var sector = new BoundingBox(new Vector3(-250_000f, -5_000f, -250_000f), new Vector3(250_000f, 60_000f, 250_000f));
+        // What the bug left: a sector shot (SetView) fitted the clip range to the zone still drawn (A0, 10 km away), and with
+        // the island behind nothing reset it.
+        var camera = new FlyCamera { Position = new Vector3(-150_000f, 200_000f, -150_000f) };
+        camera.FitClipRange(Vector3.Distance(camera.Position, new Vector3(-1_000_000f, 0f, 0f)), 250_000f);
+        Assert.True(camera.NearPlane > 50_000f, $"the old near {camera.NearPlane}");
+
+        // Standing in the sector (on the ground, zoomed in): the chosen near clip, whatever the earlier framing set.
+        var eye = new Vector3(1_000f, 200f, -3_000f);
+        Assert.Equal((10f, MathF.Max(1.1f * Reach(eye, sector), 100_000f)), FlyCamera.ClipRangeFor(eye, sector, FlyCamera.DefaultMapNear, reverseZ: true));
+        Assert.Equal(10f, FlyCamera.ClipRangeFor(eye, sector, 10f, reverseZ: false).Near);
+
+        // F15: Settings › Near clip, clamped to 1 cm .. 1 m.
+        Assert.Equal(2f, FlyCamera.ClipRangeFor(eye, sector, 2f, reverseZ: true).Near);
+        Assert.Equal(FlyCamera.MinMapNear, FlyCamera.ClipRangeFor(eye, sector, 0f, reverseZ: true).Near);
+        Assert.Equal(FlyCamera.MaxMapNear, FlyCamera.ClipRangeFor(eye, sector, 5_000f, reverseZ: true).Near);
+        Assert.Equal(FlyCamera.DefaultMapNear, FlyCamera.ClipRangeFor(eye, sector, float.NaN, reverseZ: true).Near);
+
+        // Far above it: reverse-Z keeps the chosen near; a standard depth buffer gets half the gap (nothing drawn is closer).
+        var high = new Vector3(0f, 460_000f, 0f);
+        Assert.Equal(10f, FlyCamera.ClipRangeFor(high, sector, 10f, reverseZ: true).Near);
+        var (near, far) = FlyCamera.ClipRangeFor(high, sector, 10f, reverseZ: false);
+        Assert.Equal(200_000f, near);
+        Assert.True(far >= Reach(high, sector), $"far {far}");
+
+        // Nothing drawn yet: the chosen near and a kilometre.
+        Assert.Equal((10f, 100_000f), FlyCamera.ClipRangeFor(eye, BoundingBox.Empty, 10f, reverseZ: true));
+
+        // The camera accepts every range the rule gives.
+        foreach (var at in new[] { eye, high, new Vector3(9e6f, -9e6f, 9e6f) })
+        {
+            var range = FlyCamera.ClipRangeFor(at, sector, 1f, reverseZ: false);
+            camera.SetClipRange(range.Near, range.Far);
+        }
+
+        static float Reach(Vector3 at, BoundingBox box) => Vector3.Max(Vector3.Abs(at - box.Min), Vector3.Abs(at - box.Max)).Length();
+    }
+
+    /// <summary>F15: Ctrl+Shift+N steps 1, 2, 5, 10, 20, 50 cm and round again; a hand-edited value snaps to the nearest choice.</summary>
+    [Fact]
+    public void TheNearClipChoicesStepAndSnap()
+    {
+        var steps = new List<float>();
+        var cm = 10f;
+        for (var i = 0; i < 6; i++)
+        {
+            cm = ScumStudio.App.ViewModels.NearClipOption.Next(cm).Centimetres;
+            steps.Add(cm);
+        }
+
+        Assert.Equal([20f, 50f, 1f, 2f, 5f, 10f], steps);
+        Assert.Equal(10f, ScumStudio.App.ViewModels.NearClipOption.Nearest(12f).Centimetres);
+        Assert.Equal(1f, ScumStudio.App.ViewModels.NearClipOption.Nearest(-3f).Centimetres);
+        Assert.Equal(50f, ScumStudio.App.ViewModels.NearClipOption.Nearest(400f).Centimetres);
+        Assert.Equal(10f, ScumStudio.App.ViewModels.NearClipOption.Nearest(float.NaN).Centimetres);
+    }
+
     public static TheoryData<float, float> Angles => new()
     {
         { 0f, 0f },

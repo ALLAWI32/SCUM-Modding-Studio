@@ -11,6 +11,8 @@
     <!-- Also flows in through ScumStudio.Assets; referenced directly because Reading/Cue4ParseLevelReader uses its types. -->
     <PackageReference Include="CUE4Parse" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <!-- SCUM.db, the game's SQLite save (Saves/SavedItemCleaner). -->
+    <PackageReference Include="Microsoft.Data.Sqlite" />
   </ItemGroup>
 
   <ItemGroup>

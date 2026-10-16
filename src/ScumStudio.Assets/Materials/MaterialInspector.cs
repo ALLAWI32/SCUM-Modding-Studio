@@ -274,9 +274,13 @@ public sealed class MaterialInspector
 
         foreach (var hint in BaseColorTextureHints)
         {
-            // "Diffuse/Roughness": colour packed with roughness in alpha (SCUM's object master shader).
-            var partial = withValue.FirstOrDefault(t => !IsBlendLayer(t.Name) && (t.Name.Contains(hint, StringComparison.OrdinalIgnoreCase) && !IsNonColour(t.Name))
-                                                        || t.Name.StartsWith(hint + "/", StringComparison.OrdinalIgnoreCase));
+            // "Diffuse/Roughness": colour packed with roughness in alpha (SCUM's object master shader). Never a layer painted
+            // over the base: the masters' 'SnowTexture' (a normal map) matched "Texture" and drew shelves and cliffs purple-blue
+            // on the Map wherever the instance's own colour slots hold dummies (D06).
+            // Nor a texture named as a normal map (M_Background_01's 'Base_DistaneTexture_1' is Background_01_N).
+            var partial = withValue.FirstOrDefault(t => !IsOverlay(t.Name) && !NamedLikeNormalMap(t.TexturePath)
+                                                        && ((!IsBlendLayer(t.Name) && t.Name.Contains(hint, StringComparison.OrdinalIgnoreCase) && !IsNonColour(t.Name))
+                                                            || t.Name.StartsWith(hint + "/", StringComparison.OrdinalIgnoreCase)));
             if (partial is not null)
             {
                 return partial.TexturePath;
@@ -382,6 +386,13 @@ public sealed class MaterialInspector
                || (name.EndsWith("_Color", StringComparison.OrdinalIgnoreCase) && !IsFoliageMap(name)); // SpeedTree: ScotsPine_01_Color
     }
 
+    /// <summary>True when a texture's name follows the normal map convention (<c>T_X_N</c>, <c>X_Normal</c>).</summary>
+    private static bool NamedLikeNormalMap(string texturePath)
+    {
+        var name = texturePath[(texturePath.LastIndexOfAny(['/', '.']) + 1)..];
+        return name.EndsWith("_N", StringComparison.OrdinalIgnoreCase) || name.Contains("Normal", StringComparison.OrdinalIgnoreCase);
+    }
+
     /// <summary>The maps a SpeedTree or bush texture set has beside its colour (masks, normals, subsurface, opacity).</summary>
     private static bool IsFoliageMap(string name) =>
         name.Contains("Mask", StringComparison.OrdinalIgnoreCase) || name.Contains("Normal", StringComparison.OrdinalIgnoreCase)
@@ -392,9 +403,12 @@ public sealed class MaterialInspector
     private static bool IsBlendLayer(string name) =>
         name.Contains("Blend", StringComparison.OrdinalIgnoreCase) || name.StartsWith("B Material", StringComparison.OrdinalIgnoreCase);
 
+    // "Emis": SCUM's masters spell it 'B Emisive Tint' (black), and 'SS Color' is the subsurface colour: with the snow layer
+    // no longer taken for the colour texture, these were the tints that drew untextured masters and road sides black (D06).
     private static bool IsNonColour(string name) =>
         name.Contains("Normal", StringComparison.OrdinalIgnoreCase) || name.Contains("Mask", StringComparison.OrdinalIgnoreCase)
-        || name.Contains("Rough", StringComparison.OrdinalIgnoreCase) || name.Contains("Emiss", StringComparison.OrdinalIgnoreCase)
+        || name.Contains("Rough", StringComparison.OrdinalIgnoreCase) || name.Contains("Emis", StringComparison.OrdinalIgnoreCase)
+        || name.StartsWith("SS ", StringComparison.OrdinalIgnoreCase) || name.Contains("Subsurface", StringComparison.OrdinalIgnoreCase)
         || name.Contains("Detail", StringComparison.OrdinalIgnoreCase) || name.Contains("Decay", StringComparison.OrdinalIgnoreCase)
         || name.Contains("Damage", StringComparison.OrdinalIgnoreCase) || name.Contains("RMA", StringComparison.OrdinalIgnoreCase)
         || name.Contains("Aging", StringComparison.OrdinalIgnoreCase) || name.Contains("Dirt", StringComparison.OrdinalIgnoreCase)

@@ -83,7 +83,7 @@ public sealed class Tutorial3SpawnsRecorder
                 return !rooms.Any(r => r.SelectableId != pin.SelectableId && r.Box.Contains(at));
             }
 
-            var lootPins = placements.Where(p => SpawnMarkers.KindOfMesh(p.MeshPath) == SpawnKind.Loot && p.InstanceKey is { IsLootPoint: true }).ToList();
+            var lootPins = placements.Where(p => SpawnMarkers.KindOfMesh(p.MeshPath) == SpawnKind.Loot && p.InstanceKey is { IsLootPoint: true } or { IsSpawnPoint: true }).ToList();
             var open = lootPins.Where(Outdoors).ToList();
             var lootPin = open.MaxBy(p => open.Count(o => FVector.Distance(o.World.Translation, p.World.Translation) < 800f))
                 ?? lootPins.FirstOrDefault() ?? placements.First(p => SpawnMarkers.KindOfMesh(p.MeshPath) == SpawnKind.Loot);

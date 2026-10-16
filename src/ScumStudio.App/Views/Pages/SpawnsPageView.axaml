@@ -33,15 +33,22 @@
   </UserControl.Styles>
 
   <UserControl.DataTemplates>
-    <!-- One slider over stored values. -->
+    <!-- One slider over stored values; the stored value is never rounded, the range widens to hold it. -->
     <DataTemplate DataType="vm:SpawnSliderViewModel">
       <Border Classes="spawnRow" Classes.pending="{Binding IsPending}" ToolTip.Tip="{Binding Tip}">
-        <Grid ColumnDefinitions="190,*,110" ColumnSpacing="14">
-          <TextBlock Text="{Binding Label}" VerticalAlignment="Center" TextWrapping="Wrap" />
+        <Grid ColumnDefinitions="190,*,110,Auto" ColumnSpacing="10">
+          <StackPanel Orientation="Horizontal" Spacing="5" VerticalAlignment="Center">
+            <TextBlock Text="{Binding Label}" VerticalAlignment="Center" TextWrapping="Wrap" MaxWidth="170" />
+            <c:GlyphIcon Kind="Icon.Warning" IconSize="12" Foreground="{DynamicResource WarningBrush}" IsVisible="{Binding IsOutOfRange}"
+                         ToolTip.Tip="{Tr Spawns.OutOfRange.Tip}" VerticalAlignment="Center" />
+          </StackPanel>
           <Slider Grid.Column="1" Minimum="{Binding Minimum}" Maximum="{Binding Maximum}" Value="{Binding Value}" ToolTip.Tip="{Binding Tip}"
                   SmallChange="{Binding Step}" LargeChange="{Binding Step}" TickFrequency="{Binding Step}" IsSnapToTickEnabled="True"
                   VerticalAlignment="Center" />
           <TextBlock Grid.Column="2" Classes="value" Classes.pending="{Binding IsPending}" Text="{Binding ValueText}" />
+          <Button Grid.Column="3" Classes="ghost square small" ToolTip.Tip="{Tr Module.ResetRow.Tip}" Command="{Binding ResetCommand}" VerticalAlignment="Center">
+            <c:GlyphIcon Kind="Icon.Undo" IconSize="13" />
+          </Button>
         </Grid>
       </Border>
     </DataTemplate>
@@ -62,7 +69,7 @@
       </StackPanel>
     </DataTemplate>
 
-    <!-- A ServerSettings.ini value: switch or slider. -->
+    <!-- A ServerSettings.ini value: switch or slider; -1 ("the game decides") is its own switch where the key has one. -->
     <DataTemplate DataType="vm:ServerSettingViewModel">
       <Border Classes="spawnRow" Classes.pending="{Binding IsPending}" ToolTip.Tip="{Binding Tip}">
         <Panel>
@@ -70,15 +77,60 @@
             <TextBlock Text="{Binding Label}" VerticalAlignment="Center" TextWrapping="Wrap" />
             <ToggleSwitch Grid.Column="1" IsChecked="{Binding Flag}" OnContent="" OffContent="" VerticalAlignment="Center" ToolTip.Tip="{Binding Tip}" />
           </Grid>
-          <Grid ColumnDefinitions="190,*,110" ColumnSpacing="14" IsVisible="{Binding IsSlider}">
-            <TextBlock Text="{Binding Label}" VerticalAlignment="Center" TextWrapping="Wrap" />
+          <Grid ColumnDefinitions="190,*,110,Auto" ColumnSpacing="10" IsVisible="{Binding IsSlider}">
+            <StackPanel Orientation="Horizontal" Spacing="5" VerticalAlignment="Center">
+              <TextBlock Text="{Binding Label}" VerticalAlignment="Center" TextWrapping="Wrap" MaxWidth="170" />
+              <c:GlyphIcon Kind="Icon.Warning" IconSize="12" Foreground="{DynamicResource WarningBrush}" IsVisible="{Binding IsOutOfRange}"
+                           ToolTip.Tip="{Tr Spawns.OutOfRange.Tip}" VerticalAlignment="Center" />
+            </StackPanel>
             <Slider Grid.Column="1" Minimum="{Binding Minimum}" Maximum="{Binding Maximum}" Value="{Binding Value}" ToolTip.Tip="{Binding Tip}"
                     SmallChange="{Binding Step}" LargeChange="{Binding Step}" TickFrequency="{Binding Step}" IsSnapToTickEnabled="True"
-                    VerticalAlignment="Center" />
+                    IsEnabled="{Binding CanSlide}" VerticalAlignment="Center" />
             <TextBlock Grid.Column="2" Classes="value" Classes.pending="{Binding IsPending}" Text="{Binding ValueText}" />
+            <CheckBox Grid.Column="3" Content="{Tr Spawns.GameDefault}" IsChecked="{Binding IsGameDefault}" IsVisible="{Binding HasGameDefault}"
+                      ToolTip.Tip="{Tr Spawns.GameDefault.Tip}" VerticalAlignment="Center" />
           </Grid>
         </Panel>
       </Border>
+    </DataTemplate>
+
+    <!-- A note inside a card; a warning only while its condition holds. -->
+    <DataTemplate DataType="vm:SpawnNoteViewModel">
+      <StackPanel Orientation="Horizontal" Spacing="6" Margin="10,4" IsVisible="{Binding IsShown}">
+        <c:GlyphIcon Kind="Icon.Warning" IconSize="13" Foreground="{DynamicResource WarningBrush}" IsVisible="{Binding IsWarning}" VerticalAlignment="Top" Margin="0,2,0,0" />
+        <c:GlyphIcon Kind="Icon.Info" IconSize="13" IsVisible="{Binding !IsWarning}" VerticalAlignment="Top" Margin="0,2,0,0" />
+        <TextBlock Text="{Binding Text}" Classes="caption wrap" Classes.warn="{Binding IsWarning}" MaxWidth="760" />
+      </StackPanel>
+    </DataTemplate>
+
+    <!-- A chance list row: the list's header (shared-asset badge, back to the game's weights) or one type with its chances. -->
+    <DataTemplate DataType="vm:SpawnWeightRowViewModel">
+      <Panel>
+        <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8" Margin="4,10,4,2" IsVisible="{Binding IsHeader}" ToolTip.Tip="{Binding Tip}">
+          <StackPanel Spacing="1">
+            <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+            <TextBlock Text="{Binding Detail}" Classes="caption" TextTrimming="CharacterEllipsis" />
+          </StackPanel>
+          <Border Grid.Column="1" Classes="badge" IsVisible="{Binding IsShared}" VerticalAlignment="Center">
+            <TextBlock Text="{Binding SharedText}" Classes="warn" />
+          </Border>
+          <Button Grid.Column="2" Classes="ghost square small" ToolTip.Tip="{Tr Module.ResetRow.Tip}" Command="{Binding ResetCommand}" VerticalAlignment="Center">
+            <c:GlyphIcon Kind="Icon.Undo" IconSize="13" />
+          </Button>
+        </Grid>
+        <Border Classes="spawnRow" Classes.pending="{Binding IsPending}" IsVisible="{Binding IsEntry}" ToolTip.Tip="{Binding Tip}">
+          <Grid ColumnDefinitions="190,*,70,70" ColumnSpacing="10">
+            <StackPanel Spacing="1" VerticalAlignment="Center">
+              <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" />
+              <TextBlock Text="{Binding TypeGroup}" Classes="caption" TextTrimming="CharacterEllipsis" />
+            </StackPanel>
+            <Slider Grid.Column="1" Minimum="0" Maximum="100" Value="{Binding Percent}" IsEnabled="{Binding CanEdit}" ToolTip.Tip="{Tr Spawns.Chance.InList.Tip}"
+                    SmallChange="1" LargeChange="5" VerticalAlignment="Center" />
+            <TextBlock Grid.Column="2" Classes="value" Classes.pending="{Binding IsPending}" Text="{Binding PercentText}" ToolTip.Tip="{Tr Spawns.Chance.InList.Tip}" />
+            <TextBlock Grid.Column="3" Classes="value" Text="{Binding OverallText}" ToolTip.Tip="{Tr Spawns.Chance.Overall.Tip}" />
+          </Grid>
+        </Border>
+      </Panel>
     </DataTemplate>
 
     <!-- A card of rows. -->
@@ -102,7 +154,7 @@
 
   <DockPanel>
 
-    <!-- ===== Header ===== -->
+    <!-- ===== Header: the categories, pending count, Discard / Save ===== -->
     <Border DockPanel.Dock="Top" Classes="pageHeader">
       <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="14">
         <Border Grid.Column="0" Classes="pageGlyph"><c:GlyphIcon Kind="{Binding IconKey}" IconSize="22" /></Border>
@@ -113,22 +165,40 @@
         <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
           <Border Classes="segmented">
             <StackPanel Orientation="Horizontal">
-              <ToggleButton x:Name="VehiclesTab" IsChecked="{Binding IsVehiclesTab}" ToolTip.Tip="{Tr Spawns.Tab.Vehicles.Tip}">
+              <ToggleButton x:Name="VehiclesTab" IsChecked="{Binding IsVehiclesTab}" ToolTip.Tip="{Tr Spawns.Category.Vehicles.Tip}">
                 <StackPanel Orientation="Horizontal" Spacing="5">
                   <c:GlyphIcon Kind="Icon.Vehicle" IconSize="13" />
-                  <TextBlock Text="{Tr Spawns.Tab.Vehicles}" />
+                  <TextBlock Text="{Tr Spawns.Category.Vehicles}" />
                 </StackPanel>
               </ToggleButton>
-              <ToggleButton x:Name="ZombiesTab" IsChecked="{Binding IsZombiesTab}" ToolTip.Tip="{Tr Spawns.Tab.Zombies.Tip}">
+              <ToggleButton x:Name="ZombiesTab" IsChecked="{Binding IsZombiesTab}" ToolTip.Tip="{Tr Spawns.Category.Zombies.Tip}">
                 <StackPanel Orientation="Horizontal" Spacing="5">
                   <c:GlyphIcon Kind="Icon.Warning" IconSize="13" />
-                  <TextBlock Text="{Tr Spawns.Tab.Zombies}" />
+                  <TextBlock Text="{Tr Spawns.Category.Zombies}" />
                 </StackPanel>
               </ToggleButton>
-              <ToggleButton x:Name="ServerTab" IsChecked="{Binding IsServerTab}" ToolTip.Tip="{Tr Spawns.Tab.Server.Tip}">
+              <ToggleButton x:Name="NpcsTab" IsChecked="{Binding IsNpcsTab}" ToolTip.Tip="{Tr Spawns.Category.Npcs.Tip}">
+                <StackPanel Orientation="Horizontal" Spacing="5">
+                  <c:GlyphIcon Kind="Icon.Weapon" IconSize="13" />
+                  <TextBlock Text="{Tr Spawns.Category.Npcs}" />
+                </StackPanel>
+              </ToggleButton>
+              <ToggleButton x:Name="AnimalsTab" IsChecked="{Binding IsAnimalsTab}" ToolTip.Tip="{Tr Spawns.Category.Animals.Tip}">
+                <StackPanel Orientation="Horizontal" Spacing="5">
+                  <c:GlyphIcon Kind="Icon.Tree" IconSize="13" />
+                  <TextBlock Text="{Tr Spawns.Category.Animals}" />
+                </StackPanel>
+              </ToggleButton>
+              <ToggleButton x:Name="PlayersTab" IsChecked="{Binding IsPlayersTab}" ToolTip.Tip="{Tr Spawns.Category.Players.Tip}">
+                <StackPanel Orientation="Horizontal" Spacing="5">
+                  <c:GlyphIcon Kind="Icon.Pin" IconSize="13" />
+                  <TextBlock Text="{Tr Spawns.Category.Players}" />
+                </StackPanel>
+              </ToggleButton>
+              <ToggleButton x:Name="ServerTab" IsChecked="{Binding IsServerTab}" ToolTip.Tip="{Tr Spawns.Category.Server.Tip}">
                 <StackPanel Orientation="Horizontal" Spacing="5">
                   <c:GlyphIcon Kind="Icon.Server" IconSize="13" />
-                  <TextBlock Text="{Tr Spawns.Tab.Server}" />
+                  <TextBlock Text="{Tr Spawns.Category.Server}" />
                 </StackPanel>
               </ToggleButton>
             </StackPanel>
@@ -145,10 +215,20 @@
       </Grid>
     </Border>
 
+    <!-- A moved chance list is shared by other places: the save waits for a yes. -->
+    <Border DockPanel.Dock="Top" Classes="card" Margin="24,0,24,10" IsVisible="{Binding IsConfirmingShared}">
+      <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="10">
+        <c:GlyphIcon Kind="Icon.Warning" IconSize="16" Foreground="{DynamicResource WarningBrush}" VerticalAlignment="Center" />
+        <TextBlock Grid.Column="1" Text="{Binding SharedConfirmText}" Classes="wrap" VerticalAlignment="Center" />
+        <Button Grid.Column="2" Classes="ghost" Content="{Tr Spawns.Shared.Cancel}" Command="{Binding CancelSharedCommand}" ToolTip.Tip="{Tr Spawns.Shared.Cancel.Tip}" />
+        <Button Grid.Column="3" x:Name="ConfirmSharedButton" Classes="accent" Content="{Tr Spawns.Shared.SaveAnyway}" Command="{Binding ConfirmApplyCommand}" ToolTip.Tip="{Tr Spawns.Shared.SaveAnyway.Tip}" />
+      </Grid>
+    </Border>
+
     <!-- ===== Body ===== -->
     <Panel Margin="24,0,24,20">
 
-      <!-- No game files yet (vehicles and zones come from them). -->
+      <!-- No game files yet (vehicles, zones and biomes come from them). -->
       <Border Classes="emptyState">
         <Border.IsVisible>
           <MultiBinding Converter="{x:Static BoolConverters.And}">
@@ -166,53 +246,233 @@
         </StackPanel>
       </Border>
 
-      <!-- Vehicles / zones: list and detail. -->
-      <Grid ColumnDefinitions="320,*" ColumnSpacing="12">
+      <!-- Vehicles / Zombies / NPCs / Animals: the island map with the area (left), what spawns there (right). -->
+      <Grid ColumnDefinitions="*,640" ColumnSpacing="12">
         <Grid.IsVisible>
           <MultiBinding Converter="{x:Static BoolConverters.And}">
             <Binding Path="ShowList" />
             <Binding Path="HasCatalog" />
           </MultiBinding>
         </Grid.IsVisible>
-        <Border Grid.Column="0" Classes="panel">
+        <Border Grid.Column="0" x:Name="MapPane" Classes="panel" ClipToBounds="True">
           <DockPanel>
-            <Panel DockPanel.Dock="Top" Margin="8,8,8,4">
-              <TextBox x:Name="SpawnSearch" Classes="search" Text="{Binding FilterText}" Watermark="{Tr Module.Filter}" ToolTip.Tip="{Tr Spawns.Filter.Tip}" />
-              <c:GlyphIcon Kind="Icon.Search" IconSize="15" Margin="11,0,0,0" IsHitTestVisible="False"
-                           HorizontalAlignment="Left" VerticalAlignment="Center" Foreground="{DynamicResource TextMutedBrush}" />
-            </Panel>
-            <ListBox x:Name="SpawnList" Classes="plain" ItemsSource="{Binding Entries}" SelectedItem="{Binding SelectedEntry}" Margin="4">
-              <ListBox.ItemTemplate>
-                <DataTemplate x:DataType="vm:SpawnEntry">
-                  <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10" ToolTip.Tip="{Binding PackagePath}">
-                    <Border Width="30" Height="30" CornerRadius="{DynamicResource SmallCornerRadius}" Background="{DynamicResource Surface2Brush}">
-                      <c:GlyphIcon Kind="{Binding IconKey}" IconSize="15" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                    </Border>
-                    <StackPanel Grid.Column="1" Spacing="1" VerticalAlignment="Center">
-                      <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
-                      <TextBlock Text="{Binding Group}" Classes="caption" TextTrimming="CharacterEllipsis" />
+            <WrapPanel DockPanel.Dock="Top" Margin="8,8,8,4" ItemSpacing="6" LineSpacing="6">
+              <Border Classes="segmented">
+                <StackPanel Orientation="Horizontal">
+                  <ToggleButton IsChecked="{Binding IsPanTool}" Content="{Tr Spawns.Map.Tool.Pan}" ToolTip.Tip="{Tr Spawns.Map.Tool.Pan.Tip}" />
+                  <ToggleButton IsChecked="{Binding IsSectorTool}" Content="{Tr Spawns.Map.Tool.Sector}" ToolTip.Tip="{Tr Spawns.Map.Tool.Sector.Tip}" />
+                  <ToggleButton IsChecked="{Binding IsRectangleTool}" Content="{Tr Spawns.Map.Tool.Rectangle}" ToolTip.Tip="{Tr Spawns.Map.Tool.Rectangle.Tip}" />
+                  <ToggleButton IsChecked="{Binding IsPolygonTool}" Content="{Tr Spawns.Map.Tool.Polygon}" ToolTip.Tip="{Tr Spawns.Map.Tool.Polygon.Tip}" />
+                  <ToggleButton x:Name="PlaceTool" IsChecked="{Binding IsPlaceTool}" ToolTip.Tip="{Tr Spawns.Map.Tool.Place.Tip}">
+                    <StackPanel Orientation="Horizontal" Spacing="5">
+                      <c:GlyphIcon Kind="Icon.Plus" IconSize="12" />
+                      <TextBlock Text="{Tr Spawns.Map.Tool.Place}" />
                     </StackPanel>
-                  </Grid>
-                </DataTemplate>
-              </ListBox.ItemTemplate>
-            </ListBox>
+                  </ToggleButton>
+                </StackPanel>
+              </Border>
+              <Button x:Name="FitButton" Classes="ghost" Content="{Tr Spawns.Map.Fit}" ToolTip.Tip="{Tr Spawns.Map.Fit.Tip}" Click="OnFitClick" />
+              <Button Classes="ghost" Content="{Tr Spawns.Map.Picture.Import}" Command="{Binding ImportPictureCommand}" ToolTip.Tip="{Tr Spawns.Map.Picture.Import.Tip}" />
+              <Button Classes="ghost" Content="{Tr Spawns.Map.Picture.Clear}" Command="{Binding ClearPictureCommand}" IsVisible="{Binding HasImportedPicture}" ToolTip.Tip="{Tr Spawns.Map.Picture.Clear.Tip}" />
+            </WrapPanel>
+            <TextBlock DockPanel.Dock="Bottom" Text="{Binding MapSourceText}" Classes="caption" Margin="10,2,10,6" TextTrimming="CharacterEllipsis" />
+            <c:SpawnMap x:Name="SpawnMap" Picture="{Binding MapPicture}" Markers="{Binding Markers}" ShownLayers="{Binding ShownLayers}" Tool="{Binding MapTool}"
+                        Area="{Binding Area, Mode=TwoWay}" HighlightedIds="{Binding Highlighted}" PlaceCommand="{Binding PlaceAtCommand}" ToolTip.Tip="{Tr Spawns.Map.Tip}" />
           </DockPanel>
         </Border>
 
         <Border Grid.Column="1" Classes="panel">
-          <Panel>
-            <ProgressBar IsIndeterminate="True" IsVisible="{Binding IsLoading}" VerticalAlignment="Top" Margin="12" />
-            <ScrollViewer HorizontalScrollBarVisibility="Disabled" IsVisible="{Binding HasSelection}">
-              <StackPanel Margin="16,14,16,16" Spacing="4" MaxWidth="900" HorizontalAlignment="Left">
+          <ScrollViewer HorizontalScrollBarVisibility="Disabled">
+            <StackPanel Margin="14,12,14,16" Spacing="10">
+
+              <!-- The area: its places of the category, picked to change, remove or give their own settings. -->
+              <Border Classes="card">
+                <StackPanel Spacing="8">
+                  <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                    <StackPanel>
+                      <TextBlock Text="{Tr Spawns.Area.Title}" Classes="h2" />
+                      <TextBlock x:Name="AreaText" Text="{Binding AreaText}" Classes="caption wrap" />
+                    </StackPanel>
+                    <ProgressBar Grid.Column="1" IsIndeterminate="True" IsVisible="{Binding IsSearchingArea}" Width="80" VerticalAlignment="Center" />
+                  </Grid>
+                  <ListBox x:Name="AreaList" Classes="plain" ItemsSource="{Binding AreaPlaces}" SelectedItem="{Binding SelectedPlace}" Height="220"
+                           IsVisible="{Binding HasAreaPlaces}" ToolTip.Tip="{Tr Spawns.Area.List.Tip}">
+                    <ListBox.ItemsPanel>
+                      <ItemsPanelTemplate><VirtualizingStackPanel /></ItemsPanelTemplate>
+                    </ListBox.ItemsPanel>
+                    <ListBox.ItemTemplate>
+                      <DataTemplate x:DataType="vm:SpawnAreaPlaceItem">
+                        <Grid ColumnDefinitions="Auto,Auto,*" ColumnSpacing="8" ToolTip.Tip="{Binding Tip}">
+                          <CheckBox IsChecked="{Binding IsChecked}" ToolTip.Tip="{Tr Spawns.Area.Check.Tip}" VerticalAlignment="Center" />
+                          <c:GlyphIcon Grid.Column="1" Kind="{Binding IconKey}" IconSize="14" VerticalAlignment="Center" />
+                          <StackPanel Grid.Column="2" Spacing="1" VerticalAlignment="Center">
+                            <TextBlock Text="{Binding Setting}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                            <TextBlock Text="{Binding KindText}" Classes="caption" TextTrimming="CharacterEllipsis" />
+                          </StackPanel>
+                        </Grid>
+                      </DataTemplate>
+                    </ListBox.ItemTemplate>
+                  </ListBox>
+                  <WrapPanel ItemSpacing="6" LineSpacing="6" IsVisible="{Binding HasAreaPlaces}">
+                    <Button Classes="ghost small" Content="{Tr Spawns.Area.CheckAll}" Command="{Binding CheckAllCommand}" ToolTip.Tip="{Tr Spawns.Area.CheckAll.Tip}" />
+                    <Button x:Name="RemovePlaces" Classes="ghost small" Command="{Binding RemovePlacesCommand}" ToolTip.Tip="{Tr Spawns.Place.Remove.Tip}">
+                      <StackPanel Orientation="Horizontal" Spacing="5">
+                        <c:GlyphIcon Kind="Icon.Trash" IconSize="12" />
+                        <TextBlock Text="{Tr Spawns.Place.Remove}" />
+                      </StackPanel>
+                    </Button>
+                    <Button x:Name="OwnCopy" Classes="ghost small" Content="{Tr Spawns.Zone.OwnCopy}" Command="{Binding OwnCopyCommand}" IsVisible="{Binding CanOwnCopy}" ToolTip.Tip="{Tr Spawns.Zone.OwnCopy.Tip}" />
+                  </WrapPanel>
+                  <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
+                    <ComboBox ItemsSource="{Binding NewKinds}" SelectedItem="{Binding NewKindOption}" MinWidth="150" ToolTip.Tip="{Tr Spawns.Place.Kind.Tip}">
+                      <ComboBox.ItemTemplate>
+                        <DataTemplate x:DataType="vm:SpawnKindOption">
+                          <TextBlock Text="{Binding Name}" />
+                        </DataTemplate>
+                      </ComboBox.ItemTemplate>
+                    </ComboBox>
+                    <ComboBox Grid.Column="1" ItemsSource="{Binding SettingChoices}" SelectedItem="{Binding ChosenSetting}" HorizontalAlignment="Stretch" ToolTip.Tip="{Tr Spawns.Place.Setting.Tip}" />
+                    <Button Grid.Column="2" Classes="ghost small" Content="{Tr Spawns.Place.SetSetting}" Command="{Binding SetSettingCommand}" IsVisible="{Binding HasAreaPlaces}" ToolTip.Tip="{Tr Spawns.Place.SetSetting.Tip}" />
+                  </Grid>
+                  <TextBlock Classes="caption wrap" Text="{Tr Spawns.Place.New.Tip}" />
+                </StackPanel>
+              </Border>
+
+              <!-- Under-ground check (seviscache: "spawners below the terrain"). -->
+              <Border Classes="card">
+                <StackPanel Spacing="8">
+                  <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                    <StackPanel>
+                      <TextBlock Text="{Tr Spawns.Ground.Check}" Classes="h2" />
+                      <TextBlock Text="{Binding GroundText}" Classes="caption wrap" IsVisible="{Binding GroundText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                    </StackPanel>
+                    <Button x:Name="CheckGround" Grid.Column="1" Classes="ghost" Content="{Tr Spawns.Ground.Check}" Command="{Binding CheckGroundCommand}" ToolTip.Tip="{Tr Spawns.Ground.Check.Tip}" VerticalAlignment="Center" />
+                  </Grid>
+                  <ProgressBar IsIndeterminate="True" IsVisible="{Binding IsCheckingGround}" />
+                  <ListBox x:Name="GroundList" Classes="plain" ItemsSource="{Binding GroundFindings}" Height="160" IsVisible="{Binding HasGroundFindings}">
+                    <ListBox.ItemsPanel>
+                      <ItemsPanelTemplate><VirtualizingStackPanel /></ItemsPanelTemplate>
+                    </ListBox.ItemsPanel>
+                    <ListBox.ItemTemplate>
+                      <DataTemplate x:DataType="vm:SpawnGroundItem">
+                        <Grid ColumnDefinitions="Auto,*,70,Auto" ColumnSpacing="8">
+                          <CheckBox IsChecked="{Binding IsChecked}" ToolTip.Tip="{Tr Spawns.Ground.Fix.Tip}" VerticalAlignment="Center" />
+                          <StackPanel Grid.Column="1" Spacing="1" VerticalAlignment="Center">
+                            <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" />
+                            <TextBlock Text="{Binding KindText}" Classes="caption" TextTrimming="CharacterEllipsis" />
+                          </StackPanel>
+                          <TextBlock Grid.Column="2" Classes="value" Text="{Binding DepthText}" ToolTip.Tip="{Tr Spawns.Ground.Depth.Tip}" />
+                          <Button Grid.Column="3" Classes="ghost small" Content="{Tr Spawns.Ground.GoTo}" ToolTip.Tip="{Tr Spawns.Ground.GoTo.Tip}"
+                                  Command="{Binding $parent[UserControl].((vm:SpawnsPageViewModel)DataContext).GoToCommand, FallbackValue={x:Null}}" CommandParameter="{Binding}" />
+                        </Grid>
+                      </DataTemplate>
+                    </ListBox.ItemTemplate>
+                  </ListBox>
+                  <WrapPanel ItemSpacing="6" LineSpacing="6" IsVisible="{Binding HasGroundFindings}">
+                    <Button Classes="ghost small" Content="{Tr Spawns.Ground.Fix}" Command="{Binding FixGroundCommand}" ToolTip.Tip="{Tr Spawns.Ground.Fix.Tip}" />
+                    <Button x:Name="FixAllGround" Classes="accent small" Content="{Tr Spawns.Ground.FixAll}" Command="{Binding FixAllGroundCommand}" ToolTip.Tip="{Tr Spawns.Ground.FixAll.Tip}" />
+                  </WrapPanel>
+                </StackPanel>
+              </Border>
+
+              <!-- The settings, presets and biomes: the list, then the selected one's values and types. -->
+              <Border Classes="card">
+                <StackPanel Spacing="8">
+                  <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                    <TextBlock Text="{Tr Spawns.Entries.Title}" Classes="h2" VerticalAlignment="Center" />
+                    <TextBlock Grid.Column="1" Text="{Tr Spawns.Loading}" Classes="caption" IsVisible="{Binding IsLoadingEntries}" VerticalAlignment="Center" />
+                  </Grid>
+                  <Panel>
+                    <TextBox x:Name="SpawnSearch" Classes="search" Text="{Binding FilterText}" Watermark="{Tr Module.Filter}" ToolTip.Tip="{Tr Spawns.Filter.Tip}" />
+                    <c:GlyphIcon Kind="Icon.Search" IconSize="15" Margin="11,0,0,0" IsHitTestVisible="False"
+                                 HorizontalAlignment="Left" VerticalAlignment="Center" Foreground="{DynamicResource TextMutedBrush}" />
+                  </Panel>
+                  <ListBox x:Name="SpawnList" Classes="plain" ItemsSource="{Binding Entries}" SelectedItem="{Binding SelectedEntry}" Height="200">
+                    <ListBox.ItemsPanel>
+                      <ItemsPanelTemplate><VirtualizingStackPanel /></ItemsPanelTemplate>
+                    </ListBox.ItemsPanel>
+                    <ListBox.ItemTemplate>
+                      <DataTemplate x:DataType="vm:SpawnEntry">
+                        <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10" ToolTip.Tip="{Binding PackagePath}">
+                          <Border Width="30" Height="30" CornerRadius="{DynamicResource SmallCornerRadius}" Background="{DynamicResource Surface2Brush}">
+                            <c:GlyphIcon Kind="{Binding IconKey}" IconSize="15" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                          </Border>
+                          <StackPanel Grid.Column="1" Spacing="1" VerticalAlignment="Center">
+                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                            <TextBlock Text="{Binding Group}" Classes="caption" TextTrimming="CharacterEllipsis" />
+                          </StackPanel>
+                        </Grid>
+                      </DataTemplate>
+                    </ListBox.ItemTemplate>
+                  </ListBox>
+                </StackPanel>
+              </Border>
+
+              <ProgressBar IsIndeterminate="True" IsVisible="{Binding IsLoading}" />
+              <StackPanel Spacing="4" IsVisible="{Binding HasSelection}">
                 <TextBlock Text="{Binding SelectedEntry.Name, FallbackValue=''}" Classes="h1" FontSize="20" />
                 <TextBlock Text="{Binding SelectedEntry.Group, FallbackValue=''}" Classes="muted" Margin="0,0,0,10" />
+                <TextBlock x:Name="DetailNote" Text="{Binding DetailNote}" Classes="muted wrap" IsVisible="{Binding HasDetailNote}" Margin="0,0,0,10" />
                 <ItemsControl x:Name="DetailCards" ItemsSource="{Binding DetailCards}" />
+
+                <!-- The types the zone or biome picks from: grouped, searchable, with a 3D preview of the selected one. -->
+                <Border Classes="card" Margin="0,0,0,12" IsVisible="{Binding HasTypes}">
+                  <StackPanel Spacing="8">
+                    <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12">
+                      <Border Classes="iconTile" Width="36" Height="36">
+                        <c:GlyphIcon Kind="Icon.List" IconSize="18" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                      </Border>
+                      <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                        <TextBlock Text="{Tr Spawns.Types.Title}" Classes="h2" />
+                        <TextBlock Text="{Tr Spawns.Types.Caption}" Classes="caption wrap" />
+                      </StackPanel>
+                    </Grid>
+                    <Panel>
+                      <TextBox x:Name="TypeSearch" Classes="search" Text="{Binding TypeFilter}" Watermark="{Tr Spawns.Types.Search}" ToolTip.Tip="{Tr Spawns.Types.Search.Tip}" />
+                      <c:GlyphIcon Kind="Icon.Search" IconSize="15" Margin="11,0,0,0" IsHitTestVisible="False"
+                                   HorizontalAlignment="Left" VerticalAlignment="Center" Foreground="{DynamicResource TextMutedBrush}" />
+                    </Panel>
+                    <ListBox x:Name="TypeList" Classes="plain" ItemsSource="{Binding TypeRows}" SelectedItem="{Binding SelectedType}" Height="380">
+                      <ListBox.ItemsPanel>
+                        <ItemsPanelTemplate><VirtualizingStackPanel /></ItemsPanelTemplate>
+                      </ListBox.ItemsPanel>
+                    </ListBox>
+                    <Border CornerRadius="{DynamicResource SmallCornerRadius}" ClipToBounds="True" Background="{DynamicResource ViewportBrush}"
+                            Height="300" ToolTip.Tip="{Tr Spawns.Types.Preview.Tip}">
+                      <Panel>
+                        <c:ViewportGrid Background="{DynamicResource ViewportBrush}" AxisXBrush="{DynamicResource AxisXBrush}" AxisYBrush="{DynamicResource AxisYBrush}" IsVisible="{Binding !HasTypePreview}" />
+                        <c:MeshPreview x:Name="TypePreview" Model="{Binding TypePreview}" IsVisible="{Binding HasTypePreview}" />
+                        <ProgressBar IsIndeterminate="True" IsVisible="{Binding IsTypePreviewLoading}" VerticalAlignment="Top" Margin="8,6" />
+                        <Border Classes="hud" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="8" IsHitTestVisible="False">
+                          <TextBlock Text="{Tr Spawns.Types.Preview}" />
+                        </Border>
+                        <Border Classes="hud" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="8" IsHitTestVisible="False"
+                                IsVisible="{Binding TypePreviewText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                          <TextBlock Text="{Binding TypePreviewText}" TextWrapping="Wrap" />
+                        </Border>
+                      </Panel>
+                    </Border>
+                  </StackPanel>
+                </Border>
                 <TextBlock Classes="caption wrap" Text="{Tr Spawns.ExportNote}" Margin="2,4,0,0" />
               </StackPanel>
-            </ScrollViewer>
-          </Panel>
+            </StackPanel>
+          </ScrollViewer>
         </Border>
       </Grid>
+
+      <!-- Players: what the game allows for a first spawn, and the server's respawn rules. -->
+      <ScrollViewer HorizontalScrollBarVisibility="Disabled" IsVisible="{Binding IsPlayersTab}">
+        <StackPanel Spacing="10" MaxWidth="960" HorizontalAlignment="Left">
+          <Border Classes="chip" HorizontalAlignment="Left" ToolTip.Tip="{Tr Spawns.ServerFile.Tip}">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <c:GlyphIcon Kind="Icon.File" IconSize="13" VerticalAlignment="Center" />
+              <TextBlock Text="{Binding ServerFileText}" TextTrimming="PrefixCharacterEllipsis" MaxWidth="760" />
+            </StackPanel>
+          </Border>
+          <ItemsControl x:Name="PlayerCards" ItemsSource="{Binding PlayerCards}" />
+        </StackPanel>
+      </ScrollViewer>
 
       <!-- Server settings. -->
       <ScrollViewer HorizontalScrollBarVisibility="Disabled" IsVisible="{Binding IsServerTab}">

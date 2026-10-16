@@ -133,7 +133,7 @@ public sealed class CraftablesPageRealTests
             Assert.Equal("CraftyCraftables", crafted.ModName);
             Assert.True(File.Exists(crafted.PakPath) && File.Exists(crafted.SigPath));
             Assert.Contains(crafted.Assets, a => a.PackagePath.EndsWith("/CR_SS_Chair_Asian", StringComparison.Ordinal));
-            Assert.Contains(crafted.Assets, a => a.PackagePath.EndsWith("/CI_SS_Carpenter_Bench", StringComparison.Ordinal));
+            Assert.Contains(crafted.Assets, a => a.PackagePath.EndsWith("/CI_SS_Table_01", StringComparison.Ordinal)); // a rename keeps the token (3.2: asset names for life)
 
             // The chair's recipe carries the chosen section.
             Assert.DoesNotContain(crafted.Warnings, w => w.Contains(" sections", StringComparison.Ordinal));

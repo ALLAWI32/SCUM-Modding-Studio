@@ -16,7 +16,8 @@ namespace ScumStudio.Modding.Crafting;
 /// <param name="Product">What the recipe makes: the base element (<c>BP_SS_*</c>), for power the new item, for an item the game's item.</param>
 /// <param name="Item">The item a station or power object spawns, or null.</param>
 /// <param name="Tag">A station's ingredient tag (<c>CI_SS_*</c>), or null.</param>
-public sealed record CraftablePackages(string Name, string Recipe, string Product, string? Item, string? Tag);
+/// <param name="ItemRecipe">A second recipe that crafts it into the bag (<see cref="CraftUse.Both"/>), or null.</param>
+public sealed record CraftablePackages(string Name, string Recipe, string Product, string? Item, string? Tag, string? ItemRecipe = null);
 
 /// <summary>
 /// A craftable the export can neither ship nor leave out: a Craftables pak without it would remove what players built with
@@ -46,7 +47,11 @@ public sealed class CraftableConflictException(string craftable, string packageP
 /// <param name="Request">Clones, ingredient lists and values for <see cref="AssetModBuilder"/>.</param>
 /// <param name="Entries">The packages of each planned craftable.</param>
 /// <param name="Warnings">Craftables left out and settings the game's data cannot hold.</param>
-public sealed record CraftablesPlan(AssetModRequest Request, IReadOnlyList<CraftablePackages> Entries, IReadOnlyList<string> Warnings);
+public sealed record CraftablesPlan(AssetModRequest Request, IReadOnlyList<CraftablePackages> Entries, IReadOnlyList<string> Warnings)
+{
+    /// <summary>The stock packages the plan changes in place, each one the user opted in to (an item's entity setup that gets a new tag).</summary>
+    public IReadOnlyList<string> StockOverrides { get; init; } = [];
+}
 
 /// <summary>
 /// Turns craftables into clones of the game's own crafting families (read from the paks, SCUM 1.3.3):
@@ -73,7 +78,7 @@ public sealed record CraftablesPlan(AssetModRequest Request, IReadOnlyList<Craft
 /// Every static mesh the template packages import is pointed at the craftable's mesh (<see cref="ClonePlan.Redirects"/>),
 /// names and captions become the craftable's, and the recipe gets the craftable's ingredients.
 /// </summary>
-public static class CraftablesPlanner
+public static partial class CraftablesPlanner
 {
     private const string Placeables = ModdableAssets.ConZ + "Items/Crafting/Recipes/Placeables";
     private const string Elements = ModdableAssets.ConZ + "BaseBuilding/BaseElements";
@@ -133,7 +138,7 @@ public static class CraftablesPlanner
     private static readonly string[] NotItems = ["/Characters/", "/NPCs/", "/NPC/", "/Zombies/", "/Puppets/", "/Vehicles/", "/Drones/"];
 
     // IsItem's answers per catalog (two package headers each; the Add box and the gallery ask for thousands).
-    private static readonly ConditionalWeakTable<AssetCatalog, ConcurrentDictionary<string, bool>> ItemChecks = new();
+    private static readonly ConditionalWeakTable<AssetCatalog, ConcurrentDictionary<string, string?>> ItemChecks = new();
 
     /// <summary>
     /// Plans every craftable of <paramref name="craftables"/> (bad or duplicate ones are left out with a warning). It reads
@@ -153,7 +158,9 @@ public static class CraftablesPlanner
         var ingredients = new Dictionary<string, IReadOnlyList<CraftIngredient>>(StringComparer.OrdinalIgnoreCase);
         var entries = new List<CraftablePackages>();
         var sections = new Dictionary<string, CraftCategory>(StringComparer.OrdinalIgnoreCase);
+        var skinless = new List<string>();
         var tokens = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var pickedItems = new PickedItems(catalog);
 
         // Stations first, each after the station it needs: a recipe asks for a station's tag only when that station is
         // really built (name -> its tag).
@@ -191,9 +198,9 @@ public static class CraftablesPlanner
             // Only tags the game has (a typo would ship a recipe importing a missing package) and built stations' tags.
             var recipe = new List<CraftIngredient>();
             var dropped = new List<string>();
-            foreach (var ingredient in craftable.Ingredients.Count > 0 ? craftable.Ingredients : RecipeRules.Suggest(craftable.Material, craftable.SizeMeters))
+            foreach (var ingredient in pickedItems.Resolve(craftable, craftable.Ingredients.Count > 0 ? craftable.Ingredients : RecipeRules.Suggest(craftable.Material, craftable.SizeMeters), warnings))
             {
-                if (stations.ContainsValue(ingredient.Tag))
+                if (stations.ContainsValue(ingredient.Tag) || pickedItems.IsPlanned(ingredient.Tag))
                 {
                     recipe.Add(ingredient);
                 }
@@ -236,6 +243,17 @@ public static class CraftablesPlanner
                     stations.TryAdd(craftable.Name, PackageMap.Leaf(tag));
                 }
 
+                if (packages.ItemRecipe is { } itemRecipe)
+                {
+                    ingredients[itemRecipe] = recipe;
+                }
+
+                if (craftable.Kind == CraftKind.Element)
+                {
+                    AddElementEdits(catalog, craftable, plan, packages, edits, warnings);
+                    skinless.AddRange(plan.Packages.Select(p => p.Value).Where(p => p != packages.Recipe && p != packages.ItemRecipe && PackageMap.Leaf(p).StartsWith("CR_", StringComparison.OrdinalIgnoreCase)));
+                }
+
                 ingredients[packages.Recipe] = recipe;
                 if (Section(catalog, craftable, plan, packages, warnings) is { } section)
                 {
@@ -259,8 +277,8 @@ public static class CraftablesPlanner
             }
         }
 
-        var request = new AssetModRequest(clones, edits) { Ingredients = ingredients, RecipeCategories = sections };
-        return new CraftablesPlan(request, entries, warnings);
+        var request = new AssetModRequest(clones, edits) { Ingredients = ingredients, RecipeCategories = sections, SkinlessRecipes = skinless };
+        return pickedItems.Finish(request, entries, warnings);
     }
 
     /// <summary>
@@ -402,6 +420,11 @@ public static class CraftablesPlanner
 
                 result = new CraftablePackages(craftable.Name, packages[2].Value, packages[0].Value, packages[0].Value, null);
                 break;
+            case CraftKind.Element:
+                CraftablePackages? element = null;
+                PlanElement(catalog, craftable, token, packages, redirects, ref element);
+                result = element ?? throw new InvalidOperationException($"{craftable.Element?.Template ?? craftable.Source} is not a base element this version can clone");
+                break;
             default:
                 Add(FurnitureRecipe, "CR_" + token);
                 Add(FurnitureElement, "BP_" + token);
@@ -415,8 +438,14 @@ public static class CraftablesPlanner
         var shown = packages.SelectMany(p => StaticMeshImports(catalog, p.Key)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         if (craftable.Kind != CraftKind.Item)
         {
-            redirects.AddRange(shown.Where(s => !string.Equals(s, mesh, StringComparison.OrdinalIgnoreCase)).Select(s => KeyValuePair.Create(s, mesh)));
+            if (craftable.Kind != CraftKind.Element)
+            {
+                redirects.AddRange(shown.Where(s => !string.Equals(s, mesh, StringComparison.OrdinalIgnoreCase)).Select(s => KeyValuePair.Create(s, mesh)));
+            }
         }
+
+        // The recipe shows the craftable's picture, not its template's.
+        AddIconRedirect(catalog, craftable, packages.First(p => string.Equals(p.Value, result.Recipe, StringComparison.OrdinalIgnoreCase)).Key, redirects, warnings);
 
         // A path the source already has is never shipped over, nor is the craftable silently left out (a pak without it
         // would remove what players built): the export stops and names the pak.
@@ -528,34 +557,76 @@ public static class CraftablesPlanner
 
     /// <summary>
     /// True for an inventory item of the game (weapons, food, clothes, DLC items ...): a Blueprint class with its entity setup
-    /// <c>&lt;Name&gt;_ES</c>, a Blueprint class too, beside it. Not a static mesh with an <c>SM_x_ES</c> mesh twin (132
-    /// buildings and rivers have one) and never a character (<c>BP_Prisoner</c> has a <c>BP_Prisoner_ES</c>) or a vehicle's
-    /// part. Reads the two package headers once per catalog.
+    /// (<see cref="EntitySetupNames"/>), a Blueprint class too, beside it. Not a static mesh with an <c>SM_x_ES</c> mesh twin
+    /// (132 buildings and rivers have one) and never a character (<c>BP_Prisoner</c> has a <c>BP_Prisoner_ES</c>) or a
+    /// vehicle's part. An item whose setup is not named after it (<see cref="ItemSetups"/>: the setup's <c>Actor</c> names
+    /// it) counts too. Reads the package headers once per catalog. With <paramref name="wait"/> false (the UI thread) it
+    /// never waits for that list's first build: until it is read, such an item is not one (and the answer is not kept).
     /// </summary>
-    public static bool IsItem(AssetCatalog catalog, string packagePath)
+    public static bool IsItem(AssetCatalog catalog, string packagePath, bool wait = true) => EntitySetupOf(catalog, packagePath, wait) is not null;
+
+    /// <summary>
+    /// The entity setup of the item <paramref name="packagePath"/> (see <see cref="IsItem"/>), or null for a package that is
+    /// no item. Reads the package headers once per catalog.
+    /// </summary>
+    public static string? EntitySetupOf(AssetCatalog catalog, string packagePath, bool wait = true)
     {
         ArgumentNullException.ThrowIfNull(catalog);
         var path = PackageMap.Normalize(packagePath);
         if (path.EndsWith("_ES", StringComparison.OrdinalIgnoreCase) || NotItems.Any(n => path.Contains(n, StringComparison.OrdinalIgnoreCase)))
         {
-            return false;
+            return null;
         }
 
-        return ItemChecks.GetValue(catalog, _ => new ConcurrentDictionary<string, bool>(StringComparer.OrdinalIgnoreCase))
-            .GetOrAdd(path, p => IsBlueprintClass(catalog, p + "_ES") && IsBlueprintClass(catalog, p));
+        var checks = ItemChecks.GetValue(catalog, _ => new ConcurrentDictionary<string, string?>(StringComparer.OrdinalIgnoreCase));
+        if (checks.TryGetValue(path, out var known))
+        {
+            return known;
+        }
+
+        if (EntitySetupNames(path).FirstOrDefault(es => IsBlueprintClass(catalog, es)) is { } twin && IsBlueprintClass(catalog, path))
+        {
+            return checks[path] = twin;
+        }
+
+        var setups = ItemSetups.OfAsync(catalog); // starts the worker build once
+        if (!wait && !setups.IsCompletedSuccessfully)
+        {
+            return null;
+        }
+
+        return checks[path] = setups.GetAwaiter().GetResult().NotNamedAfterItem.GetValueOrDefault(path);
     }
 
     /// <summary>
-    /// Every item of the catalog's package list (<see cref="IsItem"/> on each package with an <c>_ES</c> beside it): a few
-    /// thousand package headers the first time, so it runs on a worker.
+    /// Where an item's entity setup can be: <c>&lt;Name&gt;_ES</c>, or the name without its "Item" ending
+    /// (<c>AnimalBaitFeederItem</c> has <c>AnimalBaitFeeder_ES</c>, the DLC's <c>AnimalBaitFeederItem_Ridgeline</c> has
+    /// <c>AnimalBaitFeeder_Ridgeline_ES</c>: seviscache found it in the Assets search but not in the Craftables gallery).
+    /// </summary>
+    public static IEnumerable<string> EntitySetupNames(string packagePath)
+    {
+        ArgumentNullException.ThrowIfNull(packagePath);
+        yield return packagePath + "_ES";
+        var slash = packagePath.LastIndexOf('/') + 1;
+        var leaf = packagePath[slash..];
+        var at = leaf.LastIndexOf("Item", StringComparison.OrdinalIgnoreCase);
+        if (at > 0 && (at + 4 == leaf.Length || leaf[at + 4] == '_'))
+        {
+            yield return packagePath[..(slash + at)] + leaf[(at + 4)..] + "_ES";
+        }
+    }
+
+    /// <summary>
+    /// Every item of the catalog's package list (<see cref="IsItem"/> on each package with an entity setup beside it, and the
+    /// items of setups not named after them): a few thousand package headers the first time, so it runs on a worker.
     /// </summary>
     public static IReadOnlySet<string> Items(AssetCatalog catalog)
     {
         ArgumentNullException.ThrowIfNull(catalog);
         var entries = (catalog.Index ?? catalog.BuildIndex(resolveClasses: false)).Entries;
         var paths = entries.Select(e => e.PackagePath).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        return entries.Where(e => paths.Contains(e.PackagePath + "_ES")).AsParallel()
-            .Where(e => IsItem(catalog, e.PackagePath)).Select(e => e.PackagePath).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return entries.Where(e => EntitySetupNames(e.PackagePath).Any(paths.Contains)).AsParallel()
+            .Where(e => IsItem(catalog, e.PackagePath)).Select(e => e.PackagePath).AsSequential().Concat(ItemSetups.Of(catalog).NotNamedAfterItem.Keys).ToHashSet(StringComparer.OrdinalIgnoreCase);
     }
 
     private static bool IsBlueprintClass(AssetCatalog catalog, string package)
@@ -653,4 +724,13 @@ public static class CraftablesPlanner
         var path = PackageMap.Normalize(source);
         return catalog.GetExports(path).Any(e => e.ClassName == "StaticMesh") ? path : StaticMeshImports(catalog, path).FirstOrDefault();
     }
+
+    /// <summary>
+    /// Plans a <see cref="CraftKind.Element"/> craftable: adds the template family's packages (recipe first) and redirects,
+    /// and sets <paramref name="result"/>; left null, the craftable is left out.
+    /// </summary>
+    static partial void PlanElement(AssetCatalog catalog, Craftable craftable, string token, List<KeyValuePair<string, string>> packages, List<KeyValuePair<string, string>> redirects, ref CraftablePackages? result);
+
+    /// <summary>The element's own edits (its name and <see cref="ElementSettings.Levels"/>); a value the data cannot hold is a warning.</summary>
+    static partial void AddElementEdits(AssetCatalog catalog, Craftable craftable, ClonePlan plan, CraftablePackages packages, Dictionary<string, IReadOnlyList<TunableEdit>> edits, List<string> warnings);
 }

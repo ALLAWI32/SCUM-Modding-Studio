@@ -14,14 +14,19 @@ public sealed record TunablePatchResult(PackageBytes Bytes, IReadOnlyList<(strin
 /// <summary>
 /// Writes <see cref="TunableEdit"/>s into a cooked package. Numbers, bools, enums and vectors are same-size patches of
 /// the value bytes (the cooked layout stays identical); top-level texts are rewritten as culture-invariant FText and the
-/// export is resized (port of <c>set_display_name</c>). The package is rebuilt by <see cref="PackageWriter"/> and
-/// re-parsed; every edit is read back to prove it landed.
+/// export is resized (port of <c>set_display_name</c>); an object reference (<see cref="TunableReader.ObjectKind"/>) of a
+/// mod's own copy gets the import of its new object (added when missing). The package is rebuilt by
+/// <see cref="PackageWriter"/> and re-parsed; every edit is read back to prove it landed.
 /// </summary>
 public static class TunablePatcher
 {
-    /// <summary>Applies <paramref name="edits"/> to <paramref name="package"/>.</summary>
-    /// <exception cref="InvalidOperationException">An edit names a missing export/property, a read-only value, or an invalid value.</exception>
-    public static TunablePatchResult Apply(CookedPackage package, IEnumerable<TunableEdit> edits)
+    /// <summary>
+    /// Applies <paramref name="edits"/> to <paramref name="package"/>. With <paramref name="isClone"/> (a package the mod
+    /// creates, such as a zone's own settings) an edit may re-point an object reference to another object path (empty for
+    /// None); in a game asset that is refused, since every place that shares the asset would change with it.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">An edit names a missing export/property, a read-only value, an invalid value, or an object reference of a shared game asset.</exception>
+    public static TunablePatchResult Apply(CookedPackage package, IEnumerable<TunableEdit> edits, bool isClone = false)
     {
         ArgumentNullException.ThrowIfNull(package);
         ArgumentNullException.ThrowIfNull(edits);
@@ -29,6 +34,7 @@ public static class TunablePatcher
         var keys = TunableReader.ExportKeys(package);
         var payloads = Enumerable.Range(0, package.Exports.Count).Select(i => package.GetExportData(i).ToArray()).ToArray();
         var applied = new List<(string, string, string)>();
+        PackageTables? tables = null;
 
         foreach (var group in list.GroupBy(e => e.Export, StringComparer.Ordinal))
         {
@@ -51,6 +57,20 @@ public static class TunablePatcher
                 }
 
                 var old = Describe(tag);
+                if (tag.Value is ObjectValue reference)
+                {
+                    if (!isClone)
+                    {
+                        throw new InvalidOperationException($"{package.BasePath}: '{edit.Path}' points at another asset and the package is shared by the game; re-point it in a copy of its own.");
+                    }
+
+                    tables ??= PackageTables.Of(package, exportIndex);
+                    var index = ImportOf(package, tables with { ExportIndex = exportIndex }, reference, edit.Value.Trim());
+                    BinaryPrimitives.WriteInt32LittleEndian(payloads[exportIndex].AsSpan(reference.Offset), index);
+                    applied.Add((edit.Export + "|" + edit.Path, reference.Index == 0 ? string.Empty : package.GetFullPath(reference.Index), edit.Value.Trim()));
+                    continue;
+                }
+
                 if (tag.Value is TextValue)
                 {
                     if (edit.Path.Contains('.') || edit.Path.Contains('['))
@@ -74,9 +94,68 @@ public static class TunablePatcher
         }
 
         var input = PackageWriter.ToBuildInput(package) with { ExportData = payloads.Select(p => (ReadOnlyMemory<byte>)p).ToArray() };
+        if (tables is not null)
+        {
+            input = input with
+            {
+                Names = tables.Names,
+                NameIsWide = tables.Wide,
+                Imports = tables.Imports,
+                Exports = tables.Exports,
+                PreloadDependencies = tables.Preload,
+            };
+        }
+
         var bytes = PackageWriter.Build(input);
         VerifyReadBack(package, bytes, list);
         return new TunablePatchResult(bytes, applied);
+    }
+
+    /// <summary>
+    /// The package index <paramref name="objectPath"/> is written as: 0 for None (empty), else its import (added with the
+    /// class of the import it replaces, or a Blueprint class for <c>*_C</c>).
+    /// </summary>
+    private static int ImportOf(CookedPackage package, PackageTables tables, ObjectValue old, string objectPath)
+    {
+        if (objectPath.Length == 0 || objectPath == "None")
+        {
+            return 0;
+        }
+
+        var dot = objectPath.LastIndexOf('.');
+        if (!objectPath.StartsWith('/') || dot <= objectPath.LastIndexOf('/'))
+        {
+            throw new InvalidOperationException($"'{objectPath}' is not an object path (/Game/Folder/Package.Object).");
+        }
+
+        // The import's names are added whole; the engine reads a trailing _<number> as the name's number (audit C1), so the
+        // game would look for another package or object.
+        if (HasNameNumber(objectPath[..dot]) || HasNameNumber(objectPath[(dot + 1)..]))
+        {
+            throw new InvalidOperationException($"'{objectPath}' ends in _<number>, which the game reads as another name; not written.");
+        }
+
+        if (old.Index < 0)
+        {
+            var import = package.Imports[-old.Index - 1];
+            return tables.Import(package.ResolveName(import.ClassPackage), package.ResolveName(import.ClassName), objectPath);
+        }
+
+        return objectPath.EndsWith("_C", StringComparison.Ordinal)
+            ? tables.Import("/Script/Engine", "BlueprintGeneratedClass", objectPath)
+            : throw new InvalidOperationException($"The class of '{objectPath}' is not known here (the reference held no import); not written.");
+    }
+
+    /// <summary>
+    /// True when FName splits a number off <paramref name="name"/> (UE 4.27 <c>ParseNumber</c>): "_" then up to 10 digits,
+    /// not starting with 0 unless it is the only digit, below int.MaxValue.
+    /// </summary>
+    private static bool HasNameNumber(string name)
+    {
+        var digits = name.Length - name.AsSpan().TrimEnd("0123456789").Length;
+        var first = name.Length - digits;
+        return digits is > 0 and <= 10 && first > 0 && name[first - 1] == '_' && (digits == 1 || name[first] != '0')
+               && long.Parse(name.AsSpan(first), CultureInfo.InvariantCulture) < int.MaxValue;
     }
 
     private static string Describe(PropertyTag tag) => tag.Value switch
@@ -207,9 +286,20 @@ public static class TunablePatcher
     {
         var check = CookedPackage.Parse(bytes.UAsset, bytes.UExp, source.UBulk, source.BasePath);
         var tunables = TunableReader.Read(check).ToDictionary(t => t.Key, StringComparer.Ordinal);
+        var references = TunableReader.ObjectReferences(check).ToDictionary(r => r.Key, r => r.Value, StringComparer.Ordinal);
         foreach (var edit in edits)
         {
             var key = edit.Export + "|" + edit.Path;
+            if (references.TryGetValue(key, out var now))
+            {
+                if (!string.Equals(now, edit.Value.Trim() is "None" ? string.Empty : edit.Value.Trim(), StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidOperationException($"{source.BasePath}: '{key}' did not read back as '{edit.Value}' after patching.");
+                }
+
+                continue;
+            }
+
             if (!tunables.TryGetValue(key, out var t) || !TunableValue.AreEqual(t.Kind, t.Value, Normalize(t.Kind, edit.Value)))
             {
                 throw new InvalidOperationException($"{source.BasePath}: '{key}' did not read back as '{edit.Value}' after patching.");

@@ -255,7 +255,40 @@ public sealed partial class SetupViewModel : ViewModelBase
         if (await _services.Dialogs.PickFolderAsync(Loc.T("Setup.PickGame"), GamePaksFolder).ConfigureAwait(true) is { } path)
         {
             GamePaksFolder = GameLocator.ResolvePaksFolder(path) ?? path;
+            if (GameFolderProblem(GamePaksFolder) is { } problem)
+            {
+                TestSucceeded = false;
+                TestResult = problem;
+            }
         }
+    }
+
+    /// <summary>
+    /// Why <paramref name="folder"/> cannot be the game's Paks folder, in the user's language, or null: the dedicated
+    /// server's Paks (D10, Markus6789: the map drew nothing, and an export built on the server's cook is wrong for players).
+    /// </summary>
+    public static string? GameFolderProblem(string? folder)
+    {
+        if (string.IsNullOrWhiteSpace(folder))
+        {
+            return null;
+        }
+
+        var clean = folder.Trim().Trim('"');
+        var paks = GameLocator.ResolvePaksFolder(clean) ?? clean;
+        if (!ScumStudio.App.Services.ModExportService.IsServerPaksFolder(paks))
+        {
+            return null;
+        }
+
+        // ...\steamapps\common\SCUM Server\SCUM\Content\Paks -> ...\steamapps\common\SCUM\SCUM\Content\Paks
+        var full = Path.GetFullPath(paks);
+        var marker = Path.DirectorySeparatorChar + "SCUM Server" + Path.DirectorySeparatorChar;
+        var at = full.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+        var game = at >= 0
+            ? string.Concat(full.AsSpan(0, at), Path.DirectorySeparatorChar + "SCUM" + Path.DirectorySeparatorChar, full.AsSpan(at + marker.Length))
+            : @"...\steamapps\common\SCUM\SCUM\Content\Paks";
+        return Loc.F("Setup.GameIsServer", paks, game);
     }
 
     /// <summary>Picks the server folder.</summary>
@@ -299,6 +332,13 @@ public sealed partial class SetupViewModel : ViewModelBase
         {
             TestSucceeded = false;
             TestResult = Loc.T("Setup.ChooseFolderFirst");
+            return;
+        }
+
+        if (GameFolderProblem(GamePaksFolder) is { } problem)
+        {
+            TestSucceeded = false;
+            TestResult = problem;
             return;
         }
 
@@ -363,6 +403,14 @@ public sealed partial class SetupViewModel : ViewModelBase
     /// </summary>
     public bool Save()
     {
+        if (GameFolderProblem(GamePaksFolder) is { } problem)
+        {
+            TestSucceeded = false;
+            TestResult = problem;
+            _services.Logger.LogWarning("Setup: the game folder is the dedicated server's Paks; not saved.");
+            return false;
+        }
+
         if (HasKeyInput)
         {
             if (!AesKeyHex.IsValid(KeyInput))

@@ -132,6 +132,12 @@ public static partial class LevelPackageEditor
             _renames = copy.Trade?.Renames ?? [];
             var ownOnly = copy.Trade is not null || copy.AssignedTradePost is not null || copy.SentrySpawners is not null;
             var members = ownOnly ? CollectMembers(source, sourceIndex) : CollectMembersWithChildActors(sourceIndex);
+            if (CheckMembers(source, members, otherLevel: !_sameNames) is { } refusal)
+            {
+                warnings.Add($"'{copy.NewName}' was not created: {refusal.Describe()}.");
+                return [];
+            }
+
             var payloads = new byte[members.Count][];
             var blocks = new PropertyBlock[members.Count];
             for (var k = 0; k < members.Count; k++)
@@ -172,6 +178,10 @@ public static partial class LevelPackageEditor
                 var payload = payloads[k];
                 RemapNames(payload, blocks[k].Properties, blocks[k].EndOffset);
                 RemapObjects(payload, blocks[k].Properties, copy.NewName);
+                if (!_sameNames && source.GetExportClassName(member) == BodySetupClass && BodySetupFormatNames(payload, blocks[k].EndOffset) is { } formats)
+                {
+                    formats.ForEach(offset => RemapNameAt(payload, offset)); // the cooked collision's format names (PhysXPC)
+                }
                 if (copy.Item is { } item && blocks[k].Find(ItemProperty)?.Value is SoftObjectValue soft && soft.Offset >= 0 && soft.Offset + 8 <= payload.Length)
                 {
                     // The spawner's item is a soft path (an FName, then an empty sub path): the same size with another name.
@@ -182,7 +192,7 @@ public static partial class LevelPackageEditor
                 }
 
                 FreshGameUniqueId(payload, blocks[k], target.BasePath, copy.NewName, k); // a trade post's quest giver has an id of its own
-
+                FreshKeys(payload, blocks[k], source.GetExportClassName(member), target.BasePath, copy.NewName, k); // a light's, a mesh's build data keys
 
                 if (k == 0 && copy.Trade is { } trade)
                 {
@@ -247,7 +257,7 @@ public static partial class LevelPackageEditor
                 if (entry.FirstExportDependency >= 0)
                 {
                     first = preload.Count;
-                    counts = AppendMappedGroups(entry);
+                    counts = AppendMappedGroups(entry, outer);
                 }
 
                 exports.Add(entry with
@@ -344,6 +354,28 @@ public static partial class LevelPackageEditor
 
             return payload;
         }
+
+        /// <summary>
+        /// Re-indexes values copied out of a source payload (the loot points of a Blueprint's template) into the target, in
+        /// place, as a copied export's: every FName, every import (added with its outers), references to source exports cleared.
+        /// </summary>
+        public void RemapValues(byte[] payload, IEnumerable<PropertyValue> values)
+        {
+            foreach (var value in values)
+            {
+                RemapValue(payload, value);
+                foreach (var reference in ObjectReferences(value))
+                {
+                    if (reference.Index != 0 && reference.Offset >= 0 && reference.Offset + 4 <= payload.Length)
+                    {
+                        BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(reference.Offset), MapIndex(reference.Index, "reference"));
+                    }
+                }
+            }
+        }
+
+        /// <summary>The source objects whose references were cleared, as "name (what)".</summary>
+        public IReadOnlyCollection<string> Dropped => _dropped;
 
         /// <summary>The actor's exports plus, recursively, every other level actor its payloads reference (stored child actors).</summary>
         private List<int> CollectMembersWithChildActors(int actorIndex)
@@ -479,7 +511,13 @@ public static partial class LevelPackageEditor
             return candidate;
         }
 
-        private int[] AppendMappedGroups(ExportEntry entry)
+        /// <summary>
+        /// Appends <paramref name="entry"/>'s four dependency groups mapped into the target. A dependency on an export that is
+        /// not copied is dropped, except the export's own outer: an actor's level is <paramref name="outer"/> in the target,
+        /// and the cooker always lists the outer as create-before-create. Without it the event-driven loader may create the
+        /// actor before the level exists (a native-class actor, a light or an emitter, has nothing else to wait for).
+        /// </summary>
+        private int[] AppendMappedGroups(ExportEntry entry, int outer)
         {
             var original = source.ReadPreloadDependencies();
             var pos = entry.FirstExportDependency;
@@ -504,6 +542,10 @@ public static partial class LevelPackageEditor
                     else if (value > 0 && _exportMap.TryGetValue(value, out var e))
                     {
                         mapped = e;
+                    }
+                    else if (value > 0 && value == entry.OuterIndex && outer > 0)
+                    {
+                        mapped = outer;
                     }
                     else
                     {
@@ -533,6 +575,14 @@ public static partial class LevelPackageEditor
                 if (delegateValue.Object != 0 && delegateValue.Offset >= 0 && delegateValue.Offset + 4 <= payload.Length)
                 {
                     BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(delegateValue.Offset), MapIndex(delegateValue.Object, "delegate"));
+                }
+            }
+
+            foreach (var (offset, owner) in FieldPathOwners(tags))
+            {
+                if (owner != 0 && offset + 4 <= payload.Length)
+                {
+                    BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(offset), MapIndex(owner, "field path owner"));
                 }
             }
         }
@@ -654,6 +704,9 @@ public static partial class LevelPackageEditor
                         RemapValue(payload, field.Value);
                     }
 
+                    break;
+                case TextValue { HistoryType: 11 }:
+                    RemapNameAt(payload, value.Offset + 5); // flags, history type, then the string table id (an FName)
                     break;
                 case FieldPathValue f:
                     // TArray<FName> Path then the owner: count at Offset, names follow.

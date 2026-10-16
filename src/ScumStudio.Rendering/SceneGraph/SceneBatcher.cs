@@ -29,7 +29,15 @@ public sealed class RenderBatch
         Bounds = bounds;
         Clusters = clusters;
         FirstCode = firstCode;
+        foreach (var instance in instances)
+        {
+            OpaqueCount += instance.Tint.W >= OpaqueAlpha ? 1 : 0;
+            Pickable |= instance.PickCode != 0;
+        }
     }
+
+    /// <summary>Tint alpha from which an instance is drawn opaque.</summary>
+    internal const float OpaqueAlpha = 0.999f;
 
     /// <summary>The mesh.</summary>
     public MeshHandle Mesh { get; }
@@ -51,6 +59,21 @@ public sealed class RenderBatch
 
     /// <summary>Pick code of the first instance: instance <c>i</c> has code <c>FirstCode + i</c> (written as 0 when its node has no id).</summary>
     public uint FirstCode { get; }
+
+    /// <summary>True when every instance has a tint alpha below 1: the batch is drawn blended, after everything opaque.</summary>
+    public bool Translucent => OpaqueCount == 0 && Instances.Length > 0;
+
+    /// <summary>True when at least one instance has a pick code (its node has an id).</summary>
+    public bool Pickable { get; }
+
+    /// <summary>Instances with a tint alpha of 1 (kept right as tints are patched in place).</summary>
+    internal int OpaqueCount { get; set; }
+
+    /// <summary>The result that holds this batch now and its index there (null until a caching build claims it).</summary>
+    internal BatchResult? Owner { get; set; }
+
+    /// <inheritdoc cref="Owner"/>
+    internal int Index { get; set; }
 }
 
 /// <summary>Result of <see cref="SceneBatcher.Build(Scene)"/>.</summary>
@@ -129,6 +152,9 @@ public sealed class SceneBatcher
 
     /// <summary>Number of times <see cref="Get"/> patched records in place instead of rebuilding.</summary>
     public int Updates { get; private set; }
+
+    /// <summary>Scene nodes the last partial rebuild looked at (tests: it must not walk the whole scene).</summary>
+    internal int LastVisitedNodes { get; private set; }
 
     /// <summary>
     /// Records patched in place since the last build and not yet acknowledged with <see cref="ClearUpdates"/> (the
@@ -215,16 +241,20 @@ public sealed class SceneBatcher
                 continue; // not drawn; showing it again is a structural change
             }
 
-            if (node.Mesh is not { } mesh || !ReferenceEquals(node.SlotOwner, result))
+            if (node.Mesh is not { } mesh || node.Slot is not { } batch || !ReferenceEquals(batch.Owner, result))
             {
                 return false;
             }
 
-            var batch = result.Batches[node.SlotBatch];
             var i = node.SlotIndex;
             var old = batch.Instances[i];
             var world = node.WorldTransform;
             batch.Instances[i] = new InstanceData(world, node.Tint, old.PickCode, node.Selected ? InstanceFlags.Selected : InstanceFlags.None, node.Surface);
+            var opaque = node.Tint.W >= RenderBatch.OpaqueAlpha;
+            if (opaque != old.Tint.W >= RenderBatch.OpaqueAlpha)
+            {
+                batch.OpaqueCount += opaque ? 1 : -1;
+            }
             if (world != old.Model)
             {
                 var bounds = Frustum.TransformBounds(mesh.Bounds, world);
@@ -235,7 +265,7 @@ public sealed class SceneBatcher
                 batch.Bounds = batch.Bounds.Union(bounds);
             }
 
-            _updates.Add(new InstanceUpdate(node.SlotBatch, i));
+            _updates.Add(new InstanceUpdate(batch.Index, i));
         }
 
         log.Clear();
@@ -244,8 +274,10 @@ public sealed class SceneBatcher
 
     /// <summary>
     /// The cached result with the batches of every mesh the logged changes touched rebuilt (the meshes drawn in a logged
-    /// subtree before and after the change) and the other batches kept as they are (never more work than a full build:
-    /// the same walk, fewer batches); null when a full build is due: the log is incomplete, or the root itself changed.
+    /// subtree before and after the change) and the other batches kept as they are; null when a full build is due: the
+    /// log is incomplete, or the root itself changed. Only the logged subtrees are walked (audit F434: walking the whole
+    /// island again cost every streaming step O(scene)): a rebuilt mesh's other nodes changed in no way the log missed,
+    /// so their records, world transform included, are taken over from its old batch.
     /// </summary>
     private BatchResult? RebuildChanged(SceneNode root)
     {
@@ -258,60 +290,123 @@ public sealed class SceneBatcher
 
         var dirty = new HashSet<int>();
         var walked = new HashSet<SceneNode>(ReferenceEqualityComparer.Instance);
-        var pending = new Stack<SceneNode>();
+        var perMesh = new Dictionary<int, (MeshHandle Mesh, List<(Matrix4x4 World, SceneNode Node)> Items)>();
+        var pending = new Stack<(SceneNode Node, Matrix4x4 World, bool Drawn)>();
         foreach (var logged in log)
         {
-            pending.Push(logged);
+            if (walked.Contains(logged))
+            {
+                continue; // logged twice, or below another logged node
+            }
+
+            var drawn = IsDrawnUnder(root, logged);
+            pending.Push((logged, drawn ? logged.WorldTransform : default, drawn));
             while (pending.Count > 0)
             {
-                var node = pending.Pop();
+                var (node, world, nodeDrawn) = pending.Pop();
                 if (!walked.Add(node))
                 {
-                    continue; // logged twice, or below another logged node
+                    continue; // walked from a logged node of its own, with the same world transform
                 }
 
-                if (ReferenceEquals(node.SlotOwner, result))
+                if (node.Slot is { } old && ReferenceEquals(old.Owner, result))
                 {
-                    dirty.Add(result.Batches[node.SlotBatch].Mesh.Id);
+                    dirty.Add(old.Mesh.Id);
                 }
 
                 if (node.Mesh is { } mesh)
                 {
                     dirty.Add(mesh.Id);
+                    if (nodeDrawn)
+                    {
+                        Items(perMesh, mesh).Add((world, node));
+                    }
                 }
 
-                foreach (var child in node.Children)
+                for (var i = node.Children.Count - 1; i >= 0; i--)
                 {
-                    pending.Push(child);
+                    var child = node.Children[i];
+                    var childDrawn = nodeDrawn && child.Visible;
+                    pending.Push((child, childDrawn ? child.LocalTransform * world : default, childDrawn));
                 }
             }
         }
 
+        var visited = walked.Count;
         var batches = new List<RenderBatch>(result.Batches.Count + 16);
         foreach (var batch in result.Batches)
         {
             if (!dirty.Contains(batch.Mesh.Id))
             {
                 batches.Add(batch);
+                continue;
             }
+
+            var items = Items(perMesh, batch.Mesh);
+            for (var i = 0; i < batch.Nodes.Length; i++)
+            {
+                if (!walked.Contains(batch.Nodes[i]))
+                {
+                    items.Add((batch.Instances[i].Model, batch.Nodes[i]));
+                }
+            }
+
+            visited += batch.Nodes.Length;
         }
 
-        var perMesh = Collect(root, dirty);
-        var added = perMesh.Values.Sum(e => (long)e.Items.Count);
+        LastVisitedNodes = visited;
+        long added = 0;
+        foreach (var entry in perMesh.Values)
+        {
+            added += entry.Items.Count;
+        }
+
         if (_nextCode + added >= uint.MaxValue)
         {
             return null; // the pick codes would run out: number everything anew
         }
 
+        var ids = new int[perMesh.Count];
+        perMesh.Keys.CopyTo(ids, 0);
+        Array.Sort(ids);
         var code = _nextCode;
-        foreach (var (mesh, items) in perMesh.Values.OrderBy(e => e.Mesh.Id))
+        foreach (var id in ids)
         {
-            batches.Add(BuildBatch(mesh, items, code));
-            code += (uint)items.Count;
+            var (mesh, items) = perMesh[id];
+            if (items.Count > 0)
+            {
+                batches.Add(BuildBatch(mesh, items, code));
+                code += (uint)items.Count;
+            }
         }
 
-        batches.Sort((a, b) => a.Mesh.Id.CompareTo(b.Mesh.Id));
+        batches.Sort(static (a, b) => a.Mesh.Id.CompareTo(b.Mesh.Id));
         return Finish(batches, claim: true);
+
+        static List<(Matrix4x4 World, SceneNode Node)> Items(Dictionary<int, (MeshHandle Mesh, List<(Matrix4x4 World, SceneNode Node)> Items)> perMesh, MeshHandle mesh)
+        {
+            if (!perMesh.TryGetValue(mesh.Id, out var entry))
+            {
+                entry = (mesh, []);
+                perMesh[mesh.Id] = entry;
+            }
+
+            return entry.Items;
+        }
+    }
+
+    /// <summary>True when <paramref name="node"/> hangs below <paramref name="root"/> with every node on the way visible.</summary>
+    private static bool IsDrawnUnder(SceneNode root, SceneNode node)
+    {
+        var visible = true;
+        var top = node;
+        for (var n = node; n is not null; n = n.Parent)
+        {
+            visible &= n.Visible;
+            top = n;
+        }
+
+        return visible && ReferenceEquals(top, root);
     }
 
     /// <summary>Builds the batches of <paramref name="scene"/> (no caching).</summary>
@@ -327,7 +422,7 @@ public sealed class SceneBatcher
     private static BatchResult Build(Scene scene, bool claim, bool countOnly = false)
     {
         ArgumentNullException.ThrowIfNull(scene);
-        var perMesh = Collect(scene.Root, null);
+        var perMesh = Collect(scene.Root);
         var ids = perMesh.Keys.ToArray();
         Array.Sort(ids);
         var batches = new List<RenderBatch>(ids.Length);
@@ -342,8 +437,8 @@ public sealed class SceneBatcher
         return Finish(batches, claim);
     }
 
-    /// <summary>The visible mesh nodes below <paramref name="root"/> with their world transforms, per mesh id (only <paramref name="meshes"/> when given).</summary>
-    private static Dictionary<int, (MeshHandle Mesh, List<(Matrix4x4 World, SceneNode Node)> Items)> Collect(SceneNode root, HashSet<int>? meshes)
+    /// <summary>The visible mesh nodes below <paramref name="root"/> with their world transforms, per mesh id.</summary>
+    private static Dictionary<int, (MeshHandle Mesh, List<(Matrix4x4 World, SceneNode Node)> Items)> Collect(SceneNode root)
     {
         var perMesh = new Dictionary<int, (MeshHandle Mesh, List<(Matrix4x4 World, SceneNode Node)> Items)>();
         var stack = new Stack<(SceneNode Node, Matrix4x4 ParentWorld)>();
@@ -362,7 +457,7 @@ public sealed class SceneBatcher
                 stack.Push((node.Children[i], world));
             }
 
-            if (node.Mesh is not { } mesh || (meshes is not null && !meshes.Contains(mesh.Id)))
+            if (node.Mesh is not { } mesh)
             {
                 continue;
             }
@@ -446,7 +541,10 @@ public sealed class SceneBatcher
         return new RenderBatch(mesh, instances, nodes, bounds, clusters.ToArray(), firstCode);
     }
 
-    /// <summary>The result over <paramref name="batches"/> (ordered by mesh id); with <paramref name="claim"/> each node is told where its record now lives.</summary>
+    /// <summary>
+    /// The result over <paramref name="batches"/> (ordered by mesh id); with <paramref name="claim"/> each batch learns its
+    /// place in it and the nodes of each new batch are told where their records live (a kept batch's nodes still point at it).
+    /// </summary>
     private static BatchResult Finish(List<RenderBatch> batches, bool claim)
     {
         var total = 0;
@@ -458,13 +556,19 @@ public sealed class SceneBatcher
         var result = new BatchResult(batches, total);
         for (var b = 0; claim && b < batches.Count; b++)
         {
-            var nodes = batches[b].Nodes;
-            for (var i = 0; i < nodes.Length; i++)
+            var batch = batches[b];
+            if (batch.Owner is null)
             {
-                nodes[i].SlotOwner = result;
-                nodes[i].SlotBatch = b;
-                nodes[i].SlotIndex = i;
+                var nodes = batch.Nodes;
+                for (var i = 0; i < nodes.Length; i++)
+                {
+                    nodes[i].Slot = batch;
+                    nodes[i].SlotIndex = i;
+                }
             }
+
+            batch.Owner = result;
+            batch.Index = b;
         }
 
         return result;

@@ -131,6 +131,39 @@
               <Slider x:Name="TimeOfDaySlider" Minimum="0" Maximum="24" SmallChange="0.25" LargeChange="1" Width="120" VerticalAlignment="Center" Value="{Binding TimeOfDay}" ToolTip.Tip="{Tr Map.TimeOfDay.Tip}" />
               <TextBlock Text="{Binding TimeOfDayText}" VerticalAlignment="Center" MinWidth="38" />
             </StackPanel>
+            <!-- Views along an axis like Blender's numpad (seviscache): around the selection, else the ground under the view's centre -->
+            <Button Classes="ghost" Padding="6,4" x:Name="ViewPresetButton" ToolTip.Tip="{Tr Map.View.Tip}" AutomationProperties.Name="{Tr Map.View}">
+              <Button.IsVisible>
+                <MultiBinding Converter="{x:Static BoolConverters.And}">
+                  <Binding Path="HasView" />
+                  <Binding Path="Toolbar.View.IsShown" />
+                </MultiBinding>
+              </Button.IsVisible>
+              <c:GlyphIcon Kind="Icon.Camera" IconSize="14" />
+              <Button.Flyout>
+                <MenuFlyout Placement="BottomEdgeAlignedLeft">
+                  <MenuItem x:Name="ViewTopItem" Header="{Tr Map.View.Top}" InputGesture="NumPad7" Tag="Top" Click="OnViewPresetClick" ToolTip.Tip="{Tr Map.View.Top.Tip}" />
+                  <MenuItem Header="{Tr Map.View.Bottom}" InputGesture="Ctrl+NumPad7" Tag="Bottom" Click="OnViewPresetClick" ToolTip.Tip="{Tr Map.View.Bottom.Tip}" />
+                  <MenuItem Header="{Tr Map.View.Front}" InputGesture="NumPad1" Tag="Front" Click="OnViewPresetClick" ToolTip.Tip="{Tr Map.View.Front.Tip}" />
+                  <MenuItem Header="{Tr Map.View.Back}" InputGesture="Ctrl+NumPad1" Tag="Back" Click="OnViewPresetClick" ToolTip.Tip="{Tr Map.View.Back.Tip}" />
+                  <MenuItem Header="{Tr Map.View.Right}" InputGesture="NumPad3" Tag="Right" Click="OnViewPresetClick" ToolTip.Tip="{Tr Map.View.Right.Tip}" />
+                  <MenuItem Header="{Tr Map.View.Left}" InputGesture="Ctrl+NumPad3" Tag="Left" Click="OnViewPresetClick" ToolTip.Tip="{Tr Map.View.Left.Tip}" />
+                  <Separator />
+                  <MenuItem Header="{Tr Map.View.Opposite}" InputGesture="NumPad9" Tag="Opposite" Click="OnViewPresetClick" ToolTip.Tip="{Tr Map.View.Opposite.Tip}" />
+                  <MenuItem Header="{Tr Map.View.Frame}" InputGesture="Decimal" Tag="Frame" Click="OnViewPresetClick" ToolTip.Tip="{Tr Map.View.Frame.Tip}" />
+                </MenuFlyout>
+              </Button.Flyout>
+            </Button>
+            <!-- Wireframe (F3 or Shift+Z): the scene's triangles as lines; the sky, the grid and the gizmo stay filled -->
+            <ToggleButton Classes="ghost" Padding="6,4" x:Name="WireframeButton" IsChecked="{Binding #Viewport3d.Wireframe}" ToolTip.Tip="{Tr Map.Wireframe.Tip}" AutomationProperties.Name="{Tr Map.Wireframe}">
+              <c:GlyphIcon Kind="Icon.Mesh" IconSize="14" />
+              <ToggleButton.IsVisible>
+                <MultiBinding Converter="{x:Static BoolConverters.And}">
+                  <Binding Path="HasView" />
+                  <Binding Path="Toolbar.Wireframe.IsShown" />
+                </MultiBinding>
+              </ToggleButton.IsVisible>
+            </ToggleButton>
             <!-- Separators show only between two groups that both show something (code-behind: UpdateSeparators) -->
             <Border Classes="vsep" x:Name="ViewSeparator" />
             <ToggleButton Classes="ghost" Padding="8,4" x:Name="SpawnsButton" IsChecked="{Binding ShowSpawns}" ToolTip.Tip="{Tr Map.Spawns.Tip}">
@@ -442,6 +475,32 @@
                 </MultiBinding>
               </Button.IsVisible>
             </Button>
+            <!-- F20 (defolt_0999): go to typed coordinates; the Entities list then shows what stands nearest -->
+            <Button Classes="ghost" Padding="8,4" x:Name="GoToButton" Content="{Tr Map.GoTo}" ToolTip.Tip="{Tr Map.GoTo.Tip}">
+              <Button.IsVisible>
+                <MultiBinding Converter="{x:Static BoolConverters.And}">
+                  <Binding Path="HasView" />
+                  <Binding Path="Toolbar.GoTo.IsShown" />
+                </MultiBinding>
+              </Button.IsVisible>
+              <Button.Flyout>
+                <Flyout Placement="BottomEdgeAlignedLeft">
+                  <StackPanel x:Name="GoToPanel" Spacing="8" Width="360">
+                    <TextBlock Text="{Tr Map.GoTo.Title}" Classes="h3" />
+                    <TextBlock Text="{Tr Map.GoTo.Caption}" Classes="caption wrap" />
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                      <TextBox x:Name="GoToBox" Text="{Binding GoToText}" Watermark="{Tr Map.GoTo.Watermark}" ToolTip.Tip="{Tr Map.GoTo.Box.Tip}" FontFamily="{DynamicResource MonoFontFamily}">
+                        <TextBox.KeyBindings>
+                          <KeyBinding Gesture="Enter" Command="{Binding GoToCoordinatesCommand}" />
+                        </TextBox.KeyBindings>
+                      </TextBox>
+                      <Button Grid.Column="1" Classes="accent" x:Name="GoToGoButton" Content="{Tr Map.GoTo.Go}" Command="{Binding GoToCoordinatesCommand}" ToolTip.Tip="{Tr Map.GoTo.Go.Tip}" />
+                    </Grid>
+                    <SelectableTextBlock Text="{Binding GoToResult}" Classes="caption" TextWrapping="Wrap" IsVisible="{Binding GoToResult, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                  </StackPanel>
+                </Flyout>
+              </Button.Flyout>
+            </Button>
             <!-- Prefabs: the selection saved under a name, placed again where the camera aims, shared as plain JSON files -->
             <Button Classes="ghost" Padding="8,4" x:Name="PrefabsButton" ToolTip.Tip="{Tr Map.Prefabs.Tip}">
               <Button.IsVisible>
@@ -522,6 +581,37 @@
                       </TextBox.KeyBindings>
                     </TextBox>
                     <Button Classes="accent" Content="{Tr Map.AddInFront}" HorizontalAlignment="Right" Command="{Binding AddObjectFromTextCommand}" ToolTip.Tip="{Tr Map.AddInFront.Tip}" />
+                    <!-- My models: the project's imported 3D models (the Craftables page's import, the same library), placed like any mesh -->
+                    <Separator Margin="0,2" />
+                    <TextBlock Text="{Tr Map.MyModels.Title}" Classes="h3" />
+                    <TextBlock Text="{Tr Map.MyModels.Hint}" Classes="caption wrap" />
+                    <TextBlock Text="{Tr Map.MyModels.None}" Classes="caption wrap" IsVisible="{Binding !HasMyModels}" />
+                    <ScrollViewer MaxHeight="220" IsVisible="{Binding HasMyModels}">
+                      <ItemsControl x:Name="MyModelList" ItemsSource="{Binding MyModels}">
+                        <ItemsControl.ItemTemplate>
+                          <DataTemplate x:DataType="vm:MapModelRow">
+                            <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8" Margin="0,3">
+                              <Border Grid.Column="0" Width="44" Height="44" Background="{DynamicResource Bg1Brush}" BorderBrush="{DynamicResource StrokeBrush}" BorderThickness="1"
+                                      CornerRadius="{DynamicResource SmallCornerRadius}" ClipToBounds="True">
+                                <c:ThumbnailImage Source="{Binding Thumbnail}" Stretch="Uniform" Margin="2" />
+                              </Border>
+                              <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                <TextBlock Text="{Binding Caption}" Classes="caption" TextTrimming="CharacterEllipsis" />
+                              </StackPanel>
+                              <Button Grid.Column="2" Classes="small accent" VerticalAlignment="Center" Content="{Tr Map.MyModels.Place}" Command="{Binding Place}" ToolTip.Tip="{Tr Map.MyModels.Place.Tip}" />
+                            </Grid>
+                          </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                      </ItemsControl>
+                    </ScrollViewer>
+                    <TextBlock x:Name="ModelEngineHint" Text="{Binding ModelEngineHint}" Classes="warn caption wrap" IsVisible="{Binding ModelEngineMissing}" />
+                    <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Right">
+                      <Button x:Name="ImportMapModelButton" Content="{Tr Map.MyModels.Import}" Command="{Binding ImportMapModelCommand}" ToolTip.Tip="{Tr Map.MyModels.Import.Tip}" />
+                      <Button x:Name="CancelMapModelButton" Classes="ghost" Content="{Tr Craftables.Import.Cancel}" Command="{Binding CancelMapModelImportCommand}"
+                              IsVisible="{Binding IsImportingModel}" ToolTip.Tip="{Tr Map.MyModels.Cancel.Tip}" />
+                    </StackPanel>
+                    <ProgressBar IsIndeterminate="True" Height="4" MinHeight="4" IsVisible="{Binding IsImportingModel}" />
                     <!-- A trader anywhere: a stock trade post of the type, its own name (its economy section) and outpost -->
                     <Separator Margin="0,2" />
                     <TextBlock Text="{Tr Map.Trader.Title}" Classes="h3" />
@@ -557,6 +647,27 @@
                 <DataTemplate x:DataType="vm:MapPageViewModel"><Panel /></DataTemplate>
               </ContentControl.DataTemplates>
             </ContentControl>
+            <!-- Isolate (seviscache): only the loaded levels, no island terrain behind them, nothing streams in; Whole island turns it off -->
+            <ToggleButton Classes="ghost" Padding="6,4" x:Name="IsolateButton" IsChecked="{Binding Isolate}" ToolTip.Tip="{Tr Map.Isolate.Tip}" AutomationProperties.Name="{Tr Map.Isolate}">
+              <c:GlyphIcon Kind="Icon.EyeOff" IconSize="14" />
+              <ToggleButton.IsVisible>
+                <MultiBinding Converter="{x:Static BoolConverters.And}">
+                  <Binding Path="HasView" />
+                  <Binding Path="Toolbar.Isolate.IsShown" />
+                </MultiBinding>
+              </ToggleButton.IsVisible>
+            </ToggleButton>
+            <!-- D02: what removed item spawners left in a save (SCUM.db). A map action next to the view tools; it wraps
+                 with the toolbar instead of taking fixed width from it (header must stay short enough for the 3D view). -->
+            <Button x:Name="SavedItemsButton" Classes="ghost square" VerticalAlignment="Center" Command="{Binding OpenSavedItemsCommand}" IsVisible="{Binding Session.HasProject}">
+              <ToolTip.Tip>
+                <StackPanel MaxWidth="380" Spacing="4">
+                  <TextBlock Text="{Tr Map.SavedItems}" FontWeight="SemiBold" />
+                  <TextBlock Text="{Tr Map.SavedItems.Tip}" TextWrapping="Wrap" />
+                </StackPanel>
+              </ToolTip.Tip>
+              <c:GlyphIcon Kind="Icon.Trash" IconSize="16" />
+            </Button>
           </WrapPanel>
         </StackPanel>
         <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
@@ -732,8 +843,11 @@
             </ItemsControl.ItemTemplate>
           </ItemsControl>
 
+          <!-- Several levels chosen with Ctrl or Shift (seviscache): they load after a short pause, or now with this button -->
+          <Button DockPanel.Dock="Top" x:Name="ShowSelectedButton" Classes="accent" Margin="10,4,10,2" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                  Content="{Binding ShowSelectedText}" Command="{Binding ShowSelectedCommand}" IsVisible="{Binding HasMultiSelection}" ToolTip.Tip="{Tr Map.Levels.ShowSelected.Tip}" />
           <Panel>
-            <TreeView x:Name="WorldTree" ItemsSource="{Binding Nodes}" SelectedItem="{Binding SelectedNode}"
+            <TreeView x:Name="WorldTree" ItemsSource="{Binding Nodes}" SelectedItem="{Binding SelectedNode}" SelectionMode="Multiple"
                       IsVisible="{Binding !ShowEmptyState}" Padding="0,3">
               <TreeView.Styles>
                 <Style Selector="TreeViewItem" x:DataType="vm:WorldTreeNode">
@@ -772,11 +886,13 @@
       <Border Grid.Row="0" Grid.Column="2" Classes="panel" x:Name="Viewport">
         <Panel x:Name="ViewportContent">
           <c:ViewportGrid Background="{DynamicResource ViewportBrush}" AxisXBrush="{DynamicResource AxisXBrush}" AxisYBrush="{DynamicResource AxisYBrush}" IsVisible="{Binding !HasView}" />
-          <c:LevelViewport x:Name="Viewport3d" Scene="{Binding PreparedScene}" PickParts="{Binding PickParts}" BrushMode="{Binding BrushSelect}" BrushRadius="{Binding BrushRadius}" BrushSpots="{Binding PaintSpots}" BrushOnGround="{Binding BrushOnGround}" SelectedId="{Binding SelectedActorId, Mode=TwoWay}" SelectedInstance="{Binding SelectedInstanceKey, Mode=TwoWay}" SelectionHoldUntil="{Binding SelectionHoldUntil}" Backdrop="{Binding WorldBackdrop}" KeepCamera="{Binding IsWorldMode}" Quality="{Binding RenderQuality}" TimeOfDay="{Binding TimeOfDay}" Lighting="{Binding Lighting}" AnimateWater="{Binding AnimateWater}" KindIds="{Binding HighlightIds}" KindInstances="{Binding KindSelectionInstances}" InstanceTransforms="{Binding InstanceTransforms}"
+          <c:LevelViewport x:Name="Viewport3d" Scene="{Binding PreparedScene}" PickParts="{Binding PickParts}" BrushMode="{Binding BrushSelect}" BrushRadius="{Binding BrushRadius}" BrushSpots="{Binding PaintSpots}" BrushOnGround="{Binding BrushOnGround}" SelectedId="{Binding SelectedActorId, Mode=TwoWay}" SelectedInstance="{Binding SelectedInstanceKey, Mode=TwoWay}" SelectionHoldUntil="{Binding SelectionHoldUntil}" Backdrop="{Binding WorldBackdrop}" ShowBackdrop="{Binding !Isolate}" KeepCamera="{Binding IsWorldMode}" Quality="{Binding RenderQuality}" TimeOfDay="{Binding TimeOfDay}" Lighting="{Binding Lighting}" AnimateWater="{Binding AnimateWater}" KindIds="{Binding HighlightIds}" KindInstances="{Binding KindSelectionInstances}" InstanceTransforms="{Binding InstanceTransforms}"
                            HiddenIds="{Binding HiddenActorIds}" HiddenInstances="{Binding HiddenInstanceKeys}" HiddenPinKinds="{Binding HiddenPinKinds}" PinOverrides="{Binding PinOverrides}"
                            ActorTransforms="{Binding ActorTransforms}" Clones="{Binding Clones}" Orientation="{Binding Orientation}" CanScale="{Binding GizmoCanScale}"
                            SelectedRootWorld="{Binding SelectedRootWorld}" TranslationSnap="{Binding TranslationSnap}" RotationSnap="{Binding RotationSnap}"
+                           NearClip="{Binding NearClip}"
                            AntiAliasedFoliage="{Binding AntiAliasedFoliage}"
+                           RenderDistance="{Binding RenderDistance}" SectorSizeCm="{Binding SectorSizeCm}" Smooth="{Binding SmoothFrames}"
                            ExtraMeshes="{Binding ExtraMeshes}" ReplacedMeshes="{Binding ReplacedMeshes}" PartMeshes="{Binding PartMeshes}" Bends="{Binding Bends}" SegmentBends="{Binding SegmentBends}" ShapeHandles="{Binding ShapeHandles}" ScaleHandles="{Binding ScaleHandles}" LegHandle="{Binding LegHandle}" GroupWorlds="{Binding GroupWorlds}" IsVisible="{Binding HasView}" />
           <!-- gizmo drag: the live value next to the cursor -->
           <Border Classes="hud" IsHitTestVisible="False" HorizontalAlignment="Left" VerticalAlignment="Top"
@@ -857,12 +973,65 @@
                 <TextBlock Text="{Tr Map.Companions.NoteClassEffect}" Classes="caption wrap" IsVisible="{Binding HasClassEffects}" />
                 <TextBlock Text="{Tr Map.Companions.NoteSpawned}" Classes="caption wrap" />
                 <WrapPanel ItemSpacing="8" LineSpacing="6" HorizontalAlignment="Right">
+                  <Button x:Name="CompanionsCleanSavedButton" Classes="ghost" Content="{Tr Map.SavedItems.Open}" Command="{Binding CleanSavedCommand}"
+                          ToolTip.Tip="{Tr Map.SavedItems.Tip}" />
                   <Button x:Name="CompanionsWholeButton" Classes="ghost" Content="{Tr Map.Companions.WholeObject}" Command="{Binding WholeObjectCommand}"
                           IsVisible="{Binding HasClassEffects}" ToolTip.Tip="{Tr Map.Companions.Tip.WholeObject}" />
                   <Button x:Name="CompanionsOnlyButton" Classes="ghost" Content="{Tr Map.Companions.OnlyThis}" Command="{Binding OnlyThisCommand}"
                           ToolTip.Tip="{Tr Map.Companions.Tip.OnlyThis}" />
                   <Button x:Name="CompanionsDeleteAllButton" Classes="accent" Content="{Binding DeleteAllText}" Command="{Binding DeleteAllCommand}"
                           ToolTip.Tip="{Tr Map.Companions.Tip.DeleteAll}" />
+                </WrapPanel>
+              </StackPanel>
+            </Border>
+          </Panel>
+          <!-- Clean saved items (D02 "phantom fridges", defolt_0999, O Piqueno): what the project's removed or reverted item
+               spawners already spawned is in the save (SCUM.db), not in the mod. Choose the save, Find, untick what stays,
+               Remove ticked (a backup first), Restore backup puts it back. -->
+          <Panel HorizontalAlignment="Right" VerticalAlignment="Top" Margin="10" MaxWidth="620" IsVisible="{Binding HasSavedItems}">
+            <Border Classes="overlayCard" x:Name="SavedItemsCard" Padding="12,10" DataContext="{Binding SavedItems}" x:DataType="vm:SavedItemsViewModel">
+              <StackPanel Spacing="8">
+                <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
+                  <c:GlyphIcon Kind="Icon.Trash" IconSize="14" VerticalAlignment="Center" />
+                  <TextBlock Grid.Column="1" Text="{Tr Map.SavedItems}" FontWeight="SemiBold" VerticalAlignment="Center" />
+                  <Button Grid.Column="2" x:Name="SavedItemsCloseButton" Classes="ghost small" Padding="5" VerticalAlignment="Top" Command="{Binding CloseCommand}"
+                          ToolTip.Tip="{Tr Common.Close}">
+                    <c:GlyphIcon Kind="Icon.Close" IconSize="11" />
+                  </Button>
+                </Grid>
+                <TextBlock Text="{Tr Map.SavedItems.HowTo}" Classes="caption wrap" />
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                  <TextBlock Text="{Binding SaveText}" Classes="caption mono" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding SaveText}" />
+                  <Button Grid.Column="1" x:Name="SavedItemsChooseButton" Content="{Tr Map.SavedItems.Choose}" Command="{Binding ChooseCommand}"
+                          ToolTip.Tip="{Tr Map.SavedItems.Choose.Tip}" />
+                </Grid>
+                <WrapPanel ItemSpacing="8" LineSpacing="6">
+                  <CheckBox x:Name="SavedItemsAreaBox" IsChecked="{Binding UseArea}" Content="{Tr Map.SavedItems.UseArea}" VerticalAlignment="Center"
+                            ToolTip.Tip="{Tr Map.SavedItems.UseArea.Tip}" />
+                  <NumericUpDown x:Name="SavedItemsRadius" Value="{Binding AreaMeters}" Minimum="1" Maximum="2000" Increment="5" FormatString="0" Width="120"
+                                 IsEnabled="{Binding UseArea}" ToolTip.Tip="{Tr Map.SavedItems.UseArea.Tip}" />
+                </WrapPanel>
+                <ScrollViewer MaxHeight="240" HorizontalScrollBarVisibility="Disabled">
+                  <ItemsControl x:Name="SavedItemsList" ItemsSource="{Binding Rows}">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="vm:SavedItemRowViewModel">
+                        <Grid ColumnDefinitions="Auto,2*,3*,Auto" ColumnSpacing="8" Margin="0,1">
+                          <CheckBox IsChecked="{Binding IsChecked}" MinWidth="0" VerticalAlignment="Center" ToolTip.Tip="{Tr Map.SavedItems.Row.Tip}" />
+                          <TextBlock Grid.Column="1" Text="{Binding Name}" FontSize="12.5" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Name}" />
+                          <TextBlock Grid.Column="2" Text="{Binding WhyText}" Classes="caption" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding WhyText}" />
+                          <TextBlock Grid.Column="3" Text="{Binding PositionText}" Classes="caption mono" VerticalAlignment="Center" ToolTip.Tip="{Binding PositionText}" />
+                        </Grid>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                </ScrollViewer>
+                <TextBlock x:Name="SavedItemsStatus" Text="{Binding Status}" Classes="caption wrap" ToolTip.Tip="{Binding Status}" />
+                <WrapPanel ItemSpacing="8" LineSpacing="6" HorizontalAlignment="Right">
+                  <Button x:Name="SavedItemsRestoreButton" Classes="ghost" Content="{Tr Map.SavedItems.Restore}" Command="{Binding RestoreCommand}"
+                          ToolTip.Tip="{Tr Map.SavedItems.Restore.Tip}" />
+                  <Button x:Name="SavedItemsFindButton" Content="{Tr Map.SavedItems.Find}" Command="{Binding FindCommand}" ToolTip.Tip="{Tr Map.SavedItems.Find.Tip}" />
+                  <Button x:Name="SavedItemsRemoveButton" Classes="accent" Content="{Tr Map.SavedItems.Remove}" Command="{Binding RemoveCommand}"
+                          ToolTip.Tip="{Tr Map.SavedItems.Remove.Tip}" />
                 </WrapPanel>
               </StackPanel>
             </Border>

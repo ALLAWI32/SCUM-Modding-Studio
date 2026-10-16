@@ -31,6 +31,7 @@ public sealed partial class MapPageViewModel
 
     private Task<bool>? _backdropBuild;
     private AssetCatalog? _backdropCatalog;
+    private PreparedLevelScene? _islandTerrain; // the backdrop without the far models (they are added to it)
     private FVector? _lastCamera;
 
     /// <summary>Builds the whole-island backdrop and switches to world mode, streaming the levels around the camera.</summary>
@@ -45,11 +46,13 @@ public sealed partial class MapPageViewModel
         }
 
         EndSector(MapLoadMode.Island);
+        Isolate = false; // the whole island again: its terrain shows and streams
         IsWorldMode = true;
         _holdStreaming = false; // the island streams around the camera at once
         if (await EnsureBackdropAsync(catalog, world).ConfigureAwait(true) && LoadMode == MapLoadMode.Island)
         {
             WorldStatus = Localization.Loc.T("Map.World.Ready");
+            ShowFarModels(catalog, world, _islandTerrain); // the game's far view of every place, added once it is prepared
         }
     }
 
@@ -105,6 +108,7 @@ public sealed partial class MapPageViewModel
 
                 return built;
             }).ConfigureAwait(true);
+            _islandTerrain = WorldBackdrop;
             return true;
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
@@ -122,9 +126,9 @@ public sealed partial class MapPageViewModel
     /// </summary>
     public void UpdateWorldCamera(FVector cameraUe)
     {
-        if (!IsWorldMode || World is not { } world)
+        if (!IsWorldMode || World is not { } world || Isolate)
         {
-            return;
+            return; // Isolate: only what is loaded shows, nothing streams in
         }
 
         _lastCamera = cameraUe;

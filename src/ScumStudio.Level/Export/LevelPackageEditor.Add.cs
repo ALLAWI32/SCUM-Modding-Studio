@@ -45,6 +45,12 @@ public sealed record StaticMeshActorAdd(string NewName, string StaticMesh, Trans
     /// gravel road pieces (<see cref="BendMesh.OnlyIntoLandscape"/>): on screen they show bright pink.
     /// </summary>
     public bool OnlyIntoLandscape { get; init; }
+
+    /// <summary>
+    /// The materials of what it was copied from (a repainted wall), as material object paths by slot (a null entry keeps the
+    /// slot's own), written as the component's <c>OverrideMaterials</c>; null writes none.
+    /// </summary>
+    public IReadOnlyList<string?>? OverrideMaterials { get; init; }
 }
 
 /// <summary>
@@ -69,7 +75,8 @@ public static partial class LevelPackageEditor
 
     private static List<int> AddStaticMeshActors(
         CookedPackage package, int levelIndex, IReadOnlyList<StaticMeshActorAdd> adds, List<ExportEntry> exports, List<ReadOnlyMemory<byte>> data,
-        List<ImportEntry> imports, List<string> names, List<bool> wide, List<string> addedNames, List<int> preload, List<string> added, List<string> warnings)
+        List<ImportEntry> imports, List<string> names, List<bool> wide, List<string> addedNames, List<int> preload, List<string> added,
+        Func<string, string?>? assetClass, List<string> warnings)
     {
         var addedIndices = new List<int>();
         if (adds.Count == 0)
@@ -113,6 +120,8 @@ public static partial class LevelPackageEditor
             var landscapeTexture = add.DrawsIntoLandscape
                 ? Import(EnginePackage, "RuntimeVirtualTexture", Import(CoreUObjectPackage, "Package", 0, LandscapeTexturePackage), "RTV_Landscape")
                 : 0;
+            var materials = add.OverrideMaterials is { Count: > 0 } paths ? MaterialImports(add.NewName, paths, imports, names, wide, addedNames, assetClass, warnings) : [];
+            var materialDependencies = materials.Where(m => m != 0).Distinct().ToList();
 
             var actorIndex = exports.Count + 1;
             var componentIndex = exports.Count + 2;
@@ -129,6 +138,11 @@ public static partial class LevelPackageEditor
             // Component: StaticMesh + relative transform; bHasGuid 0; LODData (empty array).
             var component = new ByteWriter(160);
             WriteObjectTag(component, Name, StaticMeshClass, mesh);
+            if (materials.Count > 0)
+            {
+                WriteObjectArrayTag(component, Name, "OverrideMaterials", materials);
+            }
+
             var t = add.Transform;
             WriteStructTag(component, Name, "RelativeLocation", "Vector", t.Location.X, t.Location.Y, t.Location.Z);
             WriteStructTag(component, Name, "RelativeRotation", "Rotator", t.Rotation.Pitch, t.Rotation.Yaw, t.Rotation.Roll);
@@ -197,6 +211,7 @@ public static partial class LevelPackageEditor
             preload.Add(levelPackageIndex); // create-before-create
             var componentFirst = preload.Count;
             preload.AddRange([mesh, actorArchetype]); // create-before-serialize
+            preload.AddRange(materialDependencies); // the materials exist before it is read, as the mesh does
             if (landscapeTexture != 0)
             {
                 preload.Add(landscapeTexture); // as on the game's road pieces
@@ -239,7 +254,7 @@ public static partial class LevelPackageEditor
                 PackageFlags = levelEntry.PackageFlags,
                 FirstExportDependency = componentFirst,
                 SerializationBeforeSerializationDependencies = 0,
-                CreateBeforeSerializationDependencies = 2 + (bodySetupIndex != 0 ? 1 : 0) + (landscapeTexture != 0 ? 1 : 0),
+                CreateBeforeSerializationDependencies = 2 + materialDependencies.Count + (bodySetupIndex != 0 ? 1 : 0) + (landscapeTexture != 0 ? 1 : 0),
                 SerializationBeforeCreateDependencies = 2,
                 CreateBeforeCreateDependencies = 1,
             });
@@ -276,6 +291,52 @@ public static partial class LevelPackageEditor
         }
 
         return addedIndices;
+    }
+
+    /// <summary>
+    /// One package index per material slot (0 = the slot keeps the mesh's own): the level's own import of that material when
+    /// it has one (the owner's pasted building: its walls had the stock textures in game), else a new one of the class
+    /// <paramref name="assetClass"/> reads; a slot whose path or class cannot be read stays 0 with a warning, never a guessed class.
+    /// </summary>
+    private static List<int> MaterialImports(string actor, IReadOnlyList<string?> paths, List<ImportEntry> imports, List<string> names, List<bool> wide,
+        List<string> addedNames, Func<string, string?>? assetClass, List<string> warnings)
+    {
+        var result = new List<int>(paths.Count);
+        foreach (var path in paths)
+        {
+            if (path is null)
+            {
+                result.Add(0);
+                continue;
+            }
+
+            var (packagePath, objectName) = SplitObjectPath(path);
+            if (packagePath.Length == 0 || objectName.Length == 0)
+            {
+                warnings.Add($"'{actor}': '{path}' is not a material object path; that slot keeps the mesh's own material.");
+                result.Add(0);
+                continue;
+            }
+
+            var existing = imports.FindIndex(i => NameEquals(names, i.ObjectName, objectName) && i.OuterIndex < 0 && -i.OuterIndex - 1 < imports.Count
+                && NameEquals(names, imports[-i.OuterIndex - 1].ObjectName, packagePath) && NameEquals(names, imports[-i.OuterIndex - 1].ClassName, "Package"));
+            if (existing >= 0)
+            {
+                result.Add(-(existing + 1));
+            }
+            else if (assetClass?.Invoke(packagePath) is { } className && className.StartsWith("Material", StringComparison.Ordinal))
+            {
+                var outer = GetOrAddImport(imports, names, wide, addedNames, CoreUObjectPackage, "Package", 0, packagePath);
+                result.Add(GetOrAddImport(imports, names, wide, addedNames, EnginePackage, className, outer, objectName));
+            }
+            else
+            {
+                warnings.Add($"'{actor}': the class of material {path} could not be read; that slot keeps the mesh's own material.");
+                result.Add(0);
+            }
+        }
+
+        return result;
     }
 
     /// <summary>Re-emits the level export's dependency groups with <paramref name="newActors"/> created before it is serialized.</summary>
@@ -418,11 +479,11 @@ public static partial class LevelPackageEditor
     /// <c>CachedMeshBodySetupGuid</c> stays: dropping it makes the game rebuild the collision from the mesh at load, which
     /// fails in a cooked game (no triangle data at runtime) and leaves the piece with none.
     /// </summary>
-    private static bool TryPatchSpline(CookedPackage package, int levelIndex, SplinePatch patch, IList<ReadOnlyMemory<byte>> data,
+    private static bool TryPatchSpline(CookedPackage package, int levelIndex, SplinePatch patch, List<ExportEntry> exports, IList<ReadOnlyMemory<byte>> data,
         List<string> names, List<bool> wide, List<string> addedNames, List<string> warnings)
     {
-        var actorIndex = FindExport(package, patch.Actor, levelIndex + 1);
-        var componentIndex = actorIndex < 0 ? -1 : FindExport(package, patch.Component, actorIndex + 1);
+        var actorIndex = FindLevelActor(exports, names, levelIndex + 1, patch.Actor) - 1;
+        var componentIndex = actorIndex < 0 ? -1 : FindChild(exports, names, actorIndex + 1, patch.Component) - 1;
         if (componentIndex < 0)
         {
             warnings.Add($"'{patch.Actor}.{patch.Component}' is not stored in the level package; its bend was not written.");
@@ -433,7 +494,7 @@ public static partial class LevelPackageEditor
         PropertyBlock block;
         try
         {
-            block = Formats.Properties.PropertyReader.ReadPayload(package, payload, componentIndex);
+            block = Formats.Properties.PropertyReader.ReadPayload(package, payload, names);
         }
         catch (Exception ex) when (ex is InvalidDataException or IndexOutOfRangeException or ArgumentException)
         {

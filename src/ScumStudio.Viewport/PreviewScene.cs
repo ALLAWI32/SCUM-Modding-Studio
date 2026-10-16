@@ -250,26 +250,35 @@ public sealed class PreviewScene : IDisposable
     }
 
     /// <summary>
-    /// Takes the look of <paramref name="model"/> (tints, shine, textures) when it has the same parts as <see cref="Model"/>
-    /// (a repaint), without uploading the meshes again or moving the camera. False when the parts differ: upload it instead.
+    /// Takes the look of <paramref name="model"/> (tints, shine, textures) and the places of its parts when it has the same
+    /// parts as <see cref="Model"/> (a repaint, a part moved in the Parts tab), without uploading the meshes again or moving
+    /// the camera. False when the parts differ: upload it instead.
     /// </summary>
     public bool Restyle(PreviewModel model)
     {
         ArgumentNullException.ThrowIfNull(model);
-        if (model.Parts.Count != _parts.Count
-            || model.Parts.Where((p, i) => !ReferenceEquals(p.Mesh, Model.Parts[i].Mesh) || p.Transform != Model.Parts[i].Transform).Any())
+        if (model.Parts.Count != _parts.Count || model.Parts.Where((p, i) => !ReferenceEquals(p.Mesh, Model.Parts[i].Mesh)).Any())
         {
             return false;
         }
 
         var old = _textures.Values.Select(t => t.Texture).ToList();
+        var moved = false;
         for (var i = 0; i < _parts.Count; i++)
         {
             var (node, handle) = _parts[i];
             Style(node, model.Parts[i]);
             var texture = TextureOf(model.Parts[i], model);
             _renderer.SetMeshTexture(handle, texture);
-            _renderer.Meshes[handle.Id].NormalMap = texture is null ? null : NormalOf(model.Parts[i], model);
+            var gpu = _renderer.Meshes[handle.Id];
+            gpu.NormalMap = texture is null ? null : NormalOf(model.Parts[i], model);
+            gpu.Roughness = model.Parts[i].Roughness; // a paint's own roughness on the painted texels
+            var matrix = UeToGl.ModelMatrix(model.Parts[i].Transform);
+            if (node.LocalTransform != matrix)
+            {
+                node.LocalTransform = matrix;
+                moved = true;
+            }
         }
 
         var used = _textures.Values.Select(t => t.Texture).ToHashSet();
@@ -279,8 +288,66 @@ public sealed class PreviewScene : IDisposable
         }
 
         Model = model;
+        if (moved)
+        {
+            UpdateBounds();
+        }
+
         return true;
     }
+
+    /// <summary>Index of <paramref name="node"/> in <see cref="Model"/>'s parts, or -1 (the scale figure, the floor, another scene's node).</summary>
+    public int PartIndexOf(SceneNode? node) => node is null ? -1 : _parts.FindIndex(p => ReferenceEquals(p.Node, node));
+
+    /// <summary>The node drawing part <paramref name="index"/>, or null.</summary>
+    public SceneNode? PartNode(int index) => index >= 0 && index < _parts.Count ? _parts[index].Node : null;
+
+    /// <summary>Where part <paramref name="index"/> is drawn now (UE space), or null for no such part.</summary>
+    public FTransform? PartTransform(int index) => index >= 0 && index < _parts.Count ? GlToUe(_parts[index].Node.LocalTransform) : null;
+
+    /// <summary>
+    /// Moves part <paramref name="index"/> to <paramref name="transform"/> (UE space; a gizmo drag, a part's offset) with its
+    /// mesh and textures kept and the camera untouched; <see cref="ModelBounds"/> follows. False for no such part.
+    /// </summary>
+    public bool SetPartTransform(int index, FTransform transform)
+    {
+        if (index < 0 || index >= _parts.Count)
+        {
+            return false;
+        }
+
+        _parts[index].Node.LocalTransform = UeToGl.ModelMatrix(transform);
+        UpdateBounds();
+        return true;
+    }
+
+    /// <summary>Hides part <paramref name="index"/> (a removed door) or shows it again; a hidden part leaves <see cref="ModelBounds"/>. False for no such part.</summary>
+    public bool SetPartHidden(int index, bool hidden)
+    {
+        if (index < 0 || index >= _parts.Count)
+        {
+            return false;
+        }
+
+        _parts[index].Node.Visible = !hidden;
+        UpdateBounds();
+        return true;
+    }
+
+    /// <summary>The bounds of the parts shown, where they stand now.</summary>
+    private void UpdateBounds()
+    {
+        var bounds = BoundingBox.Empty;
+        foreach (var (node, handle) in _parts.Where(p => p.Node.Visible))
+        {
+            bounds = bounds.Union(LevelSceneUploader.TransformBounds(handle.Bounds, node.LocalTransform));
+        }
+
+        ModelBounds = bounds;
+    }
+
+    /// <summary>The UE transform a part's GL model matrix was made from (<see cref="UeToGl.ModelMatrix"/> undone).</summary>
+    private static FTransform GlToUe(Matrix4x4 gl) => FTransform.FromMatrix(UeToGl.AxisSwap * gl * UeToGl.AxisSwap); // the swap is its own inverse
 
     /// <summary>Releases the GPU meshes and textures (GL context current).</summary>
     /// <summary>

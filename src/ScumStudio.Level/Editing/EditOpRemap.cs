@@ -18,7 +18,8 @@ public static class EditOpRemap
         typeof(RemoveAddedInstanceOp), typeof(AddStaticMeshActorOp), typeof(AddBlueprintActorOp), typeof(RemoveAddedActorOp),
         typeof(CloneAssetOp), typeof(RemoveAssetCloneOp), typeof(SetAssetValueOp), typeof(ReplaceAssetOp), typeof(BatchOp),
         typeof(BendActorOp), typeof(SwaySegmentOp), typeof(SetSpawnPointsOp), typeof(ReplaceMeshOp), typeof(SetLootOp), typeof(SetClearGrassOp),
-        typeof(DeleteComponentsOp), typeof(RestoreComponentsOp),
+        typeof(DeleteComponentsOp), typeof(RestoreComponentsOp), typeof(SetSpawnChoiceOp), typeof(AddSpawnPlaceOp),
+        typeof(SetEconomyEntryOp), typeof(SetEconomySettingOp), typeof(SetEconomySectionOp), typeof(ReplaceEconomyOp),
     };
 
     /// <summary>
@@ -77,6 +78,11 @@ public static class EditOpRemap
             SetClearGrassOp grass => grass with { Target = A(grass.Target) },
             DeleteComponentsOp parts => parts with { Target = A(parts.Target) },
             RestoreComponentsOp parts => parts with { Target = A(parts.Target) },
+            SetSpawnChoiceOp choice => choice with { Target = A(choice.Target) },
+            AddSpawnPlaceOp place => place with { NewName = Name(place.Created.Level, place.NewName) },
+            SetEconomyEntryOp entry => traders.TryGetValue(entry.Trader, out var renamed) ? entry with { Trader = renamed } : entry,
+            SetEconomySectionOp section => traders.TryGetValue(section.Trader, out var renamed) ? section with { Trader = renamed } : section,
+            SetEconomySettingOp or ReplaceEconomyOp => op, // a share carries the economy as a file of its own, never these
             _ => throw new NotSupportedException($"Edits of type {op.GetType().Name} cannot be shared by this version."),
         };
     }

@@ -2,6 +2,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:ScumStudio.App.ViewModels"
              xmlns:c="using:ScumStudio.App.Controls"
+             xmlns:v="using:ScumStudio.App.Views.Pages"
              x:Class="ScumStudio.App.Views.Pages.ModulePageView"
              x:DataType="vm:ModulePageViewModel">
   <UserControl.Styles>
@@ -290,10 +291,15 @@
                                       <!-- A dock, not a horizontal stack: a long name trims at its column instead of running under the stock value. -->
                                       <DockPanel Grid.Column="0" VerticalAlignment="Center">
                                         <Ellipse Classes="edited" Width="7" Height="7" Margin="0,0,7,0" IsVisible="{Binding IsOverridden}" ToolTip.Tip="{Tr Module.Edited.Tip}" />
-                                        <TextBlock Text="{Binding Label}" ToolTip.Tip="{Binding PathText}" TextTrimming="CharacterEllipsis" />
+                                        <!-- A value the file does not store (a katana's MaxHealth): its parent class under the name, editable all the same. -->
+                                        <StackPanel VerticalAlignment="Center">
+                                          <TextBlock Text="{Binding Label}" ToolTip.Tip="{Binding PathText}" TextTrimming="CharacterEllipsis" />
+                                          <TextBlock Text="{Binding InheritedNote}" IsVisible="{Binding IsInherited}" ToolTip.Tip="{Binding InheritedTip}" Classes="muted"
+                                                     FontSize="11" TextTrimming="CharacterEllipsis" />
+                                        </StackPanel>
                                       </DockPanel>
                                       <TextBlock Grid.Column="1" Text="{Binding StockDisplay}" Classes="muted mono" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
-                                                 ToolTip.Tip="{Binding StockValue}" />
+                                                 ToolTip.Tip="{Binding StockTip}" />
                                       <Panel Grid.Column="2">
                                         <!-- The tip says what to type, with the reason first when the game cannot read the value. -->
                                         <TextBox Text="{Binding Value}" IsVisible="{Binding IsText}" IsReadOnly="{Binding IsReadOnly}" Classes="mono">
@@ -341,7 +347,8 @@
               <Border Margin="6" CornerRadius="{DynamicResource SmallCornerRadius}" ClipToBounds="True" Background="{DynamicResource ViewportBrush}">
                 <Panel>
                   <c:ViewportGrid Background="{DynamicResource ViewportBrush}" AxisXBrush="{DynamicResource AxisXBrush}" AxisYBrush="{DynamicResource AxisYBrush}" IsVisible="{Binding !HasPreview}" />
-                  <c:MeshPreview x:Name="ItemPreview" Model="{Binding Preview}" HighlightAttachment="{Binding HighlightAttachment}" IsVisible="{Binding HasPreview}" />
+                  <c:MeshPreview x:Name="ItemPreview" Model="{Binding Preview}" HighlightAttachment="{Binding HighlightAttachment}" IsVisible="{Binding HasPreview}"
+                                 Tool="{Binding StudioTool}" GizmoMode="{Binding StudioGizmoMode}" PartOverrides="{Binding StudioPartOverrides}" />
                   <ProgressBar IsIndeterminate="True" IsVisible="{Binding IsPreviewLoading}" VerticalAlignment="Top" Margin="8,6" />
                   <!-- The model's name (left) and the mouse hint (right) share the bottom line; the name trims instead of running under the hint. -->
                   <Grid VerticalAlignment="Bottom" Margin="8" ColumnDefinitions="*,Auto" ColumnSpacing="8" IsHitTestVisible="False">
@@ -368,6 +375,11 @@
                       </ToggleButton>
                     </StackPanel>
                   </Border>
+                  <!-- Vehicles studio: what the left mouse button does on the tab shown (turn, place a decal, move a part) -->
+                  <Border x:Name="StudioToolHint" Classes="hud" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="8" MaxWidth="360" IsHitTestVisible="False"
+                          IsVisible="{Binding ShowStudioToolHint}">
+                    <TextBlock Text="{Binding StudioToolHint}" TextWrapping="Wrap" />
+                  </Border>
                   <Border Classes="hud" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="8,30,8,8" MaxWidth="460" IsHitTestVisible="False" IsVisible="{Binding CloneSharesPaint}">
                     <TextBlock Text="{Tr Paint.CloneShared}" TextWrapping="Wrap" />
                   </Border>
@@ -382,11 +394,20 @@
               </Border>
 
               <!-- Paint (vehicles, weapons): shown on the model as it is chosen; the splitter makes the panel wider or narrower -->
-              <GridSplitter Grid.Column="1" x:Name="PaintSplitter" ResizeDirection="Columns" Background="Transparent" IsVisible="{Binding HasPaints}"
+              <GridSplitter Grid.Column="1" x:Name="PaintSplitter" ResizeDirection="Columns" Background="Transparent" IsVisible="{Binding ShowStudioPanel}"
                             ToolTip.Tip="{Tr Common.Splitter.Tip}" />
-              <Border Grid.Column="2" Margin="0,6,6,6" IsVisible="{Binding HasPaints}" Classes="panel">
+              <Border Grid.Column="2" Margin="0,6,6,6" IsVisible="{Binding ShowStudioPanel}" Classes="panel">
                 <DockPanel>
-                  <StackPanel DockPanel.Dock="Top" Margin="12,10,12,4" Spacing="2">
+                  <!-- Vehicles studio tabs; a weapon keeps its materials only -->
+                  <Border x:Name="StudioTabs" DockPanel.Dock="Top" Classes="segmented" Margin="12,10,12,0" HorizontalAlignment="Left" IsVisible="{Binding HasStudioTabs}">
+                    <StackPanel Orientation="Horizontal">
+                      <ToggleButton x:Name="StudioMaterialsTab" Click="OnStudioTabClick" IsChecked="{Binding IsStudioMaterials}" Content="{Tr Studio.Tab.Materials}" ToolTip.Tip="{Tr Studio.Tab.Materials.Tip}" />
+                      <ToggleButton x:Name="StudioTexturesTab" Click="OnStudioTabClick" IsChecked="{Binding IsStudioTextures}" Content="{Tr Studio.Tab.Textures}" ToolTip.Tip="{Tr Studio.Tab.Textures.Tip}" />
+                      <ToggleButton x:Name="StudioDecalsTab" Click="OnStudioTabClick" IsChecked="{Binding IsStudioDecals}" Content="{Tr Studio.Tab.Decals}" ToolTip.Tip="{Tr Studio.Tab.Decals.Tip}" />
+                      <ToggleButton x:Name="StudioPartsTab" Click="OnStudioTabClick" IsChecked="{Binding IsStudioParts}" Content="{Tr Studio.Tab.Parts}" ToolTip.Tip="{Tr Studio.Tab.Parts.Tip}" />
+                    </StackPanel>
+                  </Border>
+                  <StackPanel DockPanel.Dock="Top" Margin="12,10,12,4" Spacing="2" IsVisible="{Binding ShowMaterialsPanel}">
                     <Grid ColumnDefinitions="*,Auto">
                       <TextBlock Text="{Tr Paint.Title}" Classes="h2" />
                       <Button Grid.Column="1" x:Name="PaintAllOriginalButton" Classes="accent small" Content="{Tr Paint.AllOriginal}" Command="{Binding AllOriginalPaintCommand}"
@@ -404,7 +425,7 @@
                                 ToolTip.Tip="{Tr Paint.Armour.Tip}" />
                     </Grid>
                   </StackPanel>
-                  <Border DockPanel.Dock="Bottom" Padding="12,8" BorderThickness="0,1,0,0" BorderBrush="{DynamicResource StrokeSubtleBrush}">
+                  <Border DockPanel.Dock="Bottom" Padding="12,8" BorderThickness="0,1,0,0" BorderBrush="{DynamicResource StrokeSubtleBrush}" IsVisible="{Binding ShowMaterialsPanel}">
                     <StackPanel Spacing="6">
                       <TextBlock Classes="caption wrap" Text="{Binding PaintNote}" />
                       <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Right">
@@ -413,7 +434,8 @@
                       </StackPanel>
                     </StackPanel>
                   </Border>
-                  <ScrollViewer HorizontalScrollBarVisibility="Disabled">
+                  <Panel>
+                  <ScrollViewer HorizontalScrollBarVisibility="Disabled" IsVisible="{Binding ShowMaterialsPanel}">
                     <ItemsControl x:Name="PaintList" ItemsSource="{Binding Paints}" Margin="12,0,12,8">
                       <ItemsControl.ItemTemplate>
                         <DataTemplate x:DataType="vm:PaintMaterialViewModel">
@@ -460,11 +482,20 @@
                               <Slider Grid.Column="1" Minimum="0" Maximum="1" Value="{Binding ClearCoat}" SmallChange="0.05" LargeChange="0.1" ToolTip.Tip="{Tr Paint.ClearCoat.Tip}" />
                               <TextBlock Grid.Column="2" Text="{Binding ClearCoatText}" Classes="caption mono" VerticalAlignment="Center" HorizontalAlignment="Right" />
                             </Grid>
+                            <v:VehicleStudioMaterials />
                           </StackPanel>
                         </DataTemplate>
                       </ItemsControl.ItemTemplate>
                     </ItemsControl>
                   </ScrollViewer>
+                  <ScrollViewer x:Name="StudioTexturesPanel" HorizontalScrollBarVisibility="Disabled" IsVisible="{Binding IsStudioTextures}">
+                    <v:VehicleStudioTextures />
+                  </ScrollViewer>
+                  <v:VehicleStudioDecals x:Name="StudioDecalsPanel" IsVisible="{Binding IsStudioDecals}" />
+                  <ScrollViewer x:Name="StudioPartsPanel" HorizontalScrollBarVisibility="Disabled" IsVisible="{Binding IsStudioParts}">
+                    <v:VehicleStudioParts />
+                  </ScrollViewer>
+                  </Panel>
                 </DockPanel>
               </Border>
               </Grid>

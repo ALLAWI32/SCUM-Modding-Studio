@@ -3,6 +3,7 @@
              xmlns:vm="using:ScumStudio.App.ViewModels"
              xmlns:c="using:ScumStudio.App.Controls"
              xmlns:conv="using:ScumStudio.App.Converters"
+             xmlns:p="using:ScumStudio.App.Views.Pages"
              x:Class="ScumStudio.App.Views.Pages.CraftablesPageView"
              x:DataType="vm:CraftablesPageViewModel">
   <UserControl.Styles>
@@ -237,6 +238,17 @@
                           </ComboBox.ItemTemplate>
                         </ComboBox>
                       </StackPanel>
+                      <!-- The picture the crafting menu shows (Jenni: every craftable showed the improvised chair's): empty = its own. -->
+                      <StackPanel Spacing="2">
+                        <TextBlock Text="{Tr Craftables.Picture}" Classes="caption" />
+                        <StackPanel Orientation="Horizontal" Spacing="4">
+                          <AutoCompleteBox x:Name="CraftPictureBox" MinWidth="220" MaxWidth="340" Text="{Binding Icon, Mode=TwoWay}" FilterMode="Contains" MinimumPrefixLength="2"
+                                           Watermark="{Tr Craftables.Picture.Own}" ToolTip.Tip="{Tr Craftables.Picture.Tip}"
+                                           ItemsSource="{Binding $parent[UserControl].((vm:CraftablesPageViewModel)DataContext).Pictures}" />
+                          <Button x:Name="CraftPictureReset" Classes="plain" Content="{Tr Craftables.Picture.Reset}" Command="{Binding ResetIconCommand}"
+                                  ToolTip.Tip="{Tr Craftables.Picture.Reset.Tip}" />
+                        </StackPanel>
+                      </StackPanel>
                       <StackPanel Spacing="2">
                         <TextBlock Text="{Tr Craftables.MadeIn}" Classes="caption" />
                         <Panel MinHeight="32">
@@ -261,6 +273,8 @@
                     </CheckBox>
                   </StackPanel>
                 </Grid>
+
+                <p:CraftElementEditor x:Name="CraftElementEditor" />
 
                 <!-- Power objects: the green circle, what they give and their fuel. -->
                 <Border Classes="card" IsVisible="{Binding IsPower}" Padding="12">
@@ -293,18 +307,34 @@
                     <Button Classes="ghost" Content="{Tr Craftables.Suggest}" ToolTip.Tip="{Tr Craftables.Suggest.Tip}"
                             Command="{Binding $parent[UserControl].((vm:CraftablesPageViewModel)DataContext).SuggestRecipeCommand}" />
                     <Button x:Name="CraftAddIngredientButton" Classes="ghost" Content="{Tr Craftables.AddIngredient}" ToolTip.Tip="{Tr Craftables.AddIngredient.Tip}"
-                            Command="{Binding $parent[UserControl].((vm:CraftablesPageViewModel)DataContext).AddIngredientCommand}" />
+                            Command="{Binding $parent[UserControl].((vm:CraftablesPageViewModel)DataContext).PickIngredientCommand}" />
                   </StackPanel>
                 </DockPanel>
+                <!-- Each ingredient as its 3D picture, how the game knows it (badge), amount, tool, Change and Remove. -->
                 <ItemsControl x:Name="CraftIngredients" ItemsSource="{Binding Ingredients}">
                   <ItemsControl.ItemTemplate>
                     <DataTemplate x:DataType="vm:IngredientRowViewModel">
-                      <Grid ColumnDefinitions="*,120,Auto,Auto" ColumnSpacing="8" Margin="0,2">
-                        <AutoCompleteBox Grid.Column="0" Text="{Binding Tag}" FilterMode="Contains" ToolTip.Tip="{Tr Craftables.Tag.Tip}"
-                                         ItemsSource="{Binding $parent[UserControl].((vm:CraftablesPageViewModel)DataContext).Tags}" />
-                        <NumericUpDown Grid.Column="1" Value="{Binding Amount}" Minimum="1" Maximum="999" Increment="1" FormatString="0" ToolTip.Tip="{Tr Craftables.Amount.Tip}" />
-                        <CheckBox Grid.Column="2" IsChecked="{Binding IsTool}" Content="{Tr Craftables.Tool}" ToolTip.Tip="{Tr Craftables.Tool.Tip}" />
-                        <Button Grid.Column="3" Classes="ghost" Content="{Tr Craftables.RemoveIngredient}" Command="{Binding RemoveCommand}" ToolTip.Tip="{Tr Craftables.RemoveIngredient.Tip}" />
+                      <Grid ColumnDefinitions="Auto,*,110,Auto,Auto,Auto" ColumnSpacing="8" Margin="0,3">
+                        <Border Grid.Column="0" Classes="craftThumb">
+                          <Panel DataContext="{Binding Picture}" x:DataType="vm:IngredientTileViewModel">
+                            <c:GlyphIcon Kind="{Binding IconKey}" IconSize="22" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                         Foreground="{Binding Tint, Converter={x:Static conv:HexBrushConverter.Instance}}"
+                                         IsVisible="{Binding Thumbnail, Converter={x:Static ObjectConverters.IsNull}}" />
+                            <c:ThumbnailImage Source="{Binding Thumbnail}" Stretch="Uniform" Margin="2" />
+                          </Panel>
+                        </Border>
+                        <StackPanel Grid.Column="1" Spacing="3" VerticalAlignment="Center">
+                          <TextBlock Text="{Binding Title}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Item}" />
+                          <StackPanel Orientation="Horizontal" Spacing="6">
+                            <Border Classes="chip" IsVisible="{Binding HasBadge}" ToolTip.Tip="{Binding BadgeTip}"><TextBlock Text="{Binding BadgeText}" /></Border>
+                            <TextBlock Text="{Binding Detail}" Classes="caption mono" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                          </StackPanel>
+                        </StackPanel>
+                        <NumericUpDown Grid.Column="2" Value="{Binding Amount}" Minimum="1" Maximum="9999" Increment="1" FormatString="0" VerticalAlignment="Center" ToolTip.Tip="{Tr Craftables.Amount.Tip}" />
+                        <CheckBox Grid.Column="3" IsChecked="{Binding IsTool}" Content="{Tr Craftables.Tool}" ToolTip.Tip="{Tr Craftables.Tool.Tip}" />
+                        <Button Grid.Column="4" Classes="ghost" Content="{Tr Craftables.Ingredient.Change}" ToolTip.Tip="{Tr Craftables.Ingredient.Change.Tip}"
+                                Command="{Binding $parent[UserControl].((vm:CraftablesPageViewModel)DataContext).ChangeIngredientCommand}" CommandParameter="{Binding}" />
+                        <Button Grid.Column="5" Classes="ghost" Content="{Tr Craftables.RemoveIngredient}" Command="{Binding RemoveCommand}" ToolTip.Tip="{Tr Craftables.RemoveIngredient.Tip}" />
                       </Grid>
                     </DataTemplate>
                   </ItemsControl.ItemTemplate>
@@ -314,6 +344,8 @@
                         Command="{Binding $parent[UserControl].((vm:CraftablesPageViewModel)DataContext).RemoveCommand}" />
               </StackPanel>
             </ScrollViewer>
+
+            <p:CraftIngredientPicker x:Name="CraftIngredientPicker" DataContext="{Binding Picker}" />
           </Panel>
         </Border>
       </Grid>

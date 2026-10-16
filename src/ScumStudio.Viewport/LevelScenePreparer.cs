@@ -582,7 +582,7 @@ public sealed class LevelScenePreparer
                 placements.Add(new ScenePlacement(instance.StaticMeshPath, UeToGl.ModelMatrix(instance.WorldTransform), instance.WorldTransform, id,
                     $"{actor.Name}/{instance.ComponentName}[{instance.InstanceIndex}]", documentIndex, actor, null, instance)
                 {
-                    CullDistance = instance.EndCullDistance,
+                    CullDistance = FoliageThinning.CullDistanceOf(instance),
                 });
             }
         }
@@ -685,6 +685,7 @@ public sealed class LevelScenePreparer
         LevelPrepareCache? cache = null)
     {
         ArgumentNullException.ThrowIfNull(documents);
+        using var imports = ScumFileProvider.ImportScope(); // landscape layers, materials: each imported package read once
         options ??= new LevelSceneOptions();
         if (cache is null)
         {
@@ -1287,7 +1288,16 @@ public sealed class LevelScenePreparer
 
         var done = 0;
         var parallel = new ParallelOptions { CancellationToken = cancellationToken, MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount - 1) };
-        Parallel.ForEach(prefetch.Meshes, parallel, entry =>
+        // Each worker reads a package its meshes import (a parent material, a shared texture) once, not once per mesh
+        // (ScumFileProvider.ImportScope: CUE4Parse reads it again for every import it resolves).
+        Parallel.ForEach(prefetch.Meshes, parallel, ScumFileProvider.ImportScope, (entry, _, scope) =>
+        {
+            Load(entry);
+            return scope;
+        }, scope => scope.Dispose());
+        return prefetch;
+
+        void Load(KeyValuePair<string, Lazy<LoadedMesh>> entry)
         {
             progress?.Report((Interlocked.Increment(ref done) - 1, total, entry.Key));
             if (!Warm(entry.Value) || options.TextureSize <= 0 || entry.Value.Value.Info is not { } info)
@@ -1317,8 +1327,7 @@ public sealed class LevelScenePreparer
                     }
                 }
             }
-        });
-        return prefetch;
+        }
 
         Lazy<TextureImage> TextureAhead(string path) => prefetch.Textures.GetOrAdd(path, p =>
             new Lazy<TextureImage>(() => TextureDecoder.DecodeForGpu(_catalog.LoadObject<UTexture2D>(p), maxSize: options.TextureSize)));

@@ -2,6 +2,7 @@ using ScumStudio.Assets.Catalog;
 using ScumStudio.Formats.Packages;
 using ScumStudio.Modding.Catalog;
 using ScumStudio.Modding.Cloning;
+using ScumStudio.Modding.Tuning;
 
 namespace ScumStudio.Level.Editing;
 
@@ -26,6 +27,28 @@ public static class AssetEditing
         var map = new PackageMap(clone.Packages.Select(p => new KeyValuePair<string, string>(p.Old, p.New)));
         var cloned = PackageCloner.Clone(ModdableAssets.ReadPackage(catalog, pair.Old), pair.Old, map);
         return CookedPackage.Parse(cloned.Bytes.UAsset, cloned.Bytes.UExp, cloned.UBulk, path);
+    }
+
+    /// <summary>
+    /// Every value of the package that can be set: its stored values (<see cref="TunableReader"/>), then those its class
+    /// takes from a parent (<see cref="InheritedValues"/>: a katana's MaxHealth), which a change writes into its own file.
+    /// </summary>
+    /// <exception cref="FileNotFoundException">Neither the package nor its template is in the catalog.</exception>
+    public static IReadOnlyList<Tunable> ReadValues(AssetCatalog catalog, EditState? state, string packagePath)
+    {
+        var package = ReadForEditing(catalog, state, packagePath);
+        var inherited = InheritedValues.Read(package, parent =>
+        {
+            try
+            {
+                return ReadForEditing(catalog, state, parent);
+            }
+            catch (Exception ex) when (ex is FileNotFoundException or FormatException or InvalidDataException or IOException)
+            {
+                return null;
+            }
+        });
+        return TunableReader.Read(package).Concat(inherited).ToList();
     }
 
     /// <summary>

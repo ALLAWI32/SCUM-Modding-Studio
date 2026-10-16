@@ -199,6 +199,38 @@ public sealed class FlyCamera
         SetClipRange(near, far);
     }
 
+    /// <summary>The Map's near clip distance unless Settings › Near clip says otherwise (10 cm).</summary>
+    public const float DefaultMapNear = 10f;
+
+    /// <summary>Closest and farthest near clip distance Settings › Near clip offers (1 cm, 1 m).</summary>
+    public const float MinMapNear = 1f, MaxMapNear = 100f;
+
+    /// <summary>
+    /// Near and far for looking at everything drawn (<paramref name="drawn"/>, GL space) from <paramref name="eye"/>, worked
+    /// out again for every frame, never kept from an earlier framing. Near is <paramref name="near"/> (clamped to
+    /// <see cref="MinMapNear"/>..<see cref="MaxMapNear"/>); without reverse-Z it grows to half the way to the box while the eye
+    /// is outside it (nothing drawn is that close, and a standard depth buffer needs the larger near). Far reaches past the
+    /// box's farthest corner, at least 1 km. D09 (seviscache): the shot of a newly loaded sector fitted near to the zone still
+    /// drawn (kilometres away), nothing reset it while the island was behind, and the ground in front of the camera was cut away.
+    /// </summary>
+    public static (float Near, float Far) ClipRangeFor(Vector3 eye, BoundingBox drawn, float near, bool reverseZ)
+    {
+        near = float.IsFinite(near) ? Math.Clamp(near, MinMapNear, MaxMapNear) : DefaultMapNear;
+        if (drawn.IsEmpty || !float.IsFinite(eye.X + eye.Y + eye.Z))
+        {
+            return (near, MathF.Max(100_000f, near * 2f));
+        }
+
+        var gap = Vector3.Distance(eye, Vector3.Clamp(eye, drawn.Min, drawn.Max));
+        var reach = Vector3.Max(Vector3.Abs(eye - drawn.Min), Vector3.Abs(eye - drawn.Max)).Length();
+        if (!reverseZ)
+        {
+            near = MathF.Max(near, gap * 0.5f);
+        }
+
+        return (near, MathF.Max(MathF.Max(reach * 1.1f, 100_000f), near * 2f));
+    }
+
     /// <summary>
     /// World-space ray through a pixel (<paramref name="x"/>, <paramref name="y"/> from the top-left of a
     /// <paramref name="width"/> x <paramref name="height"/> viewport).

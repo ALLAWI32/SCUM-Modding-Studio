@@ -267,6 +267,7 @@ public sealed partial class ProjectExporter
                 sb.Append("- Left out (their trade posts are deleted): ").AppendLine(string.Join(", ", result.RemovedTraders));
             }
 
+            sb.AppendLine("- It REPLACES the server's own EconomyOverride.json: what the server's file has and this one lacks is gone once it is copied over. Back up the server's file first, or import it into the project (Economy page, Import) before exporting.");
             sb.AppendLine("- Dedicated server: copy it to <server>\\SCUM\\Saved\\Config\\WindowsServer\\EconomyOverride.json (the server reads it when it starts; a section per trader, named as in the trade menu's economy: A_0_Armory, your placed traders by their own names).");
             sb.AppendLine("- Single player / local game: %LOCALAPPDATA%\\SCUM\\Saved\\Config\\WindowsNoEditor\\EconomyOverride.json.");
         }

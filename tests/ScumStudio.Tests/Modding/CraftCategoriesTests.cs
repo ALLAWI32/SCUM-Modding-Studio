@@ -42,6 +42,22 @@ public sealed class CraftCategoriesTests
         Section(Misc, false, "CR_Small_Battery_Charger"),
     ]);
 
+    /// <summary>
+    /// 3.2 regression (real files): the wooden wall's recipe stores no section; the game files a modular piece's section
+    /// on its twig tier only, so an upgrade tier finds its first tier's and a building never lacks its default.
+    /// </summary>
+    [Fact]
+    public void AnUpgradeTierShowsInItsFirstTiersSection()
+    {
+        Assert.Equal("CR_Base_Modular_Wall_Twig", CraftCategories.FirstTier("CR_Base_Modular_Wall_Wood"));
+        Assert.Equal("CR_Base_Modular_Door_Single_Twig", CraftCategories.FirstTier("/Game/X/CR_Base_Modular_Door_Single_Metal"));
+        Assert.Null(CraftCategories.FirstTier("CR_Base_Modular_Wall_Twig"));
+        Assert.Null(CraftCategories.FirstTier("CR_Base_Block"));
+        Assert.Null(CraftCategories.FirstTier("CR_Chair_Improvised_Wood"));
+        Assert.Equal(Walls, CraftCategories.SectionOf(Sections, "CR_Base_Modular_Wall_Wood")?.Tag);
+        Assert.Equal(Walls, CraftCategories.DefaultFor(Craftable("/Game/ConZ_Files/Models/Buildings/SM_House"), Sections, CraftablesPlanner.FurnitureRecipe)?.Tag);
+    }
+
     [Fact]
     public void LabelsAreTidyEnglish()
     {

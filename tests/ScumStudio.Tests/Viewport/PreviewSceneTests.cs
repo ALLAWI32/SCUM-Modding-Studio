@@ -157,6 +157,52 @@ public sealed class PreviewSceneTests(ITestOutputHelper output)
         output.WriteLine(FormattableString.Invariant($"Restyle with a 2048² RGBA bake: {string.Join(", ", times.Select(t => t.ToString("F1", CultureInfo.InvariantCulture)))} ms"));
     }
 
+    [GlFact]
+    public void ARestyleWithAMovedPartKeepsTheMeshesAndMovesOnlyThatPart()
+    {
+        // Owner: "every part of the car like Blender: move it". Moving a door re-uploaded the whole car and lost the view.
+        using var gl = GlHarness.Create(64, 64);
+        var model = Vehicle(3, 64);
+        using var scene = PreviewScene.Upload(gl.Renderer, model);
+        var meshes = Drawn(scene).Select(n => n.Mesh!.Id).ToList();
+        var matrices = Drawn(scene).Select(n => n.LocalTransform).ToList();
+        var before = scene.ModelBounds;
+
+        var moved = model with { Parts = [model.Parts[0], model.Parts[1] with { Transform = new FTransform(new FVector(0, 300, 0)) }, model.Parts[2]] };
+        Assert.True(scene.Restyle(moved));
+        Assert.Equal(meshes, Drawn(scene).Select(n => n.Mesh!.Id));
+        Assert.Equal(matrices[0], Drawn(scene)[0].LocalTransform);
+        Assert.Equal(matrices[2], Drawn(scene)[2].LocalTransform);
+        Assert.Equal(300f, Drawn(scene)[1].LocalTransform.M43, 3); // UE Y is GL Z
+        Assert.Equal(before.Max.Z + 300f, scene.ModelBounds.Max.Z, 2);
+        Assert.Same(moved, scene.Model);
+    }
+
+    [GlFact]
+    public void PartsMoveAndHideOneAtATimeWithTheirBounds()
+    {
+        using var gl = GlHarness.Create(64, 64);
+        var model = Vehicle(2, 64);
+        using var scene = PreviewScene.Upload(gl.Renderer, model);
+        var nodes = Drawn(scene);
+        Assert.Equal(1, scene.PartIndexOf(nodes[1]));
+        Assert.Equal(-1, scene.PartIndexOf(null));
+
+        Assert.True(scene.SetPartTransform(1, new FTransform(new FVector(500, 0, 0))));
+        Assert.Equal(new FVector(500, 0, 0), scene.PartTransform(1)!.Value.Translation);
+        Assert.Equal(550f, scene.ModelBounds.Max.X, 2);
+        Assert.Equal(Matrix4x4.Identity, nodes[0].LocalTransform);
+
+        Assert.True(scene.SetPartHidden(1, true));
+        Assert.False(nodes[1].Visible);
+        Assert.True(nodes[0].Visible);
+        Assert.Equal(50f, scene.ModelBounds.Max.X, 2); // a hidden part leaves the bounds
+        Assert.True(scene.SetPartHidden(1, false));
+        Assert.Equal(550f, scene.ModelBounds.Max.X, 2);
+        Assert.False(scene.SetPartHidden(2, true));
+        Assert.False(scene.SetPartTransform(-1, FTransform.Identity));
+    }
+
     [Fact]
     public void AStandInIsTheTexturesOwnLowerMips()
     {

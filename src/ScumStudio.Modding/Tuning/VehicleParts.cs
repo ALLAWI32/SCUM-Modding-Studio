@@ -23,8 +23,12 @@ public static class VehicleParts
 
     private const string NodeClass = "VehiclePresetNode";
 
-    /// <summary>True for an edit this class writes (a preset node's <c>Children[i]</c>).</summary>
-    public static bool IsEdit(string path) => path.StartsWith("Children[", StringComparison.Ordinal);
+    /// <summary>
+    /// True for an edit this class writes: a preset node's <c>Children[i]</c>, or a part edit of a clone (a socket of its
+    /// mesh, see <see cref="VehicleSockets"/>; a part's model, socket or new slot, see <see cref="VehicleAttachmentEdits"/>).
+    /// </summary>
+    public static bool IsEdit(string path) =>
+        path.StartsWith("Children[", StringComparison.Ordinal) || VehicleSockets.IsEdit(path) || VehicleAttachmentEdits.IsEdit(path);
 
     /// <summary>Every slot of every node of <paramref name="preset"/>, its part and the parts that fit.</summary>
     /// <param name="preset">A vehicle spawn preset.</param>
@@ -110,14 +114,37 @@ public static class VehicleParts
     /// <summary>
     /// Writes slot edits (<see cref="TunableEdit.Value"/> = class path or empty) into <paramref name="preset"/>: an emptied
     /// slot's reference becomes <c>None</c>; a filled slot's node gets the new <c>AttachmentClass</c> (its own children stay);
-    /// an empty slot gets a new <c>VehiclePresetNode</c> export. New soft paths are added to the name table.
+    /// an empty slot gets a new <c>VehiclePresetNode</c> export; a slot past the end (a part's appended slot) grows
+    /// <c>Children</c> first. New soft paths are added to the name table. Socket and part edits go to
+    /// <see cref="VehicleSockets"/> and <see cref="VehicleAttachmentEdits"/>.
     /// </summary>
     /// <exception cref="InvalidOperationException">A missing node or slot, or a value that is not a class path.</exception>
     public static PackageBytes Apply(CookedPackage preset, IEnumerable<TunableEdit> edits)
     {
         ArgumentNullException.ThrowIfNull(preset);
         ArgumentNullException.ThrowIfNull(edits);
-        var list = edits.ToList();
+        var all = edits.ToList();
+        PackageBytes? done = null;
+        foreach (var (some, apply) in new (List<TunableEdit>, Func<CookedPackage, IEnumerable<TunableEdit>, PackageBytes>)[]
+                 {
+                     (all.Where(e => VehicleSockets.IsEdit(e.Path)).ToList(), VehicleSockets.Apply),
+                     (all.Where(e => VehicleAttachmentEdits.IsEdit(e.Path)).ToList(), VehicleAttachmentEdits.Apply),
+                 })
+        {
+            if (some.Count > 0)
+            {
+                done = apply(preset, some);
+                preset = CookedPackage.Parse(done.UAsset, done.UExp, preset.UBulk, preset.BasePath);
+            }
+        }
+
+        var list = all.Where(e => e.Path.StartsWith("Children[", StringComparison.Ordinal)).ToList();
+        if (list.Count == 0)
+        {
+            return done ?? PackageWriter.Rebuild(preset);
+        }
+
+        preset = GrowChildren(preset, list);
         var keys = TunableReader.ExportKeys(preset);
         var tables = PackageTables.Of(preset, 0);
         var payloads = Enumerable.Range(0, preset.Exports.Count).Select(i => preset.GetExportData(i).ToArray()).ToList();
@@ -215,6 +242,38 @@ public static class VehicleParts
         }
 
         return bytes;
+    }
+
+    /// <summary>A node whose edits name a slot past the end of its <c>Children</c> gets empty (<c>None</c>) slots up to it.</summary>
+    private static CookedPackage GrowChildren(CookedPackage preset, IReadOnlyList<TunableEdit> edits)
+    {
+        var keys = TunableReader.ExportKeys(preset);
+        var payloads = Enumerable.Range(0, preset.Exports.Count).Select(i => preset.GetExportData(i).ToArray()).ToArray();
+        var grown = false;
+        foreach (var node in edits.GroupBy(e => e.Export, StringComparer.Ordinal))
+        {
+            var index = Array.IndexOf(keys, node.Key);
+            var needed = node.Max(e => SlotIndex(e.Path)) + 1;
+            if (index < 0 || preset.ReadProperties(index).Find("Children") is not { Value: ArrayValue children } tag || needed <= children.Items.Count)
+            {
+                continue;
+            }
+
+            var added = needed - children.Items.Count;
+            var payload = VehicleSockets.Insert(payloads[index], tag.EndOffset, new byte[4 * added]);
+            VehicleSockets.Add(payload, tag.SizeFieldOffset, 4 * added);
+            VehicleSockets.Add(payload, tag.ValueOffset, added);
+            payloads[index] = payload;
+            grown = true;
+        }
+
+        if (!grown)
+        {
+            return preset;
+        }
+
+        var bytes = PackageWriter.Build(PackageWriter.ToBuildInput(preset) with { ExportData = payloads.Select(p => (ReadOnlyMemory<byte>)p).ToArray() });
+        return CookedPackage.Parse(bytes.UAsset, bytes.UExp, preset.UBulk, preset.BasePath);
     }
 
     private static (string? Class, ArrayValue? Children) Node(CookedPackage package, int exportIndex)

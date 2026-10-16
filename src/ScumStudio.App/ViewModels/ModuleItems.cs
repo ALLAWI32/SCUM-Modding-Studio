@@ -153,9 +153,32 @@ public sealed partial class TunableRowViewModel : ObservableObject
     public string StockValue => Tunable.Value;
 
     /// <summary>Stock value for display (enum values without their <c>EType::</c> prefix).</summary>
-    public string StockDisplay => Tunable.Kind == TunableKind.Part ? PartLabel(Tunable.Value) : Tunable.Kind == TunableKind.Enum && Tunable.Value.IndexOf("::", StringComparison.Ordinal) is var i and > 0
+    public string StockDisplay => AllowsEmpty ? Localization.Loc.T("Module.Inherited.GameDefault")
+        : Tunable.Kind == TunableKind.Part ? PartLabel(Tunable.Value) : Tunable.Kind == TunableKind.Enum && Tunable.Value.IndexOf("::", StringComparison.Ordinal) is var i and > 0
         ? Tunable.Value[(i + 2)..]
         : Tunable.Value;
+
+    /// <summary>Stock value tooltip: the raw value, or why an inherited value of the game's code has none.</summary>
+    public string StockTip => AllowsEmpty ? Localization.Loc.T("Module.Inherited.GameDefault.Tip") : Tunable.Value;
+
+    /// <summary>True for a value the package takes from a parent class (<see cref="Tunable.InheritedFrom"/>); a change writes it into the package's own file.</summary>
+    public bool IsInherited => Tunable.InheritedFrom is not null;
+
+    /// <summary>"inherited from ItemEntitySetup, editable", or empty.</summary>
+    public string InheritedNote => Tunable.InheritedFrom is { } parent ? Localization.Loc.F("Module.Inherited", ParentLabel(parent)) : string.Empty;
+
+    /// <summary>What an inherited value is and what changing it writes.</summary>
+    public string InheritedTip => Tunable.InheritedFrom is { } parent ? Localization.Loc.F("Module.Inherited.Tip", parent) : string.Empty;
+
+    /// <summary>True when an empty box is a valid value: an inherited value of the game's code (empty keeps the game's default).</summary>
+    private bool AllowsEmpty => IsInherited && Tunable.Value.Length == 0;
+
+    /// <summary>A parent class as a short name: <c>/Script/SCUM.ItemEntitySetup</c> → <c>ItemEntitySetup</c>, <c>/Game/…/2H_Katana.2H_Katana_C</c> → <c>2H_Katana</c>.</summary>
+    public static string ParentLabel(string classPath)
+    {
+        var name = classPath[(classPath.LastIndexOf('.') + 1)..];
+        return classPath.StartsWith("/Game/", StringComparison.Ordinal) && name.EndsWith("_C", StringComparison.Ordinal) ? name[..^2] : name;
+    }
 
     /// <summary>The value after applied edits.</summary>
     public string CommittedValue => _committed;
@@ -204,7 +227,7 @@ public sealed partial class TunableRowViewModel : ObservableObject
     public bool IsOverridden => !TunableValue.AreEqual(Tunable.Kind, _committed, Tunable.Value);
 
     /// <summary>Validation message for the pending value, or null.</summary>
-    public string? Error => Validate(Tunable.Kind, Value, Tunable.Choices);
+    public string? Error => AllowsEmpty && Value.Trim().Length == 0 ? null : Validate(Tunable.Kind, Value, Tunable.Choices);
 
     /// <summary>Sets the committed value (after an apply/undo) and resets the pending value to it.</summary>
     public void Commit(string committed)
@@ -217,7 +240,7 @@ public sealed partial class TunableRowViewModel : ObservableObject
     }
 
     /// <summary>Normalized pending value (numbers in invariant form).</summary>
-    public string NormalizedValue => Normalize(Tunable.Kind, Value);
+    public string NormalizedValue => AllowsEmpty && Value.Trim().Length == 0 ? string.Empty : Normalize(Tunable.Kind, Value);
 
     /// <summary>Why <paramref name="text"/> is not a valid value of <paramref name="kind"/>, or null.</summary>
     public static string? Validate(TunableKind kind, string text, IReadOnlyList<string> choices)

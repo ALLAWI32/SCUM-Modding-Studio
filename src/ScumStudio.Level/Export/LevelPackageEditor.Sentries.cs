@@ -1,8 +1,15 @@
+using System.Buffers.Binary;
 using ScumStudio.Formats;
 using ScumStudio.Formats.Packages;
 using ScumStudio.Formats.Properties;
 
 namespace ScumStudio.Level.Export;
+
+/// <summary>Another class for a soft class property of an actor (the Map's spawn editor: which sentry a spawner spawns).</summary>
+/// <param name="Actor">Actor object name (pristine or created by this request).</param>
+/// <param name="Property">The property (<c>SentryClass</c>).</param>
+/// <param name="ClassPath">The class (<c>/Game/.../BP_Sentry2.BP_Sentry2_C</c>).</param>
+public sealed record SoftClassPatch(string Actor, string Property, string ClassPath);
 
 /// <summary>
 /// Sentries. The game spawns a sentry robot only from a <c>SentrySpawner2</c> listed in the <c>_sentrySpawners</c> of its
@@ -163,5 +170,35 @@ public static partial class LevelPackageEditor
         groups.InsertRange(before, extra);
         exports[exportIndex] = entry with { FirstExportDependency = preload.Count, CreateBeforeSerializationDependencies = entry.CreateBeforeSerializationDependencies + extra.Count };
         preload.AddRange(groups);
+    }
+
+    /// <summary>
+    /// Points an actor's soft class property elsewhere: the value is an FName (the class path) and an empty sub path, so
+    /// the payload keeps its size; the path joins the name table when it is new. Returns the label, or null with a warning.
+    /// </summary>
+    private static string? TryPatchSoftClass(
+        CookedPackage package, int levelIndex, SoftClassPatch patch, List<ExportEntry> exports, List<ReadOnlyMemory<byte>> data,
+        List<string> names, List<bool> wide, List<string> addedNames, List<string> warnings)
+    {
+        var label = $"{patch.Actor}.{patch.Property}";
+        var actor = FindLevelActor(exports, names, levelIndex + 1, patch.Actor);
+        if (actor <= 0)
+        {
+            warnings.Add($"{label}: no such actor in the level; {patch.ClassPath} was not written.");
+            return null;
+        }
+
+        var payload = data[actor - 1].ToArray();
+        if (PropertyReader.ReadPayload(package, payload, names).Find(patch.Property)?.Value is not SoftObjectValue soft || soft.Offset < 0 || soft.Offset + 8 > payload.Length)
+        {
+            warnings.Add($"{label}: the actor stores no such soft class; {patch.ClassPath} was not written.");
+            return null;
+        }
+
+        var name = MakeName(patch.ClassPath, names, wide, addedNames);
+        BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(soft.Offset), name.Index);
+        BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(soft.Offset + 4), name.Number);
+        data[actor - 1] = payload;
+        return label;
     }
 }

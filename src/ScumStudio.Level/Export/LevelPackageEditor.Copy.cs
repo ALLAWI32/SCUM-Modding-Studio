@@ -114,6 +114,7 @@ public static partial class LevelPackageEditor
                 var payload = payloads[k];
                 RemapReferences(payload, blocks[k].Properties, remap);
                 FreshGameUniqueId(payload, blocks[k], package.BasePath, copy.NewName, k);
+                FreshKeys(payload, blocks[k], package.GetExportClassName(members[k]), package.BasePath, copy.NewName, k);
                 if (k == 0 && blocks[0].Find(ParentComponentProperty)?.Value is ObjectValue { Index: > 0 } parent && !remap.ContainsKey(parent.Index)
                     && parent.Offset >= 0 && parent.Offset + 4 <= payload.Length)
                 {
@@ -292,6 +293,15 @@ public static partial class LevelPackageEditor
             if (reference.Index > 0 && remap.TryGetValue(reference.Index, out var mapped) && reference.Offset >= 0 && reference.Offset + 4 <= payload.Length)
             {
                 BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(reference.Offset), mapped);
+            }
+        }
+
+        // A field path's owner is an object reference too (after the path names): a copy's points at the copy's member.
+        foreach (var (offset, owner) in FieldPathOwners(tags))
+        {
+            if (owner > 0 && remap.TryGetValue(owner, out var mapped) && offset + 4 <= payload.Length)
+            {
+                BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(offset), mapped);
             }
         }
     }

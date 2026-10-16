@@ -15,6 +15,13 @@ internal static class Program
     /// <summary>Set this environment variable to let Avalonia use a software OpenGL renderer (llvmpipe) for the viewport.</summary>
     public const string AllowSoftwareGlVariable = "SCUMSTUDIO_ALLOW_SOFTWARE_GL";
 
+    /// <summary>
+    /// Set this environment variable (to anything but 0) to compose the window on the UI thread, where the 3D views draw,
+    /// instead of on a render thread of its own: every OpenGL context of the studio is then used from one thread. A test
+    /// switch for AMD crash reports (D03), off by default.
+    /// </summary>
+    public const string UiThreadCompositorVariable = "SCUMSTUDIO_UI_THREAD_COMPOSITOR";
+
     /// <summary>Name of the one-window mutex and its events (per user session).</summary>
     internal const string InstanceName = "ScumStudio.App";
 
@@ -94,11 +101,7 @@ internal static class Program
         var allowSoftwareGl = Environment.GetEnvironmentVariable(AllowSoftwareGlVariable) is not null;
         return AppBuilder.Configure<App>()
             .UsePlatformDetect()
-            .With(new Win32PlatformOptions
-            {
-                RenderingMode = [Win32RenderingMode.Wgl, Win32RenderingMode.AngleEgl, Win32RenderingMode.Software],
-                WglProfiles = desktopGl.ToList(),
-            })
+            .With(Win32Options(desktopGl))
             .With(new X11PlatformOptions
             {
                 RenderingMode = [X11RenderingMode.Glx, X11RenderingMode.Software],
@@ -108,4 +111,15 @@ internal static class Program
             .WithInterFont()
             .LogToTrace(LogEventLevel.Warning);
     }
+
+    /// <summary>
+    /// Windows: WGL (desktop OpenGL <paramref name="desktopGl"/>) first; with <see cref="UiThreadCompositorVariable"/> set, the
+    /// compositor draws on the UI thread (Avalonia's UiThreadRenderTimer) instead of its own render thread.
+    /// </summary>
+    internal static Win32PlatformOptions Win32Options(IEnumerable<GlVersion> desktopGl) => new()
+    {
+        RenderingMode = [Win32RenderingMode.Wgl, Win32RenderingMode.AngleEgl, Win32RenderingMode.Software],
+        WglProfiles = desktopGl.ToList(),
+        ShouldRenderOnUIThread = Environment.GetEnvironmentVariable(UiThreadCompositorVariable) is { Length: > 0 } on && on != "0",
+    };
 }

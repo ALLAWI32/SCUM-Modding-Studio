@@ -51,6 +51,10 @@ public sealed class EditOpTests
             new ReplaceMeshOp(new ActorRef(Port, "LandscapeStreamingProxy_0"), "SplineMeshComponent_12", Rock, "/Game/ConZ_Files/Models/Roads/SM_Road_02.SM_Road_02"),
             new DeleteComponentsOp(house, ["P_Fire", "FireLight", "Ak_Fire"]),
             new RestoreComponentsOp(house, ["P_Fire"]),
+            new SetEconomyEntryOp("A_0_Armory", "Weapon_AK47", 3, "{\"tradeable-code\":\"Weapon_AK47\",\"base-purchase-price\":\"-1\"}", "{\"tradeable-code\":\"Weapon_AK47\",\"base-purchase-price\":\"15000\"}"),
+            new SetEconomySettingOp("traders-unlimited-stock", 17, "\"0\"", "\"1\""),
+            new SetEconomySectionOp("A_3_Armory_1", 5, null, "[]"),
+            new ReplaceEconomyOp("{\r\n\t\"economy-override\":\r\n\t{\r\n\t}\r\n}", null),
         ];
         return ops.Select(o => new object[] { o });
     }
@@ -87,7 +91,10 @@ public sealed class EditOpTests
     public void DescribesItself(EditOp op)
     {
         Assert.False(string.IsNullOrWhiteSpace(op.Describe()));
-        Assert.NotEmpty(op.GetTouchedLevels());
+        if (op is not EconomyOp)
+        {
+            Assert.NotEmpty(op.GetTouchedLevels()); // an economy edit changes the project's EconomyOverride.json, no level
+        }
     }
 
     [Fact]

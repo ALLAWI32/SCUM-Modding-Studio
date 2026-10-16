@@ -119,6 +119,7 @@ public sealed partial class MapPageViewModel
         {
             // A single level picked from the tree: the sector is gone, the view frames the level (the island's camera is
             // stale), and the switch would load that level's cell.
+            StopFarModels();
             IsSectorLocked = false;
             _sectorTarget = null; // picking that sector again loads it again
             _lastCamera = null;

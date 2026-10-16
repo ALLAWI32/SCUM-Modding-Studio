@@ -178,8 +178,9 @@ public sealed class ThumbnailService : IDisposable
 
     // Bump RenderVersion when thumbnails render differently (v2: masked leaves cut out), so stale ones are made again.
     // v3: Blueprints, 2x supersampled; v4: the masters' brightness and tint;
-    // v5: foliage types, override materials, see-through glass, master-default colours.
-    private const string RenderVersion = "5";
+    // v5: foliage types, override materials, see-through glass, master-default colours;
+    // v6: no snow layer or normal map taken for the colour (D06: purple-blue cliffs and shelves).
+    private const string RenderVersion = "6";
 
     private string CacheFile(string key, long size) =>
         Path.Combine(Directory, Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key + "|" + size + "|" + RenderVersion)))[..24] + ".png");
@@ -293,7 +294,7 @@ public sealed class ThumbnailService : IDisposable
         {
             if (OffscreenGlContext.TryCreate(Size, Size, out context, out var reason))
             {
-                _renderer = new SceneRenderer(context!);
+                _renderer = new SceneRenderer(context!, GraphicsStatus.Fallbacks);
                 _renderer.Settings = _renderer.Settings with
                 {
                     ShowGrid = false,

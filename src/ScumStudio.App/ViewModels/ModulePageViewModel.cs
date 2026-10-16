@@ -147,7 +147,7 @@ public abstract partial class ModulePageViewModel : PageViewModel, ISearchablePa
 
     /// <summary>3D model of the selected asset: its mesh (vehicles: chassis plus the default attachments on their sockets).</summary>
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(HasPreview))]
+    [NotifyPropertyChangedFor(nameof(HasPreview), nameof(ShowStudioPanel), nameof(ShowStudioToolHint))]
     private PreviewModel? _preview;
 
     /// <summary>True while the preview model is prepared on a worker.</summary>
@@ -552,11 +552,14 @@ public abstract partial class ModulePageViewModel : PageViewModel, ISearchablePa
         }
     }
 
+    /// <summary>Builds a preview in place of <see cref="MeshPreviewLoader.LoadBlueprint"/> (template, armour kit): tests that need a slow or fake load.</summary>
+    internal Func<string, string?, Task<PreviewModel?>>? PreviewLoaderOverride { get; set; }
+
     /// <summary>
     /// Builds the 3D preview of <paramref name="item"/> on a worker (a clone shows its stock template's mesh), with a
-    /// vehicle's armour kit fitted when <paramref name="addOn"/> names one.
+    /// vehicle's armour kit fitted when <paramref name="addOn"/> names one; a cancelled load (another kit chosen) shows nothing.
     /// </summary>
-    private async Task LoadPreviewAsync(AssetCatalog catalog, ModuleItemViewModel item, string? addOn = null)
+    private async Task LoadPreviewAsync(AssetCatalog catalog, ModuleItemViewModel item, string? addOn = null, CancellationToken cancellationToken = default)
     {
         IsPreviewLoading = true;
         try
@@ -564,8 +567,10 @@ public abstract partial class ModulePageViewModel : PageViewModel, ISearchablePa
             var template = item.CloneOf ?? item.PackagePath;
             // Full-size textures as the Assets page shows them (kept compressed for the GPU; paint decodes the ones it needs).
             var loader = new MeshPreviewLoader(catalog, _services.Logger) { TextureSize = AssetsPageViewModel.MeshPreviewTextureSize, ForGpu = true };
-            var model = await Task.Run(() => loader.LoadBlueprint(template, addOn)).ConfigureAwait(true);
-            if (!ReferenceEquals(SelectedItem, item))
+            var model = PreviewLoaderOverride is { } load
+                ? await load(template, addOn).ConfigureAwait(true)
+                : await Task.Run(() => loader.LoadBlueprint(template, addOn)).ConfigureAwait(true);
+            if (!ReferenceEquals(SelectedItem, item) || cancellationToken.IsCancellationRequested)
             {
                 return;
             }
@@ -590,7 +595,7 @@ public abstract partial class ModulePageViewModel : PageViewModel, ISearchablePa
         }
         finally
         {
-            if (ReferenceEquals(SelectedItem, item))
+            if (ReferenceEquals(SelectedItem, item) && !cancellationToken.IsCancellationRequested)
             {
                 IsPreviewLoading = false;
             }
@@ -835,19 +840,20 @@ public abstract partial class ModulePageViewModel : PageViewModel, ISearchablePa
     private async Task LoadPartsAsync(AssetCatalog catalog, ModuleItemViewModel item)
     {
         var parts = new List<ModulePart> { new(ModuleItemViewModel.KindLabel(item.Asset.Kind), item.PackagePath, Loc.Instance.Or("Module.Part.Gameplay." + item.Asset.Kind, string.Empty)) };
-        if (item.Asset.EntitySetupPath is { } es)
-        {
-            parts.Add(new ModulePart(Loc.T("Module.Part.EntitySetup"), es, Loc.T("Module.Part.EntitySetup.Tip")));
-        }
-
         if (ModdableAssets.IsMelee(item.CloneOf ?? item.PackagePath))
         {
-            // A knife's or axe's hit damage is the WeaponDesc_Table row named after it (a clone gets its template's row, see AssetModBuilder).
+            // A knife's or axe's hit damage is the WeaponDesc_Table row named after it (a clone gets its template's row, see
+            // AssetModBuilder); next to the weapon, so it is found before the weapon's own (thrown) damage.
             parts.Add(new ModulePart(Loc.T("Module.Part.Damage"), DataTableEdits.WeaponDescTable, Loc.T("Module.Part.Damage.Tip"))
             {
                 Row = item.Name,
                 RowFrom = item.IsClone ? PackageMap.Leaf(item.CloneOf!) : null,
             });
+        }
+
+        if (item.Asset.EntitySetupPath is { } es)
+        {
+            parts.Add(new ModulePart(Loc.T("Module.Part.EntitySetup"), es, Loc.T("Module.Part.EntitySetup.Tip")));
         }
 
         // What the traders ask for it and whether they sell it: its Table_TradeableDesc row (a clone gets its template's, see AssetModBuilder).
@@ -980,7 +986,8 @@ public abstract partial class ModulePageViewModel : PageViewModel, ISearchablePa
         IsLoadingValues = true;
         try
         {
-            var tunables = await Task.Run(() => part.IsVehicleParts || part.IsWeaponMounts ? ReadSlots(catalog, part) : RowFilter(part, TunableReader.Read(ReadForEditing(catalog, part.PackagePath)))).ConfigureAwait(true);
+            var melee = SelectedItem is { } item && ModdableAssets.IsMelee(item.CloneOf ?? item.PackagePath);
+            var tunables = await Task.Run(() => ReadValues(catalog, part, melee)).ConfigureAwait(true);
             if (!ReferenceEquals(SelectedPart, part))
             {
                 return;
@@ -1013,6 +1020,41 @@ public abstract partial class ModulePageViewModel : PageViewModel, ISearchablePa
         {
             IsLoadingValues = false;
         }
+    }
+
+    /// <summary>
+    /// The part's values: its stored values (a melee weapon's thrown damage under a title of its own), then the values its class
+    /// takes from a parent (<see cref="InheritedValues"/>: a katana's MaxHealth), which a change writes into its own file.
+    /// </summary>
+    private IReadOnlyList<Tunable> ReadValues(AssetCatalog catalog, ModulePart part, bool melee)
+    {
+        if (part.IsVehicleParts || part.IsWeaponMounts)
+        {
+            return ReadSlots(catalog, part);
+        }
+
+        var package = ReadForEditing(catalog, part.PackagePath);
+        var values = RowFilter(part, TunableReader.Read(package));
+        if (part.Row is not null || part.IsTorqueCurve)
+        {
+            return values;
+        }
+
+        // CwHedgehog set a katana's "Damage" to 999 and nothing changed: the item's damage is what a throw does (its
+        // ThrowableItemTag); a melee hit's is the Hit damage part (WeaponDesc_Table).
+        var thrown = values.Select(t => melee && t.ExportClass == "ThrowableItemTag" ? t with { Group = Loc.F("Module.Group.Thrown", t.Group) } : t);
+        var inherited = InheritedValues.Read(package, parent =>
+        {
+            try
+            {
+                return ReadForEditing(catalog, parent);
+            }
+            catch (Exception ex) when (ex is FileNotFoundException or FormatException or InvalidDataException or IOException)
+            {
+                return null;
+            }
+        });
+        return thrown.Concat(inherited).ToList();
     }
 
     /// <summary>

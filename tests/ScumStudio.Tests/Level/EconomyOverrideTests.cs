@@ -1,3 +1,5 @@
+using System.Text.Json;
+using System.Text.RegularExpressions;
 using ScumStudio.Core.Mathematics;
 using ScumStudio.Level.Economy;
 using ScumStudio.Level.Editing;
@@ -259,5 +261,190 @@ public sealed class EconomyOverrideTests
                 Directory.Delete(folder, recursive: true);
             }
         }
+    }
+
+    // The game's own file, byte for byte as SCUM writes it (read with od on the owner's PC, 2026-10-12): the brace of an
+    // object on a line of its own, arrays opened on the key's line, CRLF, tabs and no newline after the last brace.
+    internal const string GameLayout =
+        "{\r\n" +
+        "\t\"economy-override\":\r\n" +
+        "\t{\r\n" +
+        "\t\t\"economy-reset-time-hours\": \"-1.0\",\r\n" +
+        "\t\t\"prices-randomization-time-hours\": \"-1.0\",\r\n" +
+        "\t\t\"enable-fame-point-requirement\": \"1\",\r\n" +
+        "\t\t\"traders\":\r\n" +
+        "\t\t{\r\n" +
+        "\t\t\t\"A_0_Armory\": [\r\n" +
+        "\t\t\t\t{\r\n" +
+        "\t\t\t\t\t\"tradeable-code\": \"Frag_Grenade\",\r\n" +
+        "\t\t\t\t\t\"base-purchase-price\": \"-1\",\r\n" +
+        "\t\t\t\t\t\"base-sell-price\": \"-1\",\r\n" +
+        "\t\t\t\t\t\"delta-price\": \"-1.0\",\r\n" +
+        "\t\t\t\t\t\"can-be-purchased\": \"default\",\r\n" +
+        "\t\t\t\t\t\"required-famepoints\": \"-1\",\r\n" +
+        "\t\t\t\t\t\"available-after-sale-only\": \"default\"\r\n" +
+        "\t\t\t\t},\r\n" +
+        "\t\t\t\t{\r\n" +
+        "\t\t\t\t\t\"tradeable-code\": \"Weapon_AK47\",\r\n" +
+        "\t\t\t\t\t\"base-purchase-price\": \"-1\",\r\n" +
+        "\t\t\t\t\t\"base-sell-price\": \"-1\",\r\n" +
+        "\t\t\t\t\t\"delta-price\": \"-1.0\",\r\n" +
+        "\t\t\t\t\t\"can-be-purchased\": \"default\",\r\n" +
+        "\t\t\t\t\t\"required-famepoints\": \"-1\",\r\n" +
+        "\t\t\t\t\t\"available-after-sale-only\": \"default\"\r\n" +
+        "\t\t\t\t}\r\n" +
+        "\t\t\t],\r\n" +
+        "\t\t\t\"A_0_Barber\": [],\r\n" +
+        "\t\t\t\"B_4_Saloon\": [],\r\n" +
+        "\t\t\t\"Z_3_Master_Hunter\": []\r\n" +
+        "\t\t}\r\n" +
+        "\t}\r\n" +
+        "}";
+
+    // An older list a server admin kept (Discord: "the economy doesn't have a way to upload its own economy file"): a key
+    // the app does not know, a price with a thousands separator, a delta with six decimals, a yes and -1.0 for a whole number.
+    internal const string OddEntry =
+        "{\r\n" +
+        "\t\"economy-override\":\r\n" +
+        "\t{\r\n" +
+        "\t\t\"economy-logging\": \"1\",\r\n" +
+        "\t\t\"traders\":\r\n" +
+        "\t\t{\r\n" +
+        "\t\t\t\"A_0_Armory\": [\r\n" +
+        "\t\t\t\t{\r\n" +
+        "\t\t\t\t\t\"tradeable-code\": \"Weapon_AK47\",\r\n" +
+        "\t\t\t\t\t\"max-stock\": \"5\",\r\n" +
+        "\t\t\t\t\t\"base-purchase-price\": \"12,000\",\r\n" +
+        "\t\t\t\t\t\"base-sell-price\": \"-1\",\r\n" +
+        "\t\t\t\t\t\"delta-price\": \"0.123456\",\r\n" +
+        "\t\t\t\t\t\"can-be-purchased\": \"yes\",\r\n" +
+        "\t\t\t\t\t\"required-famepoints\": \"-1.0\",\r\n" +
+        "\t\t\t\t\t\"available-after-sale-only\": \"default\"\r\n" +
+        "\t\t\t\t}\r\n" +
+        "\t\t\t]\r\n" +
+        "\t\t}\r\n" +
+        "\t}\r\n" +
+        "}";
+
+    [Fact]
+    public void TheGamesOwnFileIsWrittenBackByteForByte()
+    {
+        // Owner (#25): "export writes it back unchanged where not edited".
+        Assert.Equal(GameLayout, EconomyOverride.Parse(GameLayout).ToJson());
+    }
+
+    [Fact]
+    public void UnknownKeysAndOddValuesSurviveAnEditOfAnotherValue()
+    {
+        var economy = EconomyOverride.Parse(OddEntry);
+        economy.Set("A_0_Armory", economy.Find("A_0_Armory", "Weapon_AK47")! with { SellPrice = 400 });
+        var text = economy.ToJson();
+        Assert.Contains("\"max-stock\": \"5\"", text, StringComparison.Ordinal);
+        Assert.Contains("\"base-purchase-price\": \"12,000\"", text, StringComparison.Ordinal);
+        Assert.Contains("\"delta-price\": \"0.123456\"", text, StringComparison.Ordinal);
+        Assert.Contains("\"can-be-purchased\": \"yes\"", text, StringComparison.Ordinal);
+        Assert.Equal(OddEntry.Replace("\"base-sell-price\": \"-1\"", "\"base-sell-price\": \"400\"", StringComparison.Ordinal), text); // that line only
+    }
+
+    [Fact]
+    public void ResettingTheLastValueKeepsWhatTheAppCannotRead()
+    {
+        // Review (economy): a reset that left the typed values at the game's removed the whole entry, "12,000" and the
+        // unknown key with it, although the game reads "12,000" (as 12).
+        var economy = EconomyOverride.Parse(
+            "{\"economy-override\":{\"traders\":{\"A_0_Armory\":[{\"tradeable-code\":\"Weapon_AK47\",\"max-stock\":\"5\",\"base-purchase-price\":\"12,000\",\"base-sell-price\":\"500\"}]}}}");
+        economy.Set("A_0_Armory", economy.Find("A_0_Armory", "Weapon_AK47")! with { SellPrice = null });
+        var text = economy.ToJson();
+        Assert.Contains("\"max-stock\": \"5\"", text, StringComparison.Ordinal);
+        Assert.Contains("\"base-purchase-price\": \"12,000\"", text, StringComparison.Ordinal);
+        Assert.Contains("\"base-sell-price\": \"-1\"", text, StringComparison.Ordinal);
+
+        // An entry left with nothing but the game's values still goes.
+        var plain = EconomyOverride.CreateDefault();
+        plain.Set("A_0_Armory", new TradeableOverride("Weapon_AK47") { SellPrice = 500 });
+        plain.Set("A_0_Armory", new TradeableOverride("Weapon_AK47"));
+        Assert.Empty(plain.Entries("A_0_Armory"));
+    }
+
+    [Theory]
+    [InlineData("{\"economy-override\":{\"economy-logging\":\"1\",\"economy-logging\":\"0\",\"traders\":{}}}")] // a setting twice
+    [InlineData("{\"economy-override\":{\"traders\":{\"A_0_Armory\":[],\"A_0_Armory\":[{\"tradeable-code\":\"Weapon_AK47\"}]}}}")] // a section twice
+    [InlineData("{\"economy-override\":{\"traders\":{\"\":[]}}}")] // a section without a name
+    [InlineData("{\"economy-override\":{\"economy-logging\":\"1\",\"traders\":[]}}")] // traders as an array
+    [InlineData("[]")]
+    [InlineData("{}")]
+    public void UnusualFilesReadOrFailAsJsonException(string json)
+    {
+        // Audit F103/F108/F286: a duplicate key threw ArgumentException out of the project's Changed event.
+        EconomyOverride economy;
+        try
+        {
+            economy = EconomyOverride.Parse(json);
+        }
+        catch (JsonException)
+        {
+            return;
+        }
+
+        var text = economy.ToJson();
+        Assert.Single(Regex.Matches(text, "\"traders\""));
+        Assert.Equal(text, EconomyOverride.Parse(text).ToJson());
+    }
+
+    [Fact]
+    public void DuplicateEntriesChangeTogether()
+    {
+        // Audit F285/F441: Set changed the first of two entries for one code, Remove removed both.
+        var economy = EconomyOverride.Parse("{\"economy-override\":{\"traders\":{\"A_0_Armory\":[" +
+            "{\"tradeable-code\":\"Weapon_AK47\",\"base-purchase-price\":\"100\"},{\"tradeable-code\":\"Weapon_AK47\",\"base-purchase-price\":\"200\"}]}}}");
+        economy.Set("A_0_Armory", new TradeableOverride("Weapon_AK47") { PurchasePrice = 9000 });
+        var back = EconomyOverride.Parse(economy.ToJson());
+        Assert.Equal([9000, 9000], back.Entries("A_0_Armory").Select(e => e.PurchasePrice));
+
+        economy.Set("A_0_Armory", new TradeableOverride("Weapon_AK47"));
+        Assert.Null(economy.Find("A_0_Armory", "Weapon_AK47"));
+        Assert.Empty(EconomyOverride.Parse(economy.ToJson()).Entries("A_0_Armory"));
+    }
+
+    [Fact]
+    public void TheNoteSaysTheFileReplacesTheServersOwn()
+    {
+        // Audit F105/F109: the note told admins to copy the file over the server's own without a word about what is lost.
+        var folder = Path.Combine(Path.GetTempPath(), "ss-economy-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            EconomyOverride.CreateDefault().SaveTo(folder, withNote: true);
+            var note = File.ReadAllText(Path.Combine(folder, EconomyOverride.ReadmeName));
+            Assert.Contains("REPLACES", note, StringComparison.Ordinal);
+            Assert.Contains("back up", note, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("Import", note, StringComparison.Ordinal);
+            Assert.Contains("يستبدل", note, StringComparison.Ordinal);
+            Assert.Contains("نسخة احتياطية", note, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(folder, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void APastedStockPostKeepsItsTrader()
+    {
+        // Audit F278: only a Duplicate kept a deleted post's trader; a copy pasted into another level is an added Blueprint.
+        const string outpost = "/Game/ConZ_Files/Maps/The_Island/B_4_Outpost";
+        var b = new FakeLevelBuilder(outpost);
+        var armory = b.Actor("BP_Armory_1", "/Game/X/BP_Outpost_Armory.BP_Outpost_Armory_C", blueprint: true);
+        b.Traders(armory, new TraderMarker(FTransform.Identity, "B_4_Armory", "Armorer", "/Game/X/BP_ArmsDealer.BP_ArmsDealer_C", "/Game/E/B4_Armory.B4_Armory"));
+        var level = LevelDocument.FromData(b.Build());
+
+        var state = new EditState();
+        var paste = new AddBlueprintActorOp("/Game/ConZ_Files/Maps/The_Island/A_3_Farm_01", "BP_Armory_1_Pasted", "/Game/X/BP_Outpost_Armory.BP_Outpost_Armory_C",
+            new ActorRef(outpost, "BP_Armory_1"), TransformValue.FromTransform(FTransform.Identity));
+        state.Apply(paste);
+        state.Apply(new DeleteActorOp(new ActorRef(outpost, "BP_Armory_1")));
+        Assert.Empty(TraderPosts.RemovedStockTraders(state, [level]));
+
+        state.Apply(paste.Inverse()); // the pasted copy deleted too: the trader is gone
+        Assert.Equal(["B_4_Armory"], TraderPosts.RemovedStockTraders(state, [level]));
     }
 }

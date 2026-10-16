@@ -136,6 +136,12 @@ public sealed record LevelExportData
     /// </summary>
     public int? InstanceEndCullDistance { get; init; }
 
+    /// <summary>
+    /// Instanced components: <c>InstanceStartCullDistance</c> (UE centimetres) from which the game fades the instances out
+    /// towards <see cref="InstanceEndCullDistance"/>; null when not stored or 0.
+    /// </summary>
+    public int? InstanceStartCullDistance { get; init; }
+
     /// <summary>Spline mesh components: the bend parameters (see <see cref="SplineMeshParams"/>); null for other components.</summary>
     public SplineMeshParams? SplineMesh { get; init; }
 
@@ -147,6 +153,12 @@ public sealed record LevelExportData
 
     /// <summary>Item spawner components: <c>SpawnerMarkers</c> (where loot appears); null for other components.</summary>
     public IReadOnlyList<SpawnMarker>? SpawnMarkers { get; init; }
+
+    /// <summary>
+    /// Item spawner components: true when <see cref="SpawnMarkers"/> is not stored on the export but comes from its template
+    /// (a house's indoor loot points, kept by the Blueprint).
+    /// </summary>
+    public bool SpawnMarkersFromTemplate { get; init; }
 
     /// <summary>Loot presets of the component's <c>ExamineAssetData</c> (what a search of it gives); null when it has none.</summary>
     public IReadOnlyList<string>? LootPresets { get; init; }
@@ -176,6 +188,9 @@ public sealed record LevelExportData
 
     /// <summary>Sentry spawner actors: <c>PatrolPoints</c> relative to the spawner; null for other actors.</summary>
     public IReadOnlyList<FVector>? PatrolPoints { get; init; }
+
+    /// <summary>Sentry spawner actors: the sentry they spawn (<c>SentryClass</c>, a soft class path); null for other actors.</summary>
+    public string? SentryClass { get; init; }
 
     /// <summary>Trade post actors: their traders (<c>_traderMarkers</c>, usually from the class); null for other actors.</summary>
     public IReadOnlyList<TraderMarker>? TraderMarkers { get; init; }

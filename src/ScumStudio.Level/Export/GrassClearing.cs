@@ -54,7 +54,23 @@ public static class GrassClearing
     /// <param name="Outline">Convex outline in world X/Y.</param>
     /// <param name="Bottom">Lowest point of the piece.</param>
     /// <param name="Top">Highest point of the piece.</param>
-    public readonly record struct Volume(Vector2[] Outline, float Bottom, float Top);
+    /// <param name="Solid">
+    /// Nothing can stand inside it (a rock, a cliff: <see cref="IsSolid"/>). A hollow shell (a house, a hangar) is not: its box
+    /// holds its rooms, and the spawn points in them stay. The export sets it.
+    /// </param>
+    public readonly record struct Volume(Vector2[] Outline, float Bottom, float Top, bool Solid = true);
+
+    /// <summary>
+    /// True for an actor nothing can stand inside: every mesh it draws is one of the game's rocks or cliffs
+    /// (<see cref="BendSupport.IsRock"/>). A building's mesh box also holds its rooms (audit F099: the spawn points inside
+    /// a placed hangar were removed).
+    /// </summary>
+    public static bool IsSolid(ActorRecord actor)
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+        var meshes = actor.Components.Select(c => c.StaticMeshPath).Append(actor.StaticMeshPath).OfType<string>().ToList();
+        return meshes.Count > 0 && meshes.All(BendSupport.IsRock);
+    }
 
     /// <summary>How far (cm) below an object's lowest point a spawn point still counts as inside it (points sit on the ground).</summary>
     public const float GroundToleranceCm = 50f;

@@ -66,6 +66,38 @@
               </ComboBox.ItemTemplate>
             </ComboBox>
           </StackPanel>
+          <CheckBox x:Name="ReopenLastProject" IsChecked="{Binding ReopenLastProject}" Content="{Tr Settings.ReopenLast}" ToolTip.Tip="{Tr Settings.ReopenLast.Tip}" />
+          <CheckBox x:Name="ClearGrassUnderNew" IsChecked="{Binding ClearGrassUnderNew}" Content="{Tr Settings.ClearGrass}" ToolTip.Tip="{Tr Settings.ClearGrass.Tip}" />
+          <!-- Owner: "when I delete it, everything of it must be deleted"; off, Delete takes the object alone as before -->
+          <CheckBox x:Name="DeleteWithCompanionsBox" IsChecked="{Binding DeleteWithCompanions}" Content="{Tr Settings.DeleteWithCompanions}" ToolTip.Tip="{Tr Settings.DeleteWithCompanions.Tip}" />
+          <!-- Owner: the toolbar button for this was pointless; the choice lives here now -->
+          <StackPanel>
+            <TextBlock Text="{Tr Map.Axes}" Classes="label" />
+            <ComboBox x:Name="AxesPicker" ItemsSource="{Binding Orientations}" SelectedItem="{Binding Orientation}" MinWidth="220" ToolTip.Tip="{Tr Map.Axes.Tip}" />
+          </StackPanel>
+        </StackPanel>
+      </Border>
+
+      <!-- Graphics card (D03, AMD crashes): the GPU in use, what was turned off for it, Windows' GPU choice, the view switches -->
+      <Border Classes="card">
+        <StackPanel Spacing="12">
+          <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12">
+            <Border Grid.Column="0" Classes="iconTile"><c:GlyphIcon Kind="Icon.Cube3d" IconSize="20" HorizontalAlignment="Center" VerticalAlignment="Center" /></Border>
+            <StackPanel Grid.Column="1" Spacing="4" VerticalAlignment="Center">
+              <TextBlock Text="{Tr Settings.Graphics}" Classes="h2" />
+              <TextBlock Classes="caption wrap" Text="{Tr Settings.Graphics.Caption}" />
+            </StackPanel>
+          </Grid>
+          <TextBlock x:Name="GpuInUseText" Text="{Binding GpuInUse}" Classes="wrap" ToolTip.Tip="{Tr Settings.Graphics.InUse.Tip}" />
+          <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding HasGpuWarning}">
+            <c:GlyphIcon Kind="Icon.Warning" IconSize="13" Foreground="{DynamicResource WarningBrush}" VerticalAlignment="Top" Margin="0,2,0,0" />
+            <TextBlock x:Name="GpuWarningText" Text="{Binding GpuWarning}" Classes="warn caption wrap" MaxWidth="820" />
+          </StackPanel>
+          <StackPanel Orientation="Horizontal" Spacing="10">
+            <Button x:Name="HighPerformanceGpuButton" Content="{Tr Settings.Graphics.HighPerformance}" Command="{Binding UseHighPerformanceGpuCommand}"
+                    IsEnabled="{Binding CanUseHighPerformanceGpu}" ToolTip.Tip="{Tr Settings.Graphics.HighPerformance.Tip}" />
+            <TextBlock Text="{Binding HighPerformanceStatus}" Classes="caption wrap" VerticalAlignment="Center" MaxWidth="560" />
+          </StackPanel>
           <StackPanel>
             <TextBlock Text="{Tr Settings.Quality}" Classes="label" />
             <ComboBox x:Name="QualityPicker" ItemsSource="{Binding RenderQualities}" SelectedItem="{Binding RenderQuality}" MinWidth="220"
@@ -76,14 +108,18 @@
           <CheckBox x:Name="AnimateWaterBox" IsChecked="{Binding AnimateWater}" Content="{Tr Settings.AnimateWater}" ToolTip.Tip="{Tr Settings.AnimateWater.Tip}" />
           <CheckBox x:Name="LightingBox" IsChecked="{Binding Lighting}" Content="{Tr Settings.Lighting}" ToolTip.Tip="{Tr Settings.Lighting.Tip}" />
           <CheckBox x:Name="AntiAliasedFoliageBox" IsChecked="{Binding AntiAliasedFoliage}" Content="{Tr Settings.AntiAliasedFoliage}" ToolTip.Tip="{Tr Settings.AntiAliasedFoliage.Tip}" />
-          <CheckBox x:Name="ReopenLastProject" IsChecked="{Binding ReopenLastProject}" Content="{Tr Settings.ReopenLast}" ToolTip.Tip="{Tr Settings.ReopenLast.Tip}" />
-          <CheckBox x:Name="ClearGrassUnderNew" IsChecked="{Binding ClearGrassUnderNew}" Content="{Tr Settings.ClearGrass}" ToolTip.Tip="{Tr Settings.ClearGrass.Tip}" />
-          <!-- Owner: "when I delete it, everything of it must be deleted"; off, Delete takes the object alone as before -->
-          <CheckBox x:Name="DeleteWithCompanionsBox" IsChecked="{Binding DeleteWithCompanions}" Content="{Tr Settings.DeleteWithCompanions}" ToolTip.Tip="{Tr Settings.DeleteWithCompanions.Tip}" />
-          <!-- Owner: the toolbar button for this was pointless; the choice lives here now -->
+          <!-- Smooth like the game (perf): far view in sectors and the adaptive 60 fps switch, next to the other graphics options -->
           <StackPanel>
-            <TextBlock Text="{Tr Map.Axes}" Classes="label" />
-            <ComboBox x:Name="AxesPicker" ItemsSource="{Binding Orientations}" SelectedItem="{Binding Orientation}" MinWidth="220" ToolTip.Tip="{Tr Map.Axes.Tip}" />
+            <TextBlock Text="{Tr Settings.RenderDistance}" Classes="label" />
+            <ComboBox x:Name="RenderDistancePicker" ItemsSource="{Binding RenderDistances}" SelectedItem="{Binding RenderDistance}" MinWidth="220"
+                      ToolTip.Tip="{Tr Settings.RenderDistance.Tip}" />
+          </StackPanel>
+          <CheckBox x:Name="SmoothFramesBox" IsChecked="{Binding SmoothFrames}" Content="{Tr Settings.Smooth}" ToolTip.Tip="{Tr Settings.Smooth.Tip}" />
+          <!-- F15 (seviscache): how close the Map's camera still draws, for tight rooms (Ctrl+Shift+N on the Map) -->
+          <StackPanel>
+            <TextBlock Text="{Tr Settings.NearClip}" Classes="label" />
+            <ComboBox x:Name="NearClipPicker" ItemsSource="{Binding NearClips}" SelectedItem="{Binding NearClip}" MinWidth="220"
+                      ToolTip.Tip="{Tr Settings.NearClip.Tip}" />
           </StackPanel>
         </StackPanel>
       </Border>

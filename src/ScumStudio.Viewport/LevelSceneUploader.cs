@@ -532,6 +532,7 @@ public sealed class LevelScene : IDisposable
     /// When <paramref name="detailed"/> has a sea, the backdrop's is hidden too: the detailed scene is drawn second, so its
     /// sea (wide enough for the whole island) comes after all the ground of both and is the one sea of the view. The
     /// backdrop's, drawn first, was painted over by the detailed seabed ("the water turns into empty blue ground").
+    /// The game's far model of a level (<see cref="FarModelsScene"/>) gives way to the level itself in the same frame.
     /// </summary>
     public void HideTerrainOf(PreparedLevelScene? detailed)
     {
@@ -539,6 +540,18 @@ public sealed class LevelScene : IDisposable
         foreach (var node in TerrainNodes)
         {
             node.Visible = names is null || !names.Contains(node.Name[..Math.Max(0, node.Name.IndexOf('/'))]);
+        }
+
+        var levels = detailed?.Documents.Select(d => d.PackagePath).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var group in _groups.Values)
+        {
+            foreach (var node in group.Node.Children)
+            {
+                if (node.Tag is ScenePlacement placement && FarModelsScene.LevelOf(placement.Actor) is { } level)
+                {
+                    node.Visible = levels is null || !levels.Contains(level);
+                }
+            }
         }
 
         SeaVisible = detailed?.SeaLevelCm is null;
@@ -1157,16 +1170,19 @@ public sealed class LevelScene : IDisposable
     /// <summary>
     /// Replaces the spawn point pins of the actor <paramref name="selectableId"/> (the placements with a
     /// <see cref="ScenePlacement.SpawnPoint"/>) with <paramref name="pins"/>: the project added, moved or removed points of
-    /// its stored point array, and the pins mirror the list as it is now (their keys are the current indices).
+    /// its stored point array, and the pins mirror the list as it is now (their keys are the current indices). The pins of a
+    /// copy (<see cref="AddClone"/>) are placed for the copy's root as it is now and move with the copy from then on.
     /// </summary>
     public void ReplacePins(uint selectableId, IReadOnlyList<ScenePlacement> pins)
     {
         ArgumentNullException.ThrowIfNull(pins);
         var nodes = NodesOf(selectableId);
+        var cloned = _clones.GetValueOrDefault(selectableId);
         foreach (var node in nodes.Where(n => n.Tag is ScenePlacement { SpawnPoint: not null }).ToList())
         {
             node.Parent?.Remove(node);
             nodes.Remove(node);
+            cloned?.RemoveAll(c => ReferenceEquals(c.Node, node));
         }
 
         if (!_byId.TryGetValue(selectableId, out var placements))
@@ -1194,6 +1210,7 @@ public sealed class LevelScene : IDisposable
             node.Tag = pin;
             node.MaxDrawDistance = LevelSceneUploader.DrawDistanceOf(pin);
             placements.Add(pin);
+            cloned?.Add((node, pin));
             Index(node);
         }
 

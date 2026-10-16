@@ -4,9 +4,25 @@ using ScumStudio.Formats.Properties;
 
 namespace ScumStudio.Modding.Tuning;
 
+/// <summary>A stored object reference of a package (<c>EncounterData[0].EncounterClass</c>): what it points at.</summary>
+/// <param name="Export">Export key (<see cref="Tunable.Export"/>).</param>
+/// <param name="Path">Property path (<see cref="Tunable.Path"/>).</param>
+/// <param name="Value">The object path (<c>/Game/…/X.X_C</c>, <c>/Script/ConZ.Y</c>), or empty for None.</param>
+public sealed record ObjectReference(string Export, string Path, string Value)
+{
+    /// <summary>Stable key within a package: <c>Export|Path</c>.</summary>
+    public string Key => Export + "|" + Path;
+}
+
 /// <summary>Reads every <see cref="Tunable"/> stored in a cooked package.</summary>
 public static class TunableReader
 {
+    /// <summary>
+    /// The value kind of an object reference edit (<c>SetAssetValueOp.ValueKind</c>): written by
+    /// <see cref="TunablePatcher"/> into a mod's own copies only, never into a shared game asset.
+    /// </summary>
+    public const string ObjectKind = "Object";
+
     /// <summary>Exports whose properties are engine bookkeeping, never gameplay values.</summary>
     private static readonly HashSet<string> SkippedClasses = new(StringComparer.Ordinal)
     {
@@ -59,6 +75,41 @@ public static class TunableReader
         return result;
     }
 
+    /// <summary>
+    /// Every stored object reference (<c>ObjectProperty</c>, also inside struct arrays: a zone's
+    /// <c>EncounterData[i].EncounterClass</c>), in export order then property order. They are not tunables of
+    /// <see cref="Read"/>: the module pages list values, and a reference is re-pointed only in a copy.
+    /// </summary>
+    public static IReadOnlyList<ObjectReference> ObjectReferences(CookedPackage package)
+    {
+        ArgumentNullException.ThrowIfNull(package);
+        var result = new List<ObjectReference>();
+        var keys = ExportKeys(package);
+        for (var i = 0; i < package.Exports.Count; i++)
+        {
+            if (SkippedClasses.Contains(package.GetExportClassName(i)))
+            {
+                continue;
+            }
+
+            PropertyBlock block;
+            try
+            {
+                block = package.ReadProperties(i);
+            }
+            catch (Exception ex) when (ex is FormatException or InvalidDataException or EndOfStreamException or ArgumentOutOfRangeException or NotSupportedException)
+            {
+                continue;
+            }
+
+            result.AddRange(EnumerateAll(package, i, block)
+                .Where(x => x.Tag.Value is ObjectValue)
+                .Select(x => new ObjectReference(keys[i], x.Path, ((ObjectValue)x.Tag.Value!).Index == 0 ? string.Empty : package.GetFullPath(((ObjectValue)x.Tag.Value!).Index))));
+        }
+
+        return result;
+    }
+
     /// <summary>The export's tagged values, then a DataTable's row members as <c>Rows[Row].Member</c> (see <see cref="DataTableRows"/>).</summary>
     internal static IEnumerable<(string Path, PropertyTag Tag)> EnumerateAll(CookedPackage package, int exportIndex, PropertyBlock block)
     {
@@ -73,7 +124,27 @@ public static class TunableReader
         }
 
         var all = block.EnumerateAll().Concat(rows.SelectMany(r => r.EnumerateAll().Select(m => (Path: DataTableRows.PathOf(r.Name, m.Path), m.Tag)))).ToList();
-        return all.Concat(all.SelectMany(x => NativeFloats(x.Path, x.Tag)));
+        return all.Concat(all.SelectMany(x => NativeFloats(x.Path, x.Tag))).Concat(all.SelectMany(x => MapFloats(x.Path, x.Tag)));
+    }
+
+    /// <summary>
+    /// The float values of a map (<c>CharacterClasses[i].Value</c>: a zombie preset's weight per character, an encounter's
+    /// weight per preset) as tags of their own, in stored order; the keys stay as they are.
+    /// </summary>
+    private static IEnumerable<(string Path, PropertyTag Tag)> MapFloats(string path, PropertyTag tag)
+    {
+        if (tag.Value is not MapValue map)
+        {
+            yield break;
+        }
+
+        for (var i = 0; i < map.Entries.Count; i++)
+        {
+            if (map.Entries[i].Value is FloatValue value)
+            {
+                yield return ($"{path}[{i}].Value", new PropertyTag { Name = "Value", Type = "FloatProperty", Size = 4, ValueOffset = value.Offset, Value = value });
+            }
+        }
     }
 
     /// <summary>

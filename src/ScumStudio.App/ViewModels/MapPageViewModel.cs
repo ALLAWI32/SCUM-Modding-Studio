@@ -76,9 +76,11 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
         _renderQuality = ui.RenderQuality;
         (_spawnModelsShown, _animateWater, _lighting) = (ui.SpawnModels, ui.AnimateWater, ui.Lighting);
         _antiAliasedFoliage = ui.AntiAliasedFoliage;
+        (_renderDistance, _smoothFrames) = (ui.RenderDistanceSectors, ui.SmoothFrames);
         _showSpawns = services.UiState.Current.ShowSpawnPoints;
         _timeOfDay = Math.Clamp(services.UiState.Current.TimeOfDay, 0, 24);
         _pickParts = services.UiState.Current.PickParts;
+        _nearClip = ui.NearClipCentimetres;
         _services = services;
         _openSetup = openSetup ?? (() => { });
         _services.UiState.Changed += OnUiStateChanged;
@@ -103,6 +105,7 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
     /// <summary>The world index shown, or null.</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasWorld))]
+    [NotifyPropertyChangedFor(nameof(SectorSizeCm))]
     private WorldIndex? _world;
 
     /// <summary>Root nodes of the tree.</summary>
@@ -490,6 +493,7 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
     public void Dispose()
     {
         _loadCts?.Cancel();
+        _modelImportCancel?.Cancel(); // the engine stops with the page
         _services.UiState.Changed -= OnUiStateChanged;
         _services.Workspace.CatalogChanged -= OnCatalogChanged;
         _services.Projects.PropertyChanged -= OnProjectsPropertyChanged;
@@ -536,6 +540,11 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
     {
         SelectedPackage = value?.Package;
         SelectedProperties = value?.Package is { } p ? Describe(p) : [];
+        if (ExtendingSelection)
+        {
+            return; // Ctrl or Shift in the tree: the selection loads as a whole after a pause (SelectNodes)
+        }
+
         if (value?.Package is { IsMap: true } level && level.Kind != WorldPackageKind.Persistent)
         {
             IsWorldMode = false;
@@ -624,7 +633,8 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
         var world = World;
         try
         {
-            var textureSize = Quality.TextureSize;
+            // F460: Performance and Balanced bake smaller ground textures; 0 keeps the baker's own size (1024² with layer textures).
+            var (textureSize, terrainTextureSize) = (Quality.TextureSize, Quality.TerrainTextureSize < TerrainBakeSettings.DefaultTexturedSize ? Quality.TerrainTextureSize : 0);
             var (readMs, readMb, prepareMb) = (0.0, 0L, 0L);
             var shown = PreparedScene;
             var prepared = await Task.Run(() =>
@@ -639,6 +649,7 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
                 var options = new LevelSceneOptions
                 {
                     TextureSize = textureSize,
+                    TerrainTextureSize = terrainTextureSize,
                     LandscapeStep = Math.Max(1, landscapeStep),
                     SeaPlane = seaPlane ? null : false,
                     DocumentSlots = LevelScenePreparer.SlotsAfter(documents, shown),
@@ -776,7 +787,7 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
     private void ApplyEntityFilter()
     {
         var text = EntityFilter.Trim();
-        Actors = text.Length == 0 ? AllActors : AllActors.Where(a => a.Matches(text)).ToList();
+        Actors = text.Length == 0 ? AllActors : NearCoordinates(AllActors, text) ?? AllActors.Where(a => a.Matches(text)).ToList(); // F20: "X Y (Z)" lists the nearest
     }
 
     /// <summary>
@@ -875,6 +886,7 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
             RefreshHiddenIds();
             RefreshTransforms();
             RefreshReplacements();
+            RefreshCopiedMeshes();
             RefreshBends();
             RefreshGroup();
             var again = keepId == 0 ? null : ActorOf(keepId);
@@ -1057,7 +1069,7 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
         var clones = new List<ActorClone>();
         foreach (var item in added)
         {
-            var drawnAt = IsBent(item) ? item.Actor.WorldTransform with { Scale3D = FVector.One } : item.Actor.WorldTransform;
+            var drawnAt = CloneRoot(item);
             if (item.SourceId != 0)
             {
                 clones.Add(new ActorClone(item.SelectableId, item.SourceId, drawnAt, item.Name));
@@ -1080,6 +1092,49 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
         Clones = clones;
     }
 
+    /// <summary>Where the viewport draws an added actor's root (a bent one at scale 1: its pieces carry the scale).</summary>
+    private FTransform CloneRoot(ActorItemViewModel item) => IsBent(item) ? item.Actor.WorldTransform with { Scale3D = FVector.One } : item.Actor.WorldTransform;
+
+    /// <summary>
+    /// Meshes replaced on copies drawn as clones of their source, added to what <see cref="RefreshReplacements"/> draws for
+    /// the level's own actors: a copy carries its source's replaced parts (see <see cref="ActorEdits"/>) and the game gets them.
+    /// </summary>
+    private void RefreshCopiedMeshes()
+    {
+        if (_services.Projects.Current?.State is not { } state)
+        {
+            return;
+        }
+
+        Dictionary<uint, string>? actors = null;
+        Dictionary<InstanceKey, string>? parts = null;
+        foreach (var (actor, component, mesh) in state.MeshOverrides)
+        {
+            if (ActorOf(actor) is not { IsAdded: true, SourceId: not 0 } item)
+            {
+                continue; // the level's own (RefreshReplacements), or a new mesh actor drawing its mesh through its clone
+            }
+
+            if (component.Length == 0)
+            {
+                (actors ??= new Dictionary<uint, string>(ReplacedMeshes))[item.SelectableId] = mesh;
+            }
+            else if (item.Actor.FindComponent(component) is { } c)
+            {
+                (parts ??= new Dictionary<InstanceKey, string>(PartMeshes))[InstanceKey.Of(item.SelectableId, c.Name, c.SplineMesh is null ? InstanceKey.Part : InstanceKey.Segment)] = mesh;
+            }
+            else
+            {
+                continue;
+            }
+
+            EnsureMeshLoaded(mesh);
+        }
+
+        ReplacedMeshes = actors ?? ReplacedMeshes;
+        PartMeshes = parts ?? PartMeshes;
+    }
+
     /// <summary>Loads a mesh the prepared scene does not have (new mesh actors) on a worker and hands it to the viewport.</summary>
     private void EnsureMeshLoaded(string meshPath)
     {
@@ -1090,7 +1145,21 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
             return;
         }
 
-        _ = Task.Run(() => new LevelScenePreparer(catalog, _services.Logger).PrepareMesh(meshPath, new LevelSceneOptions { TextureSize = 512 }))
+        // An imported 3D model (My models) is read from its own cooked files in the project, not the game's.
+        string? model = null;
+        if (ScumStudio.Level.Import.ModelLibrary.IsModelMesh(meshPath)
+            && (model = ScumStudio.Level.Import.ModelLibrary.FolderOf(_services.Projects.Current?.DirectoryPath, meshPath, out var problem)) is null)
+        {
+            _loadingMeshes.Remove(meshPath);
+            _services.Logger.LogWarning("Imported model {Mesh} is not drawn: it {Problem}.", meshPath, problem);
+            return;
+        }
+
+        _ = Task.Run(() =>
+            {
+                using var own = model is null ? null : AssetCatalog.OpenLoose(model);
+                return new LevelScenePreparer(own ?? catalog, _services.Logger).PrepareMesh(meshPath, new LevelSceneOptions { TextureSize = 512 });
+            })
             .ContinueWith(t => _services.Dispatcher.Invoke(() =>
             {
                 _loadingMeshes.Remove(meshPath);
@@ -1130,6 +1199,11 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
         if (name.Length == 0)
         {
             return false;
+        }
+
+        if (MyModelNamed(name) is { } mine)
+        {
+            return AddMeshActor(mine.MeshObjectPath); // one of the project's imported 3D models (My models)
         }
 
         var package = name.Contains('/', StringComparison.Ordinal) ? AssetPaths.SplitObjectPath(name).PackagePath : null;
@@ -1404,10 +1478,14 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
         }
     }
 
+    /// <summary>The copied actor's edits as they were at Copy (what its paste carries, like a clipboard; see <see cref="ActorEdits"/>).</summary>
+    private (ActorItemViewModel Item, ActorEdits Edits)? _copiedEdits;
+
     /// <summary>Remembers the selected actor (or instance) for Paste.</summary>
     [RelayCommand(CanExecute = nameof(CanCopySelected))]
     private void CopySelected()
     {
+        CommitShape(); // a scale or bend still waiting to be journaled is part of what is copied
         if (HasGroup)
         {
             CopyGroup();
@@ -1433,6 +1511,7 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
         {
             _copiedInstance = null;
             RememberCopySource(item);
+            _copiedEdits = _services.Projects.Current?.State is { } state ? (item, state.EditsOf(item.Reference)) : null;
             CopiedActor = item;
             _services.Notifications.Info(Localization.Loc.T("Assets.Copied"), Localization.Loc.F("Map.CopiedActor", item.Name));
             CopiedObjects?.Invoke();
@@ -1449,6 +1528,7 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
     [RelayCommand(CanExecute = nameof(CanPaste))]
     private void Paste()
     {
+        CommitShape();
         if (TryPasteGroup())
         {
             return;
@@ -1479,14 +1559,22 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
 
         var at = AimPointProvider?.Invoke() ?? copied.Actor.WorldTransform.Translation;
         var target = SelectedActor?.Level ?? NewObjectLevel(scene, at);
+        if (CopyRefusedText(copied, target) is { } refused)
+        {
+            _services.Notifications.Warning(Localization.Loc.T("Map.NotPasted"), refused);
+            return;
+        }
+
         try
         {
             // The copied item may come from a level the island streamed out since: its own record is all that is needed.
             var world = RootWorldOf(copied, CurrentRootTransform(copied)) with { Translation = at };
-            var op = CopyOp(copied, target, world, project.State);
-            var entry = _services.Projects.Apply(op);
-            _services.Notifications.Info(Localization.Loc.T("Map.Pasted"), entry.Op.Describe());
-            SelectCreated(op);
+            var edits = _copiedEdits is { } kept && ReferenceEquals(kept.Item, copied) ? kept.Edits : project.State.EditsOf(copied.Reference);
+            var ops = CopyOps(copied, target, world, project.State, edits);
+            _services.Projects.Apply(CopyStep(ops, Localization.Loc.T("Map.Pasted")));
+            _services.Notifications.Info(Localization.Loc.T("Map.Pasted"), ops[0].Describe());
+            WarnIfItemSpawners(ops);
+            SelectCreated(ops[0].GetPrimaryTarget());
         }
         catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or IOException or KeyNotFoundException or InvalidDataException)
         {
@@ -1502,12 +1590,20 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
     private EditOp CopyOp(ActorItemViewModel item, LevelDocument target, FTransform world, EditState state, ISet<ActorRef>? reserved = null)
     {
         var transform = TransformValue.FromTransform(world); // a new actor of its own stands in the world
+        var copied = item; // its own mesh and loot now, also for a copy of a copy (which is placed from the original's exports)
         if (item.IsAdded)
         {
             switch (state.AddedActors.GetValueOrDefault(item.Reference))
             {
                 case AddStaticMeshActorOp mesh:
-                    return EditOpFactory.AddStaticMeshActor(target, mesh.StaticMesh, transform, state, reserved) with { CollisionProfile = mesh.CollisionProfile, Loot = state.GetLoot(item.Reference) is { } set ? (set.Lootable ? set.Presets : []) : mesh.Loot };
+                    // The mesh it draws now (F076); a replaced mesh draws its own materials, as the export writes it.
+                    var replaced = state.GetMeshOverride(item.Reference);
+                    return EditOpFactory.AddStaticMeshActor(target, replaced ?? mesh.StaticMesh, transform, state, reserved) with
+                    {
+                        CollisionProfile = mesh.CollisionProfile,
+                        Loot = state.GetLoot(item.Reference) is { } set ? (set.Lootable ? set.Presets : []) : mesh.Loot,
+                        OverrideMaterials = replaced is null ? mesh.OverrideMaterials : null,
+                    };
                 case AddBlueprintActorOp blueprint:
                     // A copy of a placed item spawner spawns the same item (Item), not the item of the spawner it was made from;
                     // a copy of a placed trader is a trader of its own (its name is its economy section and its id).
@@ -1528,24 +1624,52 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
             }
         }
 
+        // A volume's brush shape cannot go into another level yet (the export would refuse it): say so at the paste.
+        if (CopyRefusedText(item, target) is { } refused)
+        {
+            throw new InvalidOperationException(refused);
+        }
+
         if (string.Equals(target.PackagePath, item.Level.PackagePath, StringComparison.OrdinalIgnoreCase))
         {
             // A duplicate keeps its source's parent: its place is relative to it.
             return new DuplicateActorOp(item.Reference, EditOpFactory.UniqueActorName(target, item.Name + "_Copy", state, reserved), RelativeOf(item, world));
         }
 
-        return item.Actor.Kind == ActorKind.StaticMeshActor && item.Actor.StaticMeshPath is { } meshPath
-            ? EditOpFactory.AddStaticMeshActor(target, meshPath, transform, state, reserved) with { CollisionProfile = item.Actor.Root?.CollisionProfile, Loot = item.Actor.Root is { } r ? LootOf(item, r) : null }
+        var meshNow = state.GetMeshOverride(copied.Reference);
+        return item.Actor.Kind == ActorKind.StaticMeshActor && (meshNow ?? item.Actor.StaticMeshPath) is { } meshPath
+            ? EditOpFactory.AddStaticMeshActor(target, meshPath, transform, state, reserved) with
+            {
+                CollisionProfile = item.Actor.Root?.CollisionProfile,
+                Loot = copied.Actor.Root is { } r ? LootOf(copied, r) : null,
+                OverrideMaterials = meshNow is null ? item.Actor.Root?.OverrideMaterials : null, // painted walls stay painted (owner, #23)
+            }
             : new AddBlueprintActorOp(target.PackagePath, EditOpFactory.UniqueActorName(target, BaseName(item) + "_Added", state, reserved), item.Actor.ClassPath, item.Reference, transform);
     }
+
+    /// <summary>
+    /// <see cref="CopyOp"/> and, after it, the edits the copy carries (<paramref name="edits"/>, see <see cref="ActorEdits"/>):
+    /// its bend, parts, meshes, spawn points, loot and grass are its source's (Discord, seviscache: a scaled and bent wall
+    /// duplicated straight; igor8802: a duplicated sentry's patrol could not be changed).
+    /// </summary>
+    private IReadOnlyList<EditOp> CopyOps(ActorItemViewModel item, LevelDocument target, FTransform world, EditState state, ActorEdits edits, ISet<ActorRef>? reserved = null)
+    {
+        var create = CopyOp(item, target, world, state, reserved);
+        return [create, .. edits.OpsOn(create.GetPrimaryTarget()!, create is AddStaticMeshActorOp)];
+    }
+
+    /// <summary>One journal step for a copy and its edits.</summary>
+    private static EditOp CopyStep(IReadOnlyList<EditOp> ops, string title) => ops.Count == 1 ? ops[0] : new BatchOp(title, ops);
 
     private static string BaseName(ActorItemViewModel item) => item.ClassName.EndsWith("_C", StringComparison.Ordinal) ? item.ClassName[..^2] : item.ClassName;
 
     /// <summary>Refreshes the scene after <paramref name="op"/> added an actor and selects the new actor.</summary>
-    private void SelectCreated(EditOp op)
+    private void SelectCreated(EditOp op) => SelectCreated(op.GetPrimaryTarget());
+
+    /// <summary>Refreshes the scene and selects <paramref name="created"/> (a batch of a copy and its edits names no one actor).</summary>
+    private void SelectCreated(ActorRef? created)
     {
         RefreshEdits();
-        var created = op.GetPrimaryTarget();
         SelectedInstanceKey = null;
         SelectedActor = AllActors.FirstOrDefault(a => a.IsAdded && created is not null && ActorRef.Comparer.Equals(a.Reference, created)) ?? SelectedActor;
     }
@@ -1567,6 +1691,7 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
     [RelayCommand(CanExecute = nameof(CanDuplicateSelected))]
     private void DuplicateSelected()
     {
+        CommitShape(); // a scale or bend still waiting (F221: Ctrl+D right after a pull copied the shape from before it)
         if (SelectedActor is not { } item)
         {
             return;
@@ -1593,10 +1718,11 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
         try
         {
             var world = RootWorldOf(item, CurrentRootTransform(item));
-            var op = CopyOp(item, item.Level, world, project.State); // exactly where the source stands: drag it off from there
-            var entry = _services.Projects.Apply(op);
-            _services.Notifications.Info(Localization.Loc.T("Map.Duplicated"), entry.Op.Describe());
-            SelectCreated(op);
+            var ops = CopyOps(item, item.Level, world, project.State, project.State.EditsOf(item.Reference)); // exactly where the source stands: drag it off from there
+            _services.Projects.Apply(CopyStep(ops, Localization.Loc.T("Map.Duplicated")));
+            _services.Notifications.Info(Localization.Loc.T("Map.Duplicated"), ops[0].Describe());
+            WarnIfItemSpawners(ops);
+            SelectCreated(ops[0].GetPrimaryTarget());
             SelectionHoldUntil = DateTime.UtcNow + DuplicateHold;
         }
         catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or IOException)
@@ -1698,6 +1824,7 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
             return;
         }
 
+        WarnIfItemSpawnerDeleted(item);
         _ = DeleteWithCompanionsAsync(WholeDelete(item) with { Refresh = () => { RefreshHiddenIds(); ActorProperties = DescribeSelected(item); } }, alone);
     }
 
@@ -2058,6 +2185,7 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
     [RelayCommand(CanExecute = nameof(CanUndo))]
     private void Undo()
     {
+        CommitShape(); // a waiting scale or bend is the latest change: it is what Undo takes back
         try
         {
             if (_services.Projects.Undo() is { } entry)
@@ -2074,6 +2202,7 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
     [RelayCommand(CanExecute = nameof(CanRedo))]
     private void Redo()
     {
+        CommitShape();
         try
         {
             if (_services.Projects.Redo() is { } entry)
@@ -2108,6 +2237,7 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
     [RelayCommand]
     private async Task ExportModAsync()
     {
+        CommitShape(); // what the sliders show is what gets exported
         var project = _services.Projects.Current;
         if (ModExportService.Blocker(_services, project) is { } blocker)
         {
@@ -2135,6 +2265,8 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
         {
             summary += Localization.Loc.T("Map.NoServerPak");
         }
+
+        summary += " · " + ModExportService.InstallNote(results);
 
         _services.Notifications.Success(Localization.Loc.T("Map.ModReady"), summary);
     }

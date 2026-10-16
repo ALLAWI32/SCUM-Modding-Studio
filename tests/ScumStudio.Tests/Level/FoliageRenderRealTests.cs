@@ -15,8 +15,8 @@ namespace ScumStudio.Tests.Level;
 
 /// <summary>
 /// Owner: "I walk through some trees". Foliage keeps a cooked copy of its trees for drawing next to the array collision is
-/// built from; a moved or deleted tree was drawn where it was, with no collision there. The export drops that copy (the
-/// game rebuilds it from the edited array) and grows the culling clusters over where a tree went. Real game files only.
+/// built from; a moved or deleted tree was drawn where it was, with no collision there. The export writes the edit into that
+/// copy too (dropping it made the foliage blink, D05) and refits the culling clusters over where a tree went. Real game files only.
 /// </summary>
 public sealed class FoliageRenderRealTests
 {
@@ -56,12 +56,17 @@ public sealed class FoliageRenderRealTests
             var (offset, size) = LevelPackageEditor.FindInstanceArray(payload, block.EndOffset, known) ?? throw new InvalidOperationException("instance array not found");
             var arrayEnd = offset + (size * pristine.Count);
 
-            // No cooked draw copy left: the game builds it from the edited array.
-            Assert.Null(InstanceRenderData.Layout(payload, arrayEnd, pristine.Count));
-            Assert.Equal(0L, BinaryPrimitives.ReadInt64LittleEndian(payload.AsSpan(arrayEnd + 8)));
+            // The cooked draw copy stays and draws every oak where the array has it (through the reorder table).
+            var copy = InstanceRenderData.Layout(payload, arrayEnd, pristine.Count) ?? throw new InvalidOperationException("the draw copy was dropped");
+            var reorder = block.Find("InstanceReorderTable")?.Value is ScumStudio.Formats.Properties.ArrayValue table
+                ? table.Items.OfType<ScumStudio.Formats.Properties.IntValue>().Select(v => v.Value).ToList()
+                : null;
+            var drawn = known.ToList();
+            drawn[5] = new FTransform(known[5].Rotation, known[5].Translation, new FVector(LevelPackageEditor.CollapsedInstanceScale));
+            Assert.Empty(HismTail.Check(payload, arrayEnd, drawn, reorder, null, requireCopy: true).Problems);
 
             // The root cluster (and the component's bounds) reach the moved oak.
-            var clusters = arrayEnd + 16;
+            var clusters = copy.SizeAt + 8 + copy.Bytes;
             Assert.Equal(64, BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(clusters)));
             var rootMin = Vector(payload, clusters + 8);
             var rootMax = Vector(payload, clusters + 8 + 16);

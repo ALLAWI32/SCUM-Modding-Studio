@@ -41,6 +41,12 @@ namespace ScumStudio.Level.Editing;
 [JsonDerivedType(typeof(SetClearGrassOp), "setClearGrass")]
 [JsonDerivedType(typeof(DeleteComponentsOp), "deleteComponents")]
 [JsonDerivedType(typeof(RestoreComponentsOp), "restoreComponents")]
+[JsonDerivedType(typeof(SetSpawnChoiceOp), "setSpawnChoice")]
+[JsonDerivedType(typeof(AddSpawnPlaceOp), "addSpawnPlace")]
+[JsonDerivedType(typeof(SetEconomyEntryOp), "setEconomyEntry")]
+[JsonDerivedType(typeof(SetEconomySettingOp), "setEconomySetting")]
+[JsonDerivedType(typeof(SetEconomySectionOp), "setEconomySection")]
+[JsonDerivedType(typeof(ReplaceEconomyOp), "replaceEconomy")]
 public abstract record EditOp
 {
     /// <summary>The operation that exactly undoes this one.</summary>
@@ -586,6 +592,12 @@ public sealed record AddStaticMeshActorOp(string Level, string NewName, string S
     /// </summary>
     public IReadOnlyList<string>? Loot { get; init; }
 
+    /// <summary>
+    /// The materials of what it was copied from (its <c>OverrideMaterials</c>: a building's wall painted with another
+    /// texture), as material object paths by slot; a null entry = the slot keeps its own; null = none.
+    /// </summary>
+    public IReadOnlyList<string?>? OverrideMaterials { get; init; }
+
     /// <inheritdoc />
     public override EditOp Inverse() => new RemoveAddedActorOp(Created, this);
 
@@ -597,6 +609,18 @@ public sealed record AddStaticMeshActorOp(string Level, string NewName, string S
 
     /// <inheritdoc />
     public override ActorRef? GetPrimaryTarget() => Created;
+
+    /// <inheritdoc />
+    public bool Equals(AddStaticMeshActorOp? other) =>
+        other is not null && Level == other.Level && NewName == other.NewName && StaticMesh == other.StaticMesh && Transform == other.Transform
+        && CollisionProfile == other.CollisionProfile && SameList(Loot, other.Loot) && SameList(OverrideMaterials, other.OverrideMaterials);
+
+    /// <inheritdoc />
+    public override int GetHashCode() => HashCode.Combine(Level, NewName, StaticMesh, Transform, Loot?.Count, OverrideMaterials?.Count);
+
+    // Lists read back from the journal are new instances: compared by content (a remove of a copy with loot must match its add).
+    private static bool SameList(IReadOnlyList<string?>? a, IReadOnlyList<string?>? b) =>
+        a is null || b is null ? a is null && b is null : a.SequenceEqual(b, StringComparer.OrdinalIgnoreCase);
 }
 
 /// <summary>
@@ -697,8 +721,8 @@ public sealed record BatchOp(string Title, IReadOnlyList<EditOp> Ops) : EditOp
 }
 
 /// <summary>
-/// Removes an actor created by <see cref="DuplicateActorOp"/>, <see cref="AddStaticMeshActorOp"/> or
-/// <see cref="AddBlueprintActorOp"/>; its inverse is that original operation.
+/// Removes an actor created by <see cref="DuplicateActorOp"/>, <see cref="AddStaticMeshActorOp"/>,
+/// <see cref="AddBlueprintActorOp"/> or <see cref="AddSpawnPlaceOp"/>; its inverse is that original operation.
 /// </summary>
 /// <param name="Target">The added actor.</param>
 /// <param name="Original">The operation that added it.</param>
@@ -778,4 +802,77 @@ public sealed record SetClearGrassOp(ActorRef Target, bool? Old, bool? New) : Ed
 
     /// <inheritdoc />
     public override ActorRef? GetPrimaryTarget() => Target;
+}
+
+/// <summary>
+/// What one spawner spawns (owner: "select a spawn, it gives me lists of what can go there and I replace it"): a sentry
+/// spawner's <c>SentryClass</c> (a soft class path in its level), or an island spawn place's choice in
+/// <c>The_Island_LevelStaticData</c> — a vehicle point's <c>VehicleLevelSpawnGroup</c> (<c>City</c>), a threat zone's
+/// <c>_zoneData</c> or a hunting area's <c>BiomeData</c> (the asset's object name, one the static data already imports).
+/// </summary>
+/// <param name="Target">The spawner or place (pristine or added).</param>
+/// <param name="Property">Which choice: <c>SentryClass</c>, <c>VehicleLevelSpawnGroup</c>, <c>_zoneData</c> or <c>BiomeData</c>.</param>
+/// <param name="Old">The choice before the edit (null = as the game has it).</param>
+/// <param name="New">The choice after the edit (null = as the game has it).</param>
+public sealed record SetSpawnChoiceOp(ActorRef Target, string Property, string? Old, string? New) : EditOp
+{
+    /// <inheritdoc />
+    public override EditOp Inverse() => this with { Old = New, New = Old };
+
+    /// <inheritdoc />
+    public override string Describe() => $"{Target} spawns {(New is null ? "as the game has it" : New[(New.LastIndexOf('.') + 1)..])} ({Property})";
+
+    /// <inheritdoc />
+    public override IReadOnlyList<string> GetTouchedLevels() => [Target.Level];
+
+    /// <inheritdoc />
+    public override ActorRef? GetPrimaryTarget() => Target;
+}
+
+/// <summary>
+/// Adds a NEW spawn place to the island's static data (owner: "create a new spawn, not a clone"): every field the map shows
+/// is its own, none comes from a stock place. Its actor lives in the <see cref="SpawnPlaces.StaticDataPath"/> document, so
+/// moves, copies, deletes and undo work on it as on any added actor.
+/// </summary>
+/// <param name="NewName">Its actor name (<see cref="SpawnPlaces.NewName"/>; never the name of a stock place).</param>
+/// <param name="Kind">Which array it joins (a vehicle point, a zombie / NPC point, a threat zone or a hunting area).</param>
+/// <param name="Setting">
+/// What spawns there: a vehicle point's group (<c>City</c>), a zombie / NPC point's type (<c>Exterior</c>, <c>Interior</c>),
+/// a threat zone's settings or a hunting area's biome (<c>MTZ_Village</c>, <c>BD_Village</c> when the island data already
+/// uses it, else its package path: <c>/Game/ConZ_Files/Encounters/EncounterZones/Medium_Threat/MTZ_Village</c>).
+/// </param>
+/// <param name="Transform">Where; a zone's or hunting area's scale is its size in metres (as the map shows it).</param>
+/// <param name="Tags">
+/// A tagged zombie / NPC point's gameplay tags (which encounters use it), each one the island data already names; null or
+/// empty = none (no stock point's tags come along). Other kinds have none.
+/// </param>
+public sealed record AddSpawnPlaceOp(string NewName, SpawnPlaceKind Kind, string Setting, TransformValue Transform, IReadOnlyList<string>? Tags = null) : EditOp
+{
+    /// <summary>The new place's actor.</summary>
+    [JsonIgnore]
+    public ActorRef Created => new(SpawnPlaces.StaticDataPath, NewName);
+
+    /// <inheritdoc />
+    public override EditOp Inverse() => new RemoveAddedActorOp(Created, this);
+
+    /// <inheritdoc />
+    public override string Describe() => $"Add new spawn place {NewName} ({Kind}, {SpawnPlaces.SettingName(Setting)}) at {Format(Transform)}";
+
+    /// <inheritdoc />
+    public override IReadOnlyList<string> GetTouchedLevels() => [SpawnPlaces.StaticDataPath];
+
+    /// <inheritdoc />
+    public override ActorRef? GetPrimaryTarget() => Created;
+
+    /// <inheritdoc />
+    public bool Equals(AddSpawnPlaceOp? other) =>
+        other is not null
+        && string.Equals(NewName, other.NewName, StringComparison.Ordinal)
+        && Kind == other.Kind
+        && string.Equals(Setting, other.Setting, StringComparison.Ordinal)
+        && Transform.Equals(other.Transform)
+        && (Tags ?? []).SequenceEqual(other.Tags ?? [], StringComparer.Ordinal);
+
+    /// <inheritdoc />
+    public override int GetHashCode() => HashCode.Combine(NewName, Kind, Setting, Transform, Tags?.Count ?? 0);
 }

@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using ScumStudio.Assets.Catalog;
@@ -55,6 +56,13 @@ public sealed record ExportOptions
     public IReadOnlyList<string> Mods { get; init; } = [];
 
     /// <summary>
+    /// The project folder whose <c>imports</c> hold the 3D models placed on the map (<see cref="Import.ModelLibrary"/>): the
+    /// pak carries every one a written level draws. It is also the folder new textures' pictures are read from
+    /// (<see cref="ProjectTextures"/>). Null = the exported project's own folder (none for a bare state).
+    /// </summary>
+    public string? ProjectDirectory { get; init; }
+
+    /// <summary>
     /// The ground height at a world X/Y for the collision check of placed rocks (<see cref="CollisionCheck.Placed"/>);
     /// null = the export catalog's landscape (<see cref="GroundHeights"/>).
     /// </summary>
@@ -65,6 +73,19 @@ public sealed record ExportOptions
     /// project's own file when exporting a project (none: only when traders are placed).
     /// </summary>
     public EconomyOverride? Economy { get; init; }
+
+    /// <summary>True: no <c>EconomyOverride.json</c> is written (the project's could not be read; see <see cref="Warnings"/>).</summary>
+    public bool LeaveOutEconomy { get; init; }
+
+    /// <summary>Warnings found before the export (the project's economy file could not be read); the result lists them first.</summary>
+    public IReadOnlyList<string> Warnings { get; init; } = [];
+
+    /// <summary>
+    /// For the server cook: reads the stock server's 12-byte sound-event stub (<c>ServerEventStubs.FromServerPaks</c>), or
+    /// throws <see cref="ServerEventStubException"/>; called only when an event has to be replaced. Null = read it from the
+    /// export's catalog (<c>ServerEventStubs.FromCatalog</c>).
+    /// </summary>
+    public Func<ScumStudio.Pak.Server.AkAudioEventStubBuilder>? ServerEventStubs { get; init; }
 }
 
 /// <summary>One rewritten level.</summary>
@@ -130,6 +151,15 @@ public sealed record ExportResult
     /// <summary>The game's traders whose trade posts the project deleted: their sections are left out of <see cref="EconomyPath"/>.</summary>
     public IReadOnlyList<string> RemovedTraders { get; init; } = [];
 
+    /// <summary>Server cook: the sound events (game paths) replaced by the server's 12-byte stubs.</summary>
+    public IReadOnlyList<string> StubbedEvents { get; init; } = [];
+
+    /// <summary>
+    /// Item spawners this export no longer has, as <c>level: actor (item)</c>: deleted ones of the game and ones an earlier
+    /// export into this folder placed. Items they already spawned stay in players' worlds (the server saves them).
+    /// </summary>
+    public IReadOnlyList<string> RemovedItemSpawners { get; init; } = [];
+
     /// <summary>Total actors removed across levels.</summary>
     public int RemovedActorCount => Levels.Sum(l => l.Report.RemovedActors.Count);
 
@@ -164,6 +194,9 @@ public sealed partial class ProjectExporter
     private const string FallbackModName = "ScumStudioMod";
 
     private readonly ILogger _logger;
+
+    /// <summary>The client cook's spawn place lists and edited places, read by its export and checked by the server's that follows (audit F281).</summary>
+    internal Spawns.SpawnPlacesReference? ClientSpawnReference { get; set; }
 
     /// <summary>Creates an exporter.</summary>
     public ProjectExporter(ILogger? logger = null)
@@ -204,13 +237,44 @@ public sealed partial class ProjectExporter
     {
         ArgumentNullException.ThrowIfNull(project);
         ArgumentNullException.ThrowIfNull(options);
-        if (options.Economy is null && EconomyOverride.LoadFrom(project.DirectoryPath) is { } economy)
+        options = options.ProjectDirectory is null ? options with { ProjectDirectory = project.DirectoryPath } : options;
+        if (options.Economy is null)
         {
-            options = options with { Economy = economy };
+            var (economy, warning) = LoadEconomy(project);
+            options = warning is null ? options with { Economy = economy } : options with { LeaveOutEconomy = true, Warnings = [.. options.Warnings, warning] };
         }
 
+        options = options.ProjectDirectory is null ? options with { ProjectDirectory = project.DirectoryPath } : options;
         return ExportAsync(project.State, project.Manifest.Name, catalog, options, role, progress, cancellationToken);
     }
+
+    /// <summary>
+    /// The project's <c>EconomyOverride.json</c> for an export, without the sections of placed traders that are off the map
+    /// (<see cref="TraderPosts.ParkedTraders"/>); null when it has none. A file that cannot be read gives a warning instead
+    /// (audit F287: it stopped the export and the command line), and the export writes no economy file.
+    /// </summary>
+    public static (EconomyOverride? Economy, string? Warning) LoadEconomy(Project project)
+    {
+        ArgumentNullException.ThrowIfNull(project);
+        try
+        {
+            if (EconomyOverride.LoadFrom(project.DirectoryPath) is not { } economy)
+            {
+                return (null, null);
+            }
+
+            var parked = TraderPosts.ParkedTraders(project.Journal, project.State);
+            return (parked.Count > 0 ? economy.Without(parked) : economy, null);
+        }
+        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
+        {
+            return (null, EconomyUnreadable(ex.Message));
+        }
+    }
+
+    /// <summary>The export report's line for a project economy file that could not be read (<paramref name="reason"/>): none was written.</summary>
+    public static string EconomyUnreadable(string reason) =>
+        $"{EconomyOverride.FileName} of the project could not be read ({reason}): no economy file was written. Fix it on the Economy page (Code) or import the server's file, and export again.";
 
     /// <summary>Exports <paramref name="state"/> (see <see cref="ExportAsync(Project, AssetCatalog, ExportOptions, ProjectSourceRole, IProgress{string}?, CancellationToken)"/>).</summary>
     /// <exception cref="InvalidOperationException">The state has no edits, or no level could be exported.</exception>
@@ -227,6 +291,11 @@ public sealed partial class ProjectExporter
         }
 
         var modName = SanitizeModName(options.ModName ?? projectName);
+        if (role == ProjectSourceRole.Client)
+        {
+            ClientSpawnReference = null;
+        }
+
         var roleDirectory = Path.Combine(Path.GetFullPath(options.OutputDirectory), RoleFolder(role));
         var staging = Path.Combine(roleDirectory, StagingFolderName);
         ResetDirectory(staging);
@@ -240,9 +309,14 @@ public sealed partial class ProjectExporter
         }, _logger);
 
         var levels = new List<ExportedLevel>();
-        var warnings = new List<string>();
+        var warnings = new List<string>(options.Warnings);
         var solidPieces = 0;
-        var bendMeshes = options.BendMeshes ?? new BendSupport(catalog).Describe;
+
+        // Imported 3D models placed on the map are read from the project's imports folder, not the game's files.
+        var models = new ModelCarry(options.ProjectDirectory);
+        var modelMeshes = models.Describe(Import.ModelLibrary.UsedOnMap(state));
+        var gameMeshes = options.BendMeshes ?? new BendSupport(catalog).Describe;
+        Func<string, BendMesh?> bendMeshes = modelMeshes.Count == 0 ? gameMeshes : mesh => modelMeshes.TryGetValue(mesh, out var model) ? model : gameMeshes(mesh);
         var undrawn = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
         bool Undrawn(string mesh) => undrawn.TryGetValue(mesh, out var known) ? known : undrawn[mesh] = IsWorldGridOnly(catalog, mesh);
         var packageCache = new Dictionary<string, CookedPackage?>(StringComparer.OrdinalIgnoreCase);
@@ -327,14 +401,14 @@ public sealed partial class ProjectExporter
             packageCache[level] = package;
             documentCache[level] = document;
 
-            var request = PlanLevel(state, level, document, warnings, SourcePackage, SourceDocument, bendMeshes, options.StraightPieces, traders, Undrawn);
+            var request = models.Keep(level, PlanLevel(state, level, document, warnings, SourcePackage, SourceDocument, bendMeshes, options.StraightPieces, traders, Undrawn), warnings);
             if (request.IsEmpty)
             {
                 warnings.Add($"{level}: no exportable change; skipped.");
                 continue;
             }
 
-            var (bytes, report) = LevelPackageEditor.Apply(package, request);
+            var (bytes, report) = LevelPackageEditor.Apply(package, request with { Packages = SourcePackage, AssetClass = catalog.GetMainClassName });
             if (role == ProjectSourceRole.Client && document is not null)
             {
                 CollectFarCuts(document, request, bendMeshes, cuts, proxies);
@@ -376,7 +450,8 @@ public sealed partial class ProjectExporter
         }
 
         var volumes = new List<GrassClearing.Volume>();
-        GrowStreamingAreas(staging, placed, bendMeshes, warnings, cancellationToken, GrassFootprints(state, catalog, bendMeshes), volumes);
+        var footprints = GrassFootprints(state, catalog, bendMeshes);
+        GrowStreamingAreas(staging, placed, bendMeshes, warnings, cancellationToken, (level, actor) => footprints(level, actor).Select(v => v with { Solid = GrassClearing.IsSolid(actor) }), volumes);
         if (volumes.Count > 0)
         {
             progress?.Report("Clearing the grass under placed objects");
@@ -385,7 +460,7 @@ public sealed partial class ProjectExporter
 
         if ((volumes.Count > 0 || state.ChangedLevels.Any(Spawns.SpawnPlaces.IsStaticData))
             && catalog.TryGetPackageFile(Spawns.SpawnPlaces.StaticDataPath, out var placesFile)
-            && await WriteSpawnPlacesAsync(state, catalog, placesFile, staging, warnings, volumes, cancellationToken).ConfigureAwait(false) is { } placesAsset)
+            && await WriteSpawnPlacesAsync(state, catalog, placesFile, staging, warnings, volumes, role, cancellationToken).ConfigureAwait(false) is { } placesAsset)
         {
             spawnPlaces.Add(placesAsset);
         }
@@ -407,7 +482,7 @@ public sealed partial class ProjectExporter
         var registered = new List<RegisteredAsset>();
         var assetValues = new List<(string, string, string, string)>();
         var writeRegistry = false;
-        var assetRequest = BuildAssetRequest(state) with { DataAssets = traders.DataAssets };
+        var assetRequest = BuildAssetRequest(state) with { DataAssets = traders.DataAssets, FileRoot = options.ProjectDirectory };
         if (!assetRequest.IsEmpty)
         {
             progress?.Report("Building vehicles and items");
@@ -446,6 +521,14 @@ public sealed partial class ProjectExporter
                 built.Packages.Count, built.Applied.Count, built.Registered.Count);
         }
 
+        // The imported 3D models the written levels draw: their cooked mesh, materials and textures, as the import made them.
+        var modelAssets = models.CopyInto(staging, catalog.ProjectName);
+        if (modelAssets.Count > 0)
+        {
+            assets.AddRange(modelAssets);
+            _logger.LogInformation("Imported 3D models: {Packages} package(s) carried into the pak.", modelAssets.Count);
+        }
+
         // Imported mods (someone's pak unpacked into the project) go in too, under what this export rewrote from them. Their
         // registries are never shipped as they are: the staged one is stock plus their records of what ships plus ours.
         var carried = ProjectMods.CarryInto(options.Mods, staging, catalog.ProjectName);
@@ -459,6 +542,10 @@ public sealed partial class ProjectExporter
         {
             throw new InvalidOperationException("Nothing was exported. " + string.Join(" ", warnings));
         }
+
+        // Every staged package is in place (levels, vehicles, imported mods): the server's sound events become its stubs.
+        var stubbed = await StubEventsAsync(staging, catalog, options, role, warnings, cancellationToken).ConfigureAwait(false);
+        var removedSpawners = ItemSpawnersGone(state, roleDirectory, documentCache, warnings);
 
         string? pakPath = null;
         string? sigPath = null;
@@ -485,7 +572,7 @@ public sealed partial class ProjectExporter
         string? economyPath = null;
         var removedTraders = TraderPosts.RemovedStockTraders(state,
             documentCache.Where(d => d.Value is not null && TraderPosts.IsOutpostLevel(d.Key)).Select(d => d.Value!)).Order(StringComparer.OrdinalIgnoreCase).ToList();
-        if (EconomyFor(state, options.Economy, removedTraders) is { } economy)
+        if (!options.LeaveOutEconomy && EconomyFor(state, options.Economy, removedTraders) is { } economy)
         {
             economyPath = economy.SaveTo(roleDirectory, withNote: true);
         }
@@ -507,6 +594,8 @@ public sealed partial class ProjectExporter
             Traders = traderLines,
             EconomyPath = economyPath,
             RemovedTraders = economyPath is null ? [] : removedTraders,
+            StubbedEvents = stubbed,
+            RemovedItemSpawners = removedSpawners,
         };
         var reportPath = Path.Combine(roleDirectory, ReportFileName);
         await File.WriteAllTextAsync(reportPath, BuildReport(result, catalog), new UTF8Encoding(false), cancellationToken).ConfigureAwait(false);
@@ -746,6 +835,7 @@ public sealed partial class ProjectExporter
                         CollisionProfile = meshActor.CollisionProfile ?? StandingTreeProfile(addedMesh, bendMeshes),
                         DrawsIntoLandscape = bendMeshes?.Invoke(addedMesh)?.DrawsIntoLandscape == true,
                         OnlyIntoLandscape = bendMeshes?.Invoke(addedMesh)?.OnlyIntoLandscape == true,
+                        OverrideMaterials = state.GetMeshOverride(added) is null ? meshActor.OverrideMaterials : null, // a new mesh draws its own
                     });
                     break;
                 case AddBlueprintActorOp blueprint when sourcePackages is not null:
@@ -868,23 +958,23 @@ public sealed partial class ProjectExporter
             detach.Add((actor.Name, root.Name));
         }
 
-        // Replaced meshes of kept stored components (a bent one was re-created above and left the level; an added actor
-        // took its new mesh above; a copy's exports are the source's: not patched).
+        // Replaced meshes of kept stored components and of copies (a bent one was re-created above and left the level; an
+        // added mesh actor took its new mesh above).
         var meshPatches = new List<MeshPatch>();
         foreach (var (actor, component, mesh) in state.MeshOverrides.Where(m => SameLevel(m.Actor.Level, level) && !state.IsDeleted(m.Actor) && !deleted.Contains(m.Actor.Actor)))
         {
-            if (state.IsAdded(actor))
+            if (state.IsAdded(actor) && (state.AddedActors[actor] is AddStaticMeshActorOp || CreatedBent(actor, meshAdds)))
             {
-                if (state.AddedActors[actor] is not AddStaticMeshActorOp)
+                if (component.Length > 0)
                 {
-                    warnings.Add($"{actor}: a copy's mesh cannot be replaced in the export (delete it and add the other mesh instead).");
+                    warnings.Add($"{actor}.{component}: the actor is exported as one new mesh actor{(CreatedBent(actor, meshAdds) ? " (bent)" : string.Empty)}, which takes only its own mesh; this part's mesh was not written.");
                 }
 
                 continue;
             }
 
             var componentName = component.Length > 0 ? component : null;
-            if (componentName is null && document?.FindActor(actor.Actor) is { Root: { } root })
+            if (componentName is null && StoredTarget(state, actor, document, sourceDocuments)?.Record is { Root: { } root })
             {
                 if (root.IsSynthesized)
                 {
@@ -906,7 +996,7 @@ public sealed partial class ProjectExporter
         foreach (var (actor, component, shape) in state.SegmentSways.Where(s => SameLevel(s.Actor.Level, level) && !state.IsDeleted(s.Actor)).Concat(replacedPieces).DistinctBy(s => (s.Actor, s.Component)))
         {
             var replaced = state.GetMeshOverride(actor, component);
-            if (document?.FindActor(actor.Actor)?.FindComponent(component) is { SplineMesh: { } spline, IsSynthesized: false } piece)
+            if (StoredTarget(state, actor, document, sourceDocuments)?.Record?.FindComponent(component) is { SplineMesh: { } spline, IsSynthesized: false } piece)
             {
                 var shaped = shape.IsStraight ? spline : SplineEnds.Shape(spline, shape.Sway1, shape.Sway2, shape.Start, shape.End);
                 var collision = (replaced ?? piece.StaticMeshPath) is { } meshPath && bendMeshes?.Invoke(meshPath) is { Boxes.Count: > 0 } info
@@ -920,16 +1010,11 @@ public sealed partial class ProjectExporter
             }
         }
 
-        // Spawner point arrays (patrol paths, loot points) of kept pristine actors: rewritten whole from their stored elements.
+        // Spawner point arrays (patrol paths, loot points) of kept actors and of copies (igor8802: a duplicated sentry's route
+        // was dropped): rewritten whole from their stored elements, a copy's from the source's it carries.
         var spawnPoints = new List<SpawnPointsPatch>();
         foreach (var (actor, component, array, points) in state.SpawnPointOverrides.Where(s => SameLevel(s.Actor.Level, level) && !state.IsDeleted(s.Actor)))
         {
-            if (state.IsAdded(actor))
-            {
-                warnings.Add($"{actor}: the spawn points of an added actor cannot be written yet (edit the original's instead).");
-                continue;
-            }
-
             spawnPoints.Add(new SpawnPointsPatch(actor.Actor, component, array, points));
         }
 
@@ -990,9 +1075,28 @@ public sealed partial class ProjectExporter
             }
         }
 
+        PlanCopyParts(state, level, warnings, meshAdds, transforms);
+        // What a sentry spawner spawns (the Map's spawn editor); a same-level copy carries its source's choice.
+        var sentries = state.SpawnChoices.Where(c => c.Property == Spawns.SpawnChoices.SentryClass && SameLevel(c.Actor.Level, level)).ToList();
+        var softClasses = sentries
+            .Where(c => !state.IsDeleted(c.Actor) && !deleted.Contains(c.Actor.Actor))
+            .Select(c => new SoftClassPatch(c.Actor.Actor, c.Property, c.Value))
+            .ToList();
+        foreach (var copy in copies)
+        {
+            foreach (var (actor, property, value) in sentries.Where(c => string.Equals(c.Actor.Actor, copy.SourceActor, StringComparison.OrdinalIgnoreCase)))
+            {
+                if (state.GetSpawnChoice(actor with { Actor = copy.NewName }, property) is null)
+                {
+                    softClasses.Add(new SoftClassPatch(copy.NewName, property, value));
+                }
+            }
+        }
+
         return new LevelEditRequest
         {
             Loot = loot,
+            SoftClasses = softClasses,
             DeleteActors = deleted.ToList(),
             DeleteComponents = deleteComponents,
             Detach = detach,
@@ -1037,7 +1141,7 @@ public sealed partial class ProjectExporter
                 return true;
             }
 
-            var actor = document?.FindActor(instance.Actor);
+            var actor = StoredTarget(state, instance.ActorRef, document, sourceDocuments)?.Record; // a copy's are its source's
             if (actor is null)
             {
                 warnings.Add($"{instance}: the actor's instance list could not be read; instance edit skipped.");
@@ -1306,6 +1410,7 @@ public sealed partial class ProjectExporter
 
             string? mesh;
             TransformValue transform;
+            IReadOnlyList<string?>? materials;
             var name = actor.Actor;
             var added = state.AddedActors.GetValueOrDefault(actor);
             switch (added)
@@ -1313,14 +1418,17 @@ public sealed partial class ProjectExporter
                 case AddStaticMeshActorOp meshActor:
                     mesh = state.GetMeshOverride(actor) ?? meshActor.StaticMesh;
                     transform = state.GetAddedTransform(actor) ?? meshActor.Transform;
+                    materials = meshActor.OverrideMaterials;
                     break;
                 case DuplicateActorOp duplicate when document?.FindActor(duplicate.Source.Actor) is { Kind: ActorKind.StaticMeshActor } source:
-                    mesh = source.StaticMeshPath;
+                    mesh = state.GetMeshOverride(actor) ?? source.StaticMeshPath; // a copy given another mesh bends as that one
                     transform = InWorld(document, source, state.GetAddedTransform(actor) ?? duplicate.Transform);
+                    materials = source.Root?.OverrideMaterials;
                     break;
                 case null when document?.FindActor(actor.Actor) is { Kind: ActorKind.StaticMeshActor, Root: { } root } pristine:
                     mesh = state.GetMeshOverride(actor) ?? pristine.StaticMeshPath; // a replaced piece bends as its new mesh
                     transform = InWorld(document, pristine, state.GetTransformOverride(actor) ?? root.Relative);
+                    materials = root.OverrideMaterials;
                     name = UniqueName(document, actor.Actor + "_Bent", meshAdds);
                     break;
                 default:
@@ -1365,6 +1473,7 @@ public sealed partial class ProjectExporter
                 {
                     DrawsIntoLandscape = info.DrawsIntoLandscape,
                     OnlyIntoLandscape = info.OnlyIntoLandscape,
+                    OverrideMaterials = state.GetMeshOverride(actor) is null ? materials : null, // a new mesh draws its own (as TryPatchMesh drops them)
                 });
             }
 
@@ -1378,6 +1487,11 @@ public sealed partial class ProjectExporter
                     break;
                 default:
                     deleted.Add(actor.Actor); // the straight original leaves the level
+                    foreach (var (_, part, _) in state.MeshOverrides.Where(m => m.Component.Length > 0 && ActorRef.Comparer.Equals(m.Actor, actor)))
+                    {
+                        warnings.Add($"{actor}.{part}: the actor is exported as one new mesh actor (bent), which takes only its own mesh; this part's mesh was not written.");
+                    }
+
                     break;
             }
 
@@ -1497,10 +1611,13 @@ public sealed partial class ProjectExporter
     /// <summary>
     /// Writes the spawn place edits of <paramref name="state"/> into the island's static data, staged next to the levels,
     /// and removes the stock spawn points standing inside <paramref name="volumes"/> (the placed objects that clear what
-    /// is under them).
+    /// is under them). The edits name stock places by their number in the client's lists: a server cook gets them only when
+    /// its lists match the client's read in the same run, in length and where each edited place stands (audit F281); else
+    /// only the new places and the points under its own placed objects. A zone's settings or a biome is imported only when
+    /// its package is in the game files or among the project's copies.
     /// </summary>
     private async Task<ExportedAsset?> WriteSpawnPlacesAsync(EditState state, AssetCatalog catalog, CUE4Parse.FileProvider.Objects.GameFile file, string staging, List<string> warnings,
-        IReadOnlyList<GrassClearing.Volume> volumes, CancellationToken cancellationToken)
+        IReadOnlyList<GrassClearing.Volume> volumes, ProjectSourceRole role, CancellationToken cancellationToken)
     {
         var request = Spawns.SpawnPlacesEditor.Plan(state, warnings);
         if (request.IsEmpty && volumes.Count == 0)
@@ -1510,7 +1627,17 @@ public sealed partial class ProjectExporter
 
         var (uasset, uexp, ubulk) = ReadPackageFiles(catalog, file);
         var package = CookedPackage.Parse(uasset, uexp, ubulk, Spawns.SpawnPlaces.StaticDataPath);
-        request = Spawns.SpawnPlacesEditor.Block(request, Spawns.SpawnPlaces.Read(package), volumes, out var blocked);
+        if (role == ProjectSourceRole.Client)
+        {
+            ClientSpawnReference = Spawns.SpawnPlacesEditor.Reference(package, request);
+        }
+        else
+        {
+            request = Spawns.SpawnPlacesEditor.ForOtherCook(request, ClientSpawnReference, package, warnings);
+        }
+
+        var blockedNames = new List<string>();
+        request = Spawns.SpawnPlacesEditor.Block(request, Spawns.SpawnPlaces.Read(package), volumes, out var blocked, blockedNames);
         if (request.IsEmpty)
         {
             return null;
@@ -1518,17 +1645,17 @@ public sealed partial class ProjectExporter
 
         if (blocked > 0)
         {
-            warnings.Add($"Spawn places: {blocked} vehicle or zombie/NPC spawn point(s) stood inside placed objects and were removed.");
+            warnings.Add($"Spawn places: {blocked} vehicle or zombie/NPC spawn point(s) stood inside placed rocks or cliffs and were removed: {string.Join(", ", blockedNames)}.");
         }
 
-        var (bytes, report) = Spawns.SpawnPlacesEditor.Apply(package, request);
+        var (bytes, report) = Spawns.SpawnPlacesEditor.Apply(package, request, path => path.StartsWith('/') && AssetEditing.ResolvePackage(catalog, state, path) is not null);
         var virtualPath = file.Path.Replace('\\', '/');
         var dot = virtualPath.LastIndexOf('.');
         var target = Path.Combine([staging, .. virtualPath[..dot].Split('/', StringSplitOptions.RemoveEmptyEntries)]);
         Directory.CreateDirectory(Path.GetDirectoryName(target)!);
         await bytes.WriteAsync(target, virtualPath[dot..], cancellationToken).ConfigureAwait(false);
         warnings.AddRange(report.Warnings.Select(w => $"Spawn places: {w}"));
-        _logger.LogInformation("Spawn places: {Deleted} removed, {Moved} moved, {Added} added.", report.Deleted, report.Moved, report.Added);
+        _logger.LogInformation("Spawn places: {Deleted} removed, {Moved} moved, {Added} copied, {Created} new.", report.Deleted, report.Moved, report.Added, report.Created);
         return new ExportedAsset(Spawns.SpawnPlaces.StaticDataPath, virtualPath, false);
     }
 
@@ -1635,6 +1762,35 @@ public sealed partial class ProjectExporter
             }
         }
 
+        if (result.StubbedEvents.Count > 0)
+        {
+            sb.AppendLine();
+            sb.AppendLine("## Sound events (server)");
+            sb.AppendLine();
+            sb.Append("- Replaced by the server's 12-byte stubs: ").AppendLine(result.StubbedEvents.Count.ToString(CultureInfo.InvariantCulture));
+            foreach (var path in result.StubbedEvents)
+            {
+                sb.Append("- ").AppendLine(path);
+            }
+        }
+
+        if (result.RemovedItemSpawners.Count > 0)
+        {
+            sb.AppendLine();
+            sb.AppendLine("## Item spawners removed");
+            sb.AppendLine();
+            sb.AppendLine(ItemSpawnerNote);
+            sb.AppendLine();
+            foreach (var line in result.RemovedItemSpawners)
+            {
+                sb.Append("- ").AppendLine(line);
+            }
+        }
+
+        sb.AppendLine();
+        sb.AppendLine("## Install");
+        sb.AppendLine();
+        sb.AppendLine(InstallNote(result.Role));
         AppendTraderReport(sb, result);
         if (result.Warnings.Count > 0)
         {

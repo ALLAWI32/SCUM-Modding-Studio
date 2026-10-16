@@ -342,18 +342,20 @@ internal sealed partial class RenderCommands : ICommandModule
         return 0;
     }
 
-    internal static bool TryCreateContext(int width, int height, ILogger logger, out OffscreenGlContext context)
+    internal static bool TryCreateContext(int width, int height, ILogger logger, out OffscreenGlContext context, bool debug = false)
     {
-        if (OffscreenGlContext.TryCreate(width, height, out var created, out var reason))
+        try
         {
-            context = created!;
-            logger.LogDebug("OpenGL: {Info}", created!.Info);
+            context = OffscreenGlContext.Create(width, height, debug);
+            logger.LogDebug("OpenGL: {Info}", context.Info);
             return true;
         }
-
-        logger.LogError("{Reason} On Linux without a display run the command under xvfb-run.", reason);
-        context = null!;
-        return false;
+        catch (GlContextUnavailableException ex)
+        {
+            logger.LogError("{Reason} On Linux without a display run the command under xvfb-run.", ex.Message);
+            context = null!;
+            return false;
+        }
     }
 
     /// <summary>Parses <c>WIDTHxHEIGHT</c> (e.g. <c>1280x720</c>).</summary>

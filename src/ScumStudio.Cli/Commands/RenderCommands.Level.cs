@@ -29,9 +29,9 @@ internal sealed partial class RenderCommands
     private static Command BuildLevel()
     {
         var source = new Argument<string>("source", "Paks folder, single .pak, or loose folder containing SCUM/Content (or Content).");
-        var sublevel = new Argument<string[]>("sublevel", "One or more sublevel names (e.g. A_0_Outpost_Exterior A_0_Outpost_Ext_Saloon) or package paths; a cell name such as A_0 renders every sublevel of that cell (POI, TV base, misc and landscape tiles, like the app's Map page).")
+        var sublevel = new Argument<string[]>("sublevel", "One or more sublevel names (e.g. A_0_Outpost_Exterior A_0_Outpost_Ext_Saloon) or package paths; a cell name such as A_0 renders every sublevel of that cell (POI, TV base, misc and landscape tiles, like the app's Map page). May be left out with --around.")
         {
-            Arity = ArgumentArity.OneOrMore,
+            Arity = ArgumentArity.ZeroOrMore,
         };
         var aes = new Option<string?>(["--aes", "-a"], $"AES-256 key for encrypted stock paks. Prefer the {AesKeyText.EnvironmentVariable} environment variable.");
         var output = OutputOption();
@@ -62,10 +62,20 @@ internal sealed partial class RenderCommands
         var hour = new Option<float?>("--hour", "Time of day 0-24 for outdoor scenes (SCUM's clock: sunrise 06:00, sunset 21:00; 13.5 = the island's own sun, the default look; the night is the game's moonlit night).");
         var noShadows = new Option<bool>("--no-shadows", "Do not draw sun shadows (the Map view draws them except on the Performance quality).");
         var spawnPlaces = new Option<bool>("--spawn-places", "Also draw the island's spawn places around the levels (vehicle and zombie spawn points, threat zones, hunting areas), as the app's Spawns switch does.");
+        var around = new Option<string?>("--around", "Load the levels whole-island mode loads for a camera at this UE point 'X,Y,Z' (cm): every content sublevel whose tile bounds come within --radius; the camera orbits it (unless --target).");
+        var radius = new Option<float>("--radius", () => 30_000f, "Detail radius for --around in cm (the Map's stream radius: Performance 20000, Balanced 30000, High 60000, Ultra 100000).");
+        var farModels = new Option<bool>("--far-models", "Also draw the game's own far view (the island's DistantLevelManager models) with the island backdrop, hiding those of the levels drawn in detail, as the app's whole-island mode does (implies --island).");
+        var renderDistance = new Option<int>("--render-distance", () => 0, "Draw the island backdrop's far models only this many sectors (map cells) from the camera (0 = no limit).");
+        var sectorSize = new Option<float>("--sector-size", () => 0f, "Sector size in cm for --render-distance (0 = measured from the cells' landscape tiles).");
+        var lodBias = new Option<float>("--lod-bias", () => 1f, "Multiplier on the projected size used to pick a mesh LOD (the Map's qualities: Performance 0.6, Balanced 0.8, High 1, Ultra 1.25).");
+        var objectDistance = new Option<float>("--object-distance", () => 0f, "Do not draw the levels' objects farther than this many cm (0 = as far as the game draws them; Performance 30000, Balanced 60000, High 150000).");
+        var samples = new Option<int>("--samples", () => 1, "Samples per pixel (the Map view draws with 4: anti-aliased edges and foliage).");
+        var glDebug = new Option<bool>("--gl-debug",
+            $"Draw on a debug context and print every message the graphics driver sends (errors and undefined behaviour first); exit code {DriverProblemsExitCode} when it reports a problem. For graphics-card crash reports.");
         var command = new Command("level", "Render whole cooked sublevels (all placed static meshes, plus terrain for landscape tiles) to PNG.")
         {
             source, sublevel, aes, output, size, yaw, pitch, dist, lod, lods, viewDistance, cullPixels, noTexture, textureSize, noInstances, noLandscape, landscapeStep, filter, noGrid, frames,
-            ground, sea, noSea, groundTexture, target, island, spawnPlaces, noShadows, hour,
+            ground, sea, noSea, groundTexture, target, island, spawnPlaces, noShadows, hour, around, radius, farModels, renderDistance, sectorSize, lodBias, objectDistance, samples, glDebug,
         };
         command.SetHandler(async (InvocationContext ctx) =>
         {
@@ -86,9 +96,42 @@ internal sealed partial class RenderCommands
 
                     orbitTarget = point;
                 }
+                Vector3? aroundPoint = null;
+                if (parse.GetValueForOption(around) is { Length: > 0 } aroundText)
+                {
+                    if (!TryParseUePoint(aroundText, out var point))
+                    {
+                        logger.LogError("--around must be 'X,Y,Z' in UE centimetres (got '{Around}').", aroundText);
+                        return 2;
+                    }
+
+                    aroundPoint = point;
+                    orbitTarget ??= point;
+                }
+
+                if (aroundPoint is null && parse.GetValueForArgument(sublevel).Length == 0)
+                {
+                    logger.LogError("Name at least one sublevel or cell, or give --around X,Y,Z.");
+                    return 2;
+                }
+
                 using var catalog = LevelCliSupport.OpenCatalog(parse.GetValueForArgument(source), parse.GetValueForOption(aes), logger);
                 var index = WorldIndex.FromCatalog(catalog);
+                var sectors = parse.GetValueForOption(renderDistance);
+                if (aroundPoint is not null || (sectors > 0 && parse.GetValueForOption(sectorSize) <= 0f))
+                {
+                    index = index.WithTileInfo(catalog, logger, cancellationToken: ct); // level and cell bounds
+                }
+
                 var packagePaths = new List<string>();
+                if (aroundPoint is { } camera)
+                {
+                    // The set the Map's whole-island mode loads for a camera there (MapPageViewModel.LevelsAround).
+                    var near = FarModelsScene.LevelsAround(index, new FVector(camera.X, camera.Y, camera.Z), parse.GetValueForOption(radius));
+                    Console.Out.WriteLine(Invariant($"around ({camera.X:0}, {camera.Y:0}, {camera.Z:0}): {near.Count} level(s) within {parse.GetValueForOption(radius) / 100f:0} m"));
+                    packagePaths.AddRange(near);
+                }
+
                 foreach (var name in parse.GetValueForArgument(sublevel))
                 {
                     if (MapCell.TryParse(name, out var cell))
@@ -152,23 +195,53 @@ internal sealed partial class RenderCommands
                     return 2;
                 }
 
-                if (!TryCreateContext(width, height, logger, out var context))
+                if (!TryCreateContext(width, height, logger, out var context, parse.GetValueForOption(glDebug)))
                 {
                     return NoGlExitCode;
                 }
 
                 // All GL work happens synchronously on this thread; the PNG is written after the context is released.
-                var culling = new RenderSettings { ViewDistanceScale = parse.GetValueForOption(viewDistance), CullPixelSize = parse.GetValueForOption(cullPixels), Shadows = !parse.GetValueForOption(noShadows), TimeOfDay = parse.GetValueForOption(hour) };
+                var culling = new RenderSettings
+                {
+                    ViewDistanceScale = parse.GetValueForOption(viewDistance), CullPixelSize = parse.GetValueForOption(cullPixels), Shadows = !parse.GetValueForOption(noShadows), TimeOfDay = parse.GetValueForOption(hour),
+                    LodBias = parse.GetValueForOption(lodBias), ObjectDrawDistance = Math.Max(0f, parse.GetValueForOption(objectDistance)),
+                };
                 PreparedLevelScene? backdrop = null;
-                if (parse.GetValueForOption(island))
+                var backdropLines = new List<string>();
+                if (parse.GetValueForOption(island) || parse.GetValueForOption(farModels))
                 {
                     // The app's whole-island backdrop (MapPageViewModel.OpenWholeIslandAsync): every landscape tile, step 16, 128² ground.
                     var tiles = index.Packages.Where(p => p.IsMap && p.Kind == WorldPackageKind.Landscape).Select(p => p.PackagePath).ToList();
                     backdrop = new LevelScenePreparer(catalog, logger).PrepareTerrain(tiles, new LevelSceneOptions { LandscapeStep = 16, TerrainTextureSize = 128 }, null, ct);
+                    if (parse.GetValueForOption(farModels))
+                    {
+                        // ... and the game's far view of every place, as MapPageViewModel.ShowFarModels adds it.
+                        var models = FarModelsScene.Read(catalog, index);
+                        var far = FarModelsScene.Prepare(catalog, models, logger, null, ct);
+                        backdrop = FarModelsScene.Combine(backdrop, far);
+                        var detailed = documents.Select(d => d.PackagePath).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                        backdropLines.Add(Invariant($"far models: {models.Count} ({models.Count(m => m.LevelPath is not null)} of a level, {models.Count(m => m.LevelPath is { } l && detailed.Contains(l))} hidden by the levels drawn in detail), {far.Meshes.Count} meshes, {far.MeshTriangles:N0} triangles at LOD 0, {far.LodTriangles:N0} over all LODs, {far.Textures.Count} textures, {far.MissingMeshes.Count} missing; prepared in {far.Elapsed.TotalMilliseconds:0} ms"));
+                    }
+                }
+
+                var backdropDistance = 0f;
+                if (sectors > 0 && backdrop is not null)
+                {
+                    var sector = parse.GetValueForOption(sectorSize) is > 0f and var given ? given : SectorSize(index);
+                    if (sector <= 0f)
+                    {
+                        logger.LogError("The sector size could not be measured from the landscape tiles; give --sector-size.");
+                        return 2;
+                    }
+
+                    backdropDistance = sectors * sector;
+                    backdropLines.Add(Invariant($"render distance: {sectors} sector(s) x {sector / 100f:N0} m = {backdropDistance / 100f:N0} m for the backdrop's far models"));
                 }
 
                 var frame = RenderPreparedScene(context, prepared, width, height, parse.GetValueForOption(yaw), parse.GetValueForOption(pitch),
-                    parse.GetValueForOption(dist), !parse.GetValueForOption(noGrid), orbitTarget, Math.Max(0, parse.GetValueForOption(frames)), culling, backdrop);
+                    parse.GetValueForOption(dist), !parse.GetValueForOption(noGrid), orbitTarget, Math.Max(0, parse.GetValueForOption(frames)), culling, backdrop, backdropDistance,
+                    Math.Max(1, parse.GetValueForOption(samples)), parse.GetValueForOption(glDebug));
+                frame.Report.InsertRange(Math.Min(2, frame.Report.Count), backdropLines);
 
                 var outFile = parse.GetValueForOption(output)!;
                 await ImageExport.SavePngAsync(frame.Rgba, width, height, outFile.FullName, ct).ConfigureAwait(false);
@@ -194,32 +267,45 @@ internal sealed partial class RenderCommands
                 }
 
                 Console.Out.WriteLine(outFile.FullName);
-                return 0;
+                return frame.DriverProblems > 0 ? DriverProblemsExitCode : 0;
             }).ConfigureAwait(false);
         });
         return command;
     }
 
+    /// <summary>Exit code of <c>render level --gl-debug</c> when the driver reported an error, undefined behaviour or a portability problem.</summary>
+    public const int DriverProblemsExitCode = 4;
+
     /// <summary>
     /// Uploads the prepared scene, frames the camera on it and renders one frame (plus <paramref name="extraFrames"/> timed
-    /// frames with the camera orbiting 0.5° per frame); disposes the context.
+    /// frames with the camera orbiting 0.5° per frame) into a target of <paramref name="samples"/> samples a pixel; disposes
+    /// the context. <paramref name="backdropDistance"/> (cm, 0 = none) caps how far the backdrop's objects (the far models)
+    /// are drawn. With <paramref name="driverMessages"/> every message of the driver's debug output goes into the report
+    /// and <c>DriverProblems</c> counts the errors, undefined behaviour and portability problems among them.
     /// </summary>
-    internal static (byte[] Rgba, List<string> Report) RenderPreparedScene(
+    internal static (byte[] Rgba, List<string> Report, int DriverProblems) RenderPreparedScene(
         OffscreenGlContext context, PreparedLevelScene prepared, int width, int height, float yaw, float pitch, float? distance, bool showGrid,
-        Vector3? orbitTargetUe = null, int extraFrames = 0, RenderSettings? culling = null, PreparedLevelScene? backdrop = null)
+        Vector3? orbitTargetUe = null, int extraFrames = 0, RenderSettings? culling = null, PreparedLevelScene? backdrop = null, float backdropDistance = 0f,
+        int samples = 1, bool driverMessages = false)
     {
         using (context)
         {
+            using var capture = driverMessages ? GlDebugOutput.Capture(context.Gl) : null;
             using var renderer = new SceneRenderer(context);
             if (culling is not null)
             {
-                renderer.Settings = renderer.Settings with { ViewDistanceScale = culling.ViewDistanceScale, CullPixelSize = culling.CullPixelSize, Shadows = culling.Shadows, TimeOfDay = culling.TimeOfDay };
+                renderer.Settings = renderer.Settings with
+                {
+                    ViewDistanceScale = culling.ViewDistanceScale, CullPixelSize = culling.CullPixelSize, Shadows = culling.Shadows, TimeOfDay = culling.TimeOfDay,
+                    LodBias = culling.LodBias, ObjectDrawDistance = culling.ObjectDrawDistance,
+                };
             }
 
             var clock = Stopwatch.StartNew();
             using var level = LevelSceneUploader.Upload(renderer, prepared);
+            var levelMs = clock.Elapsed.TotalMilliseconds;
             using var island = backdrop is null ? null : LevelSceneUploader.Upload(renderer, backdrop);
-            island?.HideTerrainOf(prepared); // as the Map view: each tile drawn once
+            island?.HideTerrainOf(prepared); // as the Map view: each tile (and each far model) drawn once
             var uploadMs = clock.Elapsed.TotalMilliseconds;
 
             var bounds = level.Bounds;
@@ -254,7 +340,7 @@ internal sealed partial class RenderCommands
                 camera.SetClipRange(10f, 3_000_000f); // as the viewport does with the island behind
             }
 
-            using var target = renderer.CreateTarget(width, height);
+            using var target = renderer.CreateTarget(width, height, samples);
             clock.Restart();
             var stats = Draw();
             var rgba = target.ReadColorRgba();
@@ -288,10 +374,21 @@ internal sealed partial class RenderCommands
 
             report.Add(Invariant($"scene: {level.PlacedCount} of {prepared.RequestedPlacements} placements from {prepared.Documents.Sum(d => d.Actors.Count)} actors in {prepared.Documents.Count} level(s); bounds (UE cm) ({ueMin.X:0.#}, {ueMin.Y:0.#}, {ueMin.Z:0.#}) .. ({ueMax.X:0.#}, {ueMax.Y:0.#}, {ueMax.Z:0.#})"));
             report.Add(Invariant($"frame: {stats.Batches} draw(s), {stats.Instances} drawn, {stats.Culled} culled, {stats.Triangles:N0} triangles, {renderMs:0.0} ms incl. read-back, camera distance {dist:0}"));
+            if (island is not null && backdrop is not null)
+            {
+                // The app uploads the backdrop in one frame: this is the hitch when the island (or its far models) appears.
+                var farShown = island.Scene.Nodes.Count(n => n.Visible && n.Tag is ScenePlacement p && p.Actor.ClassName == FarModelsScene.ActorClass);
+                report.Add(Invariant($"backdrop: {backdrop.Terrain.Count} terrain components, {farShown} of {backdrop.Placements.Count} far models shown, {island.TextureCount} textures; uploaded in {uploadMs - levelMs:0} ms"));
+            }
+
+            report.AddRange(Census(prepared));
             if (extraFrames > 0)
             {
                 var cpu = new double[extraFrames];
                 var total = new double[extraFrames];
+                var gen = new[] { GC.CollectionCount(0), GC.CollectionCount(1), GC.CollectionCount(2) };
+                var paused = GC.GetTotalPauseDuration();
+                var allocated = GC.GetAllocatedBytesForCurrentThread();
                 for (var i = 0; i < extraFrames; i++)
                 {
                     camera.Orbit(centre, yaw + ((i + 1) * 0.5f), pitch, dist);
@@ -302,10 +399,23 @@ internal sealed partial class RenderCommands
                     total[i] = clock.Elapsed.TotalMilliseconds;
                 }
 
+                var perFrame = (GC.GetAllocatedBytesForCurrentThread() - allocated) / (double)extraFrames;
                 report.Add(Invariant($"frames: {extraFrames} extra (orbiting): CPU avg {cpu.Average():0.00} ms, p95 {Percentile95(cpu):0.00} ms; with glFinish avg {total.Average():0.00} ms, p95 {Percentile95(total):0.00} ms; last frame {stats.Batches} draws, {stats.Instances} drawn, {stats.Culled} culled, {stats.Triangles:N0} triangles"));
+                report.Add(Invariant($"smoothness: {total.Count(t => t > 33.3)} frame(s) over 33 ms, {total.Count(t => t > 50.0)} over 50 ms, worst {total.Max():0.0} ms; {perFrame / (1024.0 * 1024.0):0.000} MB allocated per frame; GC gen0 {GC.CollectionCount(0) - gen[0]}, gen1 {GC.CollectionCount(1) - gen[1]}, gen2 {GC.CollectionCount(2) - gen[2]}, paused {(GC.GetTotalPauseDuration() - paused).TotalMilliseconds:0.0} ms"));
             }
 
-            return (rgba, report);
+            report.Add(Invariant($"target: {target.Samples} sample(s) a pixel"));
+            if (capture is null)
+            {
+                return (rgba, report, 0);
+            }
+
+            // Errors and undefined behaviour first, each kind once with how often it came.
+            var messages = capture.Messages;
+            report.Add(Invariant($"driver: {messages.Count} debug message(s), {capture.Problems.Count} problem(s) (errors, undefined behaviour, portability)"));
+            report.AddRange(messages.GroupBy(m => (m.Type, m.Severity, m.Id)).OrderByDescending(g => g.First().IsProblem).ThenByDescending(g => g.Count())
+                .Select(g => Invariant($"driver: {g.Count(),6}x {g.First()}")));
+            return (rgba, report, capture.Problems.Count);
 
             RenderStats Draw()
             {
@@ -314,11 +424,51 @@ internal sealed partial class RenderCommands
                     return renderer.Render(target, level.Scene, camera);
                 }
 
+                // The backdrop's far models stop at the render distance; the detailed levels keep the quality's object distance.
+                var settings = renderer.Settings;
+                renderer.Settings = backdropDistance > 0f ? settings with { ObjectDrawDistance = backdropDistance } : settings;
                 var back = renderer.Render(target, island.Scene, camera);
+                renderer.Settings = settings;
                 var front = renderer.Render(target, level.Scene, camera, clear: false);
                 return new RenderStats(back.Batches + front.Batches, back.Instances + front.Instances, back.Culled + front.Culled, back.Triangles + front.Triangles);
             }
         }
+    }
+
+    /// <summary>
+    /// Where the triangles are: placements with a game cull distance (foliage, HISM) and without (drawn as far as the levels
+    /// reach), their finest and coarsest LOD triangle sums, and the ten meshes that weigh most (LOD 0 triangles x placements).
+    /// </summary>
+    private static IEnumerable<string> Census(PreparedLevelScene prepared)
+    {
+        long Finest(string mesh) => prepared.Meshes.TryGetValue(mesh, out var m) ? m.Mesh.TriangleCount : 0;
+        long Coarsest(string mesh) => prepared.Meshes.TryGetValue(mesh, out var m) ? m.Lods[^1].TriangleCount : 0;
+        var culled = prepared.Placements.Where(p => p.CullDistance > 0f).ToList();
+        var open = prepared.Placements.Where(p => p.CullDistance <= 0f).ToList();
+        yield return Invariant($"census: {culled.Count:N0} placements with a game cull distance ({culled.Count(p => p.Instance is { StartCullDistance: > 0 }):N0} thinned from a start distance): {culled.Sum(p => Finest(p.MeshPath)):N0} triangles at LOD 0, {culled.Sum(p => Coarsest(p.MeshPath)):N0} at the last LOD; {open.Count:N0} without: {open.Sum(p => Finest(p.MeshPath)):N0} at LOD 0, {open.Sum(p => Coarsest(p.MeshPath)):N0} at the last LOD");
+        var heaviest = prepared.Placements
+            .GroupBy(p => p.MeshPath, StringComparer.OrdinalIgnoreCase)
+            .Select(g => (Mesh: g.Key, Count: g.Count(), Triangles: g.Count() * Finest(g.Key), Lods: prepared.Meshes.TryGetValue(g.Key, out var m) ? m.Lods.Count : 0,
+                Near: g.Min(p => p.CullDistance), Far: g.Max(p => p.CullDistance)))
+            .OrderByDescending(x => x.Triangles)
+            .Take(10);
+        foreach (var (mesh, count, triangles, lods, near, far) in heaviest)
+        {
+            var reach = far <= 0f ? "no cull distance" : near == far ? Invariant($"culled at {far / 100f:0} m") : Invariant($"culled at {near / 100f:0}-{far / 100f:0} m");
+            yield return Invariant($"  heavy: {triangles:N0} triangles = {count:N0} x {triangles / Math.Max(1, count):N0}, {lods} LOD(s), {reach}: {mesh}");
+        }
+    }
+
+    /// <summary>The size of a map cell (cm): the median extent of the cells' landscape tiles (needs <see cref="WorldIndex.WithTileInfo"/>); 0 when unknown.</summary>
+    private static float SectorSize(WorldIndex world)
+    {
+        var sizes = world.Packages
+            .Where(p => p.Kind == WorldPackageKind.Landscape && p.Cell is not null && p.Tile is { BoundsValid: true })
+            .GroupBy(p => p.Cell!.Value)
+            .Select(g => MathF.Max(g.Max(p => p.Tile!.BoundsMax.X) - g.Min(p => p.Tile!.BoundsMin.X), g.Max(p => p.Tile!.BoundsMax.Y) - g.Min(p => p.Tile!.BoundsMin.Y)))
+            .Order()
+            .ToList();
+        return sizes.Count == 0 ? 0f : sizes[sizes.Count / 2];
     }
 
     private static double Percentile95(double[] samples)

@@ -33,8 +33,12 @@ public sealed record CraftCategory(string Tag, string Label, string Group, bool 
 /// </summary>
 public static class CraftCategories
 {
-    /// <summary>The recipe whose section a building (a mesh under <c>/Models/Buildings/</c>) shows in: base building.</summary>
-    public const string WallRecipe = "CR_Base_Modular_Wall_Wood";
+    /// <summary>
+    /// The recipe whose section a building (a mesh under <c>/Models/Buildings/</c>) shows in: the modular walls of base
+    /// building. The game files a modular piece's section only on its first tier (<c>_Twig</c>); the stronger tiers
+    /// (<c>CR_Base_Modular_Wall_Wood</c> …) are its upgrades and carry none (<see cref="SectionOf"/> finds theirs).
+    /// </summary>
+    public const string WallRecipe = "CR_Base_Modular_Wall_Twig";
 
     /// <summary>The recipe whose section a sofa shows in.</summary>
     public const string SofaRecipe = "CR_Sofa_Improvised_Single";
@@ -140,15 +144,30 @@ public static class CraftCategories
         return string.Join(' ', words.Select((w, i) => i == 0 || w.All(char.IsUpper) ? w : w.ToLowerInvariant()));
     }
 
-    /// <summary>True when a craftable of <paramref name="kind"/> is placed in the world (a building recipe), false for an inventory item.</summary>
-    public static bool IsPlaceable(CraftKind kind) => kind is CraftKind.Furniture or CraftKind.Station;
+    /// <summary>True when a craftable of <paramref name="kind"/> is placed in the world (a building recipe; a base element of the game too), false for an inventory item.</summary>
+    public static bool IsPlaceable(CraftKind kind) => kind is CraftKind.Furniture or CraftKind.Station or CraftKind.Element;
 
-    /// <summary>The section stock recipe <paramref name="recipe"/> (a <c>CR_*</c> name or package path) shows in, or null.</summary>
+    /// <summary>
+    /// The section stock recipe <paramref name="recipe"/> (a <c>CR_*</c> name or package path) shows in, or null. A modular
+    /// base piece's upgrade tier (<c>CR_Base_Modular_Wall_Wood</c>, which stores no section) shows in its first tier's
+    /// (<c>CR_Base_Modular_Wall_Twig</c>).
+    /// </summary>
     public static CraftCategory? SectionOf(IReadOnlyList<CraftCategory> categories, string recipe)
     {
         ArgumentNullException.ThrowIfNull(categories);
         var leaf = PackageMap.Leaf(recipe);
-        return categories.FirstOrDefault(c => c.Recipes.Contains(leaf, StringComparer.OrdinalIgnoreCase));
+        CraftCategory? Find(string name) => categories.FirstOrDefault(c => c.Recipes.Contains(name, StringComparer.OrdinalIgnoreCase));
+        return Find(leaf) ?? (FirstTier(leaf) is { } first ? Find(first) : null);
+    }
+
+    /// <summary>The first tier (<c>_Twig</c>) of a modular base piece's upgrade recipe, or null for any other recipe.</summary>
+    public static string? FirstTier(string recipe)
+    {
+        var leaf = PackageMap.Leaf(recipe);
+        var cut = leaf.LastIndexOf('_');
+        return leaf.StartsWith("CR_Base_Modular_", StringComparison.OrdinalIgnoreCase) && cut > "CR_Base_Modular".Length && !leaf.EndsWith("_Twig", StringComparison.OrdinalIgnoreCase)
+            ? leaf[..cut] + "_Twig"
+            : null;
     }
 
     /// <summary>True for furniture whose default section is not its template's: a building or a sofa.</summary>

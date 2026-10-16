@@ -21,6 +21,9 @@ public sealed record GlInfo(string Vendor, string Renderer, string Version, int 
     /// <summary>The most samples a multisampled render target can have (GL_MAX_SAMPLES; 1 = none).</summary>
     public int MaxSamples { get; init; } = 1;
 
+    /// <summary>True for an OpenGL ES context (its version string starts "OpenGL ES", e.g. ANGLE): it has no <c>glPolygonMode</c>.</summary>
+    public bool IsEs => Version.StartsWith("OpenGL ES", StringComparison.Ordinal);
+
     /// <summary>True when the context version is at least <paramref name="major"/>.<paramref name="minor"/>.</summary>
     public bool IsAtLeast(int major, int minor) => Major > major || (Major == major && Minor >= minor);
 

@@ -87,8 +87,15 @@ public sealed record GpuLod(float ScreenSize, GpuSection[] Sections);
 /// </summary>
 public sealed class GpuMesh : IDisposable
 {
+    private static int s_live;
+    private static long s_liveBytes;
     private readonly GL _gl;
+    private long _bytes; // vertex, index and instance buffers, as allocated
+    private long _instanceBytes; // of those, the instance buffer's
     private bool _disposed;
+
+    /// <summary>Meshes not yet disposed in the whole process (every renderer) and the bytes of their buffers.</summary>
+    public static (int Count, long Bytes) Live => (Volatile.Read(ref s_live), Interlocked.Read(ref s_liveBytes));
 
     /// <summary>Key suffix of a material's normal map in the material texture dictionaries: <c>material + "#normal"</c>.</summary>
     public const string NormalMapSuffix = "#normal";
@@ -160,6 +167,8 @@ public sealed class GpuMesh : IDisposable
 
         gl.BindVertexArray(0);
         gl.BindBuffer(BufferTargetARB.ArrayBuffer, 0);
+        Track(((long)mesh.Vertices.Length + mesh.Indices.Length) * sizeof(float));
+        Interlocked.Increment(ref s_live);
     }
 
     /// <summary>Renderer-assigned mesh id (reported by picking).</summary>
@@ -187,16 +196,19 @@ public sealed class GpuMesh : IDisposable
     public BoundingBox Bounds { get; }
 
     /// <summary>Number of indices in the index buffer (all LODs; 3 per triangle).</summary>
-    public int IndexCount { get; }
+    public int IndexCount { get; private set; }
 
     /// <summary>Number of vertices (all LODs).</summary>
-    public int VertexCount { get; }
+    public int VertexCount { get; private set; }
 
     /// <summary>Levels of detail, finest first.</summary>
-    public GpuLod[] Lods { get; }
+    public GpuLod[] Lods { get; private set; }
 
     /// <summary>The <see cref="GpuLod.ScreenSize"/> of every LOD, for <see cref="Cameras.LodMath.ChooseLod"/>.</summary>
-    public float[] LodScreenSizes { get; }
+    public float[] LodScreenSizes { get; private set; }
+
+    /// <summary>The LOD that draws the impostor card (<see cref="SetImpostor"/>, always the last), or -1 when the mesh has none.</summary>
+    public int ImpostorLod { get; private set; } = -1;
 
     /// <summary>Number of instance records uploaded by <see cref="SetInstances"/>.</summary>
     public int InstanceCount { get; private set; }
@@ -236,6 +248,14 @@ public sealed class GpuMesh : IDisposable
         }
 
         _gl.BindBuffer(BufferTargetARB.ArrayBuffer, 0);
+        Track(((long)instances.Length * InstanceData.SizeInBytes) - _instanceBytes);
+        _instanceBytes = (long)instances.Length * InstanceData.SizeInBytes;
+    }
+
+    private void Track(long bytes)
+    {
+        _bytes += bytes;
+        Interlocked.Add(ref s_liveBytes, bytes);
     }
 
     /// <summary>Overwrites one record uploaded by <see cref="SetInstances"/> in place (drag previews); ignores indices out of range.</summary>
@@ -273,6 +293,72 @@ public sealed class GpuMesh : IDisposable
         _gl.MultiDrawElementsIndirect(PrimitiveType.Triangles, DrawElementsType.UnsignedInt, (void*)(firstCommand * DrawElementsIndirectCommand.SizeInBytes), (uint)commandCount, 0);
     }
 
+    /// <summary>
+    /// Appends an impostor card past the last LOD: one quad per instance, on its up axis and turned toward the eye, that
+    /// shows <paramref name="atlas"/> (<paramref name="views"/> pictures of the mesh around that axis, see
+    /// <see cref="ImpostorBaker"/>) below <paramref name="screenSize"/>. Masked, so it is cut, picked and casts shade where
+    /// the leaves are. Instance records are unchanged; a second call only swaps the atlas and the threshold. The atlas is
+    /// not owned.
+    /// </summary>
+    public void SetImpostor(GpuTexture atlas, int views, float screenSize)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentNullException.ThrowIfNull(atlas);
+        ArgumentOutOfRangeException.ThrowIfLessThan(views, 2);
+        if (ImpostorLod >= 0)
+        {
+            Lods[ImpostorLod].Sections[0].Texture = atlas;
+            Lods[ImpostorLod] = Lods[ImpostorLod] with { ScreenSize = screenSize };
+            LodScreenSizes[ImpostorLod] = screenSize;
+            return;
+        }
+
+        // Each corner: the bounds centre, the corner times the card's half size and the number of headings (the shader's
+        // marker: a real normal is never longer than 1), the corner's UV in one cell (the atlas rows run top down).
+        var half = ImpostorBaker.CardHalfSize(Bounds);
+        var centre = Bounds.Center;
+        Span<float> card = stackalloc float[4 * PreparedMesh.FloatsPerVertex];
+        ReadOnlySpan<float> corners = [-1f, -1f, 1f, -1f, 1f, 1f, -1f, 1f];
+        for (var i = 0; i < 4; i++)
+        {
+            var (x, y) = (corners[i * 2], corners[(i * 2) + 1]);
+            ReadOnlySpan<float> vertex = [centre.X, centre.Y, centre.Z, x * half, y * half, views, (x + 1f) * 0.5f, (1f - y) * 0.5f];
+            vertex.CopyTo(card[(i * PreparedMesh.FloatsPerVertex)..]);
+        }
+
+        ReadOnlySpan<uint> quad = [0u, 1u, 2u, 0u, 2u, 3u];
+        Append(VertexBuffer, VertexCount * PreparedMesh.Stride, MemoryMarshal.AsBytes(card));
+        Append(IndexBuffer, IndexCount * sizeof(uint), MemoryMarshal.AsBytes(quad));
+        var section = new GpuSection(new PreparedSection(IndexCount, quad.Length, VertexCount, ImpostorBaker.Material), atlas, ImpostorBaker.AlphaCutoff);
+        VertexCount += 4;
+        IndexCount += quad.Length;
+        ImpostorLod = Lods.Length;
+        Lods = [.. Lods, new GpuLod(screenSize, [section])];
+        LodScreenSizes = [.. LodScreenSizes, screenSize];
+    }
+
+    // Grows a buffer by data, keeping the buffer object the VAO names: the old contents go out to a scratch buffer and back.
+    private unsafe void Append(uint buffer, int oldBytes, ReadOnlySpan<byte> data)
+    {
+        var scratch = _gl.GenBuffer();
+        _gl.BindBuffer(BufferTargetARB.CopyWriteBuffer, scratch);
+        _gl.BufferData(BufferTargetARB.CopyWriteBuffer, (nuint)Math.Max(oldBytes, 4), null, BufferUsageARB.StreamCopy);
+        _gl.BindBuffer(BufferTargetARB.CopyReadBuffer, buffer);
+        _gl.CopyBufferSubData(CopyBufferSubDataTarget.CopyReadBuffer, CopyBufferSubDataTarget.CopyWriteBuffer, 0, 0, (nuint)oldBytes);
+        _gl.BindBuffer(BufferTargetARB.CopyWriteBuffer, buffer);
+        _gl.BufferData(BufferTargetARB.CopyWriteBuffer, (nuint)(oldBytes + data.Length), null, BufferUsageARB.StaticDraw);
+        _gl.BindBuffer(BufferTargetARB.CopyReadBuffer, scratch);
+        _gl.CopyBufferSubData(CopyBufferSubDataTarget.CopyReadBuffer, CopyBufferSubDataTarget.CopyWriteBuffer, 0, 0, (nuint)oldBytes);
+        fixed (byte* p = data)
+        {
+            _gl.BufferSubData(BufferTargetARB.CopyWriteBuffer, oldBytes, (nuint)data.Length, p);
+        }
+
+        _gl.BindBuffer(BufferTargetARB.CopyReadBuffer, 0);
+        _gl.BindBuffer(BufferTargetARB.CopyWriteBuffer, 0);
+        _gl.DeleteBuffer(scratch);
+    }
+
     /// <summary>Deletes the GL objects (textures are not owned).</summary>
     public void Dispose()
     {
@@ -286,6 +372,8 @@ public sealed class GpuMesh : IDisposable
         _gl.DeleteBuffer(VertexBuffer);
         _gl.DeleteBuffer(IndexBuffer);
         _gl.DeleteBuffer(InstanceBuffer);
+        Interlocked.Decrement(ref s_live);
+        Interlocked.Add(ref s_liveBytes, -_bytes);
     }
 }
 

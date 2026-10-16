@@ -45,15 +45,35 @@ public sealed partial class MapPageViewModel
 
     /// <summary>
     /// The world transform a point's local place is relative to: the actor's root as it is now (patrol points, a spawner
-    /// group's own component), or the storing component.
+    /// group's own component), or the storing component as it is now: its place on the root (as stored, or as the project
+    /// moved it as a part) carried along by the actor's move or turn, or to a copy's root. The stored world transform left
+    /// the gizmo where the spawner stood before it was moved.
     /// </summary>
     private FTransform PointSpaceOf(SelectedPoint sel)
     {
-        var component = sel.Array.Component is null ? null : sel.Item.Actor.FindComponent(sel.Array.Component);
-        return component is null || component.ExportIndex == sel.Item.Actor.RootComponent
-            ? RootWorldOf(sel.Item, CurrentRootTransform(sel.Item))
-            : component.WorldTransform;
+        var root = RootWorldOf(sel.Item, CurrentRootTransform(sel.Item));
+        var actor = sel.Item.Actor;
+        if (sel.Array.Component is null || actor.FindComponent(sel.Array.Component) is not { } component || component.ExportIndex == actor.RootComponent)
+        {
+            return root;
+        }
+
+        var world = component.WorldTransform;
+        if (_services.Projects.Current?.State.GetTransformOverride(sel.Item.Reference, component.Name) is { } moved
+            && actor.Components.FirstOrDefault(c => c.ExportIndex == component.AttachParent) is { } parent)
+        {
+            world = moved.ToTransform() * parent.WorldTransform;
+        }
+
+        return world.GetRelativeTransform(StoredRootWorld(sel.Item)) * root;
     }
+
+    /// <summary>
+    /// Where the components of <paramref name="item"/>'s record were read for: the actor's stored place, or for a copy its
+    /// source's (a copy's record keeps the source's components, the viewport draws it as the source moved).
+    /// </summary>
+    private FTransform StoredRootWorld(ActorItemViewModel item) =>
+        item is { IsAdded: true, SourceId: not 0 } && ActorOf(item.SourceId) is { } source ? source.Actor.WorldTransform : item.Actor.WorldTransform;
 
     /// <summary>Properties of one spawn point: which point of which spawner, where it is.</summary>
     private IReadOnlyList<PropertyRow> DescribePoint(SelectedPoint sel, FTransform world)
@@ -85,8 +105,8 @@ public sealed partial class MapPageViewModel
         return true;
     }
 
-    /// <summary>Moves the selected point to <paramref name="local"/> (relative to its owner).</summary>
-    private void ApplyPointTransform(SelectedPoint sel, TransformValue local)
+    /// <summary>Moves the selected point to <paramref name="local"/> (relative to its owner); the toast says <paramref name="title"/> (default "Moved").</summary>
+    private void ApplyPointTransform(SelectedPoint sel, TransformValue local, string? title = null)
     {
         if (local.IsNearlyEqual(sel.Points[sel.Index].Local))
         {
@@ -95,7 +115,7 @@ public sealed partial class MapPageViewModel
 
         var points = sel.Points.ToList();
         points[sel.Index] = points[sel.Index] with { Local = local };
-        ApplyPoints(sel, points, Localization.Loc.T("Map.Moved"));
+        ApplyPoints(sel, points, title ?? Localization.Loc.T("Map.Moved"));
     }
 
     /// <summary>Removes the selected point; the spawner stays selected.</summary>
@@ -139,7 +159,11 @@ public sealed partial class MapPageViewModel
         }
     }
 
-    /// <summary>The pins of every loaded actor whose point lists the project changed, drawn from the lists as they are now.</summary>
+    /// <summary>
+    /// The pins of every loaded actor whose point lists the project changed, drawn from the lists as they are now. A copy
+    /// (Duplicate, Paste) has lists of its own (igor8802: "a duplicated sentry's patrol route cannot be changed": the copy's
+    /// pins snapped back): its pins stand where the copy stands.
+    /// </summary>
     private Dictionary<uint, IReadOnlyList<ScenePlacement>> CollectPinOverrides(EditState? state)
     {
         var pins = new Dictionary<uint, IReadOnlyList<ScenePlacement>>();
@@ -150,7 +174,7 @@ public sealed partial class MapPageViewModel
 
         foreach (var group in state.SpawnPointOverrides.GroupBy(o => o.Actor, ActorRef.Comparer))
         {
-            if (!_pristineByRef.TryGetValue(group.Key, out var item))
+            if ((PristineOf(group.Key) ?? (ActorOf(group.Key) is { IsAdded: true, SourceId: not 0 } copy ? copy : null)) is not { } item)
             {
                 continue;
             }
@@ -161,7 +185,7 @@ public sealed partial class MapPageViewModel
                 continue;
             }
 
-            var actor = item.Actor;
+            var actor = item.IsAdded ? PlacedCopy(item) : item.Actor;
             foreach (var (_, component, _, points) in group)
             {
                 actor = SpawnPointArrays.WithPoints(actor, component, points);
@@ -171,6 +195,14 @@ public sealed partial class MapPageViewModel
         }
 
         return pins;
+    }
+
+    /// <summary>A copy's record with its components carried from its source's place to the copy's root (as the viewport draws the copy).</summary>
+    private ActorRecord PlacedCopy(ActorItemViewModel copy)
+    {
+        var stored = StoredRootWorld(copy);
+        var root = copy.Actor.WorldTransform;
+        return copy.Actor with { Components = copy.Actor.Components.Select(c => c with { WorldTransform = c.WorldTransform.GetRelativeTransform(stored) * root }).ToList() };
     }
 
     /// <summary>One selected spawn point: its spawner, its array, its index and the list as it is now.</summary>

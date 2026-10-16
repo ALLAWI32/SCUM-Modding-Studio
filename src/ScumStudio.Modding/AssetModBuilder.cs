@@ -5,6 +5,7 @@ using ScumStudio.Formats.Properties;
 using ScumStudio.Modding.Catalog;
 using ScumStudio.Modding.Cloning;
 using ScumStudio.Modding.Registry;
+using ScumStudio.Modding.Textures;
 using ScumStudio.Modding.Tuning;
 
 namespace ScumStudio.Modding;
@@ -12,7 +13,7 @@ namespace ScumStudio.Modding;
 /// <summary>What to build: clones and stored-value edits (on stock or cloned packages).</summary>
 /// <param name="Clones">Clone plans, applied first.</param>
 /// <param name="Edits">Package path → edits of that package (a clone's new path, or a stock package to override).</param>
-public sealed record AssetModRequest(IReadOnlyList<ClonePlan> Clones, IReadOnlyDictionary<string, IReadOnlyList<TunableEdit>> Edits)
+public sealed partial record AssetModRequest(IReadOnlyList<ClonePlan> Clones, IReadOnlyDictionary<string, IReadOnlyList<TunableEdit>> Edits)
 {
     /// <summary>Stock package → the stock package written in its place (ground textures, tree meshes).</summary>
     public IReadOnlyDictionary<string, string> Replacements { get; init; } = new Dictionary<string, string>();
@@ -25,6 +26,9 @@ public sealed record AssetModRequest(IReadOnlyList<ClonePlan> Clones, IReadOnlyD
 
     /// <summary>Recipe package → its new ingredient list (craftables, see <see cref="Crafting.RecipeIngredients"/>), written after the clones.</summary>
     public IReadOnlyDictionary<string, IReadOnlyList<Crafting.CraftIngredient>> Ingredients { get; init; } = new Dictionary<string, IReadOnlyList<Crafting.CraftIngredient>>();
+
+    /// <summary>Cloned recipe packages that keep their stock ingredients but lose their skin links (a crafted element's upgrade recipes).</summary>
+    public IReadOnlyList<string> SkinlessRecipes { get; init; } = [];
 
     /// <summary>
     /// The <c>AssetRegistry.bin</c> to register into (the main pak's of the same export), or null for the game's stock one
@@ -43,6 +47,9 @@ public sealed record AssetModRequest(IReadOnlyList<ClonePlan> Clones, IReadOnlyD
     /// registry: a check of what would ship, before anything is written.
     /// </summary>
     public bool WriteRegistry { get; init; } = true;
+
+    /// <summary>The project folder the pictures of new textures (<see cref="TextureWrites"/>) are read from, or null.</summary>
+    public string? FileRoot { get; init; }
 
     /// <summary>True when nothing is requested.</summary>
     public bool IsEmpty => Clones.Count == 0 && Edits.Count == 0 && Replacements.Count == 0 && DataAssets.Count == 0;
@@ -93,7 +100,7 @@ public sealed record AssetModBuildResult(
 /// payloads verbatim), writes the stat edits, and registers the clones in the game's stock <c>AssetRegistry.bin</c> (or
 /// the request's base). The same request applied to a client and a server catalog gives the two cooks of the mod.
 /// </summary>
-public static class AssetModBuilder
+public static partial class AssetModBuilder
 {
     /// <summary>Provider path of the cooked registry.</summary>
     public const string AssetRegistryPath = "SCUM/AssetRegistry.bin";
@@ -109,8 +116,11 @@ public static class AssetModBuilder
         var cloned = new List<ClonePlan>();
         var dropped = new HashSet<string>(StringComparer.OrdinalIgnoreCase); // new paths of clones that were not built
 
-        foreach (var plan in request.Clones)
+        foreach (var requested in request.Clones)
         {
+            // D01: a plan an earlier version recorded may leave a copied item's entity setup behind (a vehicle's item container).
+            var plan = CloneFamilyPlanner.WithEntitySetups(catalog, requested, warnings);
+
             // N017: every member is read first; one that cannot be read keeps its stock path in the others (they would
             // import a new path that does not ship). Without its template the clone is not built at all.
             var read = new List<(string Old, string New, CookedPackage Package)>();
@@ -146,7 +156,8 @@ public static class AssetModBuilder
                 foreach (var (oldPath, newPath, source) in read)
                 {
                     var clone = PackageCloner.Clone(source, oldPath, map);
-                    copies.Add((newPath, CookedPackage.Parse(clone.Bytes.UAsset, clone.Bytes.UExp, clone.UBulk, newPath), clone.Bytes));
+                    var bytes = CookedTexture2D.Relayout(clone.Bytes, clone.UBulk);
+                    copies.Add((newPath, CookedPackage.Parse(bytes.UAsset, bytes.UExp, clone.UBulk, newPath), bytes));
                 }
             }
             catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or FormatException)
@@ -239,7 +250,7 @@ public static class AssetModBuilder
             {
                 var map = new PackageMap([new KeyValuePair<string, string>(template, path)]);
                 var clone = PackageCloner.Clone(ModdableAssets.ReadPackage(catalog, template), template, map);
-                var bytes = PatchDataAsset(CookedPackage.Parse(clone.Bytes.UAsset, clone.Bytes.UExp, clone.UBulk, path), copy);
+                var bytes = CookedTexture2D.Relayout(PatchDataAsset(CookedPackage.Parse(clone.Bytes.UAsset, clone.Bytes.UExp, clone.UBulk, path), copy), clone.UBulk);
                 built[path] = (CookedPackage.Parse(bytes.UAsset, bytes.UExp, clone.UBulk, path), bytes, true);
                 maps.Add((path, map, null));
             }
@@ -257,7 +268,9 @@ public static class AssetModBuilder
             {
                 var source = ModdableAssets.ReadPackage(catalog, with);
                 var copy = PackageCloner.Clone(source, with, new PackageMap([new KeyValuePair<string, string>(with, path)]));
-                built[path] = (CookedPackage.Parse(copy.Bytes.UAsset, copy.Bytes.UExp, copy.UBulk, path), copy.Bytes, false);
+                // A texture's skip and inline mip offsets are absolute: the copy's longer or shorter header moves them.
+                var bytes = CookedTexture2D.Relayout(copy.Bytes, copy.UBulk);
+                built[path] = (CookedPackage.Parse(bytes.UAsset, bytes.UExp, copy.UBulk, path), bytes, false);
             }
             catch (Exception ex) when (ex is FileNotFoundException or FormatException or InvalidDataException or IOException or InvalidOperationException or ArgumentException)
             {
@@ -294,9 +307,35 @@ public static class AssetModBuilder
             }
         }
 
-        var applied = new List<(string, string, string, string)>();
-        foreach (var (packagePath, edits) in request.Edits)
+        // Copied recipes that keep their own ingredients (a crafted element's upgrade levels) lose their skin links.
+        foreach (var recipe in request.SkinlessRecipes)
         {
+            var path = PackageMap.Normalize(recipe);
+            if (dropped.Contains(path) || request.Ingredients.ContainsKey(recipe) || !built.TryGetValue(path, out var kept))
+            {
+                continue;
+            }
+
+            try
+            {
+                if (Crafting.RecipeIngredients.WithoutSkins(kept.Package) is { } bytes)
+                {
+                    built[path] = (CookedPackage.Parse(bytes.UAsset, bytes.UExp, kept.Package.UBulk, path), bytes, kept.IsClone);
+                }
+            }
+            catch (Exception ex) when (ex is FormatException or InvalidDataException or IOException or InvalidOperationException)
+            {
+                warnings.Add($"{path}: its skin links were not removed ({ex.Message}).");
+            }
+        }
+
+        AddIngredientInstances(catalog, request, built, warnings);
+
+        var applied = new List<(string, string, string, string)>();
+        WriteTextures(catalog, request, built, applied, warnings);
+        foreach (var (packagePath, all) in request.Edits)
+        {
+            var edits = all.Where(e => !TextureWrites.IsEdit(e.Path)).ToList();
             if (edits.Count == 0)
             {
                 continue;
@@ -334,8 +373,10 @@ public static class AssetModBuilder
                 // Spawn preset slots and weapon sockets are rewritten whole (they add exports, imports and array items).
                 var parts = edits.Where(e => VehicleParts.IsEdit(e.Path)).ToList();
                 var mounts = edits.Where(e => WeaponMounts.IsEdit(e.Path)).ToList();
-                var stored = edits.Where(e => !MaterialParameters.IsKeyed(e.Path) && !VehicleParts.IsEdit(e.Path) && !WeaponMounts.IsEdit(e.Path)).ToList();
+                var stored = edits.Where(e => !MaterialParameters.IsKeyed(e.Path) && !VehicleParts.IsEdit(e.Path) && !WeaponMounts.IsEdit(e.Path)
+                    && !MaterialTextureStreaming.IsEdit(e.Path)).ToList();
                 var keyed = edits.Where(e => MaterialParameters.IsKeyed(e.Path)).ToList();
+                var streaming = edits.Where(e => MaterialTextureStreaming.IsEdit(e.Path)).ToList();
                 var bytes = PackageWriter.Rebuild(package);
                 foreach (var (some, apply) in new (List<TunableEdit>, Func<CookedPackage, IEnumerable<TunableEdit>, PackageBytes>)[] { (parts, VehicleParts.Apply), (mounts, WeaponMounts.Apply) })
                 {
@@ -345,6 +386,16 @@ public static class AssetModBuilder
                         package = CookedPackage.Parse(bytes.UAsset, bytes.UExp, package.UBulk, path);
                         applied.AddRange(some.Select(e => (path, e.Export + "|" + e.Path, string.Empty, e.Value)));
                     }
+                }
+
+                // A value the package takes from its parent class (a katana's MaxHealth) gets a tag of its own in the package's CDO.
+                var inherited = Inherited(catalog, package, stored);
+                if (inherited.Count > 0)
+                {
+                    bytes = InheritedValues.Add(package, inherited.Select(i => (i.Value, i.Edit.Value)).ToList());
+                    package = CookedPackage.Parse(bytes.UAsset, bytes.UExp, package.UBulk, path);
+                    applied.AddRange(inherited.Select(i => (path, i.Value.Key, i.Value.Value, i.Edit.Value)));
+                    stored = stored.Except(inherited.Select(i => i.Edit)).ToList();
                 }
 
                 if (stored.Count > 0)
@@ -359,6 +410,18 @@ public static class AssetModBuilder
                 {
                     bytes = MaterialParameters.Apply(package, keyed, ParentGuids(catalog, package, warnings));
                     applied.AddRange(keyed.Select(e => (path, e.Export + "|" + e.Path, string.Empty, e.Value)));
+                }
+
+                if (streaming.Count > 0)
+                {
+                    var (renamed, count) = MaterialTextureStreaming.Apply(CookedPackage.Parse(bytes.UAsset, bytes.UExp, package.UBulk, path), streaming);
+                    bytes = renamed;
+                    if (count == 0 && streaming.Any(e => e.Value.Length > 0 && e.Path != MaterialTextureStreaming.PathOf(e.Value)))
+                    {
+                        warnings.Add($"{path}: its texture streaming data does not name the replaced texture; the game may show it blurred.");
+                    }
+
+                    applied.AddRange(streaming.Select(e => (path, e.Export + "|" + e.Path, string.Empty, e.Value)));
                 }
 
                 built[path] = (CookedPackage.Parse(bytes.UAsset, bytes.UExp, package.UBulk, path), bytes, isClone);
@@ -442,6 +505,42 @@ public static class AssetModBuilder
     }
 
     /// <summary>
+    /// New textures (<see cref="TextureWrites.PixelsPath"/> edits): the project's picture written in the layout and format of
+    /// the stock texture it replaces, under the clone's own path. A missing picture or template is a warning.
+    /// </summary>
+    private static void WriteTextures(AssetCatalog catalog, AssetModRequest request,
+        Dictionary<string, (CookedPackage Package, PackageBytes Bytes, bool IsClone)> built, List<(string, string, string, string)> applied, List<string> warnings)
+    {
+        foreach (var (packagePath, edits) in request.Edits)
+        {
+            foreach (var edit in edits.Where(e => TextureWrites.IsEdit(e.Path)))
+            {
+                if (TextureWrites.Parse(edit.Value) is not { } parsed)
+                {
+                    continue; // an undone replace
+                }
+
+                var (template, file) = parsed;
+                var path = PackageMap.Normalize(packagePath);
+                try
+                {
+                    var picture = TextureWrites.ResolveFile(request.FileRoot, file) is { } full && File.Exists(full)
+                        ? Assets.Textures.ImageFiles.Load(full)
+                        : throw new FileNotFoundException($"the picture {file} is not in the project folder");
+                    var result = TextureWriter.Write(ModdableAssets.ReadPackage(catalog, PackageMap.Normalize(template)), template, path, picture);
+                    built[path] = (CookedPackage.Parse(result.Bytes.UAsset, result.Bytes.UExp, result.UBulk, path), result.Bytes, true);
+                    applied.Add((path, edit.Export + "|" + edit.Path, string.Empty, edit.Value));
+                }
+                catch (Exception ex) when (ex is FileNotFoundException or FormatException or InvalidDataException or IOException or InvalidOperationException
+                                               or NotSupportedException or ArgumentException)
+                {
+                    warnings.Add($"{path}: texture not written ({ex.Message}).");
+                }
+            }
+        }
+    }
+
+    /// <summary>
     /// A copied data asset's id (its first <c>Guid</c> property, 16 bytes in place) and trader name (an FString: the
     /// property grows or shrinks with it).
     /// </summary>
@@ -479,6 +578,36 @@ public static class AssetModBuilder
     /// <summary>The name a clone shows in the trade menu: <c>BPC_RagerGold</c> → <c>RagerGold</c>, underscores as spaces.</summary>
     public static string TradeCaption(string leaf) =>
         (leaf.StartsWith("BPC_", StringComparison.OrdinalIgnoreCase) ? leaf[4..] : leaf).Replace('_', ' ');
+
+    /// <summary>
+    /// The edits of <paramref name="edits"/> that name no stored value of <paramref name="package"/> but one its class
+    /// inherits (<see cref="InheritedValues.Read"/>), each with that value; the others are left to <see cref="TunablePatcher"/>.
+    /// </summary>
+    private static List<(TunableEdit Edit, Tunable Value)> Inherited(AssetCatalog catalog, CookedPackage package, IReadOnlyList<TunableEdit> edits)
+    {
+        var stored = TunableReader.Read(package).Select(t => t.Key).ToHashSet(StringComparer.Ordinal);
+        var missing = edits.Where(e => !stored.Contains(e.Export + "|" + e.Path)).ToList();
+        if (missing.Count == 0)
+        {
+            return [];
+        }
+
+        var inherited = InheritedValues.Read(package, parent =>
+        {
+            try
+            {
+                return ModdableAssets.ReadPackage(catalog, parent);
+            }
+            catch (Exception ex) when (ex is FileNotFoundException or FormatException or InvalidDataException or IOException)
+            {
+                return null;
+            }
+        }).ToDictionary(t => t.Key, StringComparer.Ordinal);
+        return missing
+            .Where(e => inherited.ContainsKey(e.Export + "|" + e.Path))
+            .Select(e => (e, inherited[e.Export + "|" + e.Path]))
+            .ToList();
+    }
 
     /// <summary>The expression guids of a material instance's parent material (empty, with a warning, when unreadable).</summary>
     private static IReadOnlyDictionary<string, byte[]> ParentGuids(AssetCatalog catalog, CookedPackage instance, List<string> warnings)

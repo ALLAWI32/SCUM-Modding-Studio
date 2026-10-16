@@ -121,6 +121,25 @@ public static class RecipeIngredients
         return Build(package, tables, data);
     }
 
+    /// <summary>
+    /// The recipe with its own ingredients and without its skin links (a copied upgrade recipe of a crafted element would
+    /// otherwise offer the stock skin upgrade, which builds the stock element); null when it has none.
+    /// </summary>
+    public static PackageBytes? WithoutSkins(CookedPackage package)
+    {
+        ArgumentNullException.ThrowIfNull(package);
+        var exportIndex = RecipeExport(package);
+        var stored = package.GetExportData(exportIndex).ToArray();
+        var payload = DropSkins(package, exportIndex, stored);
+        if (payload.Length == stored.Length)
+        {
+            return null;
+        }
+
+        var data = Enumerable.Range(0, package.Exports.Count).Select(i => i == exportIndex ? (ReadOnlyMemory<byte>)payload : package.GetExportData(i)).ToArray();
+        return Build(package, PackageTables.Of(package, exportIndex), data);
+    }
+
     /// <summary>The recipe's ingredients as written (tag name, amount without skill, tool or material).</summary>
     public static IReadOnlyList<CraftIngredient> Read(CookedPackage package)
     {

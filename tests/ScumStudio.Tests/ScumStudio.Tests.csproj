@@ -23,6 +23,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The real SCUM.db schema (no save data) for synthetic saves. -->
+    <None Include="Level/Saves/ScumDbSchema.sql" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\ScumStudio.Core\ScumStudio.Core.csproj" />
     <ProjectReference Include="..\..\src\ScumStudio.Formats\ScumStudio.Formats.csproj" />
     <ProjectReference Include="..\..\src\ScumStudio.Pak\ScumStudio.Pak.csproj" />

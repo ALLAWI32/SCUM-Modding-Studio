@@ -172,6 +172,9 @@ public sealed partial class Cue4ParseLevelReader : ILevelReader
     /// <inheritdoc />
     public LevelData ReadLevel(string packagePath, CancellationToken cancellationToken = default)
     {
+        // Each package the level's objects import (their templates, Blueprint classes) is read once for the whole level,
+        // not once per object (see ScumFileProvider.ImportScope).
+        using var imports = ScumFileProvider.ImportScope();
         ArgumentException.ThrowIfNullOrWhiteSpace(packagePath);
         var package = _catalog.LoadPackage(packagePath);
         RegisterFoliageClasses(package);
@@ -417,15 +420,22 @@ public sealed partial class Cue4ParseLevelReader : ILevelReader
 
         var root = ResolveComponentReference(package, actor, "RootComponent", own, out _);
         List<FVector>? patrol = null;
-        if (header.ClassName == "SentrySpawner2" && actor.TryGetValue(out FStructFallback[] points, "PatrolPoints"))
+        string? sentry = null;
+        if (header.ClassName == "SentrySpawner2")
         {
-            patrol = points.Select(p => p.TryGetValue(out UeVector v, "LocationRelativeToSentry") ? new FVector(v.X, v.Y, v.Z) : FVector.Zero).ToList();
+            if (actor.TryGetValue(out FStructFallback[] points, "PatrolPoints"))
+            {
+                patrol = points.Select(p => p.TryGetValue(out UeVector v, "LocationRelativeToSentry") ? new FVector(v.X, v.Y, v.Z) : FVector.Zero).ToList();
+            }
+
+            sentry = actor.TryGetValue(out FSoftObjectPath sentryClass, "SentryClass") ? sentryClass.AssetPathName.Text : null;
         }
 
         var ignored = false;
         return header with
         {
             PatrolPoints = patrol,
+            SentryClass = sentry,
             TraderMarkers = ReadTraderMarkers(actor),
             WaterVolume = TryGetProperty(actor, "bWaterVolume", out bool water, ref ignored) && water,
             IsItemContainer = ClassChain(header.ClassPath, header.IsBlueprintClass).Contains("ItemContainer", StringComparer.Ordinal),
@@ -447,7 +457,7 @@ public sealed partial class Cue4ParseLevelReader : ILevelReader
 
         var templates = new TemplateChain(this, obj);
         var classChain = ClassChain(header.ClassPath, header.IsBlueprintClass);
-        var values = ReadValues(templates, header.Name, classChain, warnings);
+        var values = ReadValuesAndMarkers(templates, header.Name, classChain, warnings, out var markersFromTemplate);
         var parent = ResolveComponentReference(package, templates, "AttachParent", siblings, out var hasAttachProperty);
         if (hasAttachProperty && parent is null)
         {
@@ -460,9 +470,15 @@ public sealed partial class Cue4ParseLevelReader : ILevelReader
             socketName = socket.Text;
         }
 
+        // Grass and bushes thin out from here to InstanceEndCullDistance in the game (a foliage type's CullDistance.Min).
+        int? startCull = values.IsInstancedClass && Options.ReadInstances && TryGetProperty(templates, "InstanceStartCullDistance", out int start, ref ignored) && start > 0
+            ? start
+            : null;
         return values.ApplyTo(header) with
         {
+            InstanceStartCullDistance = startCull,
             PropertyNames = PropertyNames(obj),
+            SpawnMarkersFromTemplate = markersFromTemplate,
             IsSceneComponent = values.IsScene || hasAttachProperty,
             AttachParent = parent,
             ChildActor = classChain.Contains(ChildActorComponentClass, StringComparer.Ordinal) ? OwnExportReference(package, obj, "ChildActor") : null,
@@ -473,7 +489,14 @@ public sealed partial class Cue4ParseLevelReader : ILevelReader
     /// Reads the transform, flags, mesh, instances, visibility and child actor class of a component (or component
     /// template) along its template chain and classifies it from <paramref name="classChain"/> (most derived first).
     /// </summary>
-    private ComponentValues ReadValues(TemplateChain templates, string name, IReadOnlyList<string> classChain, List<string> warnings)
+    private ComponentValues ReadValues(TemplateChain templates, string name, IReadOnlyList<string> classChain, List<string> warnings) =>
+        ReadValuesAndMarkers(templates, name, classChain, warnings, out _);
+
+    /// <summary>
+    /// <see cref="ReadValues"/>, and whether an item spawner's markers come from its template instead of the object
+    /// (<paramref name="markersFromTemplate"/>).
+    /// </summary>
+    private ComponentValues ReadValuesAndMarkers(TemplateChain templates, string name, IReadOnlyList<string> classChain, List<string> warnings, out bool markersFromTemplate)
     {
         var obj = templates.Object;
         var fromTemplate = false;
@@ -538,7 +561,8 @@ public sealed partial class Cue4ParseLevelReader : ILevelReader
         var isComponent = obj is UActorComponent || isScene
                           || classChain.Any(c => c.EndsWith("Component", StringComparison.Ordinal) || c.EndsWith("Component_C", StringComparison.Ordinal));
         // Item spawners (groups, world spawners, the loot points of Blueprint buildings): where loot appears.
-        var markers = classChain.Any(c => c is "ItemSpawnerComponent" or "WorldItemSpawnerComponent") ? ReadSpawnMarkers(templates) : null;
+        markersFromTemplate = false;
+        var markers = classChain.Any(c => c is "ItemSpawnerComponent" or "WorldItemSpawnerComponent") ? ReadSpawnMarkers(templates, ref markersFromTemplate) : null;
         // A world item spawner puts one fixed item (a lathe, a workbench) where it stands.
         if (markers is null && classChain.Contains("WorldItemSpawnerComponent", StringComparer.Ordinal)
             && TryGetProperty(templates, "_item", out FSoftObjectPath item, ref ignored) && SoftPathText(item) is { Length: > 0 } itemPath)
@@ -797,10 +821,13 @@ public sealed partial class Cue4ParseLevelReader : ILevelReader
         return found;
     }
 
-    private IReadOnlyList<SpawnMarker>? ReadSpawnMarkers(TemplateChain templates)
+    /// <summary>
+    /// The item spawner's <c>SpawnerMarkers</c>; <paramref name="fromTemplate"/> is set when the array is not stored on the
+    /// object but comes from its template (a house's indoor loot points, kept by its Blueprint).
+    /// </summary>
+    private IReadOnlyList<SpawnMarker>? ReadSpawnMarkers(TemplateChain templates, ref bool fromTemplate)
     {
-        var ignored = false;
-        if (!TryGetProperty(templates, "SpawnerMarkers", out FStructFallback[] markers, ref ignored))
+        if (!TryGetProperty(templates, "SpawnerMarkers", out FStructFallback[] markers, ref fromTemplate))
         {
             return null;
         }

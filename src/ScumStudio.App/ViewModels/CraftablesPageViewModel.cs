@@ -43,6 +43,7 @@ public sealed partial class CraftablesPageViewModel : PageViewModel, IDisposable
         _services.Projects.Changed += OnProjectChanged;
         _services.Workspace.CatalogChanged += OnCatalogChanged;
         Gallery = new CraftGalleryViewModel(services, PickAsync, AddedSources);
+        InitPickers();
         Items.CollectionChanged += (_, e) =>
         {
             if (!_loading)
@@ -110,6 +111,13 @@ public sealed partial class CraftablesPageViewModel : PageViewModel, IDisposable
     /// <summary>Ingredient tags offered by the editor (any other <c>CI_*</c> tag can be typed).</summary>
     public IReadOnlyList<string> Tags { get; } = RecipeRules.CommonTags;
 
+    /// <summary>The game's pictures (<c>ICO_*</c> textures of the embedded stock catalogue) a craftable can show in the crafting menu.</summary>
+    public IReadOnlyList<string> Pictures => PictureList.Value;
+
+    private static readonly Lazy<IReadOnlyList<string>> PictureList = new(() => AssetDumper.Packages.Select(p => p.PackagePath)
+        .Where(p => PackageMap.Leaf(p).StartsWith("ICO_", StringComparison.OrdinalIgnoreCase))
+        .Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).ToList());
+
     /// <summary>"None" and every station craftable of the project.</summary>
     public IReadOnlyList<string> Stations { get; private set; } = [string.Empty];
 
@@ -126,9 +134,13 @@ public sealed partial class CraftablesPageViewModel : PageViewModel, IDisposable
         }
 
         var path = packagePath.Contains('.', StringComparison.Ordinal) ? packagePath[..packagePath.LastIndexOf('.')] : packagePath;
+        var projectDirectory = _services.Projects.Current?.DirectoryPath;
+        var model = ModelLibrary.IsModelMesh(path)
+            ? ModelLibrary.List(projectDirectory).FirstOrDefault(m => string.Equals(m.MeshPackage, path, StringComparison.OrdinalIgnoreCase))
+            : null;
         try
         {
-            var craftable = await Task.Run(() => Describe(catalog, path)).ConfigureAwait(true);
+            var craftable = await Task.Run(() => model is null ? Describe(catalog, path) : DescribeModel(projectDirectory!, model)).ConfigureAwait(true);
             if (craftable is null)
             {
                 _services.Notifications.Warning(Title, Loc.F("Craftables.NoMesh", path));
@@ -178,7 +190,7 @@ public sealed partial class CraftablesPageViewModel : PageViewModel, IDisposable
         var info = catalog.LoadFirstExport<UStaticMesh>(mesh) is { } loaded ? MeshExtractor.DescribeStaticMesh(loaded) : null;
         var size = info is null ? 1f : MathF.Max(0.1f, MathF.Max(info.Bounds.Size.X, MathF.Max(info.Bounds.Size.Y, info.Bounds.Size.Z)) / 100f);
         var material = RecipeRules.GuessMaterial([path, mesh, .. info?.Materials.Select(m => m.MaterialPath + " " + m.SlotName) ?? []]);
-        return new Craftable
+        return AsElement(new Craftable
         {
             Name = name.Length > 0 ? name : leaf,
             Source = path,
@@ -187,7 +199,18 @@ public sealed partial class CraftablesPageViewModel : PageViewModel, IDisposable
             Material = material,
             SizeMeters = MathF.Round(size, 2),
             Ingredients = RecipeRules.Suggest(material, size),
-        };
+        }, ElementOf(catalog, path));
+    }
+
+    /// <summary>
+    /// A craftable for a model of the project's library (<see cref="ModelLibrary"/>: imported here or on the Map's My
+    /// models), described from its own cooked files; the Craftables pak carries them (<see cref="Craftable.Imported"/>).
+    /// </summary>
+    public static Craftable? DescribeModel(string projectDirectory, LibraryModel model)
+    {
+        ArgumentNullException.ThrowIfNull(model);
+        using var own = AssetCatalog.OpenLoose(Path.Combine(projectDirectory, model.Folder));
+        return Describe(own, model.MeshPackage) is { } craftable ? craftable with { Name = model.Name, Imported = model.Folder } : null;
     }
 
     /// <inheritdoc />
@@ -255,6 +278,12 @@ public sealed partial class CraftablesPageViewModel : PageViewModel, IDisposable
             return;
         }
 
+        // The project's own 3D models (imported here or on the Map's Add object › My models) come first.
+        var mine = ModelLibrary.List(_services.Projects.Current?.DirectoryPath)
+            .Where(m => m.Name.Contains(query, StringComparison.OrdinalIgnoreCase) || m.Token.Contains(query, StringComparison.OrdinalIgnoreCase))
+            .Select(m => new CraftSourceRow(m.MeshPackage, m.Name, Loc.T("Craftables.MyModel")))
+            .ToList();
+
         if (!ReferenceEquals(_itemsOf, catalog))
         {
             // The package list and the game's items are found once per catalog on a worker (names only; the class follows
@@ -266,7 +295,7 @@ public sealed partial class CraftablesPageViewModel : PageViewModel, IDisposable
 
         if (_items is not { IsCompletedSuccessfully: true } found || catalog.Index is not { } index)
         {
-            AddResults = [];
+            AddResults = mine;
             return;
         }
 
@@ -274,14 +303,13 @@ public sealed partial class CraftablesPageViewModel : PageViewModel, IDisposable
         var items = found.Result;
         string? ClassOf(PackageEntry p) => items.Contains(p.PackagePath) ? "Item" : p.ClassName
             ?? (p.Name.StartsWith("SM_", StringComparison.OrdinalIgnoreCase) ? "StaticMesh" : p.Name.StartsWith("BP", StringComparison.OrdinalIgnoreCase) ? "Blueprint" : null);
-        AddResults = index.Entries
+        AddResults = [.. mine, .. index.Entries
             .Where(p => !p.IsMap && p.Name.Contains(query, StringComparison.OrdinalIgnoreCase))
             .Select(p => (Entry: p, Class: ClassOf(p)))
             .Where(p => p.Class == "Item" || RecipeRules.IsAllowedSource(p.Entry.PackagePath, p.Class))
             .OrderBy(p => p.Entry.Name.StartsWith(query, StringComparison.OrdinalIgnoreCase) ? 0 : 1).ThenBy(p => p.Entry.Name, StringComparer.OrdinalIgnoreCase)
             .Take(40)
-            .Select(p => new CraftSourceRow(p.Entry.PackagePath, p.Entry.Name, p.Class ?? string.Empty))
-            .ToList();
+            .Select(p => new CraftSourceRow(p.Entry.PackagePath, p.Entry.Name, p.Class ?? string.Empty))];
     }
 
     [RelayCommand]
@@ -289,37 +317,23 @@ public sealed partial class CraftablesPageViewModel : PageViewModel, IDisposable
 
     /// <summary>
     /// Owner, 2026-10-09: "a list where I can add external files, for example 3D tables or a new weapon". Picks an FBX or OBJ
-    /// file, imports and cooks it with Unreal Engine 4.27 (<see cref="UeCook"/>) and adds it as a craftable.
+    /// file, imports and cooks it with Unreal Engine 4.27 (<see cref="UeCook"/>, the same import as the Map's My models:
+    /// <see cref="ModelImports"/>) and adds it as a craftable.
     /// </summary>
     [RelayCommand(CanExecute = nameof(CanImportModel))]
     private async Task ImportModelAsync()
     {
-        if (_services.Workspace.Catalog is not { } catalog || _services.Projects.Current is not { } project)
-        {
-            _services.Notifications.Warning(Title, Loc.T(HasProject ? "Craftables.ConnectFirst" : "Craftables.NoProject"));
-            return;
-        }
-
-        if (UeCook.FindEngine() is null)
-        {
-            _services.Notifications.Error(Title, Loc.F("Craftables.Import.NoEngine", UeCook.DefaultEngineDirectory, UeCook.EngineVariable));
-            return;
-        }
-
-        var file = await _services.Dialogs.OpenFileAsync(Loc.T("Craftables.Import"), string.Join(';', UeCook.Extensions), Loc.T("Craftables.Import.Filter")).ConfigureAwait(true);
-        if (file is null)
+        if (await ModelImports.PickAsync(_services, Title, Loc.T("Craftables.NoProject")).ConfigureAwait(true) is not { } job)
         {
             return;
         }
 
+        var (file, project) = (job.File, job.Project);
         using var cancel = _importCancel = new CancellationTokenSource();
         IsImporting = true;
         try
         {
-            _services.Keys.TryGet(out var key);
-            var (ok, model) = await _services.Operations.RunAsync(Loc.F("Craftables.Importing", Path.GetFileName(file)),
-                (sink, ct) => UeCook.ImportAsync(catalog, file, project.DirectoryPath, sink, aesKey: key, cancellationToken: ct), cancel.Token).ConfigureAwait(true);
-            if (!ok || model is null)
+            if (await ModelImports.ImportAsync(_services, job, cancel.Token).ConfigureAwait(true) is not { } model)
             {
                 return;
             }
@@ -523,7 +537,7 @@ public sealed partial class CraftablesPageViewModel : PageViewModel, IDisposable
         Items.Clear();
         foreach (var craftable in file.Items)
         {
-            Items.Add(new CraftableRowViewModel(craftable, OnRowChanged, PictureAsync));
+            Items.Add(new CraftableRowViewModel(craftable, OnRowChanged, PictureAsync) { MayBeExported = true });
         }
 
         _loading = false;
@@ -554,7 +568,7 @@ public sealed partial class CraftablesPageViewModel : PageViewModel, IDisposable
             return null;
         }
 
-        var png = CraftablesPlanner.IsItem(catalog, mesh)
+        var png = CraftablesPlanner.IsItem(catalog, mesh, wait: false) // before its first await: on the UI thread
             ? await _services.Thumbnails.GetBlueprintAsync(catalog, mesh, cancellationToken).ConfigureAwait(false)
             : await _services.Thumbnails.GetAssetAsync(catalog, new PackageEntry(file.Path, mesh, "StaticMesh"), cancellationToken).ConfigureAwait(false);
         return png is null ? null : await Task.Run(() => new Bitmap(png), cancellationToken).ConfigureAwait(false);
@@ -595,7 +609,7 @@ public sealed partial class CraftableRowViewModel : ThumbnailItem
         _kind = craftable.Kind;
         _material = craftable.Material;
         _category = craftable.Category;
-        KindChoices = Kinds.Select(k => CraftChoice.Of(k)).ToList();
+        _icon = craftable.Icon;
         _station = craftable.Station ?? string.Empty;
         _needsPower = craftable.NeedsPower;
         _radius = (decimal)craftable.Power.RadiusMeters;
@@ -687,7 +701,7 @@ public sealed partial class CraftableRowViewModel : ThumbnailItem
     public ObservableCollection<IngredientRowViewModel> Ingredients { get; } = [];
 
     /// <summary>What it can become: an item of the game stays an item; any other object is furniture, a station or power.</summary>
-    public IReadOnlyList<CraftKind> Kinds => IsItem ? ItemKinds : ObjectKinds;
+    public IReadOnlyList<CraftKind> Kinds => IsItem ? ItemKinds : OffersElement ? ElementKinds : ObjectKinds;
 
     /// <summary>An item of the game (its new recipe makes the item; the game shows the item's own name and icon).</summary>
     public bool IsItem => _source.Kind == CraftKind.Item;
@@ -701,8 +715,27 @@ public sealed partial class CraftableRowViewModel : ThumbnailItem
     /// <summary>Made by a building recipe (placed in the world, built with resources), not crafted into the inventory.</summary>
     public bool IsBuilding => CraftCategories.IsPlaceable(Kind);
 
-    /// <summary><see cref="Kinds"/> named in the current language (the kind picker).</summary>
-    public IReadOnlyList<CraftChoice> KindChoices { get; }
+    /// <summary>
+    /// <see cref="Kinds"/> named in the current language (the kind picker); it follows <see cref="Kinds"/>, which gains
+    /// Element once the source's base element family is read.
+    /// </summary>
+    public IReadOnlyList<CraftChoice> KindChoices => Kinds.Select(k => CraftChoice.Of(k)).ToList();
+
+    /// <summary>
+    /// The picture the crafting menu shows (a Texture2D of the game, package path), or null for its own: an item's inventory
+    /// icon, a base element's recipe icon (Jenni: every craftable showed the improvised chair's).
+    /// </summary>
+    public string? Icon
+    {
+        get => _icon;
+        set => SetProperty(ref _icon, string.IsNullOrWhiteSpace(value) ? null : value.Trim());
+    }
+
+    private string? _icon;
+
+    /// <summary>Shows its own picture again (<see cref="Icon"/> = null).</summary>
+    [RelayCommand]
+    private void ResetIcon() => Icon = null;
 
     /// <summary><see cref="Kind"/> as a named choice (the picker and the list's chip).</summary>
     public CraftChoice KindChoice
@@ -782,10 +815,13 @@ public sealed partial class CraftableRowViewModel : ThumbnailItem
         Kind = Kind,
         Material = Material,
         Category = Category,
+        Icon = Icon,
         Station = string.IsNullOrWhiteSpace(Station) ? null : Station,
         NeedsPower = NeedsPower,
         Power = new PowerSettings((float)Radius, (float)Output, (float)Fuel, DayOnly),
-        Ingredients = Ingredients.Where(i => !string.IsNullOrWhiteSpace(i.Tag)).Select(i => new CraftIngredient(i.Tag.Trim(), (int)i.Amount, i.IsTool)).ToList(),
+        Ingredients = Ingredients.Where(i => i.IsKept).Select(i => i.ToModel()).ToList(),
+        Element = ElementModel(),
+        Use = UseModel(),
     };
 
     /// <summary>Re-reads the texts composed here in the new UI language.</summary>
@@ -803,7 +839,7 @@ public sealed partial class CraftableRowViewModel : ThumbnailItem
         Ingredients.Clear();
         foreach (var ingredient in ingredients.ToList())
         {
-            Ingredients.Add(new IngredientRowViewModel(ingredient, Changed, Remove));
+            Ingredients.Add(new IngredientRowViewModel(ingredient, Changed, Remove, IngredientPicture));
         }
 
         _quiet = quiet;
@@ -849,7 +885,7 @@ public sealed partial class CraftableRowViewModel : ThumbnailItem
     protected override void OnPropertyChanged(System.ComponentModel.PropertyChangedEventArgs e)
     {
         base.OnPropertyChanged(e);
-        if (e.PropertyName is nameof(Name) or nameof(Kind) or nameof(Material) or nameof(Category) or nameof(Station) or nameof(NeedsPower)
+        if (e.PropertyName is nameof(Name) or nameof(Kind) or nameof(Material) or nameof(Category) or nameof(Icon) or nameof(Station) or nameof(NeedsPower)
             or nameof(Radius) or nameof(Output) or nameof(Fuel) or nameof(DayOnly))
         {
             Changed();
@@ -892,11 +928,14 @@ public sealed partial class IngredientRowViewModel : ObservableObject
     private readonly Action<IngredientRowViewModel> _remove;
 
     /// <summary>Creates the row.</summary>
-    public IngredientRowViewModel(CraftIngredient ingredient, Action changed, Action<IngredientRowViewModel> remove)
+    public IngredientRowViewModel(CraftIngredient ingredient, Action changed, Action<IngredientRowViewModel> remove, Func<string, CancellationToken, Task<Bitmap?>>? pictures = null)
     {
         _tag = ingredient.Tag;
         _amount = ingredient.Amount;
         _isTool = ingredient.IsTool;
+        _item = ingredient.Item;
+        _addTag = ingredient.AddTag;
+        _pictures = pictures;
         _changed = changed;
         _remove = remove;
     }

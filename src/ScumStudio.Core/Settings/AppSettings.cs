@@ -230,6 +230,30 @@ public sealed record UiPreferences
     /// shimmering/noise in the trees"). Off: one sample, the previous look, lighter on the PC.
     /// </summary>
     public bool AntiAliasedFoliage { get; init; } = true;
+
+    /// <summary>
+    /// How close to the camera the Map still draws, in centimetres (Settings › Near clip, Ctrl+Shift+N on the Map; F15,
+    /// seviscache: "the camera clips the mesh" in tight rooms). 1 to 100; 10 by default.
+    /// </summary>
+    public float NearClipCentimetres { get; init; } = 10f;
+
+    /// <summary>
+    /// How many map sectors around the camera the game's far view reaches in whole-island mode (1-4): its far models are
+    /// drawn that far; the levels close by stream in full detail as before. Values outside are clamped.
+    /// </summary>
+    public int RenderDistanceSectors
+    {
+        get => _renderDistanceSectors;
+        init => _renderDistanceSectors = Math.Clamp(value, 1, 4);
+    }
+
+    private readonly int _renderDistanceSectors = 2;
+
+    /// <summary>
+    /// Keep the 3D view near 60 fps: while frames take too long it draws less (foliage distance first, then shadows, small
+    /// objects and the far view) and brings it back when there is room (owner: "smooth like the game").
+    /// </summary>
+    public bool SmoothFrames { get; init; } = true;
 }
 
 /// <summary>3D view quality presets (faster on weaker PCs, more detail on strong ones).</summary>
@@ -244,8 +268,17 @@ public enum RenderQuality
     /// <summary>Levels within 600 m, objects to 1.5 km, full LODs, 1024 px textures.</summary>
     High,
 
-    /// <summary>Levels within 1 km, objects as far as the game draws them, finer LODs.</summary>
+    /// <summary>
+    /// Levels within 1 km; trees, grass and instanced objects to the game's own cull distances, other objects to the edge of
+    /// the loaded levels; finer LODs than the game picks.
+    /// </summary>
     Ultra,
+
+    /// <summary>
+    /// Levels within 1 km drawn as the game decides: its cull distances and LOD screen sizes (no bias), objects down to one
+    /// pixel. Last, so saved choices keep their meaning.
+    /// </summary>
+    GameLike,
 }
 
 /// <summary>

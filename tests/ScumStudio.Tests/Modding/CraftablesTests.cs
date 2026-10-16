@@ -441,6 +441,53 @@ public sealed class CraftablesTests
     }
 
     /// <summary>
+    /// D08 (seviscache, 2026-10-12): an item's entity setup is its name twin or its name without "Item"
+    /// (AnimalBaitFeederItem has AnimalBaitFeeder_ES).
+    /// </summary>
+    [Fact]
+    public void AnItemsEntitySetupCanDropTheItemEnding()
+    {
+        Assert.Equal(["/Game/Items/AnimalBaitFeederItem_ES", "/Game/Items/AnimalBaitFeeder_ES"], CraftablesPlanner.EntitySetupNames("/Game/Items/AnimalBaitFeederItem"));
+        Assert.Equal(["/Dlc/AnimalBaitFeederItem_Ridgeline_ES", "/Dlc/AnimalBaitFeeder_Ridgeline_ES"], CraftablesPlanner.EntitySetupNames("/Dlc/AnimalBaitFeederItem_Ridgeline"));
+        Assert.Equal(["/Game/Items/Weapon_AK47_ES"], CraftablesPlanner.EntitySetupNames("/Game/Items/Weapon_AK47"));
+        Assert.Equal(["/Game/Items/Item_ES"], CraftablesPlanner.EntitySetupNames("/Game/Items/Item"));
+        Assert.Equal(["/Game/Itemsets/BP_Itemset_ES"], CraftablesPlanner.EntitySetupNames("/Game/Itemsets/BP_Itemset"));
+    }
+
+    /// <summary>
+    /// D08 (seviscache, 2026-10-12): "AnimalBait" found AnimalBaitFeederItem on the Assets page and nothing in the Craftables
+    /// gallery. The gallery lists it as an item, its search finds it, and the search ranks like the Assets page's Objects view.
+    /// </summary>
+    [Fact]
+    public void TheCraftablesGalleryListsAnimalBaitFeederItem()
+    {
+        if (Environment.GetEnvironmentVariable("SCUM_PAKS") is not { Length: > 0 } paks || !Directory.Exists(paks))
+        {
+            return; // not asked for
+        }
+
+        using var catalog = AssetCatalog.OpenPaks(paks, new AssetCatalogOptions { AesKey = AesKeyText.FromEnvironmentOrStore() });
+        const string feeder = "/Game/ConZ_Files/Items/Equipment/AnimalBaitFeederItem";
+        Assert.Equal("/Game/ConZ_Files/Items/Equipment/AnimalBaitFeeder_ES", CraftablesPlanner.EntitySetupOf(catalog, feeder));
+        Assert.Equal(CraftKind.Item, ScumStudio.App.ViewModels.CraftablesPageViewModel.Describe(catalog, feeder)?.Kind);
+
+        var index = catalog.Index ?? catalog.BuildIndex(resolveClasses: false);
+        var gallery = ScumStudio.App.ViewModels.CraftGalleryViewModel.Sort(index, CraftablesPlanner.Items(catalog));
+        Assert.Contains(gallery.Items, i => i.Entry.PackagePath == feeder);
+        var (matches, total) = ScumStudio.App.ViewModels.AssetsPageViewModel.Filter(gallery.Search, "AnimalBait", 2000);
+        Assert.Contains(matches, e => e.PackagePath == feeder);
+
+        // The Assets page's Objects view lists the catalogue's objects in catalogue order; the gallery's matches keep that order.
+        var listed = index.Entries.Select(e => e.PackagePath).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var assets = AssetDumper.Packages.Where(p => ScumStudio.App.ViewModels.AssetsPageViewModel.IsObjectClass(p.ClassName) && listed.Contains(p.PackagePath))
+            .Select(p => new PackageEntry(p.PackagePath + ".uasset", p.PackagePath, p.ClassName)).ToList();
+        var assetOrder = ScumStudio.App.ViewModels.AssetsPageViewModel.Filter(assets, "AnimalBait", 2000).Matches.Select(e => e.PackagePath).ToList();
+        var known = matches.Select(e => e.PackagePath).Where(assetOrder.Contains).ToList();
+        Assert.Equal(assetOrder.Where(known.Contains), known);
+        Console.WriteLine($"D08: gallery 'AnimalBait' {total} match(es): {string.Join(", ", matches.Select(e => e.Name))}; Assets: {assetOrder.Count}");
+    }
+
+    /// <summary>
     /// Review of craft-import: an imported model ships only when its craftable is planned (one left out, here for a token
     /// another craftable has, ships nothing), and its files are listed in the result's assets.
     /// </summary>
@@ -481,7 +528,7 @@ public sealed class CraftablesTests
             Assert.Contains(result!.Warnings, w => w.StartsWith("Oak-Table: left out", StringComparison.Ordinal));
             var imports = Path.Combine(result.StagingDirectory, "SCUM", "Content", "ScumStudio", "Imports");
             Assert.False(Directory.Exists(Path.Combine(imports, "SS_Left")));
-            Assert.True(File.Exists(Path.Combine(imports, "SS_Kept", "SM_SS_Kept.uasset")));
+            Assert.True(File.Exists(Path.Combine(imports, "SS_Kept", "SM_SS_Kept.uasset")), string.Join(" | ", result.Warnings) + " || " + string.Join(", ", result.Assets.Select(a => a.PackagePath)));
             Assert.Contains(result.Assets, a => a.PackagePath == UeCook.ImportsRoot + "/SS_Kept/SM_SS_Kept" && a.VirtualPath == "SCUM/Content/ScumStudio/Imports/SS_Kept/SM_SS_Kept.uasset");
             Assert.DoesNotContain(result.Assets, a => a.PackagePath.Contains("SS_Left", StringComparison.Ordinal));
         }

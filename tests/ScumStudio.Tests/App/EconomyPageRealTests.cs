@@ -1,4 +1,5 @@
 using Avalonia.Controls;
+using Avalonia.Headless;
 using Avalonia.VisualTree;
 using ScumStudio.App.ViewModels;
 using ScumStudio.Core.Abstractions;
@@ -76,7 +77,9 @@ public sealed class EconomyPageRealTests
             Assert.True(HeadlessUi.PumpUntil(() => window.GetVisualDescendants().OfType<TextBox>().Any(t => t.Name == "BuyBox" && t.DataContext is EconomyItemViewModel { Code: "Weapon_AK47" })));
             var buy = window.GetVisualDescendants().OfType<TextBox>().First(t => t.Name == "BuyBox" && t.DataContext is EconomyItemViewModel { Code: "Weapon_AK47" });
             Assert.Equal("11200", buy.Text); // the game's price
+            buy.Focus();
             buy.Text = "12345";
+            window.KeyPressQwerty(Avalonia.Input.PhysicalKey.Enter, Avalonia.Input.RawInputModifiers.None); // read on Enter or when left (F111)
             HeadlessUi.Pump();
             Assert.Equal(12345, economy.Economy.Find("A_3_Armory_1", "Weapon_AK47")?.PurchasePrice);
             var saved = EconomyOverride.LoadFrom(ctx.Services.Projects.Current!.DirectoryPath)!;
@@ -195,11 +198,14 @@ public sealed class EconomyPageRealTests
             var exported = EconomyOverride.Parse(File.ReadAllText(result.EconomyPath!));
             Assert.Equal(file.Entries(name), exported.Entries(name));
 
-            // The trader deleted on the map: its section leaves the project's economy, the page and the export.
+            // The trader deleted on the map: its section is parked (audit F100): kept in the project file, gone from the page,
+            // the Code view and the export.
             map.SelectedActor = map.AllActors.Single(a => a.IsAdded && project.State.AddedActors.GetValueOrDefault(a.Reference) is AddBlueprintActorOp { Trader.Name: name });
             map.DeleteSelectedCommand.Execute(null);
-            Assert.True(HeadlessUi.PumpUntil(() => !store.Economy.HasSection(name) && economy.Traders.All(t => t.Name != name)));
-            Assert.False(EconomyOverride.LoadFrom(project.DirectoryPath)!.HasSection(name));
+            Assert.True(HeadlessUi.PumpUntil(() => store.Hidden.Contains(name) && economy.Traders.All(t => t.Name != name)));
+            Assert.True(EconomyOverride.LoadFrom(project.DirectoryPath)!.HasSection(name));
+            Assert.DoesNotContain("\"" + name + "\"", store.Text, StringComparison.Ordinal);
+            Assert.False(store.ForExport().HasSection(name));
             economy.ExportCommand.Execute(null);
             Assert.False(EconomyOverride.Parse(File.ReadAllText(economy.LastExportPath!)).HasSection(name));
 

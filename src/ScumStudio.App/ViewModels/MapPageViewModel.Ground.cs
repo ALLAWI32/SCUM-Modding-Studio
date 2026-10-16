@@ -5,6 +5,7 @@ using ScumStudio.Core.Geometry;
 using ScumStudio.Core.Mathematics;
 using ScumStudio.Level.Editing;
 using ScumStudio.Level.Model;
+using ScumStudio.Level.Spawns;
 using ScumStudio.Viewport;
 
 namespace ScumStudio.App.ViewModels;
@@ -37,13 +38,55 @@ public sealed partial class MapPageViewModel
     private readonly Dictionary<string, MeshSurface?> _surfaces = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<(string Mesh, IReadOnlyList<SplineMeshParams> Bend), MeshSurface?> _bentSurfaces = [];
     private object? _bentSurfacesOf;
+    private RelayCommand? _fitToGroundCommand;
 
-    [RelayCommand]
+    /// <summary>
+    /// Sets the selection down on the ground (End). Off for a loot point of a building (it moves with its building); it is
+    /// re-checked whenever <see cref="ApplyTransformCommand"/> is, whose selection rule it shares, and when the group changes.
+    /// </summary>
+    public IRelayCommand FitToGroundCommand => _fitToGroundCommand ??= NewFitToGroundCommand();
+
+    private RelayCommand NewFitToGroundCommand()
+    {
+        var command = new RelayCommand(FitToGround, CanFitToGround);
+        ApplyTransformCommand.CanExecuteChanged += (_, _) => command.NotifyCanExecuteChanged();
+        PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(HasGroup))
+            {
+                command.NotifyCanExecuteChanged();
+            }
+        };
+        return command;
+    }
+
+    private bool CanFitToGround() => HasGroup || (SelectedActor is { IsDeleted: false } && !IsLootPointSelected);
+
     private void FitToGround()
     {
         if (_services.Projects.Current is not { } project)
         {
             _services.Notifications.Warning(Loc.T("History.NoProject"), Loc.T("Map.NoProject.Moves"));
+            return;
+        }
+
+        // A selected point is set down itself, never the building or spawner it belongs to; a loot point the building's
+        // class keeps stays where the class puts it.
+        if (!HasGroup && IsLootPointSelected)
+        {
+            _services.Notifications.Info(Loc.T("Map.Ground"), Loc.T("Map.Ground.LootPointFixed"));
+            return;
+        }
+
+        if (!CanFitToGround())
+        {
+            return;
+        }
+
+        // One point of a spawner's path or loot list: that point goes down, not the spawner it belongs to (audit F272).
+        if (!HasGroup && SelectedPointInfo() is { } point)
+        {
+            FitPointToGround(point);
             return;
         }
 
@@ -82,7 +125,9 @@ public sealed partial class MapPageViewModel
                 continue; // a road piece or a building's part: it belongs to its road or building
             }
 
-            var grounded = IsPlant(item.Actor.StaticMeshPath) || item.Actor.Kind == ActorKind.StaticMeshActor && item.Actor.StaticMeshPath is { } m && IsPlant(m)
+            // A spawn place of the island's static data (or a mesh-less spawner) is only its pin: it stands on its root (audit F273).
+            var grounded = IsPinOnly(item) ? Planted(WorldOf(item, null), null, true, supports)
+                : IsPlant(item.Actor.StaticMeshPath) || item.Actor.Kind == ActorKind.StaticMeshActor && item.Actor.StaticMeshPath is { } m && IsPlant(m)
                 ? Planted(WorldOf(item, null), MeshBounds(item.Actor.StaticMeshPath), true, supports)
                 : Grounded(item, supports);
             if (grounded is not { } root)
@@ -110,6 +155,34 @@ public sealed partial class MapPageViewModel
             RefreshGroup();
         }
     }
+
+    /// <summary>
+    /// Sets one point of a spawner (a patrol point, a loot point) down on what is under it, keeping its turn: the whole
+    /// building or spawner was re-grounded before.
+    /// </summary>
+    private void FitPointToGround(SelectedPoint sel)
+    {
+        var space = PointSpaceOf(sel);
+        var world = sel.Points[sel.Index].Local.ToTransform() * space;
+        var (x, y) = SupportCellOf(world.Translation.X, world.Translation.Y);
+        if (SupportAt(Supports([], [], (x, y, x, y)), world.Translation) is not { } ground)
+        {
+            _services.Notifications.Warning(Loc.T("Map.Ground"), Loc.T("Map.Ground.NoGround"));
+            return;
+        }
+
+        var placed = world with { Translation = world.Translation with { Z = ground } };
+        ApplyPointTransform(sel, TransformValue.FromTransform(placed.GetRelativeTransform(space)) with { Scale = sel.Points[sel.Index].Local.Scale }, Loc.T("Map.Ground.PointFitted"));
+    }
+
+    /// <summary>
+    /// True for an actor that draws nothing but its pin: a spawn place of the island's static data (a root "Place" and no
+    /// mesh), a spawner without a mesh of its own (a sentry spawner).
+    /// </summary>
+    private bool IsPinOnly(ActorItemViewModel item) =>
+        SpawnPlaces.KindOfClass(item.Actor.ClassName) is not null
+        || (item.Actor.StaticMeshPath is null && item.Actor.Components.All(c => c.StaticMeshPath is null)
+            && PreparedScene?.Placements.Any(p => p.SelectableId == item.SelectableId && Holds(p)) != true);
 
     /// <summary>True for a mesh of the game's foliage (trees, bushes, cacti, grass): the game plants it with its pivot on the ground.</summary>
     private static bool IsPlant(string? meshPath) => meshPath is not null && meshPath.Contains("/Foliage/", StringComparison.OrdinalIgnoreCase);

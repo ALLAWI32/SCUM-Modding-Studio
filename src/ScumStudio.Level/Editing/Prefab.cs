@@ -54,8 +54,27 @@ public sealed record PrefabPart
     /// <summary>Where the part stands relative to <see cref="Prefab.Pivot"/>: location in cm, rotation in degrees, scale.</summary>
     public TransformValue Transform { get; init; } = TransformValue.Identity;
 
-    /// <summary>The part's bend (see <see cref="BendActorOp"/>), or null when straight.</summary>
+    /// <summary>The part's bend (see <see cref="BendActorOp"/>), or null when straight. Kept for older readers: <see cref="Edits"/> holds it too.</summary>
     public BendValue? Bend { get; init; }
+
+    /// <summary>
+    /// What the project changed on the actor when it was saved (bend, parts, meshes, spawn points, loot…; see
+    /// <see cref="ActorEdits"/>), replayed on the placed copy; null in files written before copies carried their edits
+    /// (then only <see cref="Bend"/> is).
+    /// </summary>
+    public ActorEdits? Edits { get; init; }
+
+    /// <summary>A mesh's loot presets (empty = not lootable), or null for what its mesh asset carries.</summary>
+    public IReadOnlyList<string>? Loot { get; init; }
+
+    /// <summary>A mesh's own materials by slot (its <c>OverrideMaterials</c>; a null entry keeps the slot's), or null for none.</summary>
+    public IReadOnlyList<string?>? Materials { get; init; }
+
+    /// <summary>For a trade post the project placed as a trader: who it is (placed again under a free name of its cell).</summary>
+    public TraderPost? Trader { get; init; }
+
+    /// <summary>For a mechanic's lift: the actor name of the trade post it serves (placed only where that post is).</summary>
+    public string? Mechanic { get; init; }
 
     /// <summary>Short name for lists: the mesh, the class or the actor.</summary>
     public string DisplayName

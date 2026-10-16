@@ -27,8 +27,10 @@ public sealed record SpawnPointArray(string? Component, string Array, IReadOnlyL
 /// The point arrays a level stores on its spawners (Discord JimTheCoffeeGuy: "the tool shows the patrol points but does not
 /// let you move, add or remove them"): a sentry's <c>PatrolPoints</c> (array of <c>SentryPatrolPoint</c>, one
 /// <c>LocationRelativeToSentry</c> vector each) and an item spawner component's <c>SpawnerMarkers</c> (array of
-/// <c>ItemSpawnerMarker</c>: a <c>Transform</c> and the preset with its overrides). Only arrays the level package stores
-/// can be rewritten; a building's loot points that come from its Blueprint template are not here.
+/// <c>ItemSpawnerMarker</c>: a <c>Transform</c> and the preset with its overrides). The arrays are those of the components
+/// the level package stores: the array on the export, or, for a house's indoor loot points (seviscache: "indoor loot points
+/// show no gizmo"), the one its Blueprint template holds (<see cref="ComponentRecord.SpawnMarkersFromTemplate"/>), numbered
+/// in the template's order. Components the level does not store (synthesized, a child actor's) stay read-only.
 /// </summary>
 public static class SpawnPointArrays
 {
@@ -49,7 +51,8 @@ public static class SpawnPointArrays
 
         foreach (var component in actor.Components)
         {
-            if (component is { IsSynthesized: false, ExportIndex: >= 0, SpawnMarkers.Count: > 0 } && component.PropertyNames.Contains(SpawnerMarkers, StringComparer.OrdinalIgnoreCase))
+            if (component is { IsSynthesized: false, ExportIndex: >= 0, SpawnMarkers.Count: > 0 }
+                && (component.SpawnMarkersFromTemplate || component.PropertyNames.Contains(SpawnerMarkers, StringComparer.OrdinalIgnoreCase)))
             {
                 yield return new SpawnPointArray(component.Name, SpawnerMarkers, component.SpawnMarkers.Select((m, i) => new SpawnPoint(i, TransformValue.FromTransform(m.Local))).ToList());
             }

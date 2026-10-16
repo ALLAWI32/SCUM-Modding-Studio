@@ -57,6 +57,20 @@ public sealed class PropertyReader
         ["PerQualityLevelInt"] = null,
         ["SkeletalMeshSamplingLODBuiltData"] = null,
         ["SkeletalMeshSamplingRegionBuiltData"] = null,
+        // Niagara 4.27 (WithSerializer): the name, then the type definition as tagged members, then the derived struct's
+        // own field. A placed effect's user parameters (NiagaraComponent.OverrideParameters) hold them.
+        ["NiagaraVariableBase"] = null,
+        ["NiagaraVariable"] = null,
+        ["NiagaraVariableWithOffset"] = null,
+    };
+
+    /// <summary>
+    /// Map properties whose struct keys and values a tag does not name (a 4.27 map tag names only <c>StructProperty</c>), by
+    /// property name: (key struct, value struct).
+    /// </summary>
+    private static readonly Dictionary<string, (string Key, string Value)> MapStructs = new(StringComparer.Ordinal)
+    {
+        ["UserParameterRedirects"] = ("NiagaraVariable", "NiagaraVariable"), // FNiagaraUserRedirectionParameterStore
     };
 
     private readonly IReadOnlyList<string> _names;
@@ -188,7 +202,7 @@ public sealed class PropertyReader
 
             PropertyValue value = type == "BoolProperty"
                 ? new BoolValue(boolValue!.Value) { Offset = boolOffset, Size = 1 }
-                : DecodeTagValue(type, structName, enumName, inner, valueType, valueStart, size);
+                : DecodeTagValue(name, type, structName, enumName, inner, valueType, valueStart, size);
 
             props.Add(new PropertyTag
             {
@@ -230,7 +244,7 @@ public sealed class PropertyReader
         where T : PropertyValue => value with { Offset = Rel(start), Size = r.Position - start };
 
     // Decodes the value window of one tag; tries alternatives until one consumes exactly `size` bytes.
-    private PropertyValue DecodeTagValue(string type, string? structName, string? enumName, string? inner, string? valueType, int start, int size)
+    private PropertyValue DecodeTagValue(string name, string type, string? structName, string? enumName, string? inner, string? valueType, int start, int size)
     {
         var attempts = new List<Func<ByteReader, PropertyValue>>();
         switch (type)
@@ -267,6 +281,11 @@ public sealed class PropertyReader
                 attempts.Add(r => ReadSet(r, inner!, size));
                 break;
             case "MapProperty":
+                if (MapStructs.TryGetValue(name, out var structs) && inner == "StructProperty" && valueType == "StructProperty")
+                {
+                    attempts.Add(r => ReadMap(r, inner, valueType, byteKeysAsNames: false, structs.Key, structs.Value));
+                }
+
                 attempts.Add(r => ReadMap(r, inner!, valueType!, byteKeysAsNames: false));
                 attempts.Add(r => ReadMap(r, inner!, valueType!, byteKeysAsNames: true));
                 break;
@@ -566,6 +585,22 @@ public sealed class PropertyReader
                 };
                 fields.AddRange(ReadWeightedSampler(r));
                 return At(new NativeStructValue(structName, fields), s, r);
+            case "NiagaraVariableBase":
+            case "NiagaraVariable":
+            case "NiagaraVariableWithOffset":
+                // FNiagaraVariableBase::Serialize: the FName, then the type (FNiagaraTypeDefinitionHandle, its members tagged:
+                // ClassStructOrEnum, UnderlyingType); FNiagaraVariable adds its value bytes, ...WithOffset its offset.
+                var variable = new List<NativeField> { Field(r, "Name", "NameProperty"), new("TypeDef", ReadTaggedStruct(r, "NiagaraTypeDefinition")) };
+                if (structName == "NiagaraVariable")
+                {
+                    variable.Add(new("VarData", ReadPlainArray(r, "ByteProperty", elementSize: 1)));
+                }
+                else if (structName == "NiagaraVariableWithOffset")
+                {
+                    variable.Add(Field(r, "Offset", "IntProperty"));
+                }
+
+                return At(new NativeStructValue(structName, variable), s, r);
             default:
                 throw new NotSupportedException($"No native reader for struct '{structName}'.");
         }
@@ -573,11 +608,11 @@ public sealed class PropertyReader
 
     private NativeField Field(ByteReader r, string name, string type) => new(name, ReadElement(r, type, null, false));
 
-    private ArrayValue ReadPlainArray(ByteReader r, string type)
+    private ArrayValue ReadPlainArray(ByteReader r, string type, int elementSize = 4)
     {
         var s = r.Position;
         var n = r.I32();
-        CheckCount(n, 4, r);
+        CheckCount(n, elementSize, r);
         var items = new List<PropertyValue>(n);
         for (var i = 0; i < n; i++)
         {
@@ -688,7 +723,7 @@ public sealed class PropertyReader
         return At(new SetValue(inner, removed, items), s, r);
     }
 
-    private MapValue ReadMap(ByteReader r, string keyType, string valueType, bool byteKeysAsNames)
+    private MapValue ReadMap(ByteReader r, string keyType, string valueType, bool byteKeysAsNames, string? keyStruct = null, string? valueStruct = null)
     {
         var s = r.Position;
         var removedCount = r.I32();
@@ -696,7 +731,7 @@ public sealed class PropertyReader
         var removed = new List<PropertyValue>(removedCount);
         for (var i = 0; i < removedCount; i++)
         {
-            removed.Add(ReadElement(r, keyType, null, byteKeysAsNames));
+            removed.Add(ReadElement(r, keyType, keyStruct, byteKeysAsNames));
         }
 
         var n = r.I32();
@@ -704,8 +739,8 @@ public sealed class PropertyReader
         var entries = new List<MapEntry>(n);
         for (var i = 0; i < n; i++)
         {
-            var k = ReadElement(r, keyType, null, byteKeysAsNames);
-            var v = ReadElement(r, valueType, null, byteKeysAsNames);
+            var k = ReadElement(r, keyType, keyStruct, byteKeysAsNames);
+            var v = ReadElement(r, valueType, valueStruct, byteKeysAsNames);
             entries.Add(new MapEntry(k, v));
         }
 

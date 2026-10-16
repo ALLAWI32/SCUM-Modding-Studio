@@ -24,6 +24,7 @@ public sealed class RenderQualityTextConverter : IMultiValueConverter
         RenderQuality.Performance => Loc.T("Map.Quality.Performance"),
         RenderQuality.High => Loc.T("Map.Quality.High"),
         RenderQuality.Ultra => Loc.T("Map.Quality.Ultra"),
+        RenderQuality.GameLike => Loc.T("Map.Quality.GameLike"),
         _ => Loc.T("Map.Quality.Balanced"),
     };
 }

@@ -410,6 +410,7 @@ public static class ShareImport
         AddStaticMeshActorOp add => add.Created,
         AddBlueprintActorOp bp => bp.Created,
         DuplicateActorOp dup => dup.Created,
+        AddSpawnPlaceOp place => place.Created,
         _ => null,
     };
 }

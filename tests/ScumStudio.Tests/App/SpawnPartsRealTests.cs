@@ -58,9 +58,12 @@ public sealed class SpawnPartsRealTests
             Assert.Null(pin.LootMarker);
         }
 
-        // A shelf's loot points keep their own keys (they show what spawns there, they move with the house).
-        Assert.All(placements.Where(p => p.MeshPath == SpawnMarkers.MeshKey(SpawnKind.Loot) && p.Spawner is null && ReferenceEquals(p.Actor, house)),
-            p => Assert.True(p.InstanceKey!.Value.IsLootPoint));
+        // A shelf's loot points are points of their own when the house stores the shelf's spawner, the markers kept by its
+        // Blueprint included (seviscache: "indoor loot points show no gizmo"); a spawner the level does not store keeps
+        // loot point keys (they show what spawns there, they move with the house).
+        var shelves = placements.Where(p => p.MeshPath == SpawnMarkers.MeshKey(SpawnKind.Loot) && p.Spawner is null && ReferenceEquals(p.Actor, house)).ToList();
+        Assert.All(shelves, p => Assert.Equal(house.FindComponent(p.InstanceKey!.Value.Component) is { IsSynthesized: false, ExportIndex: >= 0 }, p.InstanceKey!.Value.IsSpawnPoint));
+        Assert.Contains(shelves, p => p.InstanceKey!.Value.IsSpawnPoint && house.FindComponent(p.InstanceKey.Value.Component)!.SpawnMarkersFromTemplate);
 
         // A drill press standing on its own (a native world spawner): drawn, and it picks the spawner actor itself.
         var factory = LevelDocument.Load(reader, Maps + "B_0_Brick_Factory_01");

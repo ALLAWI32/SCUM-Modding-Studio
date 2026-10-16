@@ -27,6 +27,9 @@ public sealed class GpuMeshCache
     // Terrain components by the prepared object (the prepare cache hands the same one back while the tile stays loaded):
     // their mesh, baked ground texture and layer weights were re-sent every streaming step (owner: "it stutters as it loads").
     private readonly Dictionary<PreparedTerrain, (MeshHandle Handle, GpuTexture? Texture, GpuTexture? Weights, string[] Textures, int Used)> _terrain = new(ReferenceEqualityComparer.Instance);
+
+    // The impostor atlas of a cached mesh (only that mesh draws with it): freed with the mesh.
+    private readonly Dictionary<string, GpuTexture> _atlases = new(StringComparer.OrdinalIgnoreCase);
     private List<string>? _taken;
     private int _generation;
     private Staging? _staging;
@@ -36,6 +39,12 @@ public sealed class GpuMeshCache
 
     /// <summary>Meshes the last upload had to send to the GPU (diagnostics; 0 when <see cref="Stage"/> sent them all beforehand).</summary>
     public int LastUploaded { get; private set; }
+
+    /// <summary>The impostor pictures <see cref="Stage"/> gives the trees and bushes of a scene (set its folder to keep them on disk).</summary>
+    public ImpostorCache Impostors { get; } = new();
+
+    /// <summary>Cached meshes drawing an impostor past their last LOD (diagnostics).</summary>
+    public int ImpostorCount => _atlases.Count;
 
     /// <summary>Starts an upload.</summary>
     internal void Begin()
@@ -182,9 +191,10 @@ public sealed class GpuMeshCache
 
     /// <summary>
     /// Sends to the GPU what <paramref name="prepared"/> draws and the cache does not hold yet: textures, then meshes (their
-    /// vertex data packed on a worker thread), then terrain, until <paramref name="budgetMs"/> is spent. Returns true once
-    /// nothing is left, so that showing the scene (<see cref="LevelScene.Update"/>) only builds nodes; call it once a frame
-    /// until then. A newer scene replaces the one being staged (what was sent stays cached).
+    /// vertex data packed on a worker thread), then terrain, then the impostors of its trees (<see cref="Impostors"/>), until
+    /// <paramref name="budgetMs"/> is spent. Returns true once nothing is left, so that showing the scene
+    /// (<see cref="LevelScene.Update"/>) only builds nodes; call it once a frame until then. A newer scene replaces the one
+    /// being staged (what was sent stays cached).
     /// </summary>
     public bool Stage(SceneRenderer renderer, PreparedLevelScene prepared, double budgetMs)
     {
@@ -234,8 +244,12 @@ public sealed class GpuMeshCache
                     }
                 }
 
+                // The mesh lives as long as its textures: a cached texture it takes counts as used now too. A scene staged and
+                // then passed over for a newer one left its meshes cached with textures that the next Trim freed, and the
+                // scene that came back to them threw "Cannot access a disposed object".
                 var uses = textures.Keys.ToArray();
                 _meshes[item.Asset.MeshPath] = (LevelSceneUploader.AddMesh(renderer, item.Asset, textures, item.Packed), uses, _generation);
+                Touch(uses);
             }
         }
 
@@ -250,6 +264,30 @@ public sealed class GpuMeshCache
             if (!_terrain.ContainsKey(component))
             {
                 Terrain(component, () => LevelSceneUploader.CreateTerrain(renderer, component, prepared, this));
+            }
+        }
+
+        // Trees and bushes get their impostor card: found in memory or on disk, or baked, one bake a call (eight small
+        // renders and read-backs, once per mesh and session).
+        if (!staging.Candidates.IsCompleted)
+        {
+            return false;
+        }
+
+        var baked = false;
+        string[] candidates = staging.Candidates.IsCompletedSuccessfully ? staging.Candidates.Result : [];
+        foreach (var path in candidates.AsSpan(Math.Min(staging.NextCandidate, candidates.Length)))
+        {
+            if (baked || clock.Elapsed.TotalMilliseconds >= budgetMs)
+            {
+                return false;
+            }
+
+            staging.NextCandidate++;
+            if (!_atlases.ContainsKey(path) && _meshes.TryGetValue(path, out var entry)
+                && Impostors.Give(renderer, path, entry.Handle, out baked) is { } atlas)
+            {
+                _atlases[path] = atlas;
             }
         }
 
@@ -273,6 +311,10 @@ public sealed class GpuMeshCache
         {
             renderer.RemoveMesh(entry.Handle);
             _meshes.Remove(key);
+            if (_atlases.Remove(key, out var atlas))
+            {
+                atlas.Dispose();
+            }
         }
 
         foreach (var (key, entry) in _textures.Where(t => t.Value.Used < oldest).ToList())
@@ -302,6 +344,12 @@ public sealed class GpuMeshCache
             entry.Weights?.Dispose();
         }
 
+        foreach (var atlas in _atlases.Values)
+        {
+            atlas.Dispose();
+        }
+
+        _atlases.Clear();
         _meshes.Clear();
         _textures.Clear();
         _terrain.Clear();
@@ -346,6 +394,23 @@ public sealed class GpuMeshCache
                     Packed.Enqueue((asset, packed));
                 }
             }, token);
+
+            // The meshes instanced placements (foliage, HISM) draw, found on a worker: a level holds 100,000 placements.
+            Candidates = Task.Run(() =>
+            {
+                var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var candidates = new List<string>();
+                foreach (var placement in scene.Placements)
+                {
+                    if (placement.Instance is not null && seen.Add(placement.MeshPath)
+                        && scene.Meshes.TryGetValue(placement.MeshPath, out var asset) && ImpostorCache.IsCandidate(asset))
+                    {
+                        candidates.Add(placement.MeshPath);
+                    }
+                }
+
+                return candidates.ToArray();
+            }, token);
         }
 
         public PreparedLevelScene Scene { get; }
@@ -359,5 +424,9 @@ public sealed class GpuMeshCache
         public ConcurrentQueue<(PreparedMeshAsset Asset, PreparedMesh? Packed)> Packed { get; } = new();
 
         public Task Packing { get; }
+
+        public Task<string[]> Candidates { get; }
+
+        public int NextCandidate { get; set; }
     }
 }

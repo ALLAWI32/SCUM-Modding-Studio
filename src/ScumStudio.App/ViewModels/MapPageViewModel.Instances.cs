@@ -88,7 +88,7 @@ public sealed partial class MapPageViewModel
     /// A copied instance: Paste adds an instance to its component (<c>Source</c>, a stored foliage/ISM component)
     /// when pasting into its own level, else places its mesh as a new StaticMeshActor.
     /// </summary>
-    private (string Mesh, TransformValue World, string? Collision, InstanceRef? Source, IReadOnlyList<string>? Loot)? _copiedInstance;
+    private (string Mesh, TransformValue World, string? Collision, InstanceRef? Source, IReadOnlyList<string>? Loot, IReadOnlyList<string?>? Materials)? _copiedInstance;
 
     /// <summary>True when one instance (not a whole actor) is selected.</summary>
     public bool HasSelectedInstance => SelectedInstanceInfo() is not null;
@@ -109,7 +109,7 @@ public sealed partial class MapPageViewModel
     }
 
     /// <summary>Properties of one loot point: which building and spawner it belongs to, where it is.</summary>
-    private static IReadOnlyList<PropertyRow> DescribeLootPoint(ActorItemViewModel item, InstanceKey point)
+    private IReadOnlyList<PropertyRow> DescribeLootPoint(ActorItemViewModel item, InstanceKey point)
     {
         var component = item.Actor.FindComponent(point.Component);
         var marker = component?.SpawnMarkers is { } all && point.Marker < all.Count ? all[point.Marker] : null;
@@ -120,7 +120,9 @@ public sealed partial class MapPageViewModel
         };
         if (marker is not null && component is not null)
         {
-            var t = (marker.Local * component.WorldTransform).Translation;
+            // Where its spawner stands now (moved, turned, or a copy: a copy's parts keep its source's stored places; F274).
+            var stored = item.Actor.Root?.WorldTransform ?? item.Actor.WorldTransform;
+            var t = (marker.Local * component.WorldTransform.GetRelativeTransform(stored) * RootWorldOf(item, CurrentRootTransform(item))).Translation;
             rows.Add(new(Localization.Loc.T("Map.Row.Location"), string.Create(CultureInfo.InvariantCulture, $"{t.X:0.#}, {t.Y:0.#}, {t.Z:0.#} cm")));
         }
 
@@ -184,8 +186,20 @@ public sealed partial class MapPageViewModel
         ? _services.Projects.Current?.State.GetTransformOverride(sel.Item.Reference, sel.Component.Name) ?? sel.Component.Relative
         : _services.Projects.Current?.State.GetInstanceOverride(RefOf(sel)) ?? TransformValue.FromTransform(sel.Instance.LocalTransform);
 
-    /// <summary>World transform the selection's local transform is relative to: the component (instances) or its parent (segments, parts).</summary>
-    private static FTransform SpaceOf(SelectedInstance sel)
+    /// <summary>
+    /// World transform the selection's local transform is relative to: the component (instances) or its parent (segments,
+    /// parts), where it is drawn: a copy's are in the copy, not where its source stores them.
+    /// </summary>
+    private FTransform SpaceOf(SelectedInstance sel) => InCopy(sel.Item, StoredSpaceOf(sel));
+
+    /// <summary>
+    /// <paramref name="stored"/> (a place in <paramref name="item"/>'s record) where the viewport draws it: a copy drawn as a
+    /// clone of its source keeps its source's stored places in its record; the clone has them relative to the copy's root.
+    /// </summary>
+    private FTransform InCopy(ActorItemViewModel item, FTransform stored) =>
+        item.SourceId != 0 && ActorOf(item.SourceId) is { } source ? stored.GetRelativeTransform(source.Actor.WorldTransform) * CloneRoot(item) : stored;
+
+    private static FTransform StoredSpaceOf(SelectedInstance sel)
     {
         if (sel.Instance is not null)
         {
@@ -309,19 +323,19 @@ public sealed partial class MapPageViewModel
             return moved;
         }
 
-        var byReference = _pristineActors.ToDictionary(a => a.Reference, ActorRef.Comparer);
         // Added instances (copied trees) are drawn the same way: the viewport clones a sibling of the component for a key it has no node for.
+        // A copy's own edits (carried from its source) are drawn on its clone (F078: a copied house showed the fence it hides).
         foreach (var (instance, value) in state.InstanceOverrides.Concat(state.AddedInstances.Keys.Select(i => (i, state.GetAddedInstanceTransform(i)!.Value))))
         {
-            if (byReference.TryGetValue(instance.ActorRef, out var item) && item.Actor.FindComponent(instance.Component) is { } component)
+            if (ActorOf(instance.ActorRef) is { } item && item.Actor.FindComponent(instance.Component) is { } component)
             {
-                moved[InstanceKey.Of(item.SelectableId, instance.Component, instance.Index)] = value.ToTransform() * component.WorldTransform;
+                moved[InstanceKey.Of(item.SelectableId, instance.Component, instance.Index)] = value.ToTransform() * InCopy(item, component.WorldTransform);
             }
         }
 
         foreach (var (actor, name, value) in state.TransformOverrides)
         {
-            if (name.Length > 0 && byReference.TryGetValue(actor, out var item) && item.Actor.FindComponent(name) is { } piece && piece.ExportIndex != item.Actor.RootComponent)
+            if (name.Length > 0 && ActorOf(actor) is { } item && item.Actor.FindComponent(name) is { } piece && piece.ExportIndex != item.Actor.RootComponent)
             {
                 var index = piece.SplineMesh is null ? InstanceKey.Part : InstanceKey.Segment;
                 moved[InstanceKey.Of(item.SelectableId, name, index)] = value.ToTransform() * SpaceOf(new SelectedInstance(item, null, piece));
@@ -458,7 +472,7 @@ public sealed partial class MapPageViewModel
             }
 
             // It collides as the tree, rock or part it was copied from (a tree mesh's own default lets players through).
-            var op = EditOpFactory.AddStaticMeshActor(sel.Item.Level, mesh, shifted, project.State) with { CollisionProfile = sel.Component.CollisionProfile, Loot = LootOf(sel.Item, sel.Component) };
+            var op = EditOpFactory.AddStaticMeshActor(sel.Item.Level, mesh, shifted, project.State) with { CollisionProfile = sel.Component.CollisionProfile, Loot = LootOf(sel.Item, sel.Component), OverrideMaterials = sel.Component.OverrideMaterials };
             var entry = _services.Projects.Apply(op);
             _services.Notifications.Info(Localization.Loc.T("Map.Duplicated"), entry.Op.Describe());
             RefreshEdits();
@@ -495,7 +509,7 @@ public sealed partial class MapPageViewModel
             return;
         }
 
-        _copiedInstance = (mesh, TransformValue.FromTransform(CurrentInstanceTransform(sel).ToTransform() * SpaceOf(sel)), sel.Component.CollisionProfile, StoredInstanceOf(sel), LootOf(sel.Item, sel.Component));
+        _copiedInstance = (mesh, TransformValue.FromTransform(CurrentInstanceTransform(sel).ToTransform() * SpaceOf(sel)), sel.Component.CollisionProfile, StoredInstanceOf(sel), LootOf(sel.Item, sel.Component), sel.Component.OverrideMaterials);
         CopiedActor = null;
         OnPropertyChanged(nameof(HasCopiedActor));
         OnPropertyChanged(nameof(PasteTip));
@@ -522,7 +536,7 @@ public sealed partial class MapPageViewModel
                 return true;
             }
 
-            var op = EditOpFactory.AddStaticMeshActor(target, copied.Mesh, copied.World with { Location = at }, project.State) with { CollisionProfile = copied.Collision, Loot = copied.Loot };
+            var op = EditOpFactory.AddStaticMeshActor(target, copied.Mesh, copied.World with { Location = at }, project.State) with { CollisionProfile = copied.Collision, Loot = copied.Loot, OverrideMaterials = copied.Materials };
             var entry = _services.Projects.Apply(op);
             _services.Notifications.Info(Localization.Loc.T("Map.Pasted"), entry.Op.Describe());
             RefreshEdits();

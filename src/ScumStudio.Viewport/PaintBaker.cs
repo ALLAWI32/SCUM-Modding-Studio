@@ -1,10 +1,11 @@
 using System.Numerics;
 using ScumStudio.Assets.Textures;
+using ScumStudio.Viewport.Decals;
 
 namespace ScumStudio.Viewport;
 
 /// <summary>
-/// Car paint as SCUM's <c>M_Car_01</c> shows it: where the colour mask is green the body has paint colour A, where it is
+/// Car paint as SCUM's <c>M_Car_01</c> shows it (<see cref="PaintRule"/>): where the colour mask is green the body has paint colour A, where it is
 /// also blue colour B (the Kinglet's tan wings on its navy body, the Mariner's beige floats); the diffuse texture only adds
 /// its scratches and grime to the paint (its brightness around its own mean), and bare metal, plastic and rubber keep it.
 /// The game's icons show it that way: a plane whose body texture is 12 times darker than the Rager's still wears its paint
@@ -21,7 +22,7 @@ public static class PaintBaker
 
     /// <summary>Paints <paramref name="diffuse"/> (sRGB) with linear colours through <paramref name="mask"/> (any size; sampled nearest).</summary>
     /// <param name="diffuse">The material's diffuse texture.</param>
-    /// <param name="mask">The colour mask: green = paint, blue = paint in the second colour.</param>
+    /// <param name="mask">The colour mask: green = paint, blue = paint in the second colour (<see cref="PaintRule"/>).</param>
     /// <param name="colourA">Main colour (linear).</param>
     /// <param name="colourB">Second colour (linear), or null to use the main colour there too.</param>
     public static TextureImage Bake(TextureImage diffuse, TextureImage mask, Vector4 colourA, Vector4? colourB = null)
@@ -42,7 +43,7 @@ public static class PaintBaker
             for (var x = 0; x < w; x += 4)
             {
                 var mi = MaskIndex(x, y);
-                var cover = Math.Max(m[mi + 1], m[mi + 2]) / 255f;
+                var cover = PaintRule.Coverage(m, mi);
                 sum += cover * Luminance(((y * w) + x) * 4);
                 weight += cover;
             }
@@ -55,8 +56,8 @@ public static class PaintBaker
             for (var x = 0; x < w; x++)
             {
                 var mi = MaskIndex(x, y);
-                var cover = Math.Max(m[mi + 1], m[mi + 2]) / 255f;
-                var tone = m[mi + 2] / 255f; // blue: the second colour
+                var cover = PaintRule.Coverage(m, mi);
+                var tone = PaintRule.SelectB(m, mi);
                 var i = ((y * w) + x) * 4;
                 var detail = Math.Clamp(Luminance(i) / mean, DetailMin, DetailMax);
                 for (var c = 0; c < 3; c++)

@@ -1,6 +1,9 @@
+using System.Diagnostics.CodeAnalysis;
 using CUE4Parse.Encryption.Aes;
+using CUE4Parse.FileProvider;
 using CUE4Parse.FileProvider.Objects;
 using CUE4Parse.FileProvider.Vfs;
+using CUE4Parse.UE4.Assets;
 using CUE4Parse.UE4.Objects.Core.Misc;
 using CUE4Parse.UE4.Versions;
 
@@ -19,10 +22,74 @@ namespace ScumStudio.Assets.Catalog;
 /// <para>Loose directories added with a higher read order than the paks override pak entries with the same path
 /// (used for "stock paks + my extracted edits" setups).</para>
 /// </remarks>
-public sealed class ScumFileProvider : AbstractVfsFileProvider
+public sealed class ScumFileProvider : AbstractVfsFileProvider, IFileProvider
 {
     private static readonly HashSet<string> LooseExtensions = new(GameFile.UeKnownExtensions, StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _aliased = new(StringComparer.OrdinalIgnoreCase);
+
+    // The packages CUE4Parse loaded on this thread to resolve imports while an ImportScope is open, by path.
+    [ThreadStatic]
+    private static Dictionary<string, IPackage?>? _importScope;
+
+    // Packages a scope keeps at most (they hold their file's bytes): the shared ones (a Blueprint, a parent material) are
+    // met again long before this many others.
+    private const int ImportScopeCapacity = 256;
+
+    /// <summary>
+    /// Until the result is disposed, a package CUE4Parse loads on this thread to resolve an import (a component's template,
+    /// a Blueprint class, a material) is read once and then reused. CUE4Parse reads the whole imported package again for
+    /// every import it resolves: the 16,677 objects of the TV_Base_A_3_Abandoned level read their Blueprints' packages
+    /// thousands of times, 8.3 GB of garbage for one level (owner: "read 9172 ms (6337 MB allocated)", the app stalls while
+    /// the collector cleans it up). Per thread and per scope, so nothing is kept after it and no package is shared between
+    /// threads. Nested scopes share the outer one.
+    /// </summary>
+    public static IDisposable ImportScope()
+    {
+        if (_importScope is not null)
+        {
+            return NoScope.Instance;
+        }
+
+        _importScope = new Dictionary<string, IPackage?>(StringComparer.OrdinalIgnoreCase);
+        return new Scope();
+    }
+
+    /// <inheritdoc cref="AbstractFileProvider.TryLoadPackage(string, out IPackage)" />
+    /// <remarks>Re-implemented for the calls CUE4Parse makes through <see cref="IFileProvider"/> (see <see cref="ImportScope"/>).</remarks>
+    bool IFileProvider.TryLoadPackage(string path, [MaybeNullWhen(false)] out IPackage package)
+    {
+        if (_importScope is not { } scope)
+        {
+            return TryLoadPackage(path, out package);
+        }
+
+        if (!scope.TryGetValue(path, out var kept))
+        {
+            if (scope.Count >= ImportScopeCapacity)
+            {
+                scope.Clear(); // a long scope keeps what it reuses most recently, not every package it ever met
+            }
+
+            scope[path] = kept = TryLoadPackage(path, out var loaded) ? loaded : null;
+        }
+
+        package = kept!;
+        return kept is not null;
+    }
+
+    private sealed class Scope : IDisposable
+    {
+        public void Dispose() => _importScope = null;
+    }
+
+    private sealed class NoScope : IDisposable
+    {
+        public static readonly NoScope Instance = new();
+
+        public void Dispose()
+        {
+        }
+    }
 
     /// <summary>Creates an empty provider using UE 4.27 versions and case-insensitive paths.</summary>
     public ScumFileProvider(VersionContainer? versions = null)

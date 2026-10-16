@@ -219,10 +219,11 @@ public sealed class SpawnModelsRealTests
         AssertModel(prepared, zombie, SpawnKind.Zombie);
         Assert.Equal(SpawnModels.ZombieMesh, SpawnMarkers.ModelOf(zombie.MeshPath));
 
-        // A hangar shelf's loot point: an item of its preset, or the crate; still the loot point's own key.
+        // A hangar shelf's loot point: an item of its preset, or the crate; still the point's own key (a point of the shelf's
+        // stored spawner, whose markers the hangar's Blueprint keeps).
         var hangar = airfield.Actors.Single(a => a.Name == "BP_Airplane_Hangar2_2");
         var loot = prepared.Placements.First(p => ReferenceEquals(p.Actor, hangar) && SpawnMarkers.KindOfMesh(p.MeshPath) == SpawnKind.Loot);
-        Assert.True(loot.InstanceKey!.Value.IsLootPoint);
+        Assert.True(loot.InstanceKey!.Value.IsSpawnPoint);
         Assert.Equal(loot.InstanceKey, loot.PickKey(false));
         Assert.True(SpawnMarkers.ModelOf(loot.MeshPath) is not null || loot.MeshPath == SpawnMarkers.MeshKey(SpawnKind.Loot));
         Assert.True(prepared.Meshes[loot.MeshPath].Mesh.TriangleCount > 0);

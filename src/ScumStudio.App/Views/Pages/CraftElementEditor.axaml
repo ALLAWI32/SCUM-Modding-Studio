@@ -1,0 +1,66 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:ScumStudio.App.ViewModels"
+             x:Class="ScumStudio.App.Views.Pages.CraftElementEditor"
+             x:DataType="vm:CraftableRowViewModel">
+  <StackPanel Spacing="10">
+    <!-- Use: placed in the world, crafted into the bag, or both -->
+    <StackPanel Orientation="Horizontal" Spacing="10">
+      <TextBlock Text="{Tr Craftables.Use}" Classes="caption" VerticalAlignment="Center" ToolTip.Tip="{Tr Craftables.Use.Tip}" />
+      <Border Classes="segmented" VerticalAlignment="Center">
+        <StackPanel Orientation="Horizontal">
+          <ToggleButton x:Name="CraftUseBuild" IsChecked="{Binding IsBuild}" IsEnabled="{Binding CanBuild}" Content="{Tr Craftables.Use.Build}" ToolTip.Tip="{Tr Craftables.Use.Build.Tip}" />
+          <ToggleButton x:Name="CraftUseCraft" IsChecked="{Binding IsCraft}" IsEnabled="{Binding CanCraft}" Content="{Tr Craftables.Use.Craft}" ToolTip.Tip="{Tr Craftables.Use.Craft.Tip}" />
+          <ToggleButton x:Name="CraftUseBoth" IsChecked="{Binding IsBoth}" IsEnabled="{Binding CanBoth}" Content="{Tr Craftables.Use.Both}" ToolTip.Tip="{Tr Craftables.Use.Both.Tip}" />
+        </StackPanel>
+      </Border>
+    </StackPanel>
+    <TextBlock x:Name="CraftKindWarning" Text="{Binding KindWarning}" Classes="warn wrap" IsVisible="{Binding KindWarning, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+
+    <!-- "Like the game's bed": the game's levels and the values each one stores, with Reset -->
+    <Border Classes="card" Padding="12" IsVisible="{Binding IsElement}">
+      <StackPanel Spacing="8">
+        <TextBlock Text="{Tr Craftables.Element.Title}" Classes="h3" />
+        <TextBlock Text="{Binding ElementNote}" Classes="caption wrap" IsVisible="{Binding ElementNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+        <StackPanel Spacing="8" DataContext="{Binding Element}" x:DataType="vm:ElementEditorViewModel"
+                    IsVisible="{Binding $parent[UserControl].((vm:CraftableRowViewModel)DataContext).HasElement}">
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <TextBlock Text="{Binding Like}" Classes="muted" VerticalAlignment="Center" />
+            <Border x:Name="CraftElementRespawn" Classes="badge ok" IsVisible="{Binding IsRespawnPoint}" ToolTip.Tip="{Tr Craftables.Element.Respawn.Tip}">
+              <TextBlock Text="{Tr Craftables.Element.Respawn}" />
+            </Border>
+          </StackPanel>
+          <TextBlock Text="{Tr Craftables.Element.Levels}" Classes="caption" IsVisible="{Binding HasLevels}" />
+          <ListBox x:Name="CraftElementLevels" Classes="plain" ItemsSource="{Binding Levels}" SelectedItem="{Binding SelectedLevel}" IsVisible="{Binding HasLevels}"
+                   ToolTip.Tip="{Tr Craftables.Element.Levels.Tip}">
+            <ListBox.ItemsPanel>
+              <ItemsPanelTemplate><WrapPanel Orientation="Horizontal" /></ItemsPanelTemplate>
+            </ListBox.ItemsPanel>
+            <ListBox.ItemTemplate>
+              <DataTemplate x:DataType="vm:ElementLevelViewModel">
+                <TextBlock Text="{Binding Title}" />
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+          <StackPanel Spacing="4" DataContext="{Binding SelectedLevel}" x:DataType="vm:ElementLevelViewModel">
+            <ItemsControl x:Name="CraftElementValues" ItemsSource="{Binding Values}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:ElementValueViewModel">
+                  <Grid ColumnDefinitions="220,150,*,Auto" ColumnSpacing="10" Margin="0,2">
+                    <TextBlock Grid.Column="0" Text="{Binding Label}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Tip}" />
+                    <NumericUpDown Grid.Column="1" Value="{Binding Number}" Minimum="-79228162514264337593543950335" Maximum="79228162514264337593543950335" Increment="1" FormatString="0.###" IsVisible="{Binding IsNumber}"
+                                   ToolTip.Tip="{Binding Tip}" />
+                    <CheckBox Grid.Column="1" IsChecked="{Binding Flag}" IsVisible="{Binding IsFlag}" ToolTip.Tip="{Binding Tip}" />
+                    <TextBlock Grid.Column="2" Text="{Binding StockText}" Classes="caption" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                    <Button Grid.Column="3" Classes="ghost" Content="{Tr Craftables.Element.Reset}" ToolTip.Tip="{Tr Craftables.Element.Reset.Tip}" Command="{Binding ResetCommand}" />
+                  </Grid>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+            <TextBlock Classes="caption wrap" Text="{Binding InheritedText}" IsVisible="{Binding HasInherited}" ToolTip.Tip="{Tr Craftables.Element.Inherited.Tip}" />
+          </StackPanel>
+        </StackPanel>
+      </StackPanel>
+    </Border>
+  </StackPanel>
+</UserControl>

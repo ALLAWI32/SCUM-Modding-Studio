@@ -1,6 +1,7 @@
 using Avalonia.VisualTree;
 using ScumStudio.App.ViewModels;
 using ScumStudio.Core.Abstractions;
+using ScumStudio.Core.Mathematics;
 using ScumStudio.Pak;
 using ScumStudio.Viewport;
 
@@ -31,20 +32,25 @@ public sealed class SpawnInfoRealTests
         await map.LoadLevelsAsync(["/Game/ConZ_Files/Maps/The_Island/A_4_Airfield"]);
         map.ShowSpawns = true;
 
-        // A gold pin on a hangar shelf picks as itself (the hangar's id, its own key), not as nothing.
+        // A gold pin on a hangar shelf picks as itself (the hangar's id, its own key), not as nothing. The hangar stores the
+        // shelf's spawner and its Blueprint the markers, so the pin is a point of its own (seviscache: "indoor loot points
+        // show no gizmo").
         var hangar = map.AllActors.Single(a => a.Name == "BP_Airplane_Hangar2_2");
         var pin = map.PreparedScene!.Placements.First(p => SpawnMarkers.KindOfMesh(p.MeshPath) == SpawnKind.Loot && ReferenceEquals(p.Actor, hangar.Actor));
         Assert.Equal(hangar.SelectableId, pin.SelectableId);
         var key = pin.InstanceKey!.Value;
-        Assert.True(key.IsLootPoint);
+        Assert.True(key.IsSpawnPoint);
+        var shelf = hangar.Actor.FindComponent(key.Component)!;
+        Assert.True(shelf is { IsSynthesized: false, SpawnMarkersFromTemplate: true });
 
         map.SelectedInstanceKey = key;
         map.SelectedActorId = hangar.SelectableId;
-        Assert.True(map.IsLootPointSelected);
-        Assert.Null(map.SelectedRootWorld); // no gizmo: dragging the pin must not carry the hangar off
-        Assert.False(map.DeleteSelectedCommand.CanExecute(null)); // Delete must not delete the hangar
-        Assert.False(map.DuplicateSelectedCommand.CanExecute(null));
-        Assert.Contains(map.ActorProperties, r => r.Name == "Loot point");
+        Assert.True(map.IsSpawnPointSelected);
+        Assert.False(map.IsLootPointSelected);
+        Assert.True(FVector.Distance(map.SelectedRootWorld!.Value.Translation, (shelf.SpawnMarkers[key.Point].Local * shelf.WorldTransform).Translation) < 1f); // the gizmo on the point
+        Assert.True(map.DeleteSelectedCommand.CanExecute(null)); // Delete and Duplicate act on the point, not on the hangar
+        Assert.True(map.DuplicateSelectedCommand.CanExecute(null));
+        Assert.Contains(map.ActorProperties, r => r.Name == "Spawn point");
         await Until(() => map.SpawnInfo.Count > 0);
         Assert.Contains(map.SpawnInfo, r => r.IsHeader && r.Text.Contains("World_Shelf", StringComparison.Ordinal) && r.Detail!.StartsWith("20 %", StringComparison.Ordinal));
         Assert.Contains(map.SpawnInfo, r => r.IsGroup && r.Text.EndsWith("Airfield", StringComparison.Ordinal) && r.Rarity == "Uncommon");

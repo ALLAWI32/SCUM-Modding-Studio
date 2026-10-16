@@ -1,5 +1,7 @@
 using System.Buffers.Binary;
+using System.Globalization;
 using ScumStudio.Core.Mathematics;
+using ScumStudio.Formats;
 using ScumStudio.Formats.Packages;
 using ScumStudio.Formats.Properties;
 using ScumStudio.Level.Editing;
@@ -20,25 +22,78 @@ public sealed record SpawnPlacesEditRequest
     /// <summary>New places: a copy of a stock place (its group and settings) at a transform.</summary>
     public IReadOnlyList<(SpawnPlaceKind Kind, int Source, TransformValue Transform)> Added { get; init; } = [];
 
+    /// <summary>
+    /// What stock places spawn (see <see cref="SpawnChoices"/>): a vehicle point's group (<c>City</c>), a zone's settings
+    /// (<c>MTZ_Settlement_Large</c>) or a hunting area's biome (<c>BD_Village</c>). A copy of the place carries it.
+    /// </summary>
+    public IReadOnlyDictionary<(SpawnPlaceKind Kind, int Index), string> Choices { get; init; } = new Dictionary<(SpawnPlaceKind, int), string>();
+
+    /// <summary>What added places spawn, by their index in <see cref="Added"/> (over their source's choice).</summary>
+    public IReadOnlyDictionary<int, string> AddedChoices { get; init; } = new Dictionary<int, string>();
+
+    /// <summary>New places (not copies: <see cref="AddSpawnPlaceOp"/>), each written with what it spawns.</summary>
+    public IReadOnlyList<NewSpawnPlace> Created { get; init; } = [];
+
     /// <summary>True when nothing changes.</summary>
-    public bool IsEmpty => Deleted.Count == 0 && Moved.Count == 0 && Added.Count == 0;
+    public bool IsEmpty => Deleted.Count == 0 && Moved.Count == 0 && Added.Count == 0 && Choices.Count == 0 && Created.Count == 0;
 }
+
+/// <summary>A new spawn place for <see cref="SpawnPlacesEditor.Apply"/> (see <see cref="AddSpawnPlaceOp"/>).</summary>
+/// <param name="Name">Its actor name (for the report).</param>
+/// <param name="Kind">Which array it joins.</param>
+/// <param name="Setting">What spawns there (<see cref="AddSpawnPlaceOp.Setting"/>, or the choice set on it later).</param>
+/// <param name="Transform">Where, as the map holds it (a zone's or area's size in the scale, metres).</param>
+/// <param name="Tags">A tagged point's gameplay tags (<see cref="AddSpawnPlaceOp.Tags"/>); null or empty = none.</param>
+public sealed record NewSpawnPlace(string Name, SpawnPlaceKind Kind, string Setting, TransformValue Transform, IReadOnlyList<string>? Tags = null);
+
+/// <summary>
+/// What the client export read of the stock places its edits name by number (audit F281): each list's length and where
+/// each named place stands. A server export checks its own cook against it.
+/// </summary>
+/// <param name="Counts">The client cook's list lengths (<see cref="SpawnPlacesEditor.Counts"/>).</param>
+/// <param name="Places">Where each stock place the edits name stands in the client cook.</param>
+public sealed record SpawnPlacesReference(IReadOnlyDictionary<SpawnPlaceKind, int> Counts, IReadOnlyDictionary<(SpawnPlaceKind Kind, int Index), FVector> Places);
 
 /// <summary>What <see cref="SpawnPlacesEditor.Apply"/> wrote.</summary>
 /// <param name="Deleted">Places removed.</param>
 /// <param name="Moved">Places moved or resized.</param>
 /// <param name="Added">Places added.</param>
 /// <param name="Warnings">Edits that could not be written.</param>
-public sealed record SpawnPlacesReport(int Deleted, int Moved, int Added, IReadOnlyList<string> Warnings);
+/// <param name="Chosen">Stock places whose choice of what spawns was written.</param>
+/// <param name="Created">New places written (not copies).</param>
+public sealed record SpawnPlacesReport(int Deleted, int Moved, int Added, IReadOnlyList<string> Warnings, int Chosen = 0, int Created = 0);
 
 /// <summary>
 /// Writes spawn place edits into <c>The_Island_LevelStaticData</c>: each touched array is rebuilt from its stock entries
-/// (kept, moved in place, or left out) followed by copies of stock entries at their new places; its count and the array
-/// and inner tag sizes follow. A zone's bounding boxes (plain, activation, low-population activation) are recomputed from
-/// its ellipse, the way the stock data has them.
+/// (kept, moved in place, or left out), then copies of stock entries at their new places, then the new places (laid out as
+/// a stock entry, every field the map shows written from the edit); its count and the array and inner tag sizes follow. A
+/// zone's bounding boxes (plain, activation, low-population activation) are recomputed from its ellipse, the way the stock
+/// data has them. A zone's settings or a hunting area's biome the data does not import yet is imported when its package
+/// exists (in the game files or among the project's copies).
 /// </summary>
 public static class SpawnPlacesEditor
 {
+    private static readonly string[] ZoneMembers = ["_semiXAxisSize", "_semiYAxisSize", "_boundingBox", "_zoneActivationBoundingBox", "_LPCZoneActivationBoundingBox"];
+
+    // A zone's sub-zones (boxes with settings of their own) and the points drones approach it from: world places around it.
+    private static readonly string[] PlaceBound = ["_subZoneData", "_flyingSpawnedCharacterApproachLocations"];
+
+    // The members of each list's entries (SCUM's FVehicleSpawnPointData, FEncounterLegacy/TaggedCharacterSpawnPoint,
+    // FEncounterStaticZoneDescription, FHuntingBiomeDescription with its FBiomeParameters). A new place writes its place,
+    // size, what spawns there and its tags, leaves the place-bound ones out, and keeps the rest as its template has them
+    // (a zone's activation multipliers and low-population settings, an area's priority, spawning switch and visitor
+    // distance); an entry with any other member (an id in a later game build) is never a template.
+    private static readonly Dictionary<SpawnPlaceKind, string[]> KnownMembers = new()
+    {
+        [SpawnPlaceKind.Vehicle] = ["SpawnTransform", SpawnChoices.VehicleGroup],
+        [SpawnPlaceKind.Character] = ["Type", "Transform"],
+        [SpawnPlaceKind.TaggedCharacter] = ["Type", "Transform", "Tags"],
+        [SpawnPlaceKind.Zone] = ["_transform", SpawnChoices.ZoneData, "_lpcZoneData", "_zoneActivationRadiusMultiplier", "_LPCZoneActivationRadiusMultiplier", .. ZoneMembers, .. PlaceBound],
+        [SpawnPlaceKind.Animal] = ["Transform", "Radius", "PopulationParameters"],
+    };
+
+    private static readonly string[] PopulationMembers = ["Priority", SpawnChoices.Biome, "bEnablePopulationSpawning", "VisitorDeactivationDistance"];
+
     /// <summary>The spawn place edits of <paramref name="state"/> (actors of the <see cref="SpawnPlaces.StaticDataPath"/> document).</summary>
     public static SpawnPlacesEditRequest Plan(EditState state, List<string>? warnings = null)
     {
@@ -61,50 +116,94 @@ public static class SpawnPlacesEditor
             }
         }
 
+        var choices = new Dictionary<(SpawnPlaceKind, int), string>();
+        foreach (var (actor, property, value) in state.SpawnChoices.Where(c => SpawnPlaces.IsStaticData(c.Actor.Level)))
+        {
+            if (SpawnPlaces.ParseName(actor.Actor) is { } stock && !deleted.Contains(stock) && SpawnChoices.PropertyOf(stock.Kind) == property)
+            {
+                choices[stock] = value;
+            }
+        }
+
+        var addedChoices = new Dictionary<int, string>();
         var added = new List<(SpawnPlaceKind, int, TransformValue)>();
-        foreach (var (actor, op) in state.AddedActors.Where(a => SpawnPlaces.IsStaticData(a.Key.Level)).OrderBy(a => a.Key.Actor, StringComparer.Ordinal))
+        var created = new List<NewSpawnPlace>();
+        foreach (var (actor, root, transform, choice) in AddedPlaces(state))
+        {
+            switch (root)
+            {
+                case DuplicateActorOp copy when SpawnPlaces.ParseName(copy.Source.Actor) is { } stock:
+                    if (choice is not null)
+                    {
+                        addedChoices[added.Count] = choice;
+                    }
+
+                    added.Add((stock.Kind, stock.Index, transform));
+                    break;
+                case AddSpawnPlaceOp place:
+                    created.Add(new NewSpawnPlace(actor.Actor, place.Kind, choice ?? place.Setting, transform, place.Tags));
+                    break;
+                default:
+                    warnings?.Add($"{actor.Actor}: neither a copy of a spawn place nor a new one; not written.");
+                    break;
+            }
+        }
+
+        return new SpawnPlacesEditRequest { Deleted = deleted, Moved = moved, Added = added, Choices = choices, AddedChoices = addedChoices, Created = created };
+    }
+
+    /// <summary>
+    /// The places the project added to the static data and kept, in the order the export appends them (by actor name): the
+    /// actor, the edit its chain of copies starts from (a copy of a stock place or a <see cref="AddSpawnPlaceOp"/>), where it
+    /// stands, and what it spawns when that was chosen on it or on a copy in between (null = as where the chain starts).
+    /// </summary>
+    public static IEnumerable<(ActorRef Actor, EditOp Root, TransformValue Transform, string? Choice)> AddedPlaces(EditState state)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        foreach (var (actor, op) in state.AddedActors.Where(a => SpawnPlaces.IsStaticData(a.Key.Level)).OrderBy(a => a.Key.Actor, StringComparer.Ordinal).ToList())
         {
             if (state.IsDeleted(actor) || state.GetAddedTransform(actor) is not { } transform)
             {
                 continue;
             }
 
-            // A copy of a copy is a copy of the stock place the chain starts from.
-            var source = op;
-            var hops = 0;
-            while (source is DuplicateActorOp d && SpawnPlaces.ParseName(d.Source.Actor) is null && state.AddedActors.TryGetValue(d.Source, out var parent) && hops++ < 64)
+            // A copy of a copy is a copy of the place the chain starts from.
+            var chain = new List<ActorRef> { actor };
+            var root = op;
+            while (root is DuplicateActorOp d && SpawnPlaces.ParseName(d.Source.Actor) is null && state.AddedActors.TryGetValue(d.Source, out var parent) && chain.Count < 64)
             {
-                source = parent;
+                chain.Add(d.Source);
+                root = parent;
             }
 
-            if (source is DuplicateActorOp copy && SpawnPlaces.ParseName(copy.Source.Actor) is { } stock)
+            var kind = root switch
             {
-                added.Add((stock.Kind, stock.Index, transform));
-            }
-            else
-            {
-                warnings?.Add($"{actor.Actor}: not a copy of a spawn place; not written.");
-            }
+                DuplicateActorOp copy when SpawnPlaces.ParseName(copy.Source.Actor) is { } stock => stock.Kind,
+                AddSpawnPlaceOp place => place.Kind,
+                _ => (SpawnPlaceKind?)null,
+            };
+            var property = kind is { } k ? SpawnChoices.PropertyOf(k) : null;
+            yield return (actor, root, transform, property is null ? null : chain.Select(a => state.GetSpawnChoice(a, property)).FirstOrDefault(c => c is not null));
         }
-
-        return new SpawnPlacesEditRequest { Deleted = deleted, Moved = moved, Added = added };
     }
 
     /// <summary>
-    /// <paramref name="request"/> with every stock vehicle and zombie / NPC spawn point that stands inside one of
+    /// <paramref name="request"/> with every stock vehicle and zombie / NPC spawn point that stands inside one of the solid
     /// <paramref name="volumes"/> (where it stands after the request's moves) removed too (owner: "nothing may spawn inside
-    /// the rocks I build"). Threat zones and hunting areas are areas, not points, and stay; so do the places the project
-    /// added (the user put them there). <paramref name="blocked"/> counts the removed points.
+    /// the rocks I build"). A hollow shell keeps the points in its rooms (audit F099: a placed hangar emptied its floor).
+    /// Threat zones and hunting areas are areas, not points, and stay; so do the places the project added (the user put them
+    /// there). <paramref name="blocked"/> counts the removed points, <paramref name="names"/> gets their actor names.
     /// </summary>
-    public static SpawnPlacesEditRequest Block(SpawnPlacesEditRequest request, IReadOnlyList<SpawnPlace> places, IReadOnlyList<Export.GrassClearing.Volume> volumes, out int blocked)
+    public static SpawnPlacesEditRequest Block(SpawnPlacesEditRequest request, IReadOnlyList<SpawnPlace> places, IReadOnlyList<Export.GrassClearing.Volume> volumes, out int blocked, List<string>? names = null)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(places);
         ArgumentNullException.ThrowIfNull(volumes);
         var deleted = request.Deleted.ToHashSet();
         var moved = new Dictionary<(SpawnPlaceKind, int), TransformValue>(request.Moved);
+        var solid = volumes.Where(v => v.Solid).ToList();
         blocked = 0;
-        foreach (var place in places.Where(p => p.Kind is SpawnPlaceKind.Vehicle or SpawnPlaceKind.Character or SpawnPlaceKind.TaggedCharacter))
+        foreach (var place in places.Where(p => solid.Count > 0 && p.Kind is SpawnPlaceKind.Vehicle or SpawnPlaceKind.Character or SpawnPlaceKind.TaggedCharacter))
         {
             var key = (place.Kind, place.Index);
             if (deleted.Contains(key))
@@ -113,10 +212,11 @@ public static class SpawnPlacesEditor
             }
 
             var at = moved.TryGetValue(key, out var to) ? to.Location : place.Transform.Translation;
-            if (Export.GrassClearing.Inside(volumes, at))
+            if (Export.GrassClearing.Inside(solid, at))
             {
                 deleted.Add(key);
                 moved.Remove(key);
+                names?.Add(place.ActorName);
                 blocked++;
             }
         }
@@ -124,31 +224,130 @@ public static class SpawnPlacesEditor
         return blocked == 0 ? request : request with { Deleted = deleted, Moved = moved };
     }
 
-    /// <summary>Applies <paramref name="request"/> to the static data <paramref name="package"/>.</summary>
-    public static (PackageBytes Bytes, SpawnPlacesReport Report) Apply(CookedPackage package, SpawnPlacesEditRequest request)
+    /// <summary>How many places of each kind the static data <paramref name="package"/> holds (its arrays' lengths).</summary>
+    public static IReadOnlyDictionary<SpawnPlaceKind, int> Counts(CookedPackage package)
+    {
+        ArgumentNullException.ThrowIfNull(package);
+        var block = package.ReadProperties(SpawnPlaces.StaticDataExport(package));
+        return Enum.GetValues<SpawnPlaceKind>().ToDictionary(k => k, k => block.Find(SpawnPlaces.ArrayOf(k))?.Value is ArrayValue a ? a.Items.Count : 0);
+    }
+
+    /// <summary>
+    /// Where a cook's arrays differ in length from the client's (<c>VehicleSpawnPoints 3491 / 3490</c>), or null when they
+    /// match. The edits name places by their number in the client's arrays; with other lengths they would hit other places.
+    /// </summary>
+    public static string? CountMismatch(IReadOnlyDictionary<SpawnPlaceKind, int> client, IReadOnlyDictionary<SpawnPlaceKind, int> other)
+    {
+        ArgumentNullException.ThrowIfNull(client);
+        ArgumentNullException.ThrowIfNull(other);
+        var differing = Enum.GetValues<SpawnPlaceKind>()
+            .Where(k => client.GetValueOrDefault(k) != other.GetValueOrDefault(k))
+            .Select(k => string.Create(CultureInfo.InvariantCulture, $"{SpawnPlaces.ArrayOf(k)} {client.GetValueOrDefault(k)} / {other.GetValueOrDefault(k)}"))
+            .ToList();
+        return differing.Count == 0 ? null : string.Join(", ", differing);
+    }
+
+    /// <summary>
+    /// What a server export checks its cook against (audit F281): the lengths of the client's lists in <paramref name="package"/>
+    /// and where each stock place <paramref name="request"/> names by its number (removed, moved, re-chosen, copied) stands.
+    /// </summary>
+    public static SpawnPlacesReference Reference(CookedPackage package, SpawnPlacesEditRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(package);
+        ArgumentNullException.ThrowIfNull(request);
+        var named = Numbered(request).ToHashSet();
+        var places = SpawnPlaces.Read(package).Where(p => named.Contains((p.Kind, p.Index))).ToDictionary(p => (p.Kind, p.Index), p => p.Transform.Translation);
+        return new SpawnPlacesReference(Counts(package), places);
+    }
+
+    /// <summary>
+    /// <paramref name="request"/> for another cook of the island (<paramref name="cook"/>, a server's): whole when its lists
+    /// have the client's lengths and every stock place the request names by number stands where it stands in the client's
+    /// (<paramref name="client"/>); else, and without a client reference, only its new places, with a warning saying why
+    /// (audit F281: a server cook of another order would get the removals and moves on other places).
+    /// </summary>
+    public static SpawnPlacesEditRequest ForOtherCook(SpawnPlacesEditRequest request, SpawnPlacesReference? client, CookedPackage cook, List<string> warnings)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(cook);
+        ArgumentNullException.ThrowIfNull(warnings);
+        var named = Numbered(request).Distinct().ToList();
+        if (named.Count == 0)
+        {
+            return request;
+        }
+
+        string? why;
+        if (client is null)
+        {
+            why = "the client's island data was not read in this export, so the server's could not be checked against it";
+        }
+        else if (CountMismatch(client.Counts, Counts(cook)) is { } counts)
+        {
+            why = $"the server's island data does not hold the same lists as the client's ({counts}; client / server)";
+        }
+        else
+        {
+            var stands = SpawnPlaces.Read(cook).ToDictionary(p => (p.Kind, p.Index), p => p.Transform.Translation);
+            var elsewhere = named
+                .Where(k => !client.Places.TryGetValue(k, out var c) || !stands.TryGetValue(k, out var s) || FVector.Distance(c, s) > 1f)
+                .Select(k => SpawnPlaces.ActorName(k.Kind, k.Index))
+                .ToList();
+            why = elsewhere.Count == 0 ? null
+                : string.Create(CultureInfo.InvariantCulture, $"{string.Join(", ", elsewhere.Take(5))}{(elsewhere.Count > 5 ? $" and {elsewhere.Count - 5} more" : string.Empty)} do not stand in the server's island data where they stand in the client's");
+        }
+
+        if (why is null)
+        {
+            return request;
+        }
+
+        warnings.Add($"Spawn places: {why}. The edits name stock places by their number in the client's lists, so none of the removed, moved, re-chosen or copied stock places were written into this pak (new places were): export client and server together, from game files of the same build.");
+        return new SpawnPlacesEditRequest { Created = request.Created };
+    }
+
+    /// <summary>Every stock place <paramref name="request"/> names by its number in a list.</summary>
+    private static IEnumerable<(SpawnPlaceKind Kind, int Index)> Numbered(SpawnPlacesEditRequest request) =>
+        request.Deleted.Concat(request.Moved.Keys).Concat(request.Choices.Keys).Concat(request.Added.Select(a => (a.Kind, a.Source)));
+
+    /// <summary>
+    /// Applies <paramref name="request"/> to the static data <paramref name="package"/>. A zone's settings or a hunting
+    /// area's biome the data does not import yet is imported only when <paramref name="packageExists"/> says its package is
+    /// in the game files or among the project's copies (a missing one would load as nothing in the game); without it, none is.
+    /// </summary>
+    public static (PackageBytes Bytes, SpawnPlacesReport Report) Apply(CookedPackage package, SpawnPlacesEditRequest request, Func<string, bool>? packageExists = null)
     {
         ArgumentNullException.ThrowIfNull(package);
         ArgumentNullException.ThrowIfNull(request);
         var exportIndex = SpawnPlaces.StaticDataExport(package);
         var payload = package.GetExportData(exportIndex).ToArray();
         var block = package.ReadProperties(exportIndex);
+        var tables = new Tables(package, exportIndex, packageExists);
         var warnings = new List<string>();
-        int deleted = 0, moved = 0, added = 0;
+        int deleted = 0, moved = 0, added = 0, chosen = 0, created = 0;
 
-        var kinds = request.Deleted.Select(d => d.Kind).Concat(request.Moved.Keys.Select(m => m.Kind)).Concat(request.Added.Select(a => a.Kind)).Distinct();
-        var arrays = kinds
-            .Select(k => (Kind: k, Tag: block.Find(SpawnPlaces.ArrayOf(k))))
-            .Where(a => a.Tag is { Value: ArrayValue { InnerTag: not null } })
-            .OrderByDescending(a => a.Tag!.Offset) // from the back: the offsets in front stay valid
-            .ToList();
-        foreach (var (kind, tag) in arrays)
+        var kinds = request.Deleted.Select(d => d.Kind).Concat(request.Moved.Keys.Select(m => m.Kind)).Concat(request.Added.Select(a => a.Kind))
+            .Concat(request.Choices.Keys.Select(c => c.Kind)).Concat(request.Created.Select(c => c.Kind)).Distinct();
+        var arrays = kinds.Select(k => (Kind: k, Tag: block.Find(SpawnPlaces.ArrayOf(k)))).ToList();
+        warnings.AddRange(arrays.Where(a => a.Tag is not { Value: ArrayValue { InnerTag: not null } }).Select(a => $"{SpawnPlaces.ArrayOf(a.Kind)}: not in the island data; its edits were not written."));
+        foreach (var (kind, tag) in arrays.Where(a => a.Tag is { Value: ArrayValue { InnerTag: not null } }).OrderByDescending(a => a.Tag!.Offset)) // from the back: the offsets in front stay valid
         {
             var array = (ArrayValue)tag!.Value;
-            var inner = array.InnerTag!;
-            var items = new List<byte[]>(array.Items.Count + 16);
-            for (var i = 0; i < array.Items.Count; i++)
+            var count = array.Items.Count;
+
+            // Places are named by their number in the list the map read (audit F281: another cook or game build may differ).
+            foreach (var index in request.Deleted.Where(d => d.Kind == kind).Select(d => d.Index)
+                         .Concat(request.Moved.Keys.Where(m => m.Kind == kind).Select(m => m.Index))
+                         .Concat(request.Choices.Keys.Where(c => c.Kind == kind).Select(c => c.Index))
+                         .Where(i => i < 0 || i >= count).Distinct().Order())
             {
-                var item = array.Items[i];
+                warnings.Add($"{SpawnPlaces.ActorName(kind, index)}: the island data has {count} {SpawnPlaces.ArrayOf(kind)}; not written (read from another game build?).");
+            }
+
+            var items = new List<byte[]>(count + 16);
+            for (var i = 0; i < count; i++)
+            {
+                var item = (StructValue)array.Items[i];
                 if (request.Deleted.Contains((kind, i)))
                 {
                     deleted++;
@@ -156,36 +355,266 @@ public static class SpawnPlacesEditor
                 }
 
                 var bytes = payload.AsSpan(item.Offset, item.Size).ToArray();
-                if (request.Moved.TryGetValue((kind, i), out var value))
+                if (request.Moved.TryGetValue((kind, i), out var value) && Place(bytes, kind, item, value, -item.Offset, SpawnPlaces.ActorName(kind, i), warnings))
                 {
-                    Place(bytes, kind, (StructValue)item, value, -item.Offset);
                     moved++;
+                }
+
+                if (request.Choices.TryGetValue((kind, i), out var choice) && Choose(tables, bytes, kind, item, choice, -item.Offset, SpawnPlaces.ActorName(kind, i), warnings))
+                {
+                    chosen++;
                 }
 
                 items.Add(bytes);
             }
 
-            foreach (var (_, source, transform) in request.Added.Where(a => a.Kind == kind))
+            for (var a = 0; a < request.Added.Count; a++)
             {
-                if (source < 0 || source >= array.Items.Count)
+                var (addedKind, source, transform) = request.Added[a];
+                if (addedKind != kind)
                 {
-                    warnings.Add($"{SpawnPlaces.ActorName(kind, source)}: no such stock place to copy.");
                     continue;
                 }
 
-                var item = array.Items[source];
+                var name = $"{SpawnPlaces.ActorName(kind, source)} (copy)";
+                if (source < 0 || source >= count)
+                {
+                    warnings.Add($"{name}: no such stock place to copy.");
+                    continue;
+                }
+
+                var item = (StructValue)array.Items[source];
                 var bytes = payload.AsSpan(item.Offset, item.Size).ToArray();
-                Place(bytes, kind, (StructValue)item, transform, -item.Offset);
+                if (!Place(bytes, kind, item, transform, -item.Offset, name, warnings))
+                {
+                    continue; // a copy where its source stands is no copy
+                }
+
+                if ((request.AddedChoices.TryGetValue(a, out var own) ? own : request.Choices.GetValueOrDefault((kind, source))) is { } carried)
+                {
+                    Choose(tables, bytes, kind, item, carried, -item.Offset, name, warnings);
+                }
+
                 items.Add(bytes);
                 added++;
+            }
+
+            foreach (var place in request.Created.Where(c => c.Kind == kind))
+            {
+                if (Create(tables, payload, array, place, warnings) is { } bytes)
+                {
+                    items.Add(bytes);
+                    created++;
+                }
             }
 
             payload = ReplaceStructArray(payload, tag, array, items);
         }
 
         var data = Enumerable.Range(0, package.Exports.Count).Select(i => i == exportIndex ? payload : package.GetExportData(i)).ToArray();
-        var bytesOut = PackageWriter.Build(PackageWriter.ToBuildInput(package) with { ExportData = data });
-        return (bytesOut, new SpawnPlacesReport(deleted, moved, added, warnings));
+        var input = PackageWriter.ToBuildInput(package) with { ExportData = data };
+        if (tables.Changed)
+        {
+            input = input with { Names = tables.Names, NameIsWide = tables.Wide, Imports = tables.Imports, Exports = tables.Exports, PreloadDependencies = tables.Preload };
+        }
+
+        return (PackageWriter.Build(input), new SpawnPlacesReport(deleted, moved, added, warnings, chosen, created));
+    }
+
+    /// <summary>
+    /// The bytes of a new element of <paramref name="array"/> for <paramref name="place"/>: laid out as the first stock
+    /// element that stores every field a new place gets and no member this version does not know (a zone of the same
+    /// settings, a hunting area of the same biome, a tagged point that stores tags when there is one), then each of those
+    /// written from <paramref name="place"/>: where, the size, what spawns there and a tagged point's tags. A zone leaves its
+    /// template's sub-zones and drone approach points behind (they stand around the template). Null, with a warning, when
+    /// no element can serve or a field cannot be written: a new place never keeps the template's.
+    /// </summary>
+    private static byte[]? Create(Tables tables, byte[] payload, ArrayValue array, NewSpawnPlace place, List<string> warnings)
+    {
+        var kind = place.Kind;
+        var whole = array.Items.OfType<StructValue>().Where(i => IsTemplate(kind, i)).ToList();
+        var templates = whole.Where(i => UnknownMembers(kind, i).Count == 0).ToList();
+        var setting = SpawnPlaces.SettingName(place.Setting);
+        var tags = place.Tags ?? [];
+        var template = kind switch
+        {
+            SpawnPlaceKind.Zone or SpawnPlaceKind.Animal => templates.FirstOrDefault(i => SpawnPlaces.Describe(kind, 0, i)?.Group == setting),
+            SpawnPlaceKind.TaggedCharacter => templates.FirstOrDefault(i => SpawnPlaces.Member(i, "Tags")?.Value is ArrayValue),
+            _ => null,
+        } ?? templates.FirstOrDefault();
+        if (template is null)
+        {
+            warnings.Add(whole.Count == 0
+                ? $"{place.Name}: no entry of {SpawnPlaces.ArrayOf(kind)} stores a whole place to lay a new one out from; not written."
+                : $"{place.Name}: the entries of {SpawnPlaces.ArrayOf(kind)} hold {string.Join(", ", UnknownMembers(kind, whole[0]))}, which this version does not know (a new place would take it from a stock place); not written.");
+            return null;
+        }
+
+        var bytes = payload.AsSpan(template.Offset, template.Size).ToArray();
+        var shift = -template.Offset;
+        if (!Place(bytes, kind, template, place.Transform, shift, place.Name, warnings) || !(kind is SpawnPlaceKind.Character or SpawnPlaceKind.TaggedCharacter
+                ? WriteType(tables.Package, bytes, template, place.Setting, shift, place.Name, warnings)
+                : Choose(tables, bytes, kind, template, place.Setting, shift, place.Name, warnings)))
+        {
+            return null;
+        }
+
+        // Members that change the element's length go last, from the back (the offsets in front stay valid).
+        var splices = new List<(int Start, int End, byte[] With)>();
+        switch (kind)
+        {
+            case SpawnPlaceKind.Zone:
+                // A zone whose settings no stock zone uses (the project's own copy) spawns by them at a low player count too,
+                // not by the low-population settings of an unrelated zone.
+                if (SpawnPlaces.Describe(kind, 0, template)?.Group != setting && SpawnPlaces.Member(template, "_lpcZoneData")?.Value is ObjectValue lpc
+                    && BinaryPrimitives.ReadInt32LittleEndian(bytes.AsSpan(lpc.Offset + shift)) != 0 && SpawnPlaces.Member(template, SpawnChoices.ZoneData)?.Value is ObjectValue zone)
+                {
+                    bytes.AsSpan(zone.Offset + shift, 4).CopyTo(bytes.AsSpan(lpc.Offset + shift));
+                }
+
+                splices.AddRange(PlaceBound.Select(m => SpawnPlaces.Member(template, m)).OfType<PropertyTag>().Select(t => (t.Offset, t.EndOffset, Array.Empty<byte>())));
+                break;
+            case SpawnPlaceKind.TaggedCharacter when SpawnPlaces.Member(template, "Tags") is { Value: ArrayValue } stored:
+                if (TagContainer(tables.Package, tags, place.Name, warnings) is not { } value)
+                {
+                    return null;
+                }
+
+                BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(stored.SizeFieldOffset + shift), value.Length);
+                splices.Add((stored.ValueOffset, stored.EndOffset, value));
+                break;
+            case SpawnPlaceKind.TaggedCharacter when tags.Count > 0:
+                warnings.Add($"{place.Name}: no entry of {SpawnPlaces.ArrayOf(kind)} stores tags to lay its tags out from; not written.");
+                return null;
+        }
+
+        foreach (var (start, end, with) in splices.OrderByDescending(s => s.Start))
+        {
+            var spliced = new byte[bytes.Length - (end - start) + with.Length];
+            bytes.AsSpan(0, start + shift).CopyTo(spliced);
+            with.CopyTo(spliced, start + shift);
+            bytes.AsSpan(end + shift).CopyTo(spliced.AsSpan(start + shift + with.Length));
+            bytes = spliced;
+        }
+
+        return bytes;
+    }
+
+    /// <summary>The members of <paramref name="item"/> this version does not know (<see cref="KnownMembers"/>; a hunting area's population parameters too).</summary>
+    internal static List<string> UnknownMembers(SpawnPlaceKind kind, StructValue item)
+    {
+        var unknown = item.Properties.Select(p => p.Name).Where(n => !KnownMembers[kind].Contains(n, StringComparer.Ordinal)).ToList();
+        if (kind == SpawnPlaceKind.Animal && SpawnPlaces.Member(item, "PopulationParameters")?.Value is StructValue population)
+        {
+            unknown.AddRange(population.Properties.Select(p => p.Name).Where(n => !PopulationMembers.Contains(n, StringComparer.Ordinal)).Select(n => "PopulationParameters." + n));
+        }
+
+        return unknown;
+    }
+
+    /// <summary>A <c>GameplayTagContainer</c>'s value for <paramref name="tags"/> (the count, then each tag's FName); null, with a warning, for a tag the island data does not name (no new FName).</summary>
+    private static byte[]? TagContainer(CookedPackage package, IReadOnlyList<string> tags, string name, List<string> warnings)
+    {
+        var value = new byte[4 + (8 * tags.Count)];
+        BinaryPrimitives.WriteInt32LittleEndian(value, tags.Count);
+        for (var i = 0; i < tags.Count; i++)
+        {
+            FNameRef tag;
+            try
+            {
+                tag = package.FindName(tags[i]);
+            }
+            catch (KeyNotFoundException)
+            {
+                warnings.Add($"{name}: tag '{tags[i]}': the island data has no such tag; not written.");
+                return null;
+            }
+
+            BinaryPrimitives.WriteInt32LittleEndian(value.AsSpan(4 + (8 * i)), tag.Index);
+            BinaryPrimitives.WriteInt32LittleEndian(value.AsSpan(8 + (8 * i)), tag.Number);
+        }
+
+        return value;
+    }
+
+    /// <summary>True when <paramref name="item"/> stores every field <see cref="Create"/> writes (no field of a new place is left as the template has it).</summary>
+    private static bool IsTemplate(SpawnPlaceKind kind, StructValue item)
+    {
+        if (SpawnPlaces.Member(item, TransformOf(kind))?.Value is not StructValue t || SpawnPlaces.Member(t, "Rotation")?.Value is not QuatValue
+            || SpawnPlaces.Member(t, "Translation")?.Value is not VectorValue || SpawnPlaces.Member(t, "Scale3D")?.Value is not VectorValue)
+        {
+            return false;
+        }
+
+        return kind switch
+        {
+            SpawnPlaceKind.Vehicle => SpawnPlaces.Member(item, SpawnChoices.VehicleGroup)?.Value is StructValue g && SpawnPlaces.Member(g, "TagName")?.Value is NameValue,
+            SpawnPlaceKind.Character or SpawnPlaceKind.TaggedCharacter => SpawnPlaces.Member(item, "Type")?.Value is EnumValue,
+            SpawnPlaceKind.Zone => SpawnPlaces.Member(item, SpawnChoices.ZoneData)?.Value is ObjectValue && ZoneMembers.All(m => SpawnPlaces.Member(item, m) is not null),
+            _ => SpawnPlaces.Member(item, "Radius")?.Value is FloatValue && SpawnPlaces.Member(item, "PopulationParameters")?.Value is StructValue p
+                 && SpawnPlaces.Member(p, SpawnChoices.Biome)?.Value is ObjectValue,
+        };
+    }
+
+    /// <summary>
+    /// Writes what a place spawns into its item bytes (offsets shifted by <paramref name="shift"/>), the same size: a
+    /// vehicle point's group tag (an FName of the package's name table: a group the game does not know spawns nothing, so
+    /// no name is added) or a zone's settings / a hunting area's biome (an import, added when a path names one the data
+    /// does not import yet: a zone's own copy of its settings). False, with a warning, when it cannot be written.
+    /// </summary>
+    private static bool Choose(Tables tables, byte[] bytes, SpawnPlaceKind kind, StructValue item, string choice, int shift, string name, List<string> warnings)
+    {
+        switch (kind)
+        {
+            case SpawnPlaceKind.Vehicle when SpawnPlaces.Member(item, SpawnChoices.VehicleGroup)?.Value is StructValue tag && SpawnPlaces.Member(tag, "TagName")?.Value is NameValue group:
+                var full = SpawnChoices.GroupTagPrefix + SpawnPlaces.SettingName(choice);
+                if (!tables.Package.Names.Contains(full, StringComparer.Ordinal))
+                {
+                    warnings.Add($"{name}: vehicle group '{choice}': the island data has no such group; not written.");
+                    return false;
+                }
+
+                var nameRef = tables.Package.FindName(full);
+                BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(group.Offset + shift), nameRef.Index);
+                BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(group.Offset + shift + 4), nameRef.Number);
+                return true;
+            case SpawnPlaceKind.Zone when SpawnPlaces.Member(item, SpawnChoices.ZoneData)?.Value is ObjectValue zone:
+                return WriteImport(zone, "EncounterZoneData");
+            case SpawnPlaceKind.Animal when SpawnPlaces.Member(item, "PopulationParameters")?.Value is StructValue p && SpawnPlaces.Member(p, SpawnChoices.Biome)?.Value is ObjectValue biome:
+                return WriteImport(biome, "BiomeData");
+            default:
+                warnings.Add($"{name}: '{choice}' cannot be chosen in {SpawnPlaces.ArrayOf(kind)}; not written.");
+                return false;
+        }
+
+        bool WriteImport(ObjectValue value, string className)
+        {
+            if (tables.Import(choice, className, out var problem) is not { } index)
+            {
+                warnings.Add($"{name}: {className} '{choice}': {problem}; not written.");
+                return false;
+            }
+
+            BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(value.Offset + shift), index);
+            return true;
+        }
+    }
+
+    /// <summary>Writes a zombie / NPC point's type (<c>Exterior</c>, <c>Interior</c>): a value of its enum the island data names (no new FName).</summary>
+    private static bool WriteType(CookedPackage package, byte[] bytes, StructValue item, string type, int shift, string name, List<string> warnings)
+    {
+        var e = (EnumValue)SpawnPlaces.Member(item, "Type")!.Value;
+        var full = e.Value.LastIndexOf("::", StringComparison.Ordinal) is var at and >= 0 ? e.Value[..(at + 2)] + type : type;
+        if (!package.Names.Contains(full, StringComparer.Ordinal))
+        {
+            warnings.Add($"{name}: '{type}' is not a zombie / NPC point type of the island data; not written.");
+            return false;
+        }
+
+        var nameRef = package.FindName(full);
+        BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(e.Offset + shift), nameRef.Index);
+        BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(e.Offset + shift + 4), nameRef.Number);
+        return true;
     }
 
     /// <summary>
@@ -220,65 +649,67 @@ public static class SpawnPlacesEditor
     /// <summary>
     /// Writes where a spawn point is into the bytes of its struct element (offsets shifted by <paramref name="shift"/>): a
     /// tagged <c>Transform</c> member (an item spawner marker: rotation, translation, scale) or else the element's first
-    /// vector member (a sentry's <c>LocationRelativeToSentry</c>: the location only). False when it has neither.
+    /// vector member (a sentry's <c>LocationRelativeToSentry</c>: the location only). Null when written, else why nothing
+    /// was: a turn, place or scale the element has no member for is not dropped silently (audit F107).
     /// </summary>
-    internal static bool WritePoint(byte[] bytes, StructValue item, TransformValue value, int shift)
+    internal static string? WritePoint(byte[] bytes, StructValue item, TransformValue value, int shift)
     {
         if (SpawnPlaces.Member(item, "Transform")?.Value is StructValue t)
         {
-            var q = value.ToTransform().Rotation;
-            if (SpawnPlaces.Member(t, "Rotation")?.Value is QuatValue r)
+            var (r, p, s) = (SpawnPlaces.Member(t, "Rotation")?.Value as QuatValue, SpawnPlaces.Member(t, "Translation")?.Value as VectorValue, SpawnPlaces.Member(t, "Scale3D")?.Value as VectorValue);
+            if (Missing(value, r is not null, p is not null, s is not null) is { } missing)
             {
-                Floats(bytes, r.Offset + shift, q.X, q.Y, q.Z, q.W);
+                return $"{missing} not stored in the game data; not written";
             }
 
-            if (SpawnPlaces.Member(t, "Translation")?.Value is VectorValue p)
-            {
-                Floats(bytes, p.Offset + shift, value.Location.X, value.Location.Y, value.Location.Z);
-            }
-
-            if (SpawnPlaces.Member(t, "Scale3D")?.Value is VectorValue s)
-            {
-                Floats(bytes, s.Offset + shift, value.Scale.X, value.Scale.Y, value.Scale.Z);
-            }
-
-            return true;
+            WriteTransform(bytes, value, r, p, s, shift);
+            return null;
         }
 
         if (item.Properties.Select(m => m.Value).OfType<VectorValue>().FirstOrDefault() is { } location)
         {
             Floats(bytes, location.Offset + shift, value.Location.X, value.Location.Y, value.Location.Z);
-            return true;
+            return null;
         }
 
-        return false;
+        return "the element has no location to write";
     }
 
-    /// <summary>Writes a place's transform (and a zone's or area's size) into its item bytes (offsets shifted by <paramref name="shift"/>).</summary>
-    private static void Place(byte[] bytes, SpawnPlaceKind kind, StructValue item, TransformValue value, int shift)
+    /// <summary>
+    /// Writes a place's transform (a point's scale too: audit F439; a zone's or area's size) into its item bytes (offsets
+    /// shifted by <paramref name="shift"/>). False, with a warning and nothing written, when a part that differs from what
+    /// is stored has no member to hold it (audit F107: the turn of a point that stores no rotation was dropped silently).
+    /// </summary>
+    private static bool Place(byte[] bytes, SpawnPlaceKind kind, StructValue item, TransformValue value, int shift, string name, List<string> warnings)
     {
-        var transformName = kind switch
+        if (SpawnPlaces.Member(item, TransformOf(kind))?.Value is not StructValue t)
         {
-            SpawnPlaceKind.Vehicle => "SpawnTransform",
-            SpawnPlaceKind.Zone => "_transform",
-            _ => "Transform",
+            warnings.Add($"{name}: its place is not stored in the game data; not written.");
+            return false;
+        }
+
+        var area = kind is SpawnPlaceKind.Zone or SpawnPlaceKind.Animal;
+        var (r, p) = (SpawnPlaces.Member(t, "Rotation")?.Value as QuatValue, SpawnPlaces.Member(t, "Translation")?.Value as VectorValue);
+        var s = area ? null : SpawnPlaces.Member(t, "Scale3D")?.Value as VectorValue; // an area's scale is its size
+        var sized = kind switch
+        {
+            SpawnPlaceKind.Zone => ZoneMembers.Take(2).All(m => SpawnPlaces.Member(item, m)?.Value is FloatValue),
+            SpawnPlaceKind.Animal => SpawnPlaces.Member(item, "Radius")?.Value is FloatValue,
+            _ => true,
         };
-        if (SpawnPlaces.Member(item, transformName)?.Value is not StructValue t)
+        var missing = string.Join(", ", new[] { Missing(value, r is not null, p is not null, s is not null || area), sized ? null : "size" }.OfType<string>());
+        if (missing.Length > 0)
         {
-            return;
+            warnings.Add($"{name}: {missing} not stored in the game data; not written.");
+            return false;
         }
 
-        var q = value.ToTransform().Rotation;
-        if (SpawnPlaces.Member(t, "Rotation")?.Value is QuatValue r)
+        if (kind == SpawnPlaceKind.Zone && (Turned(value.Rotation.Pitch) || Turned(value.Rotation.Roll)))
         {
-            Floats(bytes, r.Offset + shift, q.X, q.Y, q.Z, q.W);
+            warnings.Add($"{name}: a threat zone only turns about the vertical in the game; its pitch and roll do nothing.");
         }
 
-        if (SpawnPlaces.Member(t, "Translation")?.Value is VectorValue p)
-        {
-            Floats(bytes, p.Offset + shift, value.Location.X, value.Location.Y, value.Location.Z);
-        }
-
+        WriteTransform(bytes, value, r, p, s, shift);
         var (sizeX, sizeY) = SpawnPlaces.SizeOf(value.Scale);
         if (kind == SpawnPlaceKind.Animal && SpawnPlaces.Member(item, "Radius")?.Value is FloatValue radius)
         {
@@ -287,7 +718,7 @@ public static class SpawnPlacesEditor
 
         if (kind != SpawnPlaceKind.Zone)
         {
-            return;
+            return true;
         }
 
         Set(item, "_semiXAxisSize", sizeX);
@@ -297,21 +728,22 @@ public static class SpawnPlacesEditor
         Box("_boundingBox", 1f);
         Box("_zoneActivationBoundingBox", activation);
         Box("_LPCZoneActivationBoundingBox", lpc);
+        return true;
 
-        void Set(StructValue s, string name, float v)
+        void Set(StructValue sv, string member, float v)
         {
-            if (SpawnPlaces.Member(s, name)?.Value is FloatValue f)
+            if (SpawnPlaces.Member(sv, member)?.Value is FloatValue f)
             {
                 Floats(bytes, f.Offset + shift, v);
             }
         }
 
-        static float Get(StructValue s, string name, float fallback) => SpawnPlaces.Member(s, name)?.Value is FloatValue f ? f.Value : fallback;
+        static float Get(StructValue sv, string member, float fallback) => SpawnPlaces.Member(sv, member)?.Value is FloatValue f ? f.Value : fallback;
 
         // The axis-aligned box around the zone's ellipse (turned by its yaw), flat at the zone's height.
-        void Box(string name, float multiplier)
+        void Box(string member, float multiplier)
         {
-            if (SpawnPlaces.Member(item, name)?.Value is not BoxValue box)
+            if (SpawnPlaces.Member(item, member)?.Value is not BoxValue box)
             {
                 return;
             }
@@ -325,11 +757,175 @@ public static class SpawnPlacesEditor
         }
     }
 
+    /// <summary>The parts of <paramref name="value"/> that differ from what an absent member reads as (no turn, the origin, scale 1) and have no member; null when none.</summary>
+    private static string? Missing(TransformValue value, bool hasRotation, bool hasTranslation, bool hasScale)
+    {
+        var missing = new List<string>(3);
+        if (!hasRotation && (Turned(value.Rotation.Pitch) || Turned(value.Rotation.Yaw) || Turned(value.Rotation.Roll)))
+        {
+            missing.Add("rotation");
+        }
+
+        if (!hasTranslation && value.Location.Size() > 0.01f)
+        {
+            missing.Add("translation");
+        }
+
+        if (!hasScale && FVector.Distance(value.Scale, FVector.One) > 1e-4f)
+        {
+            missing.Add("scale");
+        }
+
+        return missing.Count == 0 ? null : string.Join(", ", missing);
+    }
+
+    private static bool Turned(float degrees) => MathF.Abs(MathF.IEEERemainder(degrees, 360f)) > 0.01f;
+
+    private static void WriteTransform(byte[] bytes, TransformValue value, QuatValue? rotation, VectorValue? translation, VectorValue? scale, int shift)
+    {
+        if (rotation is not null)
+        {
+            var q = value.ToTransform().Rotation;
+            Floats(bytes, rotation.Offset + shift, q.X, q.Y, q.Z, q.W);
+        }
+
+        if (translation is not null)
+        {
+            Floats(bytes, translation.Offset + shift, value.Location.X, value.Location.Y, value.Location.Z);
+        }
+
+        if (scale is not null)
+        {
+            Floats(bytes, scale.Offset + shift, value.Scale.X, value.Scale.Y, value.Scale.Z);
+        }
+    }
+
+    private static string TransformOf(SpawnPlaceKind kind) => kind switch
+    {
+        SpawnPlaceKind.Vehicle => "SpawnTransform",
+        SpawnPlaceKind.Zone => "_transform",
+        _ => "Transform",
+    };
+
     internal static void Floats(byte[] bytes, int offset, params float[] values)
     {
         for (var i = 0; i < values.Length; i++)
         {
             BinaryPrimitives.WriteSingleLittleEndian(bytes.AsSpan(offset + (i * 4)), values[i]);
         }
+    }
+
+    /// <summary>The static data's name, import, export and preload tables while a choice adds an import.</summary>
+    private sealed class Tables(CookedPackage package, int exportIndex, Func<string, bool>? packageExists)
+    {
+        private readonly List<string> _addedNames = [];
+
+        public CookedPackage Package { get; } = package;
+
+        public List<string> Names { get; } = package.Names.ToList();
+
+        public List<bool> Wide { get; } = package.NameEntries.Select(n => n.IsWide).ToList();
+
+        public List<ImportEntry> Imports { get; } = package.Imports.ToList();
+
+        public List<ExportEntry> Exports { get; } = package.Exports.ToList();
+
+        public List<int> Preload { get; } = package.ReadPreloadDependencies().ToList();
+
+        public bool Changed => Imports.Count != Package.Imports.Count;
+
+        /// <summary>
+        /// The import of <paramref name="setting"/> (an asset name the data imports, or its package or object path) of class
+        /// <paramref name="className"/>, added with its package when a path names one the data does not import: the class
+        /// package is that of the data's own imports of the class, and the static data lists it as created before it is
+        /// serialized, as the cooker does. Null with <paramref name="problem"/> when it cannot be found or added, or when
+        /// the package is not known to exist (an undone copy or a typo would load as nothing in the client and the server).
+        /// </summary>
+        public int? Import(string setting, string className, out string problem)
+        {
+            problem = string.Empty;
+            var name = SpawnPlaces.SettingName(setting);
+            var path = PackageOf(setting);
+            FNameRef? classPackage = null;
+            for (var i = 0; i < Imports.Count; i++)
+            {
+                var im = Imports[i];
+                if (!Is(im.ClassName, className))
+                {
+                    continue;
+                }
+
+                classPackage ??= im.ClassPackage;
+                if (Is(im.ObjectName, name) && (path is null || (im.OuterIndex < 0 && Is(Imports[-im.OuterIndex - 1].ObjectName, path))))
+                {
+                    return -(i + 1);
+                }
+            }
+
+            if (path is null)
+            {
+                problem = "the island data does not use it (its package path adds it)";
+                return null;
+            }
+
+            if (packageExists?.Invoke(path) != true)
+            {
+                problem = packageExists is null ? "its package was not checked against the game files, so it is not added" : $"{path} is neither in the game files nor one of the project's copies";
+                return null;
+            }
+
+            if (classPackage is not { } cp)
+            {
+                problem = $"the island data has no {className} to take its class from";
+                return null;
+            }
+
+            var outer = Export.LevelPackageEditor.GetOrAddImport(Imports, Names, Wide, _addedNames, "/Script/CoreUObject", "Package", 0, path);
+            var index = Export.LevelPackageEditor.GetOrAddImport(Imports, Names, Wide, _addedNames, cp.Format(Names), className, outer, name);
+            AddCreateBeforeSerialize(index);
+            return index;
+        }
+
+        /// <summary>The package path of a setting given as a path (<c>/Game/…/MTZ_Village</c> of <c>/Game/…/MTZ_Village.MTZ_Village</c>), or null for a bare name.</summary>
+        private static string? PackageOf(string setting)
+        {
+            var slash = setting.LastIndexOf('/');
+            if (slash < 0)
+            {
+                return null;
+            }
+
+            var dot = setting.IndexOf('.', slash);
+            return dot < 0 ? setting : setting[..dot];
+        }
+
+        /// <summary>Lists <paramref name="dependency"/> last among the static data's create-before-serialize dependencies; the lists after it move up by one.</summary>
+        private void AddCreateBeforeSerialize(int dependency)
+        {
+            var export = Exports[exportIndex];
+            int at;
+            if (export.FirstExportDependency < 0)
+            {
+                at = Preload.Count;
+                export = export with { FirstExportDependency = at };
+            }
+            else
+            {
+                at = export.FirstExportDependency + export.SerializationBeforeSerializationDependencies + export.CreateBeforeSerializationDependencies;
+                for (var i = 0; i < Exports.Count; i++)
+                {
+                    if (i != exportIndex && Exports[i].FirstExportDependency >= at)
+                    {
+                        Exports[i] = Exports[i] with { FirstExportDependency = Exports[i].FirstExportDependency + 1 };
+                    }
+                }
+            }
+
+            Preload.Insert(at, dependency);
+            Exports[exportIndex] = export with { CreateBeforeSerializationDependencies = export.CreateBeforeSerializationDependencies + 1 };
+        }
+
+        private bool Is(FNameRef name, string text) =>
+            name.Index >= 0 && name.Index < Names.Count && string.Equals(name.Format(Names), text, StringComparison.OrdinalIgnoreCase);
     }
 }

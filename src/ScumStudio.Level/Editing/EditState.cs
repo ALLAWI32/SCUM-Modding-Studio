@@ -26,12 +26,16 @@ public sealed partial class EditState
     private readonly Dictionary<(ActorRef Actor, string Component), (LootSetting Base, LootSetting Current)> _loot = new(TransformKeyComparer.Instance);
     private readonly Dictionary<ActorRef, bool> _grass = new(ActorRef.Comparer);
     private readonly HashSet<(ActorRef Actor, string Component)> _deletedComponents = new(TransformKeyComparer.Instance);
+    private readonly Dictionary<(ActorRef Actor, string Property), string> _choices = new(TransformKeyComparer.Instance);
+
+    // The new spawn places of _added, for readers on another thread: replaced on every change, never changed.
+    private volatile AddSpawnPlaceOp[] _newPlaces = [];
 
     /// <summary>True when no operation has a net effect.</summary>
     public bool IsEmpty =>
         _deletedActors.Count == 0 && _deletedInstances.Count == 0 && _transforms.Count == 0 && _instanceTransforms.Count == 0 && _added.Count == 0
         && _addedInstances.Count == 0 && _clones.Count == 0 && _values.Count == 0 && _replacements.Count == 0 && _bends.Count == 0 && _segmentSways.Count == 0 && _spawnPoints.Count == 0
-        && _meshes.Count == 0 && _loot.Count == 0 && _deletedComponents.Count == 0;
+        && _meshes.Count == 0 && _loot.Count == 0 && _deletedComponents.Count == 0 && _choices.Count == 0;
 
     /// <summary>Deleted components of kept actors (see <see cref="DeleteComponentsOp"/>).</summary>
     public IReadOnlyCollection<(ActorRef Actor, string Component)> DeletedComponents => _deletedComponents;
@@ -56,6 +60,12 @@ public sealed partial class EditState
     /// <summary>The "clear grass under it" setting of an actor as set (see <see cref="SetClearGrassOp"/>), or null for the default.</summary>
     public bool? GetClearGrass(ActorRef actor) => _grass.TryGetValue(actor, out var on) ? on : null;
 
+    /// <summary>Every spawner whose choice was set (see <see cref="SetSpawnChoiceOp"/>): the actor, which choice, and its value now.</summary>
+    public IEnumerable<(ActorRef Actor, string Property, string Value)> SpawnChoices => _choices.Select(c => (c.Key.Actor, c.Key.Property, c.Value));
+
+    /// <summary>What a spawner spawns as set (see <see cref="SetSpawnChoiceOp"/>), or null when it is as the game has it.</summary>
+    public string? GetSpawnChoice(ActorRef actor, string property) => _choices.TryGetValue((actor, property), out var v) ? v : null;
+
     /// <summary>True when the export clears the grass under the actor: as set, else on for an actor the project added.</summary>
     public bool ClearsGrass(ActorRef actor) => GetClearGrass(actor) ?? IsAdded(actor);
 
@@ -67,6 +77,12 @@ public sealed partial class EditState
 
     /// <summary>Actors created by duplicate/add operations, with the operation that created them.</summary>
     public IReadOnlyDictionary<ActorRef, EditOp> AddedActors => _added;
+
+    /// <summary>
+    /// The new spawn places (<see cref="AddSpawnPlaceOp"/>) of the project, in the order they were made. Safe to read on
+    /// another thread while edits are applied (the map's loading worker): the list is replaced on a change, never changed.
+    /// </summary>
+    public IReadOnlyList<AddSpawnPlaceOp> NewSpawnPlaces => _newPlaces;
 
     /// <summary>ISM/HISM instances the project added (copied trees), with the operation that created them.</summary>
     public IReadOnlyDictionary<InstanceRef, AddInstanceOp> AddedInstances => _addedInstances;
@@ -123,6 +139,7 @@ public sealed partial class EditState
             .Concat(_meshes.Keys.Select(k => k.Actor.Level))
             .Concat(_loot.Keys.Select(k => k.Actor.Level))
             .Concat(_deletedComponents.Select(k => k.Actor.Level))
+            .Concat(_choices.Keys.Select(k => k.Actor.Level))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(l => l, StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -160,6 +177,7 @@ public sealed partial class EditState
         DuplicateActorOp d => d.Transform,
         AddStaticMeshActorOp s => s.Transform,
         AddBlueprintActorOp b => b.Transform,
+        AddSpawnPlaceOp p => p.Transform,
         _ => null,
     };
 
@@ -188,6 +206,7 @@ public sealed partial class EditState
             DuplicateActorOp d => d.Transform,
             AddStaticMeshActorOp s => s.Transform,
             AddBlueprintActorOp b => b.Transform,
+            AddSpawnPlaceOp p => p.Transform,
             _ => null,
         };
     }
@@ -233,11 +252,19 @@ public sealed partial class EditState
                     all.Actors.Where(a => !_deletedActors.Contains(a)).Select(a => $"{a} is not deleted."),
                     all.Instances.Where(i => !_deletedInstances.Contains(i)).Select(i => $"{i} is not deleted."));
             case DuplicateActorOp dup:
-                return ValidateNewActor(dup.Created) ?? (_deletedActors.Contains(dup.Source) ? $"{dup.Source} is deleted." : null);
+                // A deleted source is fine: the copy is made from its stored exports before the export deletes it (a copy of a
+                // copy is a copy of the original, which may be deleted by then; audit F203).
+                return ValidateNewActor(dup.Created);
             case AddStaticMeshActorOp add:
                 return string.IsNullOrWhiteSpace(add.StaticMesh) ? "No static mesh given." : ValidateNewActor(add.Created);
             case AddBlueprintActorOp bp:
                 return string.IsNullOrWhiteSpace(bp.ClassPath) ? "No Blueprint class given." : ValidateNewActor(bp.Created);
+            case AddSpawnPlaceOp place:
+                return !Enum.IsDefined(place.Kind) ? $"Unknown kind of spawn place ({place.Kind})."
+                    : string.IsNullOrWhiteSpace(place.Setting) ? "A new spawn place needs what spawns there (a group, a type, zone settings or a biome)."
+                    : place.Tags is { Count: > 0 } tags && (place.Kind != SpawnPlaceKind.TaggedCharacter || tags.Any(string.IsNullOrWhiteSpace)) ? "Only a tagged zombie / NPC point has tags, and each tag needs a name."
+                    : SpawnPlaces.ParseName(place.NewName) is not null ? $"{place.NewName} is the name of a stock spawn place."
+                    : ValidateNewActor(place.Created);
             case RemoveAddedActorOp remove:
                 if (!_added.TryGetValue(remove.Target, out var original))
                 {
@@ -247,6 +274,9 @@ public sealed partial class EditState
                 return original.Equals(remove.Original) ? null : $"{remove.Target} was added by a different operation.";
             case SetLootOp loot:
                 return _deletedActors.Contains(loot.Target) ? $"{loot.Target} is deleted." : null;
+            case SetSpawnChoiceOp choice:
+                return _deletedActors.Contains(choice.Target) ? $"{choice.Target} is deleted."
+                    : GetSpawnChoice(choice.Target, choice.Property) != choice.Old ? $"{choice.Target}: what it spawns is not as expected (edit is out of date)." : null;
             case SetClearGrassOp grass:
                 return _deletedActors.Contains(grass.Target) ? $"{grass.Target} is deleted."
                     : GetClearGrass(grass.Target) != grass.Old ? $"{grass.Target}: the grass setting is not as expected (edit is out of date)." : null;
@@ -356,6 +386,7 @@ public sealed partial class EditState
                     AddStaticMeshActorOp a => a.Created,
                     AddBlueprintActorOp b => b.Created,
                     DuplicateActorOp d => d.Created,
+                    AddSpawnPlaceOp p => p.Created,
                     RemoveAddedActorOp r => r.Target,
                     _ => null,
                 }).OfType<ActorRef>();
@@ -377,6 +408,8 @@ public sealed partial class EditState
 
                 return Duplicates(created, ActorRef.Comparer).FirstOrDefault()
                        ?? Duplicates(batch.Ops.OfType<AddInstanceOp>().Select(a => a.Target), InstanceRef.Comparer).FirstOrDefault();
+            case EconomyOp:
+                return null;
             default:
                 return $"Unsupported operation {op.GetType().Name}.";
         }
@@ -422,8 +455,17 @@ public sealed partial class EditState
             case AddBlueprintActorOp bp:
                 _added[bp.Created] = bp;
                 break;
+            case AddSpawnPlaceOp place:
+                _added[place.Created] = place;
+                _newPlaces = [.. _newPlaces, place];
+                break;
             case RemoveAddedActorOp remove:
                 _added.Remove(remove.Target);
+                if (_newPlaces.Any(p => ActorRef.Comparer.Equals(p.Created, remove.Target)))
+                {
+                    _newPlaces = _newPlaces.Where(p => !ActorRef.Comparer.Equals(p.Created, remove.Target)).ToArray();
+                }
+
                 _deletedActors.Remove(remove.Target);
                 foreach (var key in _transforms.Keys.Where(k => ActorRef.Comparer.Equals(k.Actor, remove.Target)).ToList())
                 {
@@ -441,6 +483,12 @@ public sealed partial class EditState
                 }
 
                 _bends.Remove(remove.Target);
+                _grass.Remove(remove.Target);
+                foreach (var key in _choices.Keys.Where(k => ActorRef.Comparer.Equals(k.Actor, remove.Target)).ToList())
+                {
+                    _choices.Remove(key);
+                }
+
                 foreach (var key in _spawnPoints.Keys.Where(k => ActorRef.Comparer.Equals(k.Actor, remove.Target)).ToList())
                 {
                     _spawnPoints.Remove(key);
@@ -456,6 +504,13 @@ public sealed partial class EditState
                     _loot.Remove(key);
                 }
 
+                // A copy carries its source's sways and grass setting (see ActorEdits): they go with it.
+                foreach (var key in _segmentSways.Keys.Where(k => ActorRef.Comparer.Equals(k.Actor, remove.Target)).ToList())
+                {
+                    _segmentSways.Remove(key);
+                }
+
+                _grass.Remove(remove.Target);
                 break;
             case ReplaceMeshOp mesh:
                 var meshKey = (mesh.Target, mesh.Component ?? string.Empty);
@@ -479,13 +534,24 @@ public sealed partial class EditState
             case SetLootOp loot:
                 var lootKey = (loot.Target, loot.Component ?? string.Empty);
                 var lootBase = _loot.TryGetValue(lootKey, out var known) ? known.Base : loot.Old;
-                if (lootBase.Equals(loot.New))
+                if (lootBase.Equals(loot.New) && !InheritsLoot(loot.Target, lootKey.Item2))
                 {
                     _loot.Remove(lootKey);
                 }
                 else
                 {
                     _loot[lootKey] = (lootBase, loot.New);
+                }
+
+                break;
+            case SetSpawnChoiceOp choice:
+                if (choice.New is { } value)
+                {
+                    _choices[(choice.Target, choice.Property)] = value;
+                }
+                else
+                {
+                    _choices.Remove((choice.Target, choice.Property));
                 }
 
                 break;
@@ -574,6 +640,8 @@ public sealed partial class EditState
                 }
 
                 break;
+            case EconomyOp:
+                break;
         }
     }
 
@@ -607,6 +675,7 @@ public sealed partial class EditState
         Copy(_transforms, copy._transforms);
         Copy(_instanceTransforms, copy._instanceTransforms);
         Copy(_added, copy._added);
+        copy._newPlaces = _newPlaces;
         Copy(_addedInstances, copy._addedInstances);
         Copy(_bends, copy._bends);
         Copy(_segmentSways, copy._segmentSways);
@@ -614,6 +683,7 @@ public sealed partial class EditState
         Copy(_loot, copy._loot);
         Copy(_meshes, copy._meshes);
         Copy(_grass, copy._grass);
+        Copy(_choices, copy._choices);
         CopyAssets(copy);
         return copy;
 

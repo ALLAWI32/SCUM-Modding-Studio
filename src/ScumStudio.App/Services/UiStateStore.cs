@@ -117,21 +117,42 @@ public sealed class UiStateStore
     public event Action<UiState>? Changed;
 
     /// <summary>Applies <paramref name="change"/> and saves.</summary>
+    /// <remarks>
+    /// Never throws (D20, seviscache: "got five errors, but I couldn't open the console until I restarted the program"):
+    /// after the Not-a-Number errors the Map's saved camera held NaN, JSON refused it, and every update threw, so opening
+    /// the console (which saves that it is open) stopped before the panel was told to show. A view that is not finite is
+    /// not kept, a listener that throws is logged and the others still run, and a state that cannot be written is logged.
+    /// </remarks>
     public UiState Update(Func<UiState, UiState> change)
     {
-        Current = change(Current);
-        Changed?.Invoke(Current);
+        ArgumentNullException.ThrowIfNull(change);
+        var next = change(Current);
+        Current = next.MapView is { } view && !IsFinite(view) ? next with { MapView = Current.MapView is { } kept && IsFinite(kept) ? kept : null } : next;
+        foreach (var listener in Changed?.GetInvocationList().Cast<Action<UiState>>() ?? [])
+        {
+            try
+            {
+                listener(Current);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                _logger.LogError(ex, "A view could not follow the saved view state: {Message}", ex.Message);
+            }
+        }
+
         try
         {
             StudioHome.EnsureDirectory(Path.GetDirectoryName(FilePath)!);
             AtomicFile.WriteAllBytes(FilePath, JsonSerializer.SerializeToUtf8Bytes(Current, Options));
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or JsonException)
         {
             _logger.LogWarning("Could not save {File}: {Message}", FilePath, ex.Message);
         }
 
         return Current;
+
+        static bool IsFinite(MapView v) => float.IsFinite(v.X) && float.IsFinite(v.Y) && float.IsFinite(v.Z) && float.IsFinite(v.Yaw) && float.IsFinite(v.Pitch);
     }
 
     private UiState Load()

@@ -85,7 +85,33 @@ public sealed partial class MainWindowViewModel
 
     /// <summary>What the update is doing, or why it failed.</summary>
     [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(CopyUpdateStatusCommand))]
     private string _updateStatus = string.Empty;
+
+    /// <summary>
+    /// D11 (seviscache: "La actualización falló:" with nothing after): the whole reason, never empty: the exception's
+    /// message and its inner ones, else the exception's kind.
+    /// </summary>
+    internal static string FailureReason(Exception ex)
+    {
+        var parts = new List<string>();
+        for (var e = ex; e is not null; e = e.InnerException)
+        {
+            var message = e.Message.Trim();
+            if (message.Length > 0 && !parts.Any(p => p.Contains(message, StringComparison.Ordinal)))
+            {
+                parts.Add(message);
+            }
+        }
+
+        return parts.Count > 0 ? string.Join(" — ", parts) : ex.GetType().Name;
+    }
+
+    /// <summary>Copies <see cref="UpdateStatus"/> (a failure's whole reason, to paste in a report).</summary>
+    [RelayCommand(CanExecute = nameof(CanCopyUpdateStatus))]
+    private Task CopyUpdateStatusAsync() => Services.Dialogs.SetClipboardTextAsync(UpdateStatus);
+
+    private bool CanCopyUpdateStatus() => UpdateStatus.Length > 0;
 
     /// <summary>The update is installed but the new version did not start: the card offers Close now.</summary>
     [ObservableProperty]
@@ -321,7 +347,7 @@ public sealed partial class MainWindowViewModel
             {
                 TimeoutException => Loc.F("Update.Stalled", (int)Updater.IdleTimeout.TotalSeconds),
                 UpdateFileInUseException inUse => Loc.F("Update.FileInUse", Path.GetFileName(inUse.FilePath)),
-                _ => Loc.F("Update.Failed", ex.Message),
+                _ => Loc.F("Update.Failed", FailureReason(ex)),
             };
             IsUpdating = false;
             return;

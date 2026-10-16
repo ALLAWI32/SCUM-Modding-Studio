@@ -3,7 +3,479 @@
 All notable changes are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [semantic versioning](https://semver.org/).
 
-## [Unreleased]
+## [3.3.0] - 2026-10-16
+
+### New in this release
+- **Spawns by category** (owner: "categories: vehicles, zombies, NPCs, animals, players"): the Spawns page has six
+  categories, Vehicles, Zombies, NPCs, Animals, Players and Server. Zombies and NPCs show the same threat zones, each with
+  its own types: every zombie, drifter, guard or drone type a zone picks from is listed with its chance in its list and
+  its share of everything the zone spawns, as real percentages that add up to 100 (0 % = that type never spawns), in a
+  grouped list with a search box and a 3D preview of the selected type. Animals lists the hunting biomes with each
+  animal's share. A list other zones use too says how many threat zones it changes ("changes every threat zone that
+  uses it (12)"), a zone's own encounter weights included; a list the low-threat settings read says it changes the
+  whole island. The save asks first, and the save of the whole page is one undo step.
+- **NPCs instead of zombies, per type** (igor8802: "assign NPCs instead of zombies"): a zone's groups are named after
+  what they spawn (two zombie groups read "Zombies (1)", "Zombies (2)"), every threat-zone folder is listed (events and
+  DLC zones too, grouped by folder), and a zone that has no armed-NPC group says that a zombie weight of 0 turns it off
+  rather than spawning NPCs; a list whose weights are all 0 shows a warning.
+- **Players** (owner: "a first-spawn place for a new character"): SCUM's ServerSettings.ini has no key that chooses where
+  a new character first appears. Whether the game's own spawn data (the first-play game mode, the spawn screen's
+  settings) holds such a place is not checked yet; if it does not, "the first time at place X, then as usual" is server
+  logic, which a mod pak cannot carry. The Players category says so and shows the respawn rules your server's
+  ServerSettings.ini has (sector, shelter and squadmate respawn, their prices, first waits, cooldowns and cooldown resets).
+- **The island map of the Spawns page** (owner: "a 2D map of the island (the real in-game map picture, zoom with the
+  mouse wheel, pan) inside the Spawns page where I select an area: a whole sector, or any area I draw/resize myself"):
+  the game's own map picture, read from your paks once and kept in the app's cache (it is the game's artwork, so it
+  never ships with the studio); a picture you choose yourself wins over it, and without either the terrain is drawn
+  from above. The picture is laid over the landscape's 20 x 20 tiles: its coast matches the terrain at 97.5 % and the
+  A_0 outpost lands on its compound. The wheel zooms about the cursor,
+  a drag pans, the A-D, Z x 0-4 cells are drawn with their names, and each kind of spawn place has its own glyph and
+  colour (car, skull, shield, paw, flag; threat zones as their real turned ellipse), so the layers read even without
+  colour; zoomed out, more than 3,000 places become counts per kind. An area is a click on a sector, a rectangle with
+  eight handles (drag inside to move it) or a polygon (click the corners, double click or Enter closes it, corners can
+  be dragged; Esc drops a shape in progress). The places inside an area are found among 30,000 in under 20 ms.
+- **New spawn places, not copies** (owner: "create a NEW spawn (not a clone) and remove a spawn"): Export mod writes a
+  new vehicle point, zombie / NPC point, tagged point, threat zone or hunting area into the island's spawn data. Where
+  it stands, its size and what spawns there (the vehicle group, Exterior or Interior, a tagged point's tags, the zone
+  settings, the biome) are its own. The rest is laid out as a stock place of the same settings and kept as that one has
+  it: a zone's activation reach and low-population settings (a zone of the project's own settings uses those at a low
+  player count too), a hunting area's priority, spawning switch and visitor distance. A new zone has no sub-zones and no
+  drone approach points: those stand around the stock zone. A vehicle group or a tag the game does not know, and stock
+  data with a member this version does not know, are refused with a line in the export report. Once made, a new place
+  moves, copies, deletes and undoes on the Map like any spawn place.
+- **A zone's own settings** (igor8802: "assign NPCs instead of zombies"): a threat zone or hunting area can now point at
+  settings the island data does not use yet, such as the project's own copy of a zone's settings with NPCs in it; the
+  export adds the reference the game needs to load it. Settings that are neither in the game files nor one of the
+  project's copies (an undone copy, a typo) are refused with a line in the export report, not written as a zone that
+  loads nothing.
+- **What spawns in a zone, read from the game's data** (owner: "choose exactly which zombie or NPC types spawn there";
+  igor8802: "assign NPCs instead of zombies"): an encounter now says what it spawns from the character presets it draws
+  from (Zombies_*, Drifter_* / Guard_*, animals, dropships), no longer from its class name, so a zombie group named "NPC"
+  or a numbered group is told right; encounters that take their presets from a parent class are followed.
+- **Spawn points under the ground** (seviscache: "spawners below the terrain"): a check lists the vehicle points more
+  than 30 cm and the zombie / NPC points more than 50 cm below the terrain (indoor points, bunkers and tunnels, the sea,
+  threat zones and hunting areas left out) and sets them back on it, cars 20 cm and characters 5 cm above, in one edit
+  that one Undo takes back. A check over the whole island keeps at most 24 landscape tiles in memory.
+- **The Spawns page around the island map** (owner: "inside the Spawns page where I select an area ... create a NEW spawn
+  (not a clone) and remove a spawn"): Vehicles, Zombies, NPCs and Animals show the map on the left and the selected area
+  on the right: its places of the category, found among 25,000 while the page stays responsive. Check several to remove
+  them or to change what they spawn (vehicle group, zone settings, biome) in one undo step; New place puts a new spawn
+  place, not a copy, where you click, on the ground when the terrain is known; a threat zone gets its own settings in
+  one step, so its weights change no other zone. The under-ground check (seviscache: "spawners below the terrain") runs
+  over the area or the whole island, shows each point on the map and puts the checked ones, or all, on the ground in one
+  undo step. The page reads the game's list of presets, zones and biomes in the background.
+- **Projects with the new spawn edits need this version**: new spawn places, zone copies and the choice of what a place
+  spawns are new journal records; 3.1.0 refuses a project that has them, so open such projects with this version or later.
+- **Economy: Numbers and Code** (owner: "two views, numbers and code, full control"): the Economy page keeps its traders,
+  pictures, prices and fame as *Numbers* and adds *Code*: the project's EconomyOverride.json exactly as the export writes
+  it, in the game's own layout. Edit it or paste a whole file: it is checked as you type, each problem listed with its
+  line and column (click one to go there), and applied as one step once it reads without errors. With errors nothing is
+  applied and your text stays until you fix or discard it. A change in one view shows in the other at once.
+- **Import… on the Economy page** (Discord: "Good day! The economy doesn't have a way to upload its own economy file..."):
+  pick a server's live EconomyOverride.json, or any older list, and it becomes the project's economy in both views; a
+  card says what changed (settings, traders, items, the traders' names) and that Ctrl+Z undoes it. A file with errors
+  is not imported: it opens in Code with its problems listed, ready to fix.
+- **Every value of the file is editable**: price, sale price, delta price, fame, on sale and sold-only-after-a-sale per
+  item, each with its own Reset to the game's value, and the file's server settings (restock, rotation, price rules,
+  gold) in a Server settings card, each with its own Reset. The file has no stock per trader or per item: stock is
+  server-wide (traders-unlimited-stock, fully-restock-tradeable-hours).
+- **A crafted bed is a bed** (owner: "if he adds any bed from the game as a Building, he can build it and it becomes his
+  own; it must behave like a normal bed"; seviscache and igor8802, #12: crafted things must work like the real thing): a
+  craftable made from a base element of the game, or from its mesh, is now a copy of that element's own family instead of
+  the improvised chair: its recipe, the element, the game's whole upgrade chain (each level with its own recipe) and, for
+  a chest, a lamp or a fridge, the item it spawns. A crafted bed keeps the game bed's respawn flag (`_isUsedForRespawn`);
+  respawning at it is not yet tried in game. A chest is a container, a lamp a lamp. Health, decay hours and placement
+  rules can be set per level; a value the game's data does not store for a level is reported, never dropped in silence. Both
+  also adds an item recipe for the item a chest or a lamp spawns. The respawn time is not a value of a bed: it is the
+  server's (`ServerSettings.ini`) and the game's `RespawnSettings`, the same for every bed. DLC and modular elements
+  (walls, floors, doors) are not offered yet, and an element with mesh variations keeps its own look. Not yet tried in
+  game: respawning at a crafted bed and upgrading a crafted element.
+- **Craftables: ingredients picked in 3D** (owner: "what he pays for them also chosen in 3D, not typed"; CwHedgehog:
+  "Can I add items as new crafting materials?"; seviscache and igor8802, #12): Add ingredient and Change open a picker
+  with every item a player can carry, the game's and those of imported mods, as 3D pictures in the catalogue's
+  categories (ammunition, weapons, food, medical, clothing, tools, crafting materials …), plus the game's ingredient
+  groups (CI_) shown by their item; search, amount (1–9999) and Tool. Each ingredient shows how the recipe asks for it:
+  *Own tag* (exactly this item), *Group only* (any item of its group) or *No tag*. *Only this item (new tag)* is off by
+  default: ticked, the export adds a new tag to that item's entity setup, a file of the game, so other mods that change
+  the same item conflict with it.
+- **The element on the Craftables page** (owner: "all in 3D: I choose the type from pictures, I do not type names"): a
+  bed, chest or lamp picked from the gallery is added as *Like the game's* element; the page shows the values each level
+  of the game's upgrade chain stores, each with the game's value beside it and Reset, lists the ones a level keeps from
+  its parent class, marks a respawn point, and says in its tooltip that respawn delay and price are the server's
+  settings, not the bed's. Use picks Build, Craft or Both (Both only for an element that spawns an item). Changing the
+  kind of a craftable that may have been exported warns that the objects players placed change behaviour with the next
+  export; an existing craftable is never switched by itself.
+- **A graphics-card check for crash reports**: `scumstudio render level <paks> A_4 --island --samples 4 --frames 120
+  --gl-debug -o a4.png` draws a whole cell as the Map does (4 samples a pixel with `--samples 4`) with the graphics driver
+  in its strict checking mode and prints every message the driver sends, errors and undefined behaviour first (exit code
+  4 when there is one). On an AMD card this shows what AMD's own driver objects to. On the RTX 5080 here: the 56 levels
+  of A_4 with the island, 121 frames, no problem.
+- **Settings › Graphics card**: the graphics card the 3D views draw with (name, maker, OpenGL version), a warning when it
+  is the chip built into the processor, when Windows draws without a driver or when a feature was turned off for it, and
+  the 3D quality, spawn models, water, lighting and anti-aliased foliage switches in one place. **Use the high-performance
+  GPU** tells Windows to run the studio on the faster graphics card of a laptop with two (Windows' own per-app setting,
+  only when you click it; it applies after a restart and Windows Settings › System › Display › Graphics undoes it).
+- **Get closer to things in tight rooms** (Discord, seviscache: "the camera clips the mesh, making it impossible to see
+  exactly where you want to place the item"): Settings › *Near clip* chooses how close to the camera the Map still draws
+  (1 to 50 cm, 10 cm by default), and Ctrl+Shift+N on the Map steps through the choices.
+- **Go to coordinates on the Map** (Discord, defolt_0999: "Is there a way to find it using its coordinates?"): the new
+  *Go to* button takes X Y and, if you know it, Z, in metres as the Entities list shows them or in the game's
+  centimetres (X=… Y=… Z=…), says which it read, and puts the camera 25 m from the spot looking down at it. Coordinates
+  typed in the Entities filter list the objects within 50 m of the spot, nearest first, so something you cannot see can
+  still be found and picked.
+- **Esc cancels a move, turn or scale** (seviscache: "ESC to cancel a move like Blender"): pressing Esc while dragging
+  the gizmo, while dragging an object freely, or while dragging a Shape, scale or legs handle puts the object back where
+  it was, and nothing goes into History or the export. A short note says the move was cancelled. Without a drag, Esc
+  works as before (it leaves mouse look, or clears "all of this kind").
+- **Views along an axis, like Blender and Unreal** (seviscache): the numpad turns the camera to look from the top (7),
+  the front (1, along +X) or the right (3, along +Y); Ctrl with the same key looks from the other side, 9 looks from the
+  opposite side of the current view and . frames the selection. The view turns around the selection, or around the
+  ground in the middle of the screen when nothing is selected. A View menu in the Map header does the same. The keys work
+  with Num Lock off too: Numpad 3, 1 and . no longer nudge the object down, drop it to the ground or delete it there.
+  The orthographic view (Numpad 5) is not in this update.
+- **Wireframe view** (seviscache): a header switch, F3 or Shift+Z draws the level as the edges of its triangles, to see
+  through walls and find small or hidden pieces. The sky, the grid and the gizmo stay as they are, and a click still
+  picks what is drawn. It is not kept when the studio closes.
+- **Several levels at once, and Isolate** (seviscache: "load only the levels I choose"): in the World tree, Ctrl+click
+  adds a level (or a cell) and Shift+click a range; after a short pause exactly those levels load together (for example
+  all of Blato, its interiors and the Landscape_A_4_1 tiles), with nothing streaming in around them. "Show selected"
+  loads them at once. The new Isolate switch in the header hides the island's terrain around what is loaded and stops
+  the island streaming; Whole island turns it off. A plain click still loads one level, and Ctrl+A in the tree still
+  selects all objects of a kind. At most 64 levels load at once.
+- The Map toolbar settings (the gear at the end of the header, and Settings › Map toolbar) list the new View, Wireframe
+  and Isolate items.
+
+- **Vehicles studio: textures, decals, materials and parts of a cloned vehicle** (Discord, m7ammed: "could you add tools
+  for editing materials and importing textures?"; owner: "full control: textures, materials, every part like Blender,
+  tattoos and stickers like drift cars"): beside a vehicle's 3D view the paint panel is now a studio with four tabs, and
+  the 3D view's left mouse button follows the tab (turn the view, point at the body, or drag a part's gizmo). Everything
+  is changed on a clone only; the game's own car, textures and materials never change, and every step is one Ctrl+Z.
+  - *Textures*: every texture of the clone's paint materials with its size and format. Replace… takes any PNG or JPG:
+    at export it is fitted to the texture's size and written as a cooked texture in the game's own layout and format
+    (BC1, BC3, BC4, BC5 or BC7 with every mip, sRGB as the original, small mips in the package and large ones in the
+    .ubulk) under the clone's own name; the clone's material points at it and its streaming data names it, so it does not
+    stay blurred. Save PNG… saves a texture for a paint program, Game texture takes the original back. The pictures are
+    kept in the project's `textures` folder. Checked with the game's reader on a Rager clone: its body texture replaced by
+    a picture reads back at 2048 x 2048 DXT1 with all its mips and the picture's colours.
+  - *Decals and stickers*: a library of designs of our own, drawn in code (tribal, flames, stripes, racing and stencil numbers, army
+    stars and camouflage, anime-style speed lines and petals, skulls, shapes, blank badges) plus any PNG or JPG as a
+    sticker. Pick one and click on the car: it is projected onto the body where you click, along the surface there, so it
+    wraps round curved panels and never reaches the far side. Click it again to drag it (Escape puts it back); size in
+    cm, rotation, opacity, flip, a mirrored copy on the other side, layer order, one colour, a colour per part of the
+    design, or a random pick from your palette that stays the same for the same variation. The 3D view shows the decals
+    under the paint as you place them; they are saved with the project (`decals/<clone>.json`). Apply decals writes them
+    into the clone's own colour texture and colour mask (a picture put on those two slots in the Textures tab is
+    replaced), so the paint the player sprays shows round them; a decal on a spot of the texture another part also uses
+    is reported.
+  - *Materials*: each material slot shows which parts of the car wear it and gets Roughness (M_Car_01's paint roughness
+    under the clear coat), Brightness (0-400 %: a gold over 100 % is stored brighter than white paint) and Saturation, with
+    the finishes Bright gold, Dull gold, Chrome, Diamond and Plain, for one slot or every slot at once; Game colours puts
+    every value back.
+  - *Parts*: pick a part on the car and move, turn or scale it with the gizmo or the numbers, hide it (it stays on the car
+    and keeps working), take it out of the spawn, show another model of the game in its place (an animated part only
+    swaps for an animated one) or bolt any model of the game onto the car where you click. The clone gets its own copy of
+    the part's socket on its own copy of the car's mesh, which the engine looks at before the shared skeleton, so the
+    stock car and other clones never move. Wheels roll on the car's physics and stay where they are.
+  - Only the game can confirm (`#SpawnVehicle` the clone, then look): the replaced texture close up and sharp at 50-100 m;
+    each decal where it was put, with its colours and opacity, and nowhere else; the paint colours on the same areas as in
+    the studio (the colour-mask rule); how a very bright gold or Diamond looks; a moved part at its new place, its
+    collision, a moved door opening on its new hinge, a hidden part's collision; an added part spawning, and the item it
+    gives when taken off (expected: a roof rack's); the stock car unchanged; a server with the mod and a client without
+    it, neither crashing.
+
+- **Far forests drawn as cards, as games do** (owner: "the game is very smooth, our app is not … high FPS and far
+  render distance at the same time"): every tree and bush the foliage tools placed (3 m across or more, with lighter
+  models) is pictured once from eight sides when its level loads, and past its lightest model it is drawn as one card
+  turned toward you, still only up to the game's own cull distance. The card shows the side you look from, is cut out
+  where its leaves are (clicks and the brush go through the gaps) and is lit like the leaves. A test forest of 20 000
+  trees over 3 km draws 0.32 million triangles instead of 2.16 million (the 12 000 trees past 600 m: 24 000 instead of
+  1.8 million); from each of the eight sides the card covers the tree's pixels to within 2 % and its colour to within
+  2/255. Every model also turns its normals with three cross products a vertex instead of a matrix inverse, which a
+  dense forest pays for millions of times a frame.
+- **The game's own far view in whole-island mode** (owner: "high FPS and far render distance at the same time … smooth,
+  optimized like the game"): every place not loaded in detail is now drawn with the merged far model the game itself
+  draws there (the island's 1,523 far models: a building, an outpost, a quarter of a town), so towns and outposts stand
+  on the horizon instead of bare ground. A place's far model gives way to the place in the same frame it streams in and
+  comes back when it streams out. The models are prepared once per session in the background (the island shows at once,
+  they appear when ready). Grass and bushes now thin out between the game's own start and end distances, as the game
+  fades them, instead of all stopping at one line. `scumstudio render level --around X,Y,Z --far-models
+  --render-distance 2 --frames 300` measures a view: frames over 33 and 50 ms, garbage per frame, GC pauses, and which
+  meshes carry the triangles.
+- **Smooth view and a far view in sectors** (owner: "The game is very smooth; our app is not. I want high FPS AND far
+  render distance at the same time"): Settings › *Smooth* (on) keeps the Map's 3D view near 60 fps. When frames take
+  longer than 16.7 ms for half a second it draws less, one step at a time: trees and grass first, then coarser models,
+  then shadows, then small objects and the farthest sector; after two seconds with room to spare it brings them back.
+  Texture detail never changes (that would load the levels again). Settings › *Render distance* (1 to 4 sectors around
+  the camera, 2 by default) sets how far the island's far view reaches; the levels close by still load in full detail.
+  A new quality, *Game-like*, draws what the game draws: its cull distances, its own model detail levels, everything
+  down to one pixel. The line under the view now reads placements, drawn, triangles, draw calls, CPU and GPU time,
+  frame rate, garbage-collector pauses per second and full collections, and *Smooth -N* while the view is lowered: a
+  line to screenshot when it stutters.
+- **Values a weapon inherits from its parent can be changed** (CwHedgehog: "I want to change this weapon's MaxHealth. It
+  seems to be inherited from a parent?"): a cooked Blueprint stores only what differs from its parent, so a katana's
+  entity setup has no MaxHealth (it is the game code's ItemEntitySetup default) and 2H_Katana1 has none of the values it
+  shares with 2H_Katana. The Weapons and Vehicles pages now list them under the asset's own values, marked "inherited
+  from ItemEntitySetup, editable" (a Blueprint parent's numbers and switches with the parent's value; MaxHealth of the
+  game code as "game default", since it is in no file). A change writes the value as a tag of the parent's type into
+  that asset's own defaults, so a clone gets it and the parent and every other item keep theirs; empty keeps the game's
+  value. The CLI's item stats/set and the MCP item tools list and set them too. Melee weapons: the Hit damage part (their WeaponDesc_Table row) now comes right after the weapon, and the
+  weapon's own damage values are titled "When thrown, not the hit damage" (CwHedgehog set a cloned katana's thrown
+  Damage to 999 and nothing changed when hitting).
+- **Your own 3D models on the Map** (Pheidian: "Is there a way to import custom models into the editor?"): Add object ›
+  My models lists the project's imported 3D models with their 3D picture. They are the Craftables page's models: one
+  import, used in both (the Craftables Add box offers them too). Place puts one where the camera aims as a new object of
+  the project: the gizmo moves, turns and scales it, Ctrl+Z undoes it, and typing its name in the Add object box works
+  too. Import 3D model… is the Craftables page's import (FBX or OBJ, cooked by Unreal Engine 4.27); without the engine
+  the button says what to install instead of failing. Players collide with the model as the import made it: they can
+  walk on it and into it. Export mod puts the model into the pak with its placement, in the client's pak and the
+  server's. A placement whose model files were deleted from the project is left out, with a warning. A shared mod
+  (Share your mod) does not carry the model files, as with an imported craftable: whoever imports it gets that warning. Tested
+  in the studio with a stand-in model (the game's table renamed into an import); a model cooked by Unreal Engine 4.27
+  standing on the island is not yet confirmed in the game.
+
+### Fixes
+- **Every craftable shows its own picture** (Jenni: "every craftable shows the improvised chair"; she replaced the icon
+  and it did not show): the copied recipe's `Icon` was never written, so each kept its template's picture. It now shows
+  the item's own inventory icon, or the recipe picture of the game element it is, and a Picture box on the Craftables
+  page picks any of the game's pictures (empty = its own). A mesh with no picture of its own still shows its template's
+  (pick one in the Picture box). A picture rendered from the mesh is not made yet.
+- **Buildings show in the base building menu again**: the wooden wall's recipe stores no menu section (the game files a
+  modular piece's section only on its twig tier; wood and metal are its upgrades), so a craftable made from a building
+  had no section to default to. It now uses the walls' section, and an upgrade tier finds its first tier's.
+- **Craftables review**: an item's entity setup that an imported mod or another mod pak overrides is never given a new
+  tag (its bytes would ship); the Craftables export ships exactly the opted-in item setups at their game path and still
+  refuses any other; a crafted element's upgrade recipes lose their skin links (a stock skin upgrade would turn it
+  back into the stock element); element values are no longer clamped to 0..1,000,000 on display; the Kind box offers
+  Element once the source's element family is read.
+- **Copies keep everything that was changed on the original** (seviscache: "after pulling an object with the orange
+  handle, Duplicate gives a copy without that change although the scale values are equal"; igor8802: "a duplicated
+  sentry's patrol route cannot be changed"): Duplicate, Copy/Paste, Extend, group copies, prefabs and the AI's duplicate
+  now carry the bend, handle pushes, ends and legs, moved or hidden parts, replaced meshes, spawn and patrol points, loot,
+  the grass setting and the scale you just pulled; a building pasted into another level keeps its repainted walls (owner:
+  "some placed buildings have textures in the wrong place"); a copy of a copy still works after the original is deleted;
+  the loot panel of a copy shows the loot the game gets; a copy set back to its own loot keeps it; a copy's moved, hidden
+  or replaced parts show on the Map as the game gets them, and its parts are picked where the copy stands; the AI's copy
+  of a locker into another level keeps its loot.
+- A duplicated or pasted sentry's patrol route can be changed and is exported; a copy's moved or deleted parts, replaced
+  meshes, road sways and loot points reach the game too (igor8802, seviscache).
+- Pasted and bent buildings keep their painted materials in game (the owner).
+- Indoor loot points that come from a building's Blueprint are written when moved (seviscache).
+- **Spawn points on copies and indoor loot points** (igor8802: "a duplicated sentry's patrol route cannot be changed";
+  seviscache: "indoor loot points show no gizmo when selected"): the patrol and loot points of a copied sentry or spawner
+  are drawn where the copy stands and go with it, and moving one no longer snaps back; a house's indoor loot points, which
+  its Blueprint keeps, are points of their own with a gizmo, Duplicate and Delete, like a spawner group's; the gizmo of a
+  point of a moved or turned spawner stands where the point is drawn; Fit to ground (End) on a point sets down that point
+  instead of the whole building or spawner, and on a loot point the building's class keeps it says why nothing moves.
+- **Spawns keeps your unsaved changes**: changing a setting no longer throws away the moved sliders (only another server
+  folder reloads the server's rows); after undo or redo a save starts from the project's current values instead of
+  failing as "out of date"; one slider over several values (the chance of every part) is one undo step; two presets of
+  one vehicle share the server's limit row instead of writing the same key twice.
+- **Values as the game and your server store them**: a weight of 0.75 is no longer shown as 1, 500 zombies or a 500 m
+  distance no longer stop at the slider's end (the slider widens and says the value is beyond the usual range), and
+  ServerSettings.ini values written by hand (`2`, `true`, `1`, `1000000`, `-1`) no longer count as changes. Every row has
+  a back-to-the-game-value button and shows the game's value in its hover text; "the game decides" (-1) is its own switch.
+- **ServerSettings.ini stays as you wrote it**: saving changes only the values of the keys you moved; comments, spacing,
+  line endings and a byte order mark stay byte for byte, and a new key goes after the last value of its section. The
+  first save ever keeps your original file as ServerSettings.ini.bak and never overwrites it; each session's first save
+  keeps the file as it was then as ServerSettings.ini.session.bak.
+- **Spawns messages**: the part-chance slider changes only the parts (not the preset's own chance) and says how many
+  parts use the game's default; a zone that cannot be read says so in your language instead of an empty page; the units
+  are translated; the save message names the ServerSettings.ini it wrote and says to restart the server, and the page
+  says to press Save before Export mod.
+- **Spawn points inside placed houses**: Export mod removed every vehicle and zombie point inside the box of any placed
+  object, so a placed hangar or house emptied its floor. Only rocks and cliffs remove the points in them now, and the
+  export report names each point it removed.
+- **Spawn place edits that were dropped without a word**: a turn of a place whose game data stores no rotation, the
+  scale of a point, and edits of places the game build does not have (another update, the server's files) now write or
+  say why not in the export report.
+- **Spawn place edits on the wrong places in the server pak**: the edits name stock places by their number in the
+  client's lists. The server pak now gets the removed, moved, re-chosen and copied stock places only when it is exported
+  together with the client, its lists are as long and each edited place stands where the client has it. Otherwise it
+  gets only the new places, and the export report says why.
+- **Fit to ground on a spawn place** (seviscache): a vehicle or zombie spawn place of the island stood where it was with
+  "No ground under it"; it now goes down onto the ground like any object.
+- **Fit to ground on one point of a spawner** (audit): with one patrol point of a sentry (or one loot point of a spawner
+  group) selected, the whole spawner was set down; now that point goes down alone. A loot point of a building cannot be
+  fitted (it moves with its building), and the button says so by being off.
+- A landscape tile that cannot be read (a mod's or a plugin's) no longer stops the ground checks; it has no ground.
+- **The Economy page keeps the file's own values**: a value the file pins (even to the game's own) or leaves at -1 stays
+  that way when you edit another value of the same item, and an item your game files do not know (a mod's) keeps the
+  file's values and is left alone by the bulk buttons; such items used to be written out as 0. -1 in a box is the game's
+  value (it became 0), +10 % can no longer turn a huge price negative, and a box is read when you leave it or press
+  Enter: "12,000" and "12 000" are 12000, and a typo says so and changes nothing.
+- **Every section of the file is on the page**: a trader that is neither the game's nor placed on the map shows as "not
+  on this map" with its items instead of being invisible, and new game files rebuild the shown rows with their prices.
+- **Without a project the Economy page says so**: every editor is off instead of taking edits it could not keep. The
+  export toast says that the file replaces the server's own (import it first), the row marks are named by what they
+  mean, not by their colour, and game tables that cannot be read say so with a Retry instead of loading for ever.
+- **EconomyOverride.json kept exactly as read, in the game's own layout** (owner: "export writes it back unchanged where
+  not edited"): the project's file is now written byte for byte as SCUM writes its own (an object's brace on a line of
+  its own, tabs, CRLF, no newline at the end), and nothing read is lost any more: keys the app does not know, a price
+  written `12,000`, a delta with six decimals or a `yes` stay as written until you change that very value; an edit
+  rewrites only the value it changes, and a reset never drops what the app cannot read. A server's live file or an
+  older list (with or without its `economy-override` wrapper) can be imported into the project: it becomes the
+  project's economy, the placed traders keep their sections, the project's file is backed up first and the change is
+  one Ctrl+Z. Files with a key twice, a section twice or a `"traders": []` open instead of failing, and a code edit is
+  checked first (line and column of each problem: unknown trader, unknown item, bad number).
+- **Ctrl+Z undoes economy edits**: every economy change (a price, a whole trader, a setting, an import) is one step of
+  the project's history, so Ctrl+Z and Redo undo the economy instead of the last map edit, also after reopening the
+  project.
+- **A placed trader's prices survive undo, reopen and redo**: a placed trader that leaves the map (deleted, undone, or
+  placed by an edit that a later one dropped) keeps its section in the project, hidden and left out of the export,
+  until an undo or redo brings it back; its name stays taken meanwhile, so a new trader cannot take it.
+- **Economy files are never lost**: a file the app could not read, one it writes differently, or one changed by hand
+  while the project was open is kept as a timestamped `EconomyOverride.json.<date-time>.bak` before the next write (one
+  `.bak` was overwritten every session), and the message names that copy even before the Economy page was opened. A
+  file that could not be read is only replaced by an edit or an import of yours, never by a trader placed on the map.
+  One "Economy not saved" message instead of one per keystroke.
+- **Export with a damaged economy file** goes on without the file and says so in its warnings instead of stopping, and
+  never writes the game's defaults in its place (an economy-only export and the Economy page's Export say why and write
+  nothing); a project that only changes prices can be exported (it writes the economy file, no game files needed);
+  Export mod uses the Economy page's file; a trade post copied and pasted into another level keeps its trader's
+  section. The note and the export report now say that the file replaces the server's own and to back that up or
+  import it first.
+- **Cloned vehicles no longer crash the game after a restart** (Discord, jenni_1129: "frist time u can spawn them in the
+  game .if u close the game and go in the game will crash"; m7ammed: "if you restart the game … the game crashes"): a
+  clone copied the vehicle's trunk (its item container) but not the trunk's entity setup, which every stock vehicle has,
+  so the saved car came back with a trunk the game had no setup for. A clone now takes the setup too, under its own name
+  (`RedRager_Item_Container_ES` for `BPC_RedRager`), and exporting a project that cloned a vehicle with an earlier
+  version adds it. Export again and spawn new cars; a car saved with an earlier export may still fail to load.
+- **Copied lights, fire, smoke, Niagara effects and sounds no longer break the level they go into**
+  (seviscache: "I got a "corrupted data" error when I launched the game" after copying light emitters and
+  particle/Niagara Blueprints; thezombie_97's crash in Samobor may be the same fault). Three faults of the copier are
+  fixed. A Niagara effect's own settings (the moths around most street lamps and reflectors, flies, smoke) were copied
+  with names and a type that belong to the level they came from, so the game read wrong names or broken data; they are
+  now carried over properly. A copied object did not wait for its new level while the level loads, as every object the
+  game itself cooks does, so a plain light, a smoke or fog emitter or a Niagara effect could be made before its level
+  existed. And a copy shared its light's and its meshes' baked-lighting keys with the original: it now gets keys of its
+  own, as the editor gives an object it moves, so a copy never borrows the original's baked light or shadows. Copy,
+  Duplicate and Paste on the Map copy lamps, fires, effects and sound emitters. A volume (fog, sound or post-process
+  area, item spawner zone) is still not pasted into another level, because its shape cannot be moved there yet: the Map
+  says so at the paste, and a group paste leaves it out and pastes the rest. A copy into another level is also refused
+  when a body, foliage or landscape part holds data the studio cannot move between levels, or a value it cannot read
+  (the export report names the part); what is safe is carried over properly (a body's collision format, field path
+  owners, string table texts).
+- **The server pak no longer crashes the dedicated server with sound events of imported mods** (taishan_song): the
+  dedicated server only loads its own 12-byte empty sound events and died with "Serial size mismatch" on the ones a car
+  mod brings. The server pak (and the server's Craftables pak) now gets the server's own empty event in their place, read
+  from the server's game paks; when none can be read, the server pak is not built and the message says why. A client pak
+  that would carry such server-only events (a mod imported from a server's mods folder) is named in the warnings.
+- **Every export says where its paks go** (Qraox, taishan_song): every player needs the client paks, the server the
+  server paks, Craftables included, and both restart. A Craftables pak built for one side only is named, an old server
+  pak no longer stays beside a newer client pak (it is removed from the export folder, and one left in the server's mods
+  folder is named), and the export report has an Install section.
+- **Setup refuses the dedicated server's Paks folder as the game folder** (Markus6789: the map drew nothing): it names
+  the game's folder to pick instead, `...\steamapps\common\SCUM\SCUM\Content\Paks`.
+- **Item spawners warn that the server keeps what they spawned** (defolt_0999, O Piqueno: "phantom fridges"): a fridge,
+  stove or other fixed item placed with Add object, a prefab or a paste is a world item spawner, and the server saves the
+  item it spawns, so deleting or undoing the spawner later leaves the item until an admin removes it in the game or the
+  server is wiped. The Map now says so when one is placed or deleted, and the export lists (report and message) the
+  spawners it no longer has, also those an earlier export placed. A pak cannot remove an item the server already saved:
+  the game's spawner has no "spawn once" or "do not save" setting (only the item and its chance to be usable).
+- **No more flickering trees and bushes after deleting or moving them** (Discord, defolt_0999: "the flickering bushes and
+  trees are still there"): deleting or moving a tree or bush threw away the game's ready-made draw data of every tree or
+  bush of that kind in the landscape square, so the game had to rebuild it, and a moved tree that was turned or resized
+  stuck out of the box the game culls it by. The export now writes the edit into that draw data and remeasures only the
+  boxes that hold the changed trees, the way the game's own tools build them; everything else stays exactly as the game
+  has it. Export the mod again to get the fix. Copying a tree into a square still makes the game rebuild that kind there.
+- **AMD graphics cards: the studio no longer goes down when the 3D view hits a graphics error** (reported by Pheidian, RX
+  9070 XT: "LOT of crashes ... when loading areas", most at military POIs; other AMD users at the cities). A frame that
+  fails is now caught: the 3D view puts the graphics state back, turns off the features 3.2 added (anti-aliasing and smooth
+  leaf edges, then compressed textures) and draws on, and after five failures in a row it stops with a message instead of
+  the app closing. Anti-aliasing now takes only a sample count the driver lists for both of its formats, and a driver that
+  refuses the anti-aliased buffers, their resolve or the water's copy of them gets one sample. A compressed texture the
+  driver refuses is decoded instead, and an error left over from another upload no longer stops a whole area from loading.
+  The log now names the graphics card, its driver and OpenGL version, everything turned off and why, and the driver's own
+  error messages, so a crash inside the driver still leaves a trail.
+- **Cliffs, shelves and cabinets no longer turn purple-blue on the Map** (Discord, seviscache: "There are some interior
+  and rock models that load the "normal" map—the relief texture—instead of the color texture"; defolt_0999: the rocks
+  around Prvo Selo): where a material's own colour slots hold placeholders, the studio took the snow layer's texture
+  from SCUM's master material, which is a normal map. 471 materials did (the cliff rocks, Big_Rock_01, the market
+  shelves and freezers, file cabinets, metal fences, road sides), and the far hills took their normal map too. Snow,
+  moss and dirt layers and textures named as normal maps are never taken for the colour now: the cliffs draw the rock
+  master's rock texture, the furniture its own base tint. Untextured surfaces also stop taking an emissive or
+  subsurface colour as theirs, so they are not drawn black instead. The Assets page's thumbnails are made again once, so
+  none keeps the old colour.
+- **Flying back over the island no longer stops the Map with "Cannot access a disposed object"**: when the camera turned
+  before the next sector was shown, the objects already sent to the graphics card for it kept textures that the card's
+  cache then freed, and coming back to them stopped the drawing. Those textures now stay as long as the objects that use
+  them. (Found while checking the purple-blue report above; the Map's textures were otherwise each drawn on their own
+  objects, also after being freed and sent again.)
+- **Zooming in no longer cuts the Map away after you load another sector** (Discord, seviscache: "If I zoom out, Blato
+  A4 becomes visible again, but if I zoom in, it gets cut off"): the camera shot of a newly loaded sector fitted the near
+  clip to the zone still drawn, kilometres away, and nothing reset it while the island was behind, so everything closer
+  than that was cut. The near and far clip are now worked out for every frame from what is drawn.
+- **A failed update says why, in full** (Discord, seviscache: the update window showed "La actualización falló:" and
+  nothing after): the reason now has its own row under the progress bar, wraps, shows in a tooltip and has a Copy button
+  for a bug report; an error without a message names its kind, and inner errors are added.
+- **The console opens again after errors** (Discord, seviscache: "got five errors, but I couldn't open the console until
+  I restarted the program"): after the Not-a-Number errors the Map's saved camera held NaN, saving the view state threw on
+  every change, and opening the console (which saves that it is open) stopped before the panel showed. Saving the view
+  state never throws now: a camera that is not a number is not kept, and one view that fails to follow does not stop the
+  others.
+- **The Craftables gallery finds every item the Assets page finds** (Discord, seviscache: "when I try to search for
+  "AnimalBaitFeeder," the Craftables search doesn't return it, but the Resources search does"): an item whose entity
+  setup drops the "Item" from its name (AnimalBaitFeederItem has AnimalBaitFeeder_ES, and its Ridgeline copy) was not
+  seen as an item, so it was in no list. It is now listed under its category, becomes an Item craftable, and the
+  gallery's search ranks its matches in the same order as the Assets page.
+- **Phantom fridges: Clean saved items removes what a removed item spawner left in a world, without a wipe**
+  (defolt_0999: "It continues to exist in the world even after I delete it"; O Piqueno). A fridge, stove or other fixed
+  item placed with Add object, a prefab or a paste is a world item spawner, and the game saves the item it spawned in
+  the save (SCUM.db), so deleting or undoing the spawner left the item until a wipe. New on the Map: **Clean saved
+  items**. Stop the server (or quit the game), choose its SCUM.db, Find: it lists the saved items of every item
+  spawner this project placed and no longer has (undone, reverted
+  or deleted, from the whole history) and of the game's spawners it deleted; optionally also the same items around the
+  object selected on the Map. Untick what stays, Remove ticked: a backup `SCUM.db.studio-backup-<date>` is made next to
+  it first, and Restore backup puts it back. Players, inventories, containers, vehicles, bases and items of any other
+  spawner are never touched; it refuses while the game or the server has the save open. Placing or deleting a spawner,
+  the Delete list and the export (message and report) point to it. A pak alone still cannot do this: the game's spawner
+  has no "spawn once" or "do not save" setting (only the item and its chance to be usable).
+- **Copied textures keep valid offsets**: a texture written in place of another (Replacements: snow on the ground, a
+  ground texture for a ground texture) or copied with a clone kept the original's absolute file offsets of its small
+  mips and its platform data, wrong as soon as the new name made the header longer or shorter (FORMAT_NOTES: "never
+  rename-clone" a texture). Every copied texture now gets the offsets of its own header.
+- **Apply paint is one step, and keeps working after Undo and Redo** (audit): applying a car with five painted parts made
+  about twenty journal entries, each reading every paint again, and one Ctrl+Z took back one value; it is now one entry.
+  A Redo while new paint was being chosen left the panel on the old values, so Apply was refused ("edit is out of
+  date"); the panel now takes the applied values and keeps the paint being chosen. Picking an armour kit twice quickly
+  could end on the first one; the last kit chosen now wins.
+- **Flying over the island no longer stalls while new places load** (owner: "flying inland over dense forest stutters
+  badly", his log: "read 9172 ms (6337 MB allocated), prepare 16090 ms (14391 MB)"): reading a place read every
+  package its objects borrow from (a building's parts, a material's parent) again for each object, so the military
+  base alone made 9.2 GB of garbage in 10 s, and the collector then held up the view. Each package is now read once
+  per place: the base reads in 0.3 s with 0.4 GB, to the same result. On a 4 km flight at Ultra from the B_4 outpost
+  to A_3 (real game files, RTX 5080), the work per streaming step fell from 1.6 GB to 0.6 GB on average and from
+  13.9 GB to 3.7 GB at worst, and frames over 100 ms during the flight from 15 to 7. Drawing a frame no longer makes
+  garbage (54 KB → about 0.1 KB a frame), the overlay is drawn once instead of once per scene, a click or the brush
+  looks only at what is under the cursor, a place streaming in rebuilds only what it touches (20,000 of 100,000
+  objects in a test instead of all), and textures read only the sizes they keep.
+- **The island no longer freezes the app when it appears** (owner: "heavy lag, very low FPS"): the island's terrain was
+  sent to the graphics card in one frame, about 0.9 s for an island-sized test with far models; it now goes over many
+  frames, a few milliseconds each (4.4–7.3 ms at most on the test PC), while the view keeps drawing, and an island
+  that only gains far models sends just those. Moving the camera also gets the short loading budget from its very first
+  frame (the first frame of a move used to spend the 30 ms meant for a camera at rest).
+- **Lighter ground textures on Performance and Balanced, and a quiet view at rest**: every quality baked the ground at
+  1024 × 1024 per landscape piece (4 MB each); Performance now bakes 256 and Balanced 512. A still view with the spawn
+  layers switched off no longer redraws 25 times a second; the glint runs only while a spawn model is shown.
+- **AMD graphics cards: undefined drawing state found and fixed** (Pheidian's crashes, D03). The 3D views were checked
+  with the driver in its strict checking mode, which reports what one graphics card lets through and another may crash
+  on. Every frame without sun shadows (Performance quality, lighting off, the 3D previews in studio light, tile
+  pictures) asked the shadow sampler to read a unit with no depth texture on it, which OpenGL calls undefined behaviour;
+  it now reads a small "no shadow" texture made for it. Every texture slot a shader reads now holds a real texture in
+  every pass, the pick pass no longer dithers its object numbers and clears its whole buffer. A flight from the B_4
+  outpost into the A_4 airfield on the real game files (4 km, 40,000 objects streaming in and out, anti-aliasing and
+  shadows on) now ends with no error or warning from the driver. Only an AMD card can confirm the crashes are gone.
+- **AMD graphics cards: each 3D frame is finished before the window copies it** (D03). The window's own renderer, running
+  on another thread, copied the 3D view's picture as soon as the studio had sent its drawing commands, not once the card
+  had carried them out; OpenGL only promises a finished picture after the card has finished. NVIDIA cards run the two in
+  order anyway; AMD cards need not, and the copy could read a picture still being drawn, which is likeliest when areas
+  stream in and frames are heaviest. The Map and the 3D previews now wait for their frame to finish before handing it
+  over (measured on an RTX 5080: a heavy test frame handed over after 1.6 ms with 11 ms of drawing still to do, now after
+  12.6 ms, complete). Each streaming step also writes to the log how many meshes and textures the studio holds on the
+  graphics card; a flight there and back holds as much at its end as at its start. For AMD testers who still crash:
+  starting the studio with the environment variable `SCUMSTUDIO_UI_THREAD_COMPOSITOR=1` makes the window draw on the same
+  thread as the 3D views, so all of the studio's graphics run on one thread (a test switch, off by default; the log says
+  when it is on).
 
 ## [3.2.0] - 2026-10-12
 

@@ -73,6 +73,7 @@ public sealed partial class MapPageViewModel
     [RelayCommand(CanExecute = nameof(CanSavePrefab))]
     private void SavePrefab()
     {
+        CommitShape(); // saved as the sliders show it
         if (BuildPrefab(PrefabName) is not { } prefab)
         {
             _services.Notifications.Info(Loc.T("Map.Prefabs.Nothing"), Loc.T("Map.Prefabs.NothingDetail"));
@@ -101,9 +102,10 @@ public sealed partial class MapPageViewModel
             ? GroupItems().Select(m => (m.Item, m.Instance)).ToList()
             : SelectedActor is { } one ? [(one, SelectedInstanceInfo())] : [];
         var parts = new List<(PrefabPart Part, FTransform World)>();
+        var edits = EditsOf(members.Where(m => m.Instance is null).Select(m => m.Item)); // one pass for the whole set
         foreach (var (item, sel) in members)
         {
-            if (PartOf(item, sel) is { } part)
+            if (PartOf(item, sel, edits.GetValueOrDefault(item.Reference)) is { } part)
             {
                 parts.Add(part);
             }
@@ -126,7 +128,7 @@ public sealed partial class MapPageViewModel
     }
 
     /// <summary>The part for one member (a whole actor, or one instance / part of it) with its world transform now, or null.</summary>
-    private (PrefabPart Part, FTransform World)? PartOf(ActorItemViewModel item, SelectedInstance? sel)
+    private (PrefabPart Part, FTransform World)? PartOf(ActorItemViewModel item, SelectedInstance? sel, ActorEdits? actorEdits)
     {
         var state = _services.Projects.Current?.State;
         if (sel is not null)
@@ -140,7 +142,7 @@ public sealed partial class MapPageViewModel
             var world = CurrentInstanceTransform(sel).ToTransform() * SpaceOf(sel);
             var part = StoredInstanceOf(sel) is { } source
                 ? new PrefabPart { Kind = PrefabPartKind.FoliageInstance, Level = source.Level, Actor = source.Actor, Component = source.Component, Mesh = mesh, Collision = sel.Component.CollisionProfile }
-                : new PrefabPart { Kind = PrefabPartKind.StaticMesh, Mesh = mesh, Collision = sel.Component.CollisionProfile };
+                : new PrefabPart { Kind = PrefabPartKind.StaticMesh, Mesh = mesh, Collision = sel.Component.CollisionProfile, Loot = LootOf(sel.Item, sel.Component), Materials = sel.Component.OverrideMaterials };
             return (part, world);
         }
 
@@ -151,6 +153,8 @@ public sealed partial class MapPageViewModel
 
         var root = RootWorldOf(item, CurrentRootTransform(item));
         var bend = state?.GetBendValue(item.Reference) is { IsStraight: false } b ? b : (BendValue?)null;
+        var edits = actorEdits is { IsEmpty: false } ? actorEdits : null; // replayed on the placed copy (with the bend: Bend is for older readers)
+        var replaced = state?.GetMeshOverride(item.Reference); // saved as the mesh it draws now (F076)
         var source2 = item;
         if (item.IsAdded)
         {
@@ -158,9 +162,17 @@ public sealed partial class MapPageViewModel
             switch (state?.AddedActors.GetValueOrDefault(item.Reference))
             {
                 case AddStaticMeshActorOp meshActor:
-                    return (new PrefabPart { Kind = PrefabPartKind.StaticMesh, Mesh = meshActor.StaticMesh, Class = "/Script/Engine.StaticMeshActor", Collision = meshActor.CollisionProfile, Bend = bend }, root);
+                    return (new PrefabPart
+                    {
+                        Kind = PrefabPartKind.StaticMesh, Mesh = replaced ?? meshActor.StaticMesh, Class = "/Script/Engine.StaticMeshActor", Collision = meshActor.CollisionProfile, Bend = bend, Edits = edits,
+                        Loot = state!.GetLoot(item.Reference) is { } set ? (set.Lootable ? set.Presets : []) : meshActor.Loot, Materials = replaced is null ? meshActor.OverrideMaterials : null,
+                    }, root);
                 case AddBlueprintActorOp blueprint:
-                    return (new PrefabPart { Kind = PrefabPartKind.Blueprint, Level = blueprint.Source.Level, Actor = blueprint.Source.Actor, Class = blueprint.ClassPath, Item = blueprint.Item }, root);
+                    return (new PrefabPart
+                    {
+                        Kind = PrefabPartKind.Blueprint, Level = blueprint.Source.Level, Actor = blueprint.Source.Actor, Class = blueprint.ClassPath, Item = blueprint.Item, Edits = edits,
+                        Trader = blueprint.Trader, Mechanic = blueprint.Mechanic,
+                    }, root);
                 case DuplicateActorOp duplicate when PristineOf(duplicate.Source) is { } pristine:
                     source2 = pristine;
                     break;
@@ -169,15 +181,19 @@ public sealed partial class MapPageViewModel
             }
         }
 
+        var isMesh = source2.Actor.Kind == ActorKind.StaticMeshActor;
         return (new PrefabPart
         {
             Kind = PrefabPartKind.StockActor,
             Level = source2.Level.PackagePath,
             Actor = source2.Name,
             Class = source2.Actor.ClassPath,
-            Mesh = source2.Actor.Kind == ActorKind.StaticMeshActor ? source2.Actor.StaticMeshPath : null,
+            Mesh = isMesh ? replaced ?? source2.Actor.StaticMeshPath : null,
             Collision = source2.Actor.Root?.CollisionProfile,
             Bend = bend,
+            Edits = edits,
+            Loot = isMesh && item.Actor.Root is { } r ? LootOf(item, r) : null,
+            Materials = isMesh && replaced is null ? source2.Actor.Root?.OverrideMaterials : null,
         }, root);
     }
 
@@ -219,15 +235,13 @@ public sealed partial class MapPageViewModel
                 }
 
                 ops.Add(op);
-                if (op.GetPrimaryTarget() is { } actor && op is not AddInstanceOp)
+                if (op is AddStaticMeshActorOp or DuplicateActorOp or AddBlueprintActorOp && op.GetPrimaryTarget() is { } actor)
                 {
                     created.Add(actor);
-                }
 
-                // A bent wall or bridge is bent again (the exporter bends mesh actors and duplicates).
-                if (part.Bend is { IsStraight: false } bend && op is AddStaticMeshActorOp or DuplicateActorOp && op.GetPrimaryTarget() is { } bent)
-                {
-                    ops.Add(new BendActorOp(bent, 0f, bend.Degrees, NewSway1: bend.Sway1, NewSway2: bend.Sway2, NewStart: bend.Start, NewEnd: bend.End, NewLegs: bend.Legs));
+                    // What was changed on the saved object is changed on its copy, once (an older file has only the bend).
+                    var edits = part.Edits ?? (part.Bend is { IsStraight: false } bend && op is not AddBlueprintActorOp ? new ActorEdits { Bend = bend } : ActorEdits.None);
+                    ops.AddRange(edits.OpsOn(actor, op is AddStaticMeshActorOp));
                 }
             }
         }
@@ -247,6 +261,7 @@ public sealed partial class MapPageViewModel
         {
             var entry = _services.Projects.Apply(new BatchOp(Loc.F("Map.Prefabs.PlaceTitle", row.Name), ops));
             _services.Notifications.Info(Loc.T("Map.Prefabs.Placed"), entry.Op.Describe() + Loc.T("Map.CtrlZUndoes"));
+            WarnIfItemSpawners(ops);
         }
         catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or IOException)
         {
@@ -273,7 +288,7 @@ public sealed partial class MapPageViewModel
         var transform = TransformValue.FromTransform(world);
         bool Known(string? path) => path is not null && (catalog is null || catalog.PackageExists(AssetPaths.SplitObjectPath(path).PackagePath));
         AddStaticMeshActorOp? MeshActor() => Known(part.Mesh)
-            ? EditOpFactory.AddStaticMeshActor(target, part.Mesh!, transform, state, reserved) with { CollisionProfile = part.Collision }
+            ? EditOpFactory.AddStaticMeshActor(target, part.Mesh!, transform, state, reserved) with { CollisionProfile = part.Collision, Loot = part.Loot, OverrideMaterials = part.Materials }
             : null;
 
         switch (part.Kind)
@@ -297,10 +312,21 @@ public sealed partial class MapPageViewModel
                 }
 
                 var source = new ActorRef(part.Level, part.Actor);
-                // A spawner saved with its own item keeps it: a duplicate of the stock spawner would spawn the stock item.
-                if (part.Item is null && PristineOf(source) is { } item)
+                // A spawner saved with its own item keeps it: a duplicate of the stock spawner would spawn the stock item. A
+                // placed trader or lift is placed as one again (below), not as a copy of the stock post.
+                if (part.Item is null && part.Trader is null && part.Mechanic is null && PristineOf(source) is { } item)
                 {
-                    return CopyOp(item, target, world, state, reserved);
+                    // The saved mesh, loot and paint, not what the original has now (a file written before parts kept them: the original's).
+                    var copy = CopyOp(item, target, world, state, reserved);
+                    var saved = part.Edits is not null || part.Loot is not null || part.Materials is not null;
+                    return copy is AddStaticMeshActorOp add
+                        ? add with { StaticMesh = part.Mesh ?? add.StaticMesh, Loot = saved ? part.Loot : add.Loot, OverrideMaterials = saved ? part.Materials : add.OverrideMaterials }
+                        : copy;
+                }
+
+                if (part.Mechanic is { } mechanic && target.FindActor(mechanic) is null && !state.IsAdded(new ActorRef(target.PackagePath, mechanic)))
+                {
+                    return null; // a lift serves a trade post of its own level: none of that name here
                 }
 
                 if (part.Kind == PrefabPartKind.StockActor && part.Mesh is not null && part.Class?.EndsWith(".StaticMeshActor", StringComparison.OrdinalIgnoreCase) == true)
@@ -315,7 +341,15 @@ public sealed partial class MapPageViewModel
 
                 var className = part.Class[(part.Class.LastIndexOf('.') + 1)..];
                 var baseName = className.EndsWith("_C", StringComparison.Ordinal) ? className[..^2] : className;
-                return new AddBlueprintActorOp(target.PackagePath, EditOpFactory.UniqueActorName(target, baseName + "_Added", state, reserved), part.Class, source, transform) { Item = part.Item };
+                return new AddBlueprintActorOp(target.PackagePath, EditOpFactory.UniqueActorName(target, baseName + "_Added", state, reserved), part.Class, source, transform)
+                {
+                    Item = part.Item,
+                    Mechanic = part.Mechanic,
+                    // A trader of its own, as a pasted one (see CopyOp): its name is its economy section, so it gets a free one.
+                    Trader = part.Trader is { Name.Length: > 0 } trader
+                        ? trader with { Name = FreeDefaultName(CellOf(target) ?? Level.Economy.TraderPosts.CellOf(trader.Name) ?? "X_0", trader.Type, reserved) }
+                        : part.Trader,
+                };
         }
     }
 

@@ -311,12 +311,20 @@
             </Grid>
           </Border>
           <Border DockPanel.Dock="Bottom" Padding="24,14" BorderBrush="{DynamicResource StrokeSubtleBrush}" BorderThickness="0,1,0,0" Background="{DynamicResource Bg1Brush}">
-            <Grid ColumnDefinitions="*,Auto,Auto,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="8">
+            <Grid ColumnDefinitions="*,Auto,Auto,Auto" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="8">
               <ProgressBar Grid.ColumnSpan="4" Value="{Binding UpdateProgress}" Maximum="100" IsVisible="{Binding IsUpdating}" Margin="0,0,0,10" />
-              <TextBlock Grid.Row="1" Text="{Binding UpdateStatus}" Classes="caption wrap" VerticalAlignment="Center" />
-              <Button Grid.Row="1" Grid.Column="1" Content="{Tr Update.ReleasePage}" Classes="ghost" Command="{Binding OpenReleasePageCommand}" ToolTip.Tip="{Tr Update.ReleasePage.Tip}" />
-              <Button Grid.Row="1" Grid.Column="2" Content="{Tr Update.Later}" Classes="ghost" Command="{Binding CloseUpdateCommand}" IsEnabled="{Binding !IsUpdating}" ToolTip.Tip="{Tr Update.Later.Tip}" />
-              <Panel Grid.Row="1" Grid.Column="3">
+              <!-- D11 (seviscache): the whole reason on its own row, wrapped, selectable, in the tooltip and copyable -->
+              <Grid Grid.Row="1" Grid.ColumnSpan="4" ColumnDefinitions="*,Auto" ColumnSpacing="8" Margin="0,0,0,10"
+                    IsVisible="{Binding UpdateStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                <ScrollViewer MaxHeight="96" HorizontalScrollBarVisibility="Disabled">
+                  <SelectableTextBlock x:Name="UpdateStatusText" Text="{Binding UpdateStatus}" Classes="caption" TextWrapping="Wrap" ToolTip.Tip="{Binding UpdateStatus}" />
+                </ScrollViewer>
+                <Button Grid.Column="1" x:Name="CopyUpdateStatusButton" Classes="ghost small" Content="{Tr Common.Copy}" Command="{Binding CopyUpdateStatusCommand}"
+                        VerticalAlignment="Top" ToolTip.Tip="{Tr Update.CopyStatus.Tip}" />
+              </Grid>
+              <Button Grid.Row="2" Grid.Column="1" Content="{Tr Update.ReleasePage}" Classes="ghost" Command="{Binding OpenReleasePageCommand}" ToolTip.Tip="{Tr Update.ReleasePage.Tip}" />
+              <Button Grid.Row="2" Grid.Column="2" Content="{Tr Update.Later}" Classes="ghost" Command="{Binding CloseUpdateCommand}" IsEnabled="{Binding !IsUpdating}" ToolTip.Tip="{Tr Update.Later.Tip}" />
+              <Panel Grid.Row="2" Grid.Column="3">
                 <Button x:Name="InstallUpdateButton" Classes="accent" Command="{Binding InstallUpdateCommand}" IsVisible="{Binding IsInstallShown}" ToolTip.Tip="{Tr Update.Install.Tip}">
                   <StackPanel Orientation="Horizontal" Spacing="6">
                     <c:GlyphIcon Kind="Icon.Download" IconSize="14" />

@@ -130,6 +130,22 @@ public sealed class JournalSliceTests
             JournalSlice.Groups(applied));
     }
 
+    [Fact]
+    public void EconomyEditsAreNeverShared()
+    {
+        // Merge (economy + share): an economy edit has no level, so it fell into the island group and an island-wide share
+        // carried it, although a share takes the economy as a file of its own.
+        var applied = Journal(
+            new SetEconomySettingOp("economy-logging", 0, "\"1\"", "\"0\""),
+            new DeleteActorOp(new ActorRef(Water, "WaterSpline_3")),
+            new BatchOp("Economy: A_0_Armory", [new SetEconomyEntryOp("A_0_Armory", "Weapon_AK47", 0, null, "{\"tradeable-code\":\"Weapon_AK47\"}")]));
+
+        Assert.Equal([new SliceGroup(JournalSlice.IslandKey, 1)], JournalSlice.Groups(applied));
+        var batch = JournalSlice.Take(applied, new SectorChoice(new HashSet<string>(), IslandWide: true, Assets: false), "Shared mod", out _);
+        Assert.DoesNotContain(batch.Ops, op => op is EconomyOp);
+        Assert.Single(batch.Ops);
+    }
+
     [Theory]
     [InlineData("/Game/ConZ_Files/Maps/The_Island/A_0_Outpost", "A_0")]
     [InlineData("/Game/ConZ_Files/Maps/The_Island/A_0_Outpost.A_0_Outpost", "A_0")]

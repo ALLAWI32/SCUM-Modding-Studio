@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using ScumStudio.Assets.Catalog;
+using ScumStudio.Formats.Packages;
 using ScumStudio.Level.Import;
 using ScumStudio.Level.Projects;
 using ScumStudio.Modding;
@@ -60,7 +61,12 @@ public static class CraftablesExporter
             return null;
         }
 
-        var (plan, built, imports, importedAssets, warnings) = Prepare(craftables, catalog, baseRegistry, writeRegistry: true);
+        // A stock package the plan overrides (an item's setup given a new tag) is built on the project pak's staged copy, so
+        // that pak's edits of it (Module page) are not hidden by this higher pak; only while that pak is there.
+        var projectStaging = Path.Combine(roleDirectory, ProjectExporter.StagingFolderName);
+        var projectPak = !options.WritePak || File.Exists(Path.Combine(roleDirectory, ProjectExporter.PakFileName(modName, options.PakChunkIndex)));
+        Func<string, CookedPackage?> basePackage = p => projectPak && catalog.TryGetPackageFile(p, out var f) ? StagedPackage(projectStaging, f.Path, p) : null;
+        var (plan, built, imports, importedAssets, warnings) = Prepare(craftables, catalog, baseRegistry, writeRegistry: true, basePackage);
         var staging = Path.Combine(roleDirectory, StagingFolderName);
         if (Directory.Exists(staging))
         {
@@ -99,6 +105,8 @@ public static class CraftablesExporter
             await File.WriteAllBytesAsync(registry, built.AssetRegistry, cancellationToken).ConfigureAwait(false);
         }
 
+        // The server cook's sound events (an imported model's, a clone's) become the server's 12-byte stubs, like the project pak's.
+        var stubbed = await ProjectExporter.StubEventsAsync(staging, catalog, options, role, warnings, cancellationToken).ConfigureAwait(false);
         string? pakPath = null;
         string? sigPath = null;
         if (options.WritePak)
@@ -131,6 +139,7 @@ public static class CraftablesExporter
             Registered = built.Registered,
             AssetValues = built.Applied,
             Warnings = warnings,
+            StubbedEvents = stubbed,
         };
     }
 
@@ -154,7 +163,7 @@ public static class CraftablesExporter
 
     // The craftables whose imported model is usable, planned and built; stops before anything is written when nothing would
     // be built or the pak would ship a package the game already has (P0 #1: the Craftables pak only adds).
-    private static Prepared Prepare(CraftablesFile craftables, AssetCatalog catalog, byte[]? baseRegistry, bool writeRegistry)
+    private static Prepared Prepare(CraftablesFile craftables, AssetCatalog catalog, byte[]? baseRegistry, bool writeRegistry, Func<string, CookedPackage?>? basePackage = null)
     {
         var warnings = new List<string>();
         var items = new List<Craftable>();
@@ -176,6 +185,11 @@ public static class CraftablesExporter
         }
 
         var plan = CraftablesPlanner.Plan(catalog, items);
+        if (basePackage is not null)
+        {
+            plan = plan with { Request = plan.Request with { BasePackage = basePackage } };
+        }
+
         warnings.AddRange(plan.Warnings);
         var built = AssetModBuilder.Build(catalog, plan.Request with { BaseRegistry = baseRegistry, SellClones = false, WriteRegistry = writeRegistry });
         warnings.AddRange(built.Warnings);
@@ -190,8 +204,15 @@ public static class CraftablesExporter
             .Select(virtualPath => new ExportedAsset(AssetPaths.ToPackagePath(virtualPath, catalog.ProjectName), virtualPath, IsClone: false))
             .ToList();
 
-        // A package the game already has (a stock table, a stock recipe) stops it here, and the previous pak stays as it was.
-        var atGamePaths = GamePathsIn(catalog, built.Packages.Select(p => p.PackagePath).Concat(importedAssets.Select(a => a.PackagePath)));
+        // A package the game already has (a stock table, a stock recipe) stops it here, and the previous pak stays as it was;
+        // only the item setups the user opted in to give a new tag (plan.StockOverrides) may be shipped at their stock path.
+        var stockOverrides = plan.StockOverrides.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var overridden in plan.StockOverrides)
+        {
+            warnings.Add($"The Craftables pak replaces the game's {overridden} (an item given a new tag): export again after every game update.");
+        }
+
+        var atGamePaths = GamePathsIn(catalog, built.Packages.Select(p => p.PackagePath).Where(p => !stockOverrides.Contains(p)).Concat(importedAssets.Select(a => a.PackagePath)));
         if (atGamePaths.Count > 0)
         {
             throw new InvalidOperationException("The Craftables pak would change packages the game already has, so it was not written: " + string.Join(", ", atGamePaths) + ".");
@@ -268,5 +289,15 @@ public static class CraftablesExporter
     {
         var path = result is null ? null : Path.Combine([result.StagingDirectory, .. AssetModBuilder.AssetRegistryPath.Split('/')]);
         return path is not null && File.Exists(path) ? File.ReadAllBytes(path) : null;
+    }
+
+    /// <summary>The package <paramref name="staging"/> holds at <paramref name="virtualPath"/> (<c>SCUM/Content/…/X.uasset</c>), or null.</summary>
+    private static CookedPackage? StagedPackage(string staging, string virtualPath, string packagePath)
+    {
+        var header = Path.Combine([staging, .. virtualPath.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries)]);
+        var stem = header[..^Path.GetExtension(header).Length];
+        return File.Exists(header) && File.Exists(stem + ".uexp")
+            ? CookedPackage.Parse(File.ReadAllBytes(header), File.ReadAllBytes(stem + ".uexp"), File.Exists(stem + ".ubulk") ? File.ReadAllBytes(stem + ".ubulk") : null, packagePath)
+            : null;
     }
 }

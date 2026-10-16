@@ -1,0 +1,28 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:ScumStudio.App.ViewModels"
+             x:Class="ScumStudio.App.Views.Pages.VehicleStudioMaterials"
+             x:DataType="vm:PaintMaterialViewModel">
+  <!-- One material slot's studio values under its colour pickers: which parts wear it, roughness, brightness, saturation. -->
+  <StackPanel Spacing="6">
+    <TextBlock Text="{Binding UsedByText}" Classes="caption wrap" IsVisible="{Binding HasUsedBy}" ToolTip.Tip="{Tr Paint.UsedBy.Tip}" />
+    <Grid ColumnDefinitions="80,*,44" ColumnSpacing="6" IsVisible="{Binding HasRoughness}">
+      <TextBlock Text="{Tr Paint.Roughness}" Classes="caption" VerticalAlignment="Center" />
+      <Slider x:Name="RoughnessSlider" Grid.Column="1" Minimum="0" Maximum="1" Value="{Binding Roughness}" SmallChange="0.02" LargeChange="0.1"
+              ToolTip.Tip="{Tr Paint.Roughness.Tip}" />
+      <TextBlock Grid.Column="2" Text="{Binding RoughnessText}" Classes="caption mono" VerticalAlignment="Center" HorizontalAlignment="Right" />
+    </Grid>
+    <Grid ColumnDefinitions="80,*,44" ColumnSpacing="6" IsVisible="{Binding HasTone}">
+      <TextBlock Text="{Tr Paint.Brightness}" Classes="caption" VerticalAlignment="Center" />
+      <Slider x:Name="BrightnessSlider" Grid.Column="1" Minimum="0" Maximum="4" Value="{Binding Brightness}"
+              SmallChange="0.05" LargeChange="0.25" ToolTip.Tip="{Tr Paint.Brightness.Tip}" />
+      <TextBlock Grid.Column="2" Text="{Binding BrightnessText}" Classes="caption mono" VerticalAlignment="Center" HorizontalAlignment="Right" />
+    </Grid>
+    <Grid ColumnDefinitions="80,*,44" ColumnSpacing="6" IsVisible="{Binding HasTone}">
+      <TextBlock Text="{Tr Paint.Saturation}" Classes="caption" VerticalAlignment="Center" />
+      <Slider x:Name="SaturationSlider" Grid.Column="1" Minimum="0" Maximum="2" Value="{Binding Saturation}" SmallChange="0.05" LargeChange="0.25"
+              ToolTip.Tip="{Tr Paint.Saturation.Tip}" />
+      <TextBlock Grid.Column="2" Text="{Binding SaturationText}" Classes="caption mono" VerticalAlignment="Center" HorizontalAlignment="Right" />
+    </Grid>
+  </StackPanel>
+</UserControl>

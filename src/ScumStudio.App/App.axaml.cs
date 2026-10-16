@@ -66,6 +66,7 @@ public partial class App : Application
             var services = CreateServices();
             _services = services;
             HookUnhandledExceptions(services);
+            HookGraphics(services);
             AccentPalette.Apply(this, services.UiState.Current.Accent);
             Loc.Instance.Language = services.Settings.Load().Ui.Language;
 
@@ -128,6 +129,22 @@ public partial class App : Application
                 services.Logger.LogCritical(ex, "Fatal exception: {Message}", ex.Message);
             }
         };
+    }
+
+    /// <summary>
+    /// The graphics card's log and warnings (D03): the GPU each 3D view starts on, the driver's messages, and a toast when a
+    /// feature is turned off for it. A native crash inside the driver is not an exception, so these lines are what is left.
+    /// </summary>
+    public static void HookGraphics(AppServices services)
+    {
+        var logger = services.LoggerFactory.CreateLogger("Graphics");
+        GraphicsStatus.Attach(logger);
+        GraphicsStatus.Warn = (feature, reason) => services.Notifications.ShowCoalesced("graphics-fallback", ToastSeverity.Warning,
+            Loc.T("Settings.Graphics.FallbackToast"), Loc.F("Settings.Graphics.FallbackToast.Message", GraphicsStatus.FeatureName(feature)));
+        if (Program.Win32Options([]).ShouldRenderOnUIThread)
+        {
+            logger.LogInformation("Graphics: the window is composed on the UI thread ({Variable} is set)", Program.UiThreadCompositorVariable);
+        }
     }
 
     private static void BringToFront(Window window)

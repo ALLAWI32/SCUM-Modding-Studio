@@ -60,6 +60,12 @@ public sealed record ComponentRecord(
     public IReadOnlyList<SpawnMarker> SpawnMarkers { get; init; } = [];
 
     /// <summary>
+    /// True when <see cref="SpawnMarkers"/> comes from the component's Blueprint template, not from the component export
+    /// (a house's indoor loot points): the level stores no <c>SpawnerMarkers</c> of its own for it.
+    /// </summary>
+    public bool SpawnMarkersFromTemplate { get; init; }
+
+    /// <summary>
     /// Loot presets (class paths) of the component's own <c>ExamineAssetData</c> (stored or from its Blueprint template): a
     /// player can search it for loot. Empty when the component has none (the mesh asset may still carry one).
     /// </summary>
@@ -101,6 +107,9 @@ public sealed record ComponentRecord(
 
     /// <summary>Instanced components: distance (cm) beyond which the game draws none of the instances (<c>InstanceEndCullDistance</c>); 0 = never culled.</summary>
     public int InstanceEndCullDistance { get; init; }
+
+    /// <summary>Instanced components: distance (cm) from which the game starts thinning the instances out (<c>InstanceStartCullDistance</c>); 0 = none.</summary>
+    public int InstanceStartCullDistance { get; init; }
 
     /// <summary>
     /// Spline mesh components (roads, river banks, fences along landscape splines): how the mesh is bent, in component
@@ -203,6 +212,9 @@ public sealed record ActorInstance(
 {
     /// <summary>The owning component's <see cref="ComponentRecord.InstanceEndCullDistance"/> (cm; 0 = never culled).</summary>
     public int EndCullDistance { get; init; }
+
+    /// <summary>The owning component's <see cref="ComponentRecord.InstanceStartCullDistance"/> (cm; 0 = none).</summary>
+    public int StartCullDistance { get; init; }
 }
 
 /// <summary>An actor of a <see cref="LevelDocument"/> with its components and composed transforms.</summary>
@@ -248,6 +260,9 @@ public sealed record ActorRecord(
 
     /// <summary>Sentry spawners: the patrol path, as points relative to the spawner (<c>PatrolPoints</c>).</summary>
     public IReadOnlyList<FVector> PatrolPoints { get; init; } = [];
+
+    /// <summary>Sentry spawners: the class of the sentry robot it spawns (<c>SentryClass</c>); null for other actors.</summary>
+    public string? SentryClass { get; init; }
 
     /// <summary>Trade posts: the traders they place (<c>_traderMarkers</c> of the class); empty for other actors.</summary>
     public IReadOnlyList<TraderMarker> TraderMarkers { get; init; } = [];

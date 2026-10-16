@@ -88,6 +88,50 @@ public sealed partial class MapPageViewModel
         }
     }
 
+    /// <summary>How many sectors around the camera the game's far view reaches (Settings, 1-4).</summary>
+    [ObservableProperty]
+    private int _renderDistance = 2;
+
+    /// <summary>Keep the 3D view near 60 fps by drawing less while frames take too long (Settings).</summary>
+    [ObservableProperty]
+    private bool _smoothFrames = true;
+
+    private (WorldIndex? World, float Cm) _sectorSize;
+
+    /// <summary>A map sector's edge in cm when the index has no tile bounds.</summary>
+    internal const float DefaultSectorSizeCm = 300_000f;
+
+    /// <summary>A map sector's edge in cm (the unit of <see cref="RenderDistance"/>), worked out once per world index.</summary>
+    public float SectorSizeCm
+    {
+        get
+        {
+            if (!ReferenceEquals(_sectorSize.World, World) || _sectorSize.Cm <= 0f)
+            {
+                _sectorSize = (World, SectorSizeOf(World?.Packages ?? []));
+            }
+
+            return _sectorSize.Cm;
+        }
+    }
+
+    /// <summary>
+    /// A map sector's edge in cm: the median, over the cells, of the larger side of the box around the cell's landscape
+    /// tiles (its four quadrants); <see cref="DefaultSectorSizeCm"/> when no tile has bounds.
+    /// </summary>
+    internal static float SectorSizeOf(IEnumerable<WorldPackage> packages)
+    {
+        var sizes = packages
+            .Where(p => p.Kind == WorldPackageKind.Landscape && p.Cell is not null && p.Tile is { BoundsValid: true })
+            .GroupBy(p => p.Cell!.Value)
+            .Select(cell => (Min: cell.Select(p => p.Tile!.BoundsMin).Aggregate(FVector.Min), Max: cell.Select(p => p.Tile!.BoundsMax).Aggregate(FVector.Max)))
+            .Select(box => MathF.Max(box.Max.X - box.Min.X, box.Max.Y - box.Min.Y))
+            .Where(size => size > 0f)
+            .Order()
+            .ToList();
+        return sizes.Count > 0 ? sizes[sizes.Count / 2] : DefaultSectorSizeCm;
+    }
+
     /// <summary>Follows a quality and the view switches chosen on the Settings page.</summary>
     private void OnSettingsChangedQuality(object? sender, EventArgs e) =>
         _services.Dispatcher.Invoke(() =>
@@ -96,7 +140,9 @@ public sealed partial class MapPageViewModel
             RenderQuality = ui.RenderQuality;
             (AnimateWater, Lighting) = (ui.AnimateWater, ui.Lighting);
             AntiAliasedFoliage = ui.AntiAliasedFoliage;
+            (RenderDistance, SmoothFrames) = (ui.RenderDistanceSectors, ui.SmoothFrames);
             SpawnModelsShown = ui.SpawnModels;
+            NearClip = ui.NearClipCentimetres;
         });
 
     /// <summary>

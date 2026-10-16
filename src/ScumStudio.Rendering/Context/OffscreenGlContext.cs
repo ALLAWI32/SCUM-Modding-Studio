@@ -49,8 +49,12 @@ public sealed class OffscreenGlContext : IGlContext, IDisposable
     /// </summary>
     /// <param name="width">Initial logical size reported by <see cref="Size"/> (render targets may differ).</param>
     /// <param name="height">Initial logical height.</param>
+    /// <param name="debug">
+    /// A debug context: the driver checks every call and reports through <see cref="GlDebugOutput.Capture"/> what it finds,
+    /// undefined behaviour included (validation runs; slower).
+    /// </param>
     /// <exception cref="GlContextUnavailableException">No display, no GLFW, or the driver cannot provide GL 4.3 core.</exception>
-    public static OffscreenGlContext Create(int width = 1280, int height = 720)
+    public static OffscreenGlContext Create(int width = 1280, int height = 720, bool debug = false)
     {
         if (width <= 0 || height <= 0)
         {
@@ -77,7 +81,7 @@ public sealed class OffscreenGlContext : IGlContext, IDisposable
                     VSync = false,
                     ShouldSwapAutomatically = false,
                     IsEventDriven = true,
-                    API = new GraphicsAPI(ContextAPI.OpenGL, ContextProfile.Core, ContextFlags.ForwardCompatible, RequiredVersion),
+                    API = new GraphicsAPI(ContextAPI.OpenGL, ContextProfile.Core, ContextFlags.ForwardCompatible | (debug ? ContextFlags.Debug : 0), RequiredVersion),
                 };
                 window = Window.Create(options);
                 window.Initialize();

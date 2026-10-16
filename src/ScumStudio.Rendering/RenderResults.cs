@@ -8,7 +8,7 @@ namespace ScumStudio.Rendering;
 /// <param name="Instances">Mesh instances drawn.</param>
 /// <param name="Culled">Mesh instances rejected by frustum culling.</param>
 /// <param name="Triangles">Triangles submitted (instances x triangles per mesh).</param>
-public sealed record RenderStats(int Batches, int Instances, int Culled, long Triangles);
+public readonly record struct RenderStats(int Batches, int Instances, int Culled, long Triangles);
 
 /// <summary>Result of a successful pick.</summary>
 /// <param name="MeshId">Renderer mesh id of the hit instance.</param>
@@ -25,3 +25,8 @@ public sealed record PickResult(int MeshId, uint InstanceId, SceneNode Node, flo
 /// <param name="BuildMs">Milliseconds spent building the batches.</param>
 /// <param name="UploadMs">Milliseconds spent sending them.</param>
 public sealed record BatchRebuild(bool Partial, int Batches, int Instances, double BuildMs, double UploadMs);
+
+/// <summary>What a pick prepared (see <see cref="SceneRenderer.LastPickStats"/>).</summary>
+/// <param name="Instances">Instances its ID pass draws.</param>
+/// <param name="Draws">Draw ranges it issues.</param>
+internal readonly record struct PickStats(int Instances, int Draws);

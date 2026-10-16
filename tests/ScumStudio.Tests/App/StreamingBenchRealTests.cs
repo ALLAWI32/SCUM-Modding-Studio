@@ -11,6 +11,8 @@ using ScumStudio.Pak;
 using ScumStudio.Rendering;
 using ScumStudio.Rendering.Cameras;
 using ScumStudio.Rendering.Context;
+using ScumStudio.Rendering.Gl;
+using ScumStudio.Rendering.Resources;
 using ScumStudio.Rendering.Targets;
 using ScumStudio.Tests.Rendering;
 using ScumStudio.Viewport;
@@ -39,7 +41,18 @@ public sealed class StreamingBenchRealTests(ITestOutputHelper output)
     private static readonly ScumStudio.Rendering.SceneGraph.Scene EmptyScene = new();
 
     [GlFact]
-    public void FlyingFromB4IntoA4AndA3IsTimed()
+    public void FlyingFromB4IntoA4AndA3IsTimed() => Fly(debug: false);
+
+    /// <summary>
+    /// D03 (AMD cards crash as areas load, "most at POIs with mechs and military stuff"): the same flight into the A_4
+    /// airfield on a debug context, drawn as the Map draws (4 samples, sun shadows, a pick now and then), with the driver's
+    /// debug output at every severity: the real game's meshes and textures streaming in and out must leave no error,
+    /// undefined behaviour or portability message.
+    /// </summary>
+    [GlFact]
+    public void FlyingIntoTheAirfieldOnADebugContextLeavesTheDriverNothingToReport() => Fly(debug: true);
+
+    private void Fly(bool debug)
     {
         if (Environment.GetEnvironmentVariable("SCUM_PAKS") is not { Length: > 0 } paks || !Directory.Exists(paks))
         {
@@ -51,7 +64,7 @@ public sealed class StreamingBenchRealTests(ITestOutputHelper output)
         {
             try
             {
-                FrameThread.Run(() => FlyAsync(paks));
+                FrameThread.Run(() => FlyAsync(paks, debug));
             }
             catch (Exception ex)
             {
@@ -66,7 +79,7 @@ public sealed class StreamingBenchRealTests(ITestOutputHelper output)
         }
     }
 
-    private async Task FlyAsync(string paks)
+    private async Task FlyAsync(string paks, bool debug)
     {
         if (Environment.GetEnvironmentVariable("SCUMSTUDIO_BENCH_SLL") == "1")
         {
@@ -86,27 +99,46 @@ public sealed class StreamingBenchRealTests(ITestOutputHelper output)
             ProjectsFolder = Path.Combine(root, "projects"),
         });
         services.Keys.Set(AesKeyText.FromEnvironmentOrStore()!);
-        services.UpdateSettings(s => s with { GamePaksFolder = paks, Ui = s.Ui with { RenderQuality = RenderQuality.Balanced } });
+        services.UpdateSettings(s => s with { GamePaksFolder = paks, Ui = s.Ui with { RenderQuality = Enum.TryParse<RenderQuality>(Environment.GetEnvironmentVariable("SCUMSTUDIO_BENCH_QUALITY"), out var q) ? q : RenderQuality.Balanced } });
         await services.Workspace.ConnectAsync(ProgressSink.Null);
         using var map = new MapPageViewModel(services);
         await map.LoadCompletion;
         var world = map.World!;
         await map.OpenWholeIslandAsync();
+        var farClock = Stopwatch.StartNew();
+        if (map.FarModelsLoading is { } far)
+        {
+            await far; // the game's far models join the island once, before the flight (their load is not a streaming step)
+        }
+
         var backdropScene = map.WorldBackdrop ?? throw new InvalidOperationException("no island backdrop");
+        output.WriteLine(string.Create(CultureInfo.InvariantCulture,
+            $"island backdrop: {backdropScene.Placements.Count:N0} placements (far models waited {farClock.Elapsed.TotalSeconds:0.0} s), render distance {map.RenderDistance} sectors of {map.SectorSizeCm / 100f:0} m"));
 
         // The flight: from the middle of the B_4 outpost to the middle of A_4, then west to the A_3/A_4 border.
         var outpost = world.Packages.Single(p => p.PackagePath.EndsWith("/B_4_Outpost", StringComparison.OrdinalIgnoreCase)).Tile!;
         var start = (outpost.BoundsMin + outpost.BoundsMax) * 0.5f;
         FVector[] path = [start, new(466_800f, -447_600f, 0f), new(314_400f, -447_600f, 0f)];
+        if (debug)
+        {
+            path = [.. path, path[1], start]; // and back: what streamed out must leave the GPU (D03: "every 2 minutes")
+        }
+
         var legs = Enumerable.Range(0, path.Length - 1).Select(i => FVector.Distance(path[i] with { Z = 0f }, path[i + 1] with { Z = 0f })).ToArray();
         var length = legs.Sum();
         output.WriteLine(string.Create(CultureInfo.InvariantCulture, $"flight {length / 100f:0} m at {SpeedCmPerSecond / 100f:0} m/s, quality {map.RenderQuality} (radius {map.Quality.StreamRadiusCm / 100f:0} m), {Width}x{Height}, server GC {System.Runtime.GCSettings.IsServerGC} (DATAS {Environment.GetEnvironmentVariable("DOTNET_GCDynamicAdaptationMode") ?? "-"}), viewport: {ViewportReplica.Mode}"));
 
-        using var context = OffscreenGlContext.Create(Width, Height);
+        using var context = OffscreenGlContext.Create(Width, Height, debug);
+        using var capture = debug ? GlDebugOutput.Capture(context.Gl) : null;
         using var renderer = new SceneRenderer(context);
-        using var target = renderer.CreateTarget(Width, Height);
+        using var target = renderer.CreateTarget(Width, Height, samples: debug ? 4 : 1); // the Map's anti-aliased target
         var quality = map.Quality;
-        renderer.Settings = renderer.Settings with { ShowGrid = true, ObjectDrawDistance = quality.ObjectDistanceCm, LodBias = quality.LodBias, CullPixelSize = quality.CullPixels };
+        renderer.Settings = renderer.Settings with
+        {
+            ShowGrid = true, ObjectDrawDistance = quality.ObjectDistanceCm, LodBias = quality.LodBias, CullPixelSize = quality.CullPixels, Shadows = debug,
+        };
+        var detailSettings = renderer.Settings;
+        var backdropSettings = FrameBudget.Backdrop(detailSettings, map.RenderDistance, map.SectorSizeCm); // as LevelViewport draws the island
         using var view = new ViewportReplica(renderer);
         view.ShowBackdrop(backdropScene);
         var camera = new FlyCamera();
@@ -117,6 +149,7 @@ public sealed class StreamingBenchRealTests(ITestOutputHelper output)
 
         var frames = new List<double>();
         var slow = new List<string>();
+        var gpu = new List<(int Meshes, long MeshBytes, int Textures, long TextureBytes)>(); // alive after each streaming step (debug run)
         var steps = new List<string>();
         var clock = Stopwatch.StartNew();
         var flown = 0f;
@@ -163,13 +196,28 @@ public sealed class StreamingBenchRealTests(ITestOutputHelper output)
                 lastLoad = load;
                 var allocated = GC.GetTotalAllocatedBytes();
                 step += string.Create(CultureInfo.InvariantCulture, $" | {(allocated - allocatedBefore) >> 20} MB allocated since the last step |");
+                if (debug)
+                {
+                    var (meshCount, meshBytes) = GpuMesh.Live;
+                    var (textureCount, textureBytes) = GpuTexture.Live;
+                    gpu.Add((meshCount, meshBytes, textureCount, textureBytes));
+                    step += string.Create(CultureInfo.InvariantCulture, $" GPU: {meshCount} meshes {meshBytes >> 20} MB, {textureCount} textures {textureBytes >> 20} MB, {FreeVideoMemoryMb(context.Gl)} MB free |");
+                }
+
                 allocatedBefore = allocated;
             }
 
             var rebuildBefore = renderer.LastRebuild;
             var draw = Stopwatch.StartNew();
+            renderer.Settings = backdropSettings;
             renderer.Render(target, view.Backdrop!.Scene, camera);
+            renderer.Settings = detailSettings;
             var stats = renderer.Render(target, view.Level?.Scene ?? EmptyScene, camera, clear: false);
+            if (debug && frames.Count % 30 == 0 && view.Level is { } pickable)
+            {
+                _ = renderer.Pick(target, pickable.Scene, camera, Width / 2, Height / 2, radius: 4); // a click on the Map
+            }
+
             var drawCpuMs = draw.Elapsed.TotalMilliseconds;
             context.Gl.Finish();
             var drawMs = draw.Elapsed.TotalMilliseconds;
@@ -212,6 +260,23 @@ public sealed class StreamingBenchRealTests(ITestOutputHelper output)
         output.WriteLine("Frames over 50 ms:");
         slow.ForEach(output.WriteLine);
         Assert.True(steps.Count >= 3, $"{steps.Count} streaming steps");
+        if (capture is not null)
+        {
+            var messages = capture.Messages;
+            output.WriteLine($"Driver messages: {messages.Count}, problems: {capture.Problems.Count} ({renderer.Info})");
+            foreach (var group in messages.GroupBy(m => (m.Type, m.Severity, m.Id)).OrderByDescending(g => g.First().IsProblem))
+            {
+                output.WriteLine($"{group.Count(),6}x {group.First()}");
+            }
+
+            Assert.True(capture.Problems.Count == 0, string.Join(Environment.NewLine, capture.Problems.Distinct().Take(20)));
+
+            // Back where it started: what streamed out went from the GPU too (a leak would grow step after step).
+            var (first, last, most) = (gpu[0], gpu[^1], gpu.Max(g => g.TextureBytes + g.MeshBytes));
+            output.WriteLine($"GPU at the first step {first}, at the last {last}, most {most >> 20} MB");
+            Assert.True(last.TextureBytes + last.MeshBytes <= (first.TextureBytes + first.MeshBytes) * 5 / 4,
+                $"back at the start the GPU holds {(last.TextureBytes + last.MeshBytes) >> 20} MB, {(first.TextureBytes + first.MeshBytes) >> 20} MB when it set off");
+        }
     }
 
     private static string Rebuild(BatchRebuild? rebuild) => rebuild is null
@@ -224,6 +289,10 @@ public sealed class StreamingBenchRealTests(ITestOutputHelper output)
         return string.Create(CultureInfo.InvariantCulture,
             $"gen{info.Generation}{(info.Compacted ? " compacting" : string.Empty)}{(info.Concurrent ? " background" : string.Empty)} pause {(info.PauseDurations.Length > 0 ? info.PauseDurations[0].TotalMilliseconds : 0):0} ms, promoted {info.PromotedBytes >> 20} MB, heap {info.HeapSizeBytes >> 20} MB");
     }
+
+    /// <summary>NVX_gpu_memory_info's free video memory in MB, or -1 on a driver without it.</summary>
+    private static long FreeVideoMemoryMb(Silk.NET.OpenGL.GL gl) =>
+        GlInfo.HasExtension(gl, "GL_NVX_gpu_memory_info") ? gl.GetInteger((Silk.NET.OpenGL.GetPName)0x9049) / 1024 : -1; // CURRENT_AVAILABLE_VIDMEM_NVX, KB
 
     private static double Percentile(List<double> sorted, double p) => sorted[Math.Clamp((int)Math.Ceiling(p * sorted.Count) - 1, 0, sorted.Count - 1)];
 
@@ -350,12 +419,8 @@ public sealed class StreamingBenchRealTests(ITestOutputHelper output)
                 node.Visible = visible;
             }
 
-            // The tiles the levels bring at full detail are hidden in the backdrop.
-            var detailed = prepared.Terrain.Select(t => t.LevelName).ToHashSet(StringComparer.OrdinalIgnoreCase);
-            foreach (var node in Backdrop!.TerrainNodes)
-            {
-                node.Visible = !detailed.Contains(node.Name[..Math.Max(0, node.Name.IndexOf('/'))]);
-            }
+            // The tiles and far models of the levels drawn in detail are hidden in the backdrop (LevelScene.HideTerrainOf).
+            Backdrop!.HideTerrainOf(prepared);
 
             var t = level.UploadTimings!;
             var detail = staged + string.Create(CultureInfo.InvariantCulture, $"textures {t.TexturesMs:0} meshes {t.MeshesMs:0} ({t.MeshesUploaded} new) nodes {t.NodesMs:0} terrain {t.TerrainMs:0}");

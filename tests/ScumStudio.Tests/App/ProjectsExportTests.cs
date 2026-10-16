@@ -1,6 +1,7 @@
 using ScumStudio.App.Services;
 using ScumStudio.App.ViewModels;
 using ScumStudio.Core.Abstractions;
+using ScumStudio.Level.Economy;
 using ScumStudio.Level.Editing;
 using ScumStudio.Level.Export;
 using ScumStudio.Modding.Crafting;
@@ -49,6 +50,7 @@ public sealed class ProjectsExportTests
         Assert.True(File.Exists(result.PakPath));
         Assert.Equal(2, PakInspector.ReadIndex(result.PakPath!).Entries.Count);
         Assert.Equal(new[] { "StaticMeshActor_1" }, Assert.Single(result.Levels).Report.RemovedActors);
+        Assert.Null(result.EconomyPath); // no economy in the project: none written, the server keeps its own
         Assert.True(page.HasExportResult);
         Assert.Contains(page.ExportRows, r => r.Name == "Client pak" && r.Value == result.PakPath);
         Assert.True(page.HasExportWarnings); // loose game files carry no stock .sig
@@ -125,5 +127,83 @@ public sealed class ProjectsExportTests
         Assert.Empty(await ModExportService.ExportAsync(ctx.Services, request with { IncludeCraftables = true }, ProgressSink.Null));
         Assert.False(File.Exists(old));
         Assert.Contains(ctx.Services.Notifications.Toasts, t => (t.Message ?? string.Empty).Contains(Path.GetFileName(old), StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task AnEconomyOnlyProjectIsExportable()
+    {
+        // Audit F279: a project that only changes prices was "nothing to export"; it needs no game files either.
+        using var ctx = AppTestContext.Create();
+        var project = await ctx.Services.Projects.CreateAsync(ctx.Combine("projects"), "Prices");
+        Assert.NotNull(ModExportService.Blocker(ctx.Services, project));
+        ctx.Services.Economy.SetEntry("A_0_Armory", "Weapon_AK47", new TradeableOverride("Weapon_AK47") { PurchasePrice = 15000 });
+        Assert.Null(ModExportService.Blocker(ctx.Services, project));
+
+        var output = ctx.Combine("out");
+        Assert.Empty(await ModExportService.ExportAsync(ctx.Services, new ModExportRequest(project, output, null, false), ProgressSink.Null));
+        var server = Path.Combine(output, ProjectExporter.ServerFolderName, EconomyOverride.FileName);
+        Assert.Equal(ctx.Services.Economy.Text, File.ReadAllText(server));
+        Assert.Equal(ctx.Services.Economy.Text, File.ReadAllText(Path.Combine(output, ProjectExporter.ClientFolderName, EconomyOverride.FileName)));
+        Assert.Contains("REPLACES", File.ReadAllText(Path.Combine(output, ProjectExporter.ServerFolderName, EconomyOverride.ReadmeName)), StringComparison.Ordinal);
+        Assert.Contains(ctx.Services.Notifications.Toasts, t => (t.Message ?? string.Empty).Contains(server, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task AnUnreadableEconomyFileIsNeverExportedAsTheGamesDefaults()
+    {
+        // Review (economy): the store holds the game's defaults in place of a file it could not read, and Export mod wrote
+        // them as EconomyOverride.json, which replaces the server's whole economy (3.1.0 stopped with an error instead).
+        using var ctx = AppTestContext.Create();
+        var created = await ctx.Services.Projects.CreateAsync(ctx.Combine("projects"), "Bad prices");
+        var folder = created.DirectoryPath;
+        var path = Path.Combine(folder, EconomyOverride.FileName);
+        ctx.Services.Projects.Close();
+        const string Bad = "{ \"economy-override\": { \"traders\": ";
+        File.WriteAllText(path, Bad);
+        await ctx.Services.Projects.OpenAsync(folder);
+        var project = ctx.Services.Projects.Current!;
+        var store = ctx.Services.Economy;
+        Assert.NotNull(store.LoadError);
+
+        var output = ctx.Combine("out");
+        var server = Path.Combine(output, ProjectExporter.ServerFolderName, EconomyOverride.FileName);
+        Assert.Null(ModExportService.Blocker(ctx.Services, project));
+        await ModExportService.ExportAsync(ctx.Services, new ModExportRequest(project, output, null, false), ProgressSink.Null);
+        Assert.False(File.Exists(server));
+        Assert.Contains(ctx.Services.Notifications.Toasts, t => (t.Message ?? string.Empty).Contains("no economy file was written", StringComparison.Ordinal));
+
+        // A trader placed on the map does not write the defaults over the file either.
+        ctx.Services.Projects.Apply(ProjectEconomyTests.PlaceTrader("A_3_Armory_1"));
+        Assert.Equal(Bad, File.ReadAllText(path));
+
+        // Importing a good file is deliberate: the bad one is kept as a .bak and the economy exports again.
+        var imported = store.Import("{\"economy-override\":{\"traders\":{\"A_0_Armory\":[{\"tradeable-code\":\"Weapon_AK47\",\"base-purchase-price\":\"15000\"}]}}}", "server.json");
+        Assert.True(imported.Imported);
+        Assert.Null(store.LoadError);
+        Assert.Contains(Directory.GetFiles(folder, EconomyOverride.FileName + "*.bak"), f => File.ReadAllText(f) == Bad);
+        Assert.Contains("\"15000\"", store.ForExport().ToJson(), StringComparison.Ordinal);
+        Assert.Contains("\"15000\"", File.ReadAllText(path), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AMalformedEconomyFileExportsWithAWarning()
+    {
+        // Audit F287: the exporter read the project's economy without a catch, so a bad file stopped Export mod and the CLI.
+        using var ctx = AppTestContext.Create();
+        var game = ctx.Combine("game");
+        SyntheticLevels.WriteContent(game, withBlueprintPackage: true);
+        await ctx.Services.Workspace.OpenLooseAsync(game, ProgressSink.Null);
+        var project = await ctx.Services.Projects.CreateAsync(ctx.Combine("projects"), "Broken economy");
+        ctx.Services.Projects.Apply(new DeleteActorOp(new ActorRef(SyntheticLevels.LevelPath, "StaticMeshActor_1")));
+        File.WriteAllText(Path.Combine(project.DirectoryPath, EconomyOverride.FileName), "{ \"economy-override\": { \"traders\": ");
+
+        var (economy, warning) = ProjectExporter.LoadEconomy(project);
+        Assert.Null(economy);
+        Assert.Contains(EconomyOverride.FileName, warning, StringComparison.Ordinal);
+
+        var result = await new ProjectExporter(ctx.Services.Logger).ExportAsync(project, ctx.Services.Workspace.Catalog!, new ExportOptions { OutputDirectory = ctx.Combine("out") });
+        Assert.True(File.Exists(result.PakPath));
+        Assert.Null(result.EconomyPath);
+        Assert.Contains(result.Warnings, w => w.Contains(EconomyOverride.FileName, StringComparison.Ordinal));
     }
 }

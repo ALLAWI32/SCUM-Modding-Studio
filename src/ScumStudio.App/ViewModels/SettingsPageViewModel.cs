@@ -68,6 +68,7 @@ public sealed partial class SettingsPageViewModel : PageViewModel, IDisposable
         _services.SettingsChanged += OnSettingsChanged;
         _services.Mcp.StateChanged += OnMcpStateChanged;
         Reload();
+        StartGraphics();
     }
 
     /// <summary>Accent swatches.</summary>
@@ -204,6 +205,8 @@ public sealed partial class SettingsPageViewModel : PageViewModel, IDisposable
             DeleteWithCompanions = s.Ui.DeleteWithCompanions;
             (SpawnModels, AnimateWater, Lighting) = (s.Ui.SpawnModels, s.Ui.AnimateWater, s.Ui.Lighting);
             AntiAliasedFoliage = s.Ui.AntiAliasedFoliage;
+            NearClip = NearClipOption.Nearest(s.Ui.NearClipCentimetres);
+            (RenderDistance, SmoothFrames) = (s.Ui.RenderDistanceSectors, s.Ui.SmoothFrames);
             McpEnabled = s.Mcp.Enabled;
             McpPort = s.Mcp.Port.ToString(System.Globalization.CultureInfo.InvariantCulture);
         }
@@ -245,6 +248,7 @@ public sealed partial class SettingsPageViewModel : PageViewModel, IDisposable
         MarkSelected(_services.UiState.Current.Accent);
         OnPropertyChanged(nameof(AccentCaption));
         OnPropertyChanged(nameof(McpPortError));
+        RefreshGraphics();
         OnPropertyChanged(nameof(DataFolderText));
         OnPropertyChanged(nameof(KeyProtection));
         OnPropertyChanged(nameof(Version));
@@ -326,6 +330,32 @@ public sealed partial class SettingsPageViewModel : PageViewModel, IDisposable
     [ObservableProperty]
     private bool _antiAliasedFoliage = true;
 
+    /// <summary>How close to the camera the Map still draws (F15: tight rooms).</summary>
+    [ObservableProperty]
+    private NearClipOption _nearClip = NearClipOption.Nearest(10f);
+
+    /// <summary>The near clip choices.</summary>
+    public IReadOnlyList<NearClipOption> NearClips => NearClipOption.All;
+
+    partial void OnNearClipChanged(NearClipOption value)
+    {
+        if (!_reloading && value is not null)
+        {
+            _services.UpdateSettings(s => s with { Ui = s.Ui with { NearClipCentimetres = value.Centimetres } });
+        }
+    }
+
+    /// <summary>How many sectors around the camera the game's far view reaches in whole-island mode.</summary>
+    [ObservableProperty]
+    private int _renderDistance = 2;
+
+    /// <summary>The choices of <see cref="RenderDistance"/>, in sectors.</summary>
+    public IReadOnlyList<int> RenderDistances { get; } = [1, 2, 3, 4];
+
+    /// <summary>The 3D view keeps near 60 fps by drawing less while frames take too long.</summary>
+    [ObservableProperty]
+    private bool _smoothFrames = true;
+
     partial void OnSpawnModelsChanged(bool value)
     {
         if (!_reloading)
@@ -358,6 +388,22 @@ public sealed partial class SettingsPageViewModel : PageViewModel, IDisposable
         }
     }
 
+    partial void OnRenderDistanceChanged(int value)
+    {
+        if (!_reloading)
+        {
+            _services.UpdateSettings(s => s with { Ui = s.Ui with { RenderDistanceSectors = value } });
+        }
+    }
+
+    partial void OnSmoothFramesChanged(bool value)
+    {
+        if (!_reloading)
+        {
+            _services.UpdateSettings(s => s with { Ui = s.Ui with { SmoothFrames = value } });
+        }
+    }
+
     partial void OnRenderQualityChanged(ScumStudio.Core.Settings.RenderQuality value)
     {
         if (!_reloading)
@@ -384,6 +430,7 @@ public sealed partial class SettingsPageViewModel : PageViewModel, IDisposable
         _services.KeyChanged -= OnKeyChanged;
         _services.SettingsChanged -= OnSettingsChanged;
         _services.Mcp.StateChanged -= OnMcpStateChanged;
+        StopGraphics();
         _toolbar?.Dispose();
     }
 

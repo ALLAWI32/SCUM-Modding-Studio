@@ -92,6 +92,19 @@ public sealed class PropertyBlock
                     }
 
                     break;
+                case SetValue set: // a set of structs (a hunting biome's animals) reads like an array: its items in stored order
+                    for (var i = 0; i < set.Items.Count; i++)
+                    {
+                        if (set.Items[i] is StructValue item)
+                        {
+                            foreach (var x in Enumerate(item.Properties, $"{path}[{i}]."))
+                            {
+                                yield return x;
+                            }
+                        }
+                    }
+
+                    break;
             }
         }
     }

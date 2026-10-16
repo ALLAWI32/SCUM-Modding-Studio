@@ -266,16 +266,19 @@ public sealed partial class MapPageViewModel
     private void CopyGroup()
     {
         _copiedGroup = [];
-        foreach (var (member, item, instance) in GroupItems())
+        var items = GroupItems();
+        var edits = EditsOf(items.Where(m => m.Instance is null).Select(m => m.Item));
+        foreach (var (member, item, instance) in items)
         {
             RememberCopySource(item);
             if (instance is null)
             {
-                _copiedGroup.Add(new CopiedMember(member, item, WorldOf(item, null), null, null));
+                _copiedGroup.Add(new CopiedMember(member, item, WorldOf(item, null), null, null) { Edits = edits.GetValueOrDefault(item.Reference) ?? ActorEdits.None });
             }
             else if (member.Index != InstanceKey.Segment && MeshOf(instance) is { } mesh)
             {
-                _copiedGroup.Add(new CopiedMember(member, item, WorldOf(item, instance), mesh, instance.Component.CollisionProfile) { Loot = LootOf(item, instance.Component) });
+                _copiedGroup.Add(new CopiedMember(member, item, WorldOf(item, instance), mesh, instance.Component.CollisionProfile)
+                    { Loot = LootOf(item, instance.Component), Materials = instance.Component.OverrideMaterials });
             }
         }
 
@@ -314,6 +317,7 @@ public sealed partial class MapPageViewModel
     /// </summary>
     public void Extend(bool backwards = false)
     {
+        CommitShape(); // the piece is extended as the sliders show it
         var members = HasGroup
             ? GroupItems().Select(m => (m.Member, World: WorldOf(m.Item, m.Instance), m.Item, m.Instance)).ToList()
             : SelectedActor is { } item && MemberOf(item, SelectedInstanceKey) is { } single
@@ -336,10 +340,19 @@ public sealed partial class MapPageViewModel
         var along = members.Select(m => FVector.Dot(m.World.Translation, axis)).ToList();
         var step = (along.Max() - along.Min()) + pieceLength;
         var offset = axis * (backwards ? -step : step);
+        var edits = EditsOf(members.Where(m => m.Instance is null).Select(m => m.Item));
         PlaceCopies(members.Select(m => new CopiedMember(m.Member, m.Item, m.World, m.Instance is { } s ? MeshOf(s) : null, m.Instance?.Component.CollisionProfile)
-            { Loot = m.Instance is { } li ? LootOf(m.Item, li.Component) : null }).ToList(),
+            {
+                Loot = m.Instance is { } li ? LootOf(m.Item, li.Component) : null,
+                Materials = m.Instance?.Component.OverrideMaterials,
+                Edits = m.Instance is null ? edits.GetValueOrDefault(m.Item.Reference) ?? ActorEdits.None : ActorEdits.None,
+            }).ToList(),
             offset, Loc.T("Map.Extend"), selectCopies: true);
     }
+
+    /// <summary>The edits of several actors, read in one pass (a group of hundreds; see <see cref="EditState.EditsOf(IEnumerable{ActorRef})"/>).</summary>
+    private IReadOnlyDictionary<ActorRef, ActorEdits> EditsOf(IEnumerable<ActorItemViewModel> items) =>
+        _services.Projects.Current?.State.EditsOf(items.Select(i => i.Reference)) ?? new Dictionary<ActorRef, ActorEdits>();
 
     /// <summary>
     /// Copies of the members moved by <paramref name="offset"/>, as one journal step; the copies are selected. Without
@@ -356,6 +369,8 @@ public sealed partial class MapPageViewModel
 
         var reserved = new HashSet<ActorRef>(ActorRef.Comparer);
         var ops = new List<EditOp>();
+        var created = new List<ActorRef>();
+        var refused = new List<string>();
         try
         {
             foreach (var copied in members)
@@ -368,17 +383,27 @@ public sealed partial class MapPageViewModel
                 var member = copied.Member;
                 var item = ActorOf(member.Actor) ?? copied.Item; // the record taken at Copy when its level streamed out since
                 var level = into ?? item.Level;
+                if (member.Component is null && CopyRefusedText(item, level) is { } why)
+                {
+                    refused.Add(why); // a volume stays out of another level; the rest of the group is pasted
+                    continue;
+                }
+
                 if (member.Component is null)
                 {
                     var world = into is null ? RootWorldOf(item, CurrentRootTransform(item)) : copied.World;
-                    ops.Add(CopyOp(item, level, world with { Translation = world.Translation + offset }, project.State, reserved));
+                    var copyOps = CopyOps(item, level, world with { Translation = world.Translation + offset }, project.State, copied.Edits, reserved);
+                    created.Add(copyOps[0].GetPrimaryTarget()!);
+                    ops.AddRange(copyOps); // one flat batch: the copy, then the edits it carries
                 }
                 else if (member.Index != InstanceKey.Segment && copied.Mesh is { } mesh)
                 {
                     // One tree or rock becomes a mesh actor of its own; it collides as what it was copied from.
                     var placed = TransformValue.FromTransform(copied.World);
-                    ops.Add(EditOpFactory.AddStaticMeshActor(level, mesh, placed with { Location = placed.Location + offset }, project.State, reserved)
-                        with { CollisionProfile = copied.Collision, Loot = copied.Loot }); // and holds loot as what it was copied from
+                    var add = EditOpFactory.AddStaticMeshActor(level, mesh, placed with { Location = placed.Location + offset }, project.State, reserved)
+                        with { CollisionProfile = copied.Collision, Loot = copied.Loot, OverrideMaterials = copied.Materials }; // and holds loot and paint as what it was copied from
+                    created.Add(add.Created);
+                    ops.Add(add);
                 }
             }
         }
@@ -388,14 +413,23 @@ public sealed partial class MapPageViewModel
             return true;
         }
 
+        if (refused.Count > 0)
+        {
+            _services.Notifications.Warning(Loc.T("Map.NotPasted"), string.Join(" ", refused));
+        }
+
         if (ops.Count == 0)
         {
-            _services.Notifications.Info(Loc.T("Map.NothingToPaste"), Loc.T("Map.NothingToPasteDetail")); // never a silent nothing
+            if (refused.Count == 0)
+            {
+                _services.Notifications.Info(Loc.T("Map.NothingToPaste"), Loc.T("Map.NothingToPasteDetail")); // never a silent nothing
+            }
+
             return true;
         }
 
-        var created = ops.Select(o => o.GetPrimaryTarget()).OfType<ActorRef>().ToList();
         ApplyGroupOps(ops, title);
+        WarnIfItemSpawners(ops);
         if (selectCopies)
         {
             SelectCreatedGroup(created);
@@ -993,6 +1027,12 @@ public sealed partial class MapPageViewModel
     {
         /// <summary>The loot presets a searchable part carries onto its copy (see <c>LootOf</c>).</summary>
         public IReadOnlyList<string>? Loot { get; init; }
+
+        /// <summary>A part's own materials (its <c>OverrideMaterials</c>), painted on its copy too.</summary>
+        public IReadOnlyList<string?>? Materials { get; init; }
+
+        /// <summary>A whole actor's edits as they were when it was copied (its bend, parts, spawn points…; see <see cref="ActorEdits"/>).</summary>
+        public ActorEdits Edits { get; init; } = ActorEdits.None;
     }
 
     private sealed record GroupMember(ActorRef Actor, string? Component, int Index)

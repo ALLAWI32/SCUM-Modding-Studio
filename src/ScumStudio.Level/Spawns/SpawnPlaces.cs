@@ -30,7 +30,7 @@ public enum SpawnPlaceKind
 /// One spawn place of the island.
 /// </summary>
 /// <param name="Kind">Which array it lives in.</param>
-/// <param name="Index">Index in that array of the stock data.</param>
+/// <param name="Index">Index in that array of the stock data; -1 for a place the project added.</param>
 /// <param name="Transform">Where (world space, centimetres).</param>
 /// <param name="Group">
 /// Vehicles: the level spawn group (<c>City</c>, <c>Default</c>, <c>Boat</c>, <c>CivilianAirplane</c> …); characters:
@@ -40,8 +40,11 @@ public enum SpawnPlaceKind
 /// <param name="SizeY">Zones: half the width along Y (cm); animals: the radius; 0 otherwise.</param>
 public sealed record SpawnPlace(SpawnPlaceKind Kind, int Index, FTransform Transform, string Group, float SizeX = 0f, float SizeY = 0f)
 {
-    /// <summary>The name of the place's actor in the map's document (<c>VehicleSpawn_00123</c>).</summary>
-    public string ActorName => SpawnPlaces.ActorName(Kind, Index);
+    /// <summary>The actor name of a place the project added (a copy or a new place); null for a stock place.</summary>
+    public string? Name { get; init; }
+
+    /// <summary>The name of the place's actor in the map's document (<c>VehicleSpawn_00123</c>, <c>NewVehicleSpawn_0001</c>).</summary>
+    public string ActorName => Name ?? SpawnPlaces.ActorName(Kind, Index);
 }
 
 /// <summary>
@@ -99,6 +102,25 @@ public static class SpawnPlaces
         SpawnPlaceKind.Zone => "ThreatZone_",
         _ => "HuntingArea_",
     } + index.ToString("00000", CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// A free name for a new place of <paramref name="kind"/> (<c>NewVehicleSpawn_0001</c>): not in <paramref name="taken"/>
+    /// and never one <see cref="ParseName"/> reads as a stock place.
+    /// </summary>
+    public static string NewName(SpawnPlaceKind kind, IEnumerable<string> taken)
+    {
+        ArgumentNullException.ThrowIfNull(taken);
+        var used = new HashSet<string>(taken, StringComparer.OrdinalIgnoreCase);
+        var prefix = "New" + ActorName(kind, 0)[..^5];
+        for (var n = 1; ; n++)
+        {
+            var name = prefix + n.ToString("0000", CultureInfo.InvariantCulture);
+            if (!used.Contains(name))
+            {
+                return name;
+            }
+        }
+    }
 
     /// <summary>The stock place an actor name stands for (kind and index), or null for an added copy or another name.</summary>
     public static (SpawnPlaceKind Kind, int Index)? ParseName(string actorName)
@@ -194,9 +216,10 @@ public static class SpawnPlaces
             var actor = exports.Count;
             var root = actor + 1;
             var t = place.Transform;
+            // A point shows the scale it stores, so a move writes back what was there (the export writes a point's scale).
             var scale = place.Kind is SpawnPlaceKind.Zone or SpawnPlaceKind.Animal
                 ? new FVector(MathF.Max(place.SizeX, 1f) / 100f, MathF.Max(place.SizeY, 1f) / 100f, 1f)
-                : FVector.One;
+                : t.Scale3D;
             exports.Add(new LevelExportData
             {
                 Index = actor,
@@ -263,6 +286,87 @@ public static class SpawnPlaces
 
     /// <summary>A zone's or hunting area's size from its actor's root scale (metres per axis, as <see cref="ToLevelData"/> sets it).</summary>
     public static (float SizeX, float SizeY) SizeOf(FVector scale) => (MathF.Abs(scale.X) * 100f, MathF.Abs(scale.Y) * 100f);
+
+    /// <summary>
+    /// The places as the project has them (what the export writes, for the Spawns page and the map): <paramref name="stock"/>
+    /// without the deleted ones, moved, resized and with what they spawn now, then the copies and the new places in the
+    /// order the export appends them (<see cref="SpawnPlace.Index"/> -1, <see cref="SpawnPlace.Name"/> their actor name).
+    /// </summary>
+    public static IReadOnlyList<SpawnPlace> WithEdits(IReadOnlyList<SpawnPlace> stock, Editing.EditState state)
+    {
+        ArgumentNullException.ThrowIfNull(stock);
+        ArgumentNullException.ThrowIfNull(state);
+        var result = new List<SpawnPlace>(stock.Count + 16);
+        var byIndex = new Dictionary<(SpawnPlaceKind, int), SpawnPlace>();
+        foreach (var place in stock)
+        {
+            byIndex[(place.Kind, place.Index)] = place;
+            var actor = new Editing.ActorRef(StaticDataPath, place.ActorName);
+            if (state.IsDeleted(actor))
+            {
+                continue;
+            }
+
+            var edited = state.GetTransformOverride(actor) is { } value
+                ? At(place.Kind, place.Group, value, place.Transform.Scale3D) with { Index = place.Index }
+                : place;
+            result.Add(SpawnChoices.PropertyOf(place.Kind) is { } property && state.GetSpawnChoice(actor, property) is { } choice
+                ? edited with { Group = SettingName(choice) }
+                : edited);
+        }
+
+        var copies = new List<SpawnPlace>();
+        var created = new List<SpawnPlace>();
+        foreach (var (actor, root, transform, choice) in SpawnPlacesEditor.AddedPlaces(state))
+        {
+            switch (root)
+            {
+                case Editing.DuplicateActorOp copy when ParseName(copy.Source.Actor) is { } source && byIndex.TryGetValue(source, out var original):
+                    // As the export: the source's own choice is carried while the source is kept.
+                    var stockActor = new Editing.ActorRef(StaticDataPath, original.ActorName);
+                    var group = choice ?? (SpawnChoices.PropertyOf(source.Kind) is { } property && !state.IsDeleted(stockActor)
+                        ? state.GetSpawnChoice(stockActor, property)
+                        : null);
+                    copies.Add(At(source.Kind, group ?? original.Group, transform, original.Transform.Scale3D) with { Name = actor.Actor });
+                    break;
+                case Editing.AddSpawnPlaceOp place:
+                    created.Add(At(place.Kind, choice ?? place.Setting, transform) with { Name = actor.Actor });
+                    break;
+            }
+        }
+
+        // Each array as the export writes it: its stock places, then the copies, then the new places.
+        return Enum.GetValues<SpawnPlaceKind>()
+            .SelectMany(k => result.Where(p => p.Kind == k).Concat(copies.Where(p => p.Kind == k)).Concat(created.Where(p => p.Kind == k)))
+            .ToList();
+    }
+
+    /// <summary>
+    /// A place of <paramref name="kind"/> spawning <paramref name="setting"/> at <paramref name="value"/> as the map holds it
+    /// (a zone's or area's size in the scale, metres); <paramref name="storedScale"/> is the scale a zone or area stores.
+    /// </summary>
+    public static SpawnPlace At(SpawnPlaceKind kind, string setting, Model.TransformValue value, FVector? storedScale = null)
+    {
+        ArgumentNullException.ThrowIfNull(setting);
+        if (kind is not (SpawnPlaceKind.Zone or SpawnPlaceKind.Animal))
+        {
+            return new SpawnPlace(kind, -1, value.ToTransform(), SettingName(setting));
+        }
+
+        var (sizeX, sizeY) = SizeOf(value.Scale);
+        var transform = new FTransform(value.Rotation, value.Location, storedScale ?? FVector.One);
+        return kind == SpawnPlaceKind.Animal
+            ? new SpawnPlace(kind, -1, transform, SettingName(setting), MathF.Max(sizeX, sizeY), MathF.Max(sizeX, sizeY))
+            : new SpawnPlace(kind, -1, transform, SettingName(setting), sizeX, sizeY);
+    }
+
+    /// <summary>The asset name a setting stands for: <c>MTZ_Village</c> for itself or for its package path (<c>/Game/…/MTZ_Village</c>, <c>….MTZ_Village</c>).</summary>
+    public static string SettingName(string setting)
+    {
+        ArgumentNullException.ThrowIfNull(setting);
+        var leaf = setting[(setting.LastIndexOf('/') + 1)..];
+        return leaf[(leaf.IndexOf('.') + 1)..];
+    }
 
     private static FTransform? TransformOf(StructValue item, string name)
     {

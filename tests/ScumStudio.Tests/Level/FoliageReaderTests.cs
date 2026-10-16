@@ -19,13 +19,18 @@ public sealed class FoliageReaderTests
         Assert.NotEmpty(bushes);
         Assert.All(bushes, c => Assert.True(c.IsInstanced && c.Instances.Count > 0, c.Name));
 
-        // Foliage carries the foliage type's cull distance (InstanceEndCullDistance), which every instance placement inherits.
+        // Foliage carries the foliage type's cull distances (InstanceStart/EndCullDistance), which every instance inherits;
+        // between the two the instances thin out (FoliageThinning).
         var culled = doc.Actors.SelectMany(a => a.Components).Where(c => c.IsInstanced && c.InstanceEndCullDistance > 0).ToList();
         Assert.NotEmpty(culled);
         var placements = ScumStudio.Viewport.LevelScenePreparer.CollectPlacements(doc, 0);
         Assert.Contains(placements, p => p.Instance is not null && p.CullDistance > 0f);
         Assert.All(placements.Where(p => p.Instance is not null), p =>
-            Assert.Equal(p.Actor.Components.Single(c => c.ExportIndex == p.Instance!.ComponentExportIndex).InstanceEndCullDistance, p.CullDistance));
+        {
+            var component = p.Actor.Components.Single(c => c.ExportIndex == p.Instance!.ComponentExportIndex);
+            Assert.Equal((component.InstanceStartCullDistance, component.InstanceEndCullDistance), (p.Instance!.StartCullDistance, p.Instance.EndCullDistance));
+            Assert.Equal(ScumStudio.Viewport.FoliageThinning.CullDistanceOf(p.Instance), p.CullDistance);
+        });
     }
 }
 

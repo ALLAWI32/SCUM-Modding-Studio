@@ -17,6 +17,8 @@ namespace ScumStudio.App.ViewModels;
 /// removed. Edits are the server's <c>EconomyOverride.json</c> (schema as the game writes it, see
 /// <see cref="EconomyOverride"/>), kept in the project by <see cref="ProjectEconomy"/> (which also gives a placed trader its
 /// section and hides the game's traders the project deleted) and written next to the paks by Export (and by Export mod).
+/// Every edit is one entry of the project's journal through the store, so Ctrl+Z undoes it; the page shows the store again
+/// on each of its changes (an undo, a redo, an import, a code edit). The Code view and Import are in the <c>.Code</c> part.
 /// </summary>
 public sealed partial class EconomyPageViewModel : PageViewModel, ISearchablePage, IDisposable
 {
@@ -29,9 +31,11 @@ public sealed partial class EconomyPageViewModel : PageViewModel, ISearchablePag
     private IReadOnlyList<EconomyPickItem> _allPicks = [];
     private string? _shown;
     private Level.Projects.Project? _shownProject;
+    private EconomyDefaults? _shownDefaults;
     private string? _wanted;
     private bool _bulk;
     private bool _keepRows;
+    private bool _building;
 
     /// <summary>Creates the page.</summary>
     private Action<string>? _placeTrader;
@@ -60,11 +64,14 @@ public sealed partial class EconomyPageViewModel : PageViewModel, ISearchablePag
         _services = services;
         _store = services.Economy;
         _openSetup = openSetup ?? (() => { });
+        _selectedCodeScope = CodeScopes[0];
         _store.Changed += OnStoreChanged;
+        _store.Notice += OnStoreNotice;
         _services.Workspace.CatalogChanged += OnCatalogChanged;
         _services.Projects.Changed += OnProjectChanged;
         _store.Refresh();
         Load();
+        BuildSettings();
     }
 
     /// <inheritdoc />
@@ -76,7 +83,7 @@ public sealed partial class EconomyPageViewModel : PageViewModel, ISearchablePag
 
     /// <summary>The trader shown.</summary>
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(HasTrader), nameof(TraderTitle), nameof(TraderCaption), nameof(TraderIconKey), nameof(TraderCell), nameof(TraderType), nameof(IsPlacedTrader))]
+    [NotifyPropertyChangedFor(nameof(HasTrader), nameof(TraderTitle), nameof(TraderCaption), nameof(TraderIconKey), nameof(TraderCell), nameof(TraderType), nameof(IsPlacedTrader), nameof(IsUnknownTrader))]
     private EconomyTraderRow? _selectedTrader;
 
     /// <summary>What the selected trader sells, filtered.</summary>
@@ -125,6 +132,24 @@ public sealed partial class EconomyPageViewModel : PageViewModel, ISearchablePag
     /// <summary>A project is open (edits are kept in it).</summary>
     public bool HasProject => _services.Projects.HasProject;
 
+    /// <summary>The economy can be changed: without a project nothing would be kept, so every editor is off (F299).</summary>
+    public bool CanEdit => _store.CanEdit;
+
+    /// <summary>The game's economy tables could not be read (Retry reads them again).</summary>
+    [ObservableProperty]
+    private bool _tablesFailed;
+
+    /// <summary>The Server settings card is shown instead of the selected trader.</summary>
+    [ObservableProperty]
+    private bool _isSettingsOpen;
+
+    /// <summary>The file's settings, in file order.</summary>
+    [ObservableProperty]
+    private IReadOnlyList<EconomySettingRow> _settingRows = [];
+
+    /// <summary>The selected trader's section is not of a trader the game or the map knows.</summary>
+    public bool IsUnknownTrader => SelectedTrader?.IsUnknown == true;
+
     /// <summary>Selected trader's name.</summary>
     public string TraderTitle => SelectedTrader?.Name ?? string.Empty;
 
@@ -168,7 +193,9 @@ public sealed partial class EconomyPageViewModel : PageViewModel, ISearchablePag
     /// <inheritdoc />
     public void Dispose()
     {
+        CancelCodeWait();
         _store.Changed -= OnStoreChanged;
+        _store.Notice -= OnStoreNotice;
         _services.Workspace.CatalogChanged -= OnCatalogChanged;
         _services.Projects.Changed -= OnProjectChanged;
     }
@@ -184,8 +211,23 @@ public sealed partial class EconomyPageViewModel : PageViewModel, ISearchablePag
         }
     }
 
-    partial void OnSelectedTraderChanged(EconomyTraderRow? value)
+    partial void OnSelectedTraderChanged(EconomyTraderRow? oldValue, EconomyTraderRow? newValue)
     {
+        if (_building && newValue is null)
+        {
+            return;
+        }
+
+        if (!_keepRows && newValue is not null && !string.Equals(oldValue?.Name, newValue.Name, StringComparison.OrdinalIgnoreCase))
+        {
+            IsSettingsOpen = false; // a trader picked in the list is shown
+        }
+
+        if (IsTraderScope && !string.Equals(oldValue?.Name, newValue?.Name, StringComparison.OrdinalIgnoreCase))
+        {
+            OnCodeScopeChanged();
+        }
+
         ShowTrader();
         if (IsAddOpen)
         {
@@ -229,14 +271,7 @@ public sealed partial class EconomyPageViewModel : PageViewModel, ISearchablePag
             return;
         }
 
-        Bulk(items =>
-        {
-            foreach (var item in items.Where(i => !i.IsLocked))
-            {
-                item.PurchasePrice = (int)Math.Round(item.PurchasePrice * f);
-                item.SellPrice = (int)Math.Round(item.SellPrice * f);
-            }
-        });
+        Bulk(item => item.ScalePrices(f));
     }
 
     /// <summary>Takes the shown items off the shelf (or puts them back: "true").</summary>
@@ -244,13 +279,7 @@ public sealed partial class EconomyPageViewModel : PageViewModel, ISearchablePag
     public void SetOnSale(string onSale)
     {
         var value = string.Equals(onSale, "true", StringComparison.OrdinalIgnoreCase);
-        Bulk(items =>
-        {
-            foreach (var item in items.Where(i => !i.IsLocked))
-            {
-                item.CanBePurchased = value;
-            }
-        });
+        Bulk(item => item.CanBePurchased = value);
     }
 
     /// <summary>The selected trader back to the game's stock and values (a placed trader's section lists its stock again).</summary>
@@ -262,14 +291,11 @@ public sealed partial class EconomyPageViewModel : PageViewModel, ISearchablePag
             return;
         }
 
-        _store.Economy.Clear(trader.Name);
-        if (trader.IsPlaced && _store.Defaults is { } defaults)
+        // One journal entry: the toast says how to get the trader's edits back (F113).
+        if (_store.ResetTrader(trader.Name) is not null)
         {
-            _store.Economy.List(trader.Name, defaults.StockCodes(trader.Type));
+            _services.Notifications.Success(Loc.T("Economy.ResetTraderDone"), Loc.F("Economy.ResetTraderDoneDetail", trader.Name));
         }
-
-        Saved();
-        ShowTrader();
     }
 
     /// <summary>
@@ -285,20 +311,18 @@ public sealed partial class EconomyPageViewModel : PageViewModel, ISearchablePag
             return 0;
         }
 
-        var added = 0;
+        var entries = new List<(string Code, TradeableOverride? Value)>();
         foreach (var code in codes.Distinct(StringComparer.OrdinalIgnoreCase))
         {
             if (defaults.Find(code) is { ImmuneToOverrides: false } tradeable && !tradeable.IsSoldBy(trader.Type) && _store.Economy.Find(trader.Name, code) is null)
             {
-                _store.Economy.Set(trader.Name, tradeable.AddedEntry());
-                added++;
+                entries.Add((tradeable.Code, tradeable.AddedEntry()));
             }
         }
 
+        var added = entries.Count > 0 && _store.SetEntries(trader.Name, entries, $"Economy: {trader.Name} add {entries.Count} items") is not null ? entries.Count : 0;
         if (added > 0)
         {
-            Saved();
-            ShowTrader();
             if (IsAddOpen)
             {
                 BuildPicks();
@@ -334,10 +358,7 @@ public sealed partial class EconomyPageViewModel : PageViewModel, ISearchablePag
             return;
         }
 
-        _store.Economy.Remove(trader.Name, item.Code);
-        _allItems = _allItems.Where(i => !ReferenceEquals(i, item)).ToList();
-        Saved();
-        RefreshItems();
+        _store.SetEntry(trader.Name, item.Code, null); // the store's Changed rebuilds the rows without it
     }
 
     /// <summary>
@@ -349,6 +370,14 @@ public sealed partial class EconomyPageViewModel : PageViewModel, ISearchablePag
     {
         var settings = _services.Settings.Load();
         var folder = string.IsNullOrWhiteSpace(settings.ClientModsOutputFolder) ? ProjectsPageViewModel.DefaultExportFolder() : settings.ClientModsOutputFolder;
+        if (_store.LoadError is { } error)
+        {
+            // Review (economy): the page holds the game's defaults in place of a file it could not read; written out, they
+            // would replace the server's economy.
+            _services.Notifications.Error(Loc.T("Economy.NotExported"), $"{Loc.T("Economy.BadFile")}: {error}");
+            return;
+        }
+
         try
         {
             var economy = _store.ForExport();
@@ -367,26 +396,39 @@ public sealed partial class EconomyPageViewModel : PageViewModel, ISearchablePag
     /// <summary>The server copy written by the last <see cref="Export"/> (tests).</summary>
     public string? LastExportPath { get; private set; }
 
-    private void Bulk(Action<IReadOnlyList<EconomyItemViewModel>> change)
+    /// <summary>
+    /// Applies <paramref name="change"/> to every shown row the server lets a file change and the game's tables know, and
+    /// writes only the rows whose entry changed, as one step.
+    /// </summary>
+    private void Bulk(Action<EconomyItemViewModel> change)
     {
+        if (SelectedTrader is not { } trader || !CanEdit)
+        {
+            return;
+        }
+
+        var changed = new List<EconomyItemViewModel>();
         _bulk = true;
         try
         {
-            change(Items);
+            foreach (var item in Items.Where(i => !i.IsLocked && !i.IsUnknown))
+            {
+                var before = item.ToOverride();
+                change(item);
+                if (!Equals(before, item.ToOverride()))
+                {
+                    changed.Add(item);
+                }
+            }
         }
         finally
         {
             _bulk = false;
         }
 
-        if (SelectedTrader is { } trader)
+        if (changed.Count > 0)
         {
-            foreach (var item in Items)
-            {
-                Write(trader, item);
-            }
-
-            Saved();
+            Write(trader, changed);
         }
     }
 
@@ -397,21 +439,20 @@ public sealed partial class EconomyPageViewModel : PageViewModel, ISearchablePag
             return;
         }
 
-        Write(trader, item);
-        Saved();
+        Write(trader, [item]);
     }
 
-    /// <summary>A placed trader's section lists every item (back to the game's values = a <c>-1</c> entry); others keep changes only.</summary>
-    private void Write(EconomyTraderRow trader, EconomyItemViewModel item) => _store.Economy.Set(trader.Name, item.ToOverride(), keep: trader.IsPlaced);
-
-    /// <summary>Keeps the economy in the project and refreshes the counts.</summary>
-    private void Saved()
+    /// <summary>
+    /// Writes the entries of <paramref name="rows"/> as one journal entry: a placed trader's section lists every item (back to
+    /// the game's values = a <c>-1</c> entry); others keep changes only. The store's Changed shows the result; when nothing
+    /// was written (no project) the rows take the file's values back.
+    /// </summary>
+    private void Write(EconomyTraderRow trader, IReadOnlyList<EconomyItemViewModel> rows)
     {
-        _store.Save();
-        if (SelectedTrader is { } trader)
+        var describe = rows.Count == 1 ? $"Economy: {trader.Name} {rows[0].Code}" : $"Economy: {trader.Name} {rows.Count} items";
+        if (_store.SetEntries(trader.Name, [.. rows.Select(r => (r.Code, (TradeableOverride?)r.ToOverride()))], describe) is null)
         {
-            SetChanges(trader);
-            OnPropertyChanged(nameof(TraderCaption));
+            ReloadRows();
         }
     }
 
@@ -452,7 +493,10 @@ public sealed partial class EconomyPageViewModel : PageViewModel, ISearchablePag
         LoadCompletion = _store.LoadDefaultsAsync();
     }
 
-    /// <summary>The game's traders still on the island and the project's placed ones, sorted by map cell.</summary>
+    /// <summary>Sections the page does not show (traders whose trade posts the project deleted, placed traders off the map).</summary>
+    private IReadOnlySet<string> HiddenSections() => _store.Hidden;
+
+    /// <summary>The game's traders still on the island, the project's placed ones and the file's other sections, sorted by map cell.</summary>
     private void BuildTraders()
     {
         if (_store.Defaults is not { } defaults)
@@ -462,34 +506,63 @@ public sealed partial class EconomyPageViewModel : PageViewModel, ISearchablePag
 
         IsLoading = false;
         var selected = _wanted ?? SelectedTrader?.Name;
+        var hidden = HiddenSections();
         var rows = defaults.Traders
-            .Where(t => !_store.RemovedStock.Contains(t.Name))
+            .Where(t => !hidden.Contains(t.Name))
             .Select(t => new EconomyTraderRow(t.Name, t.Type, false, TraderPosts.CellOf(t.Name)))
             .ToList();
+        var known = rows.Select(r => r.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
         if (_services.Projects.Current is { } project)
         {
             foreach (var (actor, op) in TraderPosts.Placed(project.State))
             {
-                if (op.Trader is { Name.Length: > 0 } trader && !rows.Any(r => string.Equals(r.Name, trader.Name, StringComparison.OrdinalIgnoreCase)))
+                if (op.Trader is { Name.Length: > 0 } trader && !hidden.Contains(trader.Name) && known.Add(trader.Name))
                 {
                     rows.Add(new EconomyTraderRow(trader.Name, trader.Type, true, TraderPosts.CellOf(actor.Level) ?? TraderPosts.CellOf(trader.Name)));
                 }
             }
         }
 
-        rows = [.. rows.OrderBy(r => r.Cell, StringComparer.OrdinalIgnoreCase).ThenBy(r => r.IsPlaced).ThenBy(r => r.Name, StringComparer.OrdinalIgnoreCase)];
+        // Sections of traders neither the game nor the map knows (an imported file's, another map's): listed, not lost (F444).
+        known.UnionWith(defaults.Traders.Select(t => t.Name));
+        foreach (var name in _store.Economy.Traders.Where(n => !hidden.Contains(n) && known.Add(n)))
+        {
+            rows.Add(new EconomyTraderRow(name, string.Empty, false, TraderPosts.CellOf(name), isUnknown: true));
+        }
+
+        rows = [.. rows.OrderBy(r => r.IsUnknown).ThenBy(r => r.Cell, StringComparer.OrdinalIgnoreCase).ThenBy(r => r.IsPlaced).ThenBy(r => r.Name, StringComparer.OrdinalIgnoreCase)];
+        if (Traders.Count == rows.Count && Traders.Zip(rows).All(p => p.First.Name == p.Second.Name && p.First.Type == p.Second.Type
+                && p.First.IsPlaced == p.Second.IsPlaced && p.First.IsUnknown == p.Second.IsUnknown && p.First.Cell == p.Second.Cell))
+        {
+            rows = [.. Traders]; // the same traders (an edit): the cards stay, so the lists keep their selection and the rows theirs
+        }
+
         foreach (var row in rows)
         {
             SetChanges(row);
         }
 
-        var same = SelectedTrader is { } old && ReferenceEquals(_shownProject, _services.Projects.Current)
-            && rows.FirstOrDefault(r => r.Name == old.Name) is { } kept && kept.IsPlaced == old.IsPlaced && kept.Type == old.Type;
-        Traders = rows;
+        // New game tables (another game version, F280) rebuild the rows: their defaults are the tables'.
+        var same = SelectedTrader is { } old && ReferenceEquals(_shownProject, _services.Projects.Current) && ReferenceEquals(_shownDefaults, defaults)
+            && rows.FirstOrDefault(r => r.Name == old.Name) is { } kept && kept.IsPlaced == old.IsPlaced && kept.IsUnknown == old.IsUnknown && kept.Type == old.Type;
+        if (!rows.SequenceEqual(Traders))
+        {
+            _building = true; // a list given new items clears its selection on the way: not a trader picked
+            try
+            {
+                Traders = rows;
+            }
+            finally
+            {
+                _building = false;
+            }
+        }
+
         var next = rows.FirstOrDefault(r => string.Equals(r.Name, selected, StringComparison.OrdinalIgnoreCase)) ?? rows.FirstOrDefault();
         if (same && string.Equals(next?.Name, _shown, StringComparison.OrdinalIgnoreCase))
         {
-            // The same trader of the same project: keep its rows (and their pictures), only the card is new.
+            // The same trader of the same project: keep its rows (and their pictures), only the card is new; the values are
+            // the file's now (an undo, a redo, an import or the code view changed them).
             _keepRows = true;
             try
             {
@@ -499,6 +572,12 @@ public sealed partial class EconomyPageViewModel : PageViewModel, ISearchablePag
             {
                 _keepRows = false;
             }
+
+            ReloadRows();
+        }
+        else if (next is not null && ReferenceEquals(SelectedTrader, next))
+        {
+            ShowTrader(); // the same card over new tables or another project: its rows are made again
         }
         else
         {
@@ -523,6 +602,7 @@ public sealed partial class EconomyPageViewModel : PageViewModel, ISearchablePag
 
         _shown = SelectedTrader?.Name;
         _shownProject = _services.Projects.Current;
+        _shownDefaults = _store.Defaults;
         if (SelectedTrader is not { } trader || _store.Defaults is not { } defaults)
         {
             _allItems = [];
@@ -532,20 +612,46 @@ public sealed partial class EconomyPageViewModel : PageViewModel, ISearchablePag
         }
 
         // By category; in each, what the game puts on the shelf first, then what it only buys.
+        var editable = CanEdit;
         var stock = defaults.SoldBy(trader.Type)
             .OrderBy(t => t.Category, StringComparer.OrdinalIgnoreCase).ThenBy(t => !t.CanBePurchased).ThenBy(t => t.Caption, StringComparer.CurrentCultureIgnoreCase)
-            .Select(t => new EconomyItemViewModel(t, _store.Economy.Find(trader.Name, t.Code), OnItemChanged, false, RemoveItem, PictureAsync));
-        var added = _store.Economy.Entries(trader.Name)
-            .Where(e => defaults.Find(e.Code)?.IsSoldBy(trader.Type) != true)
-            .Select(e => new EconomyItemViewModel(
-                defaults.Find(e.Code) ?? new TradeableDefault(e.Code, e.Code.Replace('_', ' '), string.Empty, [], 0, 0, true, 0, false),
-                e, OnItemChanged, true, RemoveItem, PictureAsync));
+            .Select(t => new EconomyItemViewModel(t, _store.Economy.Find(trader.Name, t.Code), OnItemChanged, false, RemoveItem, PictureAsync) { IsEditable = editable });
+        var added = AddedEntries(trader, defaults)
+            .Select(e => defaults.Find(e.Code) is { } known
+                ? new EconomyItemViewModel(known, e, OnItemChanged, true, RemoveItem, PictureAsync) { IsEditable = editable }
+                : new EconomyItemViewModel(new TradeableDefault(e.Code, e.Code.Replace('_', ' '), string.Empty, [], 0, 0, true, 0, false), e, OnItemChanged, true, RemoveItem, PictureAsync, isUnknown: true) { IsEditable = editable });
         _allItems = [.. added, .. stock];
         var category = SelectedCategory?.Key;
         Categories = [new EconomyCategory(AllCategories, Loc.T("Economy.AllCategories")),
             .. _allItems.Select(i => i.Category).Where(c => c.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).Select(c => new EconomyCategory(c, c))];
         SelectedCategory = Categories.FirstOrDefault(c => c.Key == category) ?? Categories[0];
         RefreshItems();
+        OnPropertyChanged(nameof(TraderCaption));
+    }
+
+    /// <summary>The entries of <paramref name="trader"/> for items its type does not sell (added ones, and codes the tables do not know).</summary>
+    private IEnumerable<TradeableOverride> AddedEntries(EconomyTraderRow trader, EconomyDefaults defaults) =>
+        _store.Economy.Entries(trader.Name).Where(e => defaults.Find(e.Code)?.IsSoldBy(trader.Type) != true);
+
+    /// <summary>The shown rows take the file's values again (rebuilt when items were added to or removed from the trader).</summary>
+    private void ReloadRows()
+    {
+        if (SelectedTrader is not { } trader || _store.Defaults is not { } defaults)
+        {
+            return;
+        }
+
+        if (!AddedEntries(trader, defaults).Select(e => e.Code).SequenceEqual(_allItems.Where(i => i.IsAdded).Select(i => i.Code), StringComparer.OrdinalIgnoreCase))
+        {
+            ShowTrader();
+            return;
+        }
+
+        foreach (var item in _allItems)
+        {
+            item.Load(_store.Economy.Find(trader.Name, item.Code));
+        }
+
         OnPropertyChanged(nameof(TraderCaption));
     }
 
@@ -619,6 +725,9 @@ public sealed partial class EconomyPageViewModel : PageViewModel, ISearchablePag
 
     private void OnStoreChanged(object? sender, EventArgs e)
     {
+        OnPropertyChanged(nameof(CanEdit));
+        BuildSettings();
+        OnStoreTextChanged();
         if (_store.Defaults is null)
         {
             if (HasCatalog && !IsLoading)
@@ -638,14 +747,64 @@ public sealed partial class EconomyPageViewModel : PageViewModel, ISearchablePag
         BuildTraders();
     }
 
+    /// <summary>Tables that could not be read stop the progress bar and offer Retry (F302); the store says the other notices itself.</summary>
+    private void OnStoreNotice(object? sender, EconomyNotice notice)
+    {
+        switch (notice.Kind)
+        {
+            case EconomyNoticeKind.TablesFailed:
+                IsLoading = false;
+                TablesFailed = true;
+                _services.Notifications.Error(Loc.T("Economy.TablesFailed"), Loc.F("Economy.TablesFailedDetail", LoadCompletion.Exception?.GetBaseException().Message ?? string.Empty));
+                break;
+        }
+    }
+
+    /// <summary>Reads the game's economy tables again after they failed.</summary>
+    [RelayCommand]
+    private void Retry()
+    {
+        TablesFailed = false;
+        Load();
+    }
+
+    /// <summary>The settings card's rows, in file order; rows of the same keys only take the file's values (the box keeps focus).</summary>
+    private void BuildSettings()
+    {
+        var settings = _store.Economy.Settings;
+        var editable = CanEdit;
+        if (SettingRows.Count == settings.Count && SettingRows.Select(r => r.Key).SequenceEqual(settings.Select(s => s.Key), StringComparer.Ordinal)
+            && SettingRows.All(r => r.IsEditable == editable))
+        {
+            for (var i = 0; i < settings.Count; i++)
+            {
+                if (SettingRows[i].Value != settings[i].Value)
+                {
+                    SettingRows[i].Load(settings[i].Value);
+                }
+            }
+
+            return;
+        }
+
+        SettingRows = [.. settings.Select(s => new EconomySettingRow(s.Key, s.Value, (row, value) => _store.SetSetting(row.Key, value), editable))];
+    }
+
     private void OnCatalogChanged(object? sender, EventArgs e) => _services.Dispatcher.Post(() =>
     {
         OnPropertyChanged(nameof(HasCatalog));
+        OnPropertyChanged(nameof(IsCodeShown));
+        OnPropertyChanged(nameof(IsNumbersShown));
         IsLoading = false;
+        TablesFailed = false;
         Load();
     });
 
-    private void OnProjectChanged(object? sender, EventArgs e) => OnPropertyChanged(nameof(HasProject));
+    private void OnProjectChanged(object? sender, EventArgs e)
+    {
+        OnPropertyChanged(nameof(HasProject));
+        OnPropertyChanged(nameof(CanEdit));
+    }
 }
 
 /// <summary>A trade category in the filter ("All" has the key <c>*</c>).</summary>

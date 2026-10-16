@@ -166,4 +166,74 @@ public sealed class PatrolPointsRealTests
         Assert.True(FVector.Distance(new FVector(moved.X, moved.Y, moved.Z), markers[2].Local.Translation + new FVector(0f, 0f, 200f)) < 0.1f);
         Assert.Equal(markers[2].Preset, stored[1].Get<FStructFallback>("SpawnerPreset").Get<CUE4Parse.UE4.Objects.UObject.FPackageIndex>("Preset").Name.Replace("_C", string.Empty, StringComparison.Ordinal));
     }
+
+    [Fact]
+    public async Task ADuplicatedSentrysPatrolPinIsMovedWhereTheCopyStands()
+    {
+        if (Environment.GetEnvironmentVariable("SCUM_PAKS") is not { Length: > 0 } paks || !Directory.Exists(paks))
+        {
+            return; // not asked for
+        }
+
+        using var ctx = AppTestContext.Create();
+        ctx.Services.Keys.Set(AesKeyText.FromEnvironmentOrStore()!);
+        ctx.Services.UpdateSettings(s => s with { GamePaksFolder = paks });
+        await ctx.Services.Workspace.ConnectAsync(ProgressSink.Null);
+        using var map = new MapPageViewModel(ctx.Services);
+        await map.LoadCompletion;
+        await ctx.Services.Projects.CreateAsync(ctx.Combine("projects"), "PatrolCopy");
+        await map.LoadLevelsAsync([Barracks]);
+        map.ShowSpawns = true;
+
+        // igor8802: "a duplicated sentry's patrol route cannot be changed": the copy's pin snapped back.
+        var sentry = map.AllActors.Single(a => a.Name == "SentrySpawner_0");
+        map.SelectedActor = sentry;
+        map.DuplicateSelectedCommand.Execute(null);
+        var copy = Assert.Single(map.AllActors, a => a.IsAdded);
+        var root = map.SelectedRootWorld!.Value;
+        map.ApplyDraggedTransform(copy.SelectableId, root with { Translation = root.Translation + new FVector(1000f, 0f, 0f) });
+        map.SelectedInstanceKey = InstanceKey.Of(copy.SelectableId, SpawnPointArrays.PatrolPoints, InstanceKey.SpawnPointBase);
+        Assert.True(map.IsSpawnPointSelected);
+        var pin = map.SelectedRootWorld!.Value;
+        map.ApplyDraggedTransform(copy.SelectableId, pin with { Translation = pin.Translation + new FVector(500f, 0f, 0f) });
+
+        var drawn = Assert.Contains(copy.SelectableId, map.PinOverrides);
+        Assert.Equal(sentry.Actor.PatrolPoints.Count, drawn.Count);
+        Assert.True(FVector.Distance(drawn.Single(p => p.SpawnPoint!.Value.Index == 0).World.Translation, pin.Translation + new FVector(500f, 0f, 0f)) < 1f);
+        Assert.DoesNotContain(sentry.SelectableId, map.PinOverrides);
+    }
+
+    [Fact]
+    public async Task AStockHousesIndoorLootPointHasAGizmoAndMoves()
+    {
+        if (Environment.GetEnvironmentVariable("SCUM_PAKS") is not { Length: > 0 } paks || !Directory.Exists(paks))
+        {
+            return; // not asked for
+        }
+
+        using var ctx = AppTestContext.Create();
+        ctx.Services.Keys.Set(AesKeyText.FromEnvironmentOrStore()!);
+        ctx.Services.UpdateSettings(s => s with { GamePaksFolder = paks });
+        await ctx.Services.Workspace.ConnectAsync(ProgressSink.Null);
+        using var map = new MapPageViewModel(ctx.Services);
+        await map.LoadCompletion;
+        await ctx.Services.Projects.CreateAsync(ctx.Combine("projects"), "IndoorLoot");
+        await map.LoadLevelsAsync([SpawnPartsRealTests.Tisno]);
+        map.ShowSpawns = true;
+
+        // seviscache: "indoor loot points show no gizmo": the house stores its loot spawners without their markers.
+        var house = map.AllActors.Single(a => a.Name == "BP_SB_House_B_INT_4");
+        var component = house.Actor.Components.First(c => c.SpawnMarkersFromTemplate && !c.IsSynthesized && c.SpawnMarkers.Count > 0);
+        var pins = map.PreparedScene!.Placements.Where(p => p.SelectableId == house.SelectableId && p.SpawnPoint?.Key == component.Name).ToList();
+        Assert.Equal(component.SpawnMarkers.Count, pins.Count);
+        map.SelectedActor = house;
+        map.SelectedInstanceKey = pins[0].PickKey(map.PickParts);
+        Assert.True(map.IsSpawnPointSelected);
+        var world = map.SelectedRootWorld!.Value;
+        Assert.True(FVector.Distance(world.Translation, (component.SpawnMarkers[0].Local * component.WorldTransform).Translation) < 1f);
+        map.ApplyDraggedTransform(house.SelectableId, world with { Translation = world.Translation + new FVector(0f, 0f, 50f) });
+        var op = Assert.IsType<SetSpawnPointsOp>(ctx.Services.Projects.Current!.Journal.Applied[^1].Op);
+        Assert.Equal(component.Name, op.Component);
+        Assert.Equal(component.SpawnMarkers.Count, op.New.Count);
+    }
 }

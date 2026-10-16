@@ -66,4 +66,40 @@ public sealed class PrefabTests
         Assert.Equal("a_b_c", Prefab.SafeFileName("a/b:c"));
         Assert.Equal("Prefab", Prefab.SafeFileName("  "));
     }
+
+    [Fact]
+    public void KeepsWhatWasChangedOnAPartAndReadsOlderFiles()
+    {
+        const string boulder = "/Game/ConZ_Files/Models/Rocks/SM_Boulder.SM_Boulder";
+        var edits = new ActorEdits
+        {
+            Bend = new BendValue(20f, 30f, Legs: 150f),
+            Parts = [new PartEdit("Fence", TransformValue.Identity, TransformValue.At(0f, 0f, 50f))],
+            Meshes = [new MeshEdit(null, Rock, boulder)],
+            Points = [new PointsEdit(null, "PatrolPoints", [new(0, TransformValue.Identity)], [new(0, TransformValue.At(100f, 0f, 0f)), new(0, Somewhere)])],
+            Loot = [new LootEdit("Locker", new LootSetting(true, ["/Game/X/Examine_A.Examine_A_C"]), new LootSetting(false, []))],
+            ClearGrass = false,
+            Instances = [new InstanceEdit("Trees", 3) { Deleted = true }],
+        };
+        var part = new PrefabPart
+        {
+            Kind = PrefabPartKind.StaticMesh, Mesh = boulder, Edits = edits, Loot = [], Materials = [null, "/Game/X/MI_A.MI_A"],
+            Trader = new TraderPost("A_3_Armory", "Armorer", "Outpost_A_3") { Personality = "/Game/X/P_Armory.P_Armory" }, Mechanic = "BP_TradePost_9",
+        };
+        var json = (Sample() with { Parts = [part] }).ToJson();
+        var back = Assert.Single(Prefab.FromJson(json).Parts);
+        Assert.Equal(json, (Sample() with { Parts = [back] }).ToJson());
+        var someone = new ActorRef(Outpost, "Placed");
+        Assert.Equal(edits.OpsOn(someone, false), back.Edits!.OpsOn(someone, false));
+        Assert.Empty(back.Loot!);
+        Assert.Equal([null, "/Game/X/MI_A.MI_A"], back.Materials);
+        Assert.Equal(part.Trader, back.Trader);
+        Assert.Equal("BP_TradePost_9", back.Mechanic);
+
+        // A file written before parts kept their edits loads as before: its bend only.
+        var old = Prefab.FromJson(Sample().ToJson()).Parts[1];
+        Assert.Null(old.Edits);
+        Assert.Null(old.Materials);
+        Assert.Equal(new BendValue(12f, 20f), old.Bend);
+    }
 }

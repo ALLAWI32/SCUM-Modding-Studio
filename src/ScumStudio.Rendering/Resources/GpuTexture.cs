@@ -29,6 +29,8 @@ public sealed class GpuTexture : IDisposable
     /// <summary>Anisotropic filtering level asked for on mipmapped textures (clamped to what the driver allows).</summary>
     public const float MaxAnisotropy = 16f;
 
+    private static int s_live;
+    private static long s_liveBytes;
     private readonly GL _gl;
     private bool _disposed;
 
@@ -42,7 +44,12 @@ public sealed class GpuTexture : IDisposable
         Height = height;
         IsSrgb = srgb;
         Wrap = wrap;
+        Interlocked.Increment(ref s_live);
+        Interlocked.Add(ref s_liveBytes, EstimatedBytes);
     }
+
+    /// <summary>Textures not yet disposed in the whole process (every renderer) and their <see cref="EstimatedBytes"/>.</summary>
+    public static (int Count, long Bytes) Live => (Volatile.Read(ref s_live), Interlocked.Read(ref s_liveBytes));
 
     /// <summary>Texture object name.</summary>
     public uint Handle { get; private set; }
@@ -119,6 +126,15 @@ public sealed class GpuTexture : IDisposable
             {
                 break;
             }
+        }
+
+        if (GlErrors.Drain(gl) is { Count: > 0 } errors)
+        {
+            // Checked here, before ApplyAnisotropy drains the queue (it hid this error): a driver that refuses the blocks (a
+            // format, a size) must not leave an incomplete texture that is drawn as if it were fine (D03).
+            gl.BindTexture(TextureTarget.Texture2D, 0);
+            gl.DeleteTexture(handle);
+            throw new InvalidOperationException($"OpenGL refused the {format} texture of {width}x{height} ({mips.Count} mips): {string.Join(", ", errors)}");
         }
 
         gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureBaseLevel, 0);
@@ -248,6 +264,8 @@ public sealed class GpuTexture : IDisposable
             _disposed = true;
             _gl.DeleteTexture(Handle);
             _gl.DeleteSampler(Sampler);
+            Interlocked.Decrement(ref s_live);
+            Interlocked.Add(ref s_liveBytes, -EstimatedBytes);
         }
     }
 

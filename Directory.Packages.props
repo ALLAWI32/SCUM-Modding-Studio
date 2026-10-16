@@ -40,6 +40,8 @@
     <!-- Infrastructure -->
     <PackageVersion Include="System.CommandLine" Version="2.0.0-beta4.22272.1" />
     <PackageVersion Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
+    <!-- SCUM.db (the game's SQLite save): Clean saved items reads it and removes what removed item spawners left. Microsoft's own provider. -->
+    <PackageVersion Include="Microsoft.Data.Sqlite" Version="8.0.31" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.2" />
 
     <!-- Tests -->

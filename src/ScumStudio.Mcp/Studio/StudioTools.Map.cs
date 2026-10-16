@@ -575,7 +575,7 @@ public sealed partial class StudioTools
             var what = note.Component is null ? note.Actor.Actor : $"{note.Actor.Actor}.{note.Component}";
             plan.Notes.Add(note.Kind switch
             {
-                CompanionNoteKind.SpawnedItemsStay => $"{what} spawns items: those a running server already spawned stay (players have them, or the server saved them).",
+                CompanionNoteKind.SpawnedItemsStay => $"{what} spawns items: those a running server already spawned stay (players have them, or the server saved them). The app's Map → Clean saved items removes a removed spawner's saved items from SCUM.db.",
                 CompanionNoteKind.ClassEffectStays => $"{what} is made by its actor's class, not stored in the level: it goes only with the whole actor.",
                 CompanionNoteKind.AttachedKept => $"{what} (a trade post, spawner, volume or level actor) hangs on what is deleted: kept where it stands, with what hangs on it.",
                 _ => $"{what} is a volume mostly outside what is deleted (shared with what stays): kept.",
@@ -717,7 +717,7 @@ public sealed partial class StudioTools
             op = op with { NewName = EditOpFactory.UniqueActorName(document, newName, project.State) };
         }
 
-        var entry = _host.Apply(op);
+        var entry = _host.Apply(WithEdits(op, op.Created, project.State.EditsOf(reference)));
         return Task.FromResult(McpToolResult.Text($"#{entry.Seq} {op.Describe()} → new actor '{op.NewName}'"));
     }
 
@@ -784,7 +784,16 @@ public sealed partial class StudioTools
         }
         else if (actor.Kind == ActorKind.StaticMeshActor && actor.StaticMeshPath is { } mesh)
         {
-            op = EditOpFactory.AddStaticMeshActor(target, mesh, transform, project.State);
+            // The mesh, loot and paint it has now, as the Map's Paste copies it.
+            var replaced = project.State.GetMeshOverride(reference);
+            op = EditOpFactory.AddStaticMeshActor(target, replaced ?? mesh, transform, project.State) with
+            {
+                CollisionProfile = actor.Root?.CollisionProfile,
+                Loot = actor.Root is { } stored && (project.State.GetLoot(reference) ?? new LootSetting(stored.LootPresets.Count > 0, stored.LootPresets)) is var loot
+                    ? (loot.Lootable ? (loot.Presets.Count > 0 ? loot.Presets : null) : [])
+                    : null,
+                OverrideMaterials = replaced is null ? actor.Root?.OverrideMaterials : null,
+            };
         }
         else
         {
@@ -792,9 +801,13 @@ public sealed partial class StudioTools
             op = new AddBlueprintActorOp(targetPath, EditOpFactory.UniqueActorName(target, baseName + "_Added", project.State), actor.ClassPath, reference, transform);
         }
 
-        var entry = _host.Apply(op);
+        var entry = _host.Apply(WithEdits(op, op.GetPrimaryTarget()!, project.State.EditsOf(reference)));
         return Task.FromResult(McpToolResult.Text($"#{entry.Seq} {op.Describe()}"));
     }
+
+    /// <summary>A copy and the edits it carries from its source (bend, parts, spawn points, loot…; see <see cref="ActorEdits"/>) as one step.</summary>
+    private static EditOp WithEdits(EditOp create, ActorRef created, ActorEdits edits) =>
+        edits.OpsOn(created, create is AddStaticMeshActorOp) is { Count: > 0 } carried ? new BatchOp(create.Describe(), [create, .. carried]) : create;
 
     private List<string> LevelsFrom(ToolCall call)
     {

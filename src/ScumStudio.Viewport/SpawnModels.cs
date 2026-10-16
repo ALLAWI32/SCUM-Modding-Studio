@@ -79,6 +79,26 @@ public sealed class SpawnModels
         };
     }
 
+    /// <summary>
+    /// The skeletal or static mesh a character Blueprint class shows (<c>/Game/…/BP_Zombie_Police.BP_Zombie_Police_C</c>, a
+    /// preset's <c>CharacterClasses</c> entry), for the Spawns page's 3D preview of a type; null when it names none.
+    /// </summary>
+    public string? MeshOfClass(string classPath)
+    {
+        ArgumentNullException.ThrowIfNull(classPath);
+        return Blueprint(PackageOf(classPath.Trim()));
+    }
+
+    /// <summary>
+    /// The whole figure of a character Blueprint class (body, head, hair, gear: its Blueprint package, composed like a
+    /// trader's by <see cref="MeshPreviewLoader.LoadBlueprint"/>), or null when the class is not in the game files.
+    /// </summary>
+    public string? FigureOfClass(string classPath)
+    {
+        ArgumentNullException.ThrowIfNull(classPath);
+        return Character(PackageOf(classPath.Trim()));
+    }
+
     private string? Cached(string key, Func<string?> resolve)
     {
         if (_resolved.TryGetValue(key, out var known))

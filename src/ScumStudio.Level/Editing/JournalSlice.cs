@@ -153,8 +153,10 @@ public static class JournalSlice
 
     private static IEnumerable<EditOp> Leaves(EditOp op) => op is BatchOp batch ? batch.Ops.SelectMany(Leaves) : [op];
 
+    // An economy edit (EconomyOverride.json, a project file) is no map or asset edit: it fell into the island group, so an
+    // island-wide share carried it, although a share takes the economy as a file of its own (ShareImport.SharedEconomy).
     private static List<EditOp> Flatten(IReadOnlyList<JournalEntry> applied) =>
-        applied.SelectMany(e => Leaves(e.Op)).SelectMany(SplitPerLevel).ToList();
+        applied.SelectMany(e => Leaves(e.Op)).Where(o => o is not EconomyOp).SelectMany(SplitPerLevel).ToList();
 
     /// <summary>A delete-all (or its restore) of several levels as one edit per level, each in its own cell's group.</summary>
     private static IEnumerable<EditOp> SplitPerLevel(EditOp op)

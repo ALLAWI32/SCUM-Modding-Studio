@@ -5,6 +5,7 @@ using ScumStudio.Assets.Catalog;
 using ScumStudio.Formats.Packages;
 using ScumStudio.Modding;
 using ScumStudio.Modding.Catalog;
+using ScumStudio.Modding.Cloning;
 using ScumStudio.Modding.Tuning;
 using ScumStudio.Pak;
 using Xunit.Abstractions;
@@ -173,6 +174,70 @@ public sealed class PartsRealTests(ITestOutputHelper output)
                 Assert.Contains("BP_MountTypeWeaponMagazine76239_C", mounts);
                 Assert.DoesNotContain("BP_MountTypeWeapon_M70_Bayonet_C", mounts);
                 Assert.Equal(1.12f, cdo.GetOrDefault<float>("_damageOverTime"));
+            }
+            finally
+            {
+                if (Directory.Exists(dir))
+                {
+                    Directory.Delete(dir, recursive: true);
+                }
+            }
+        }
+    }
+
+    [Fact]
+    public async Task AWolfsWagenCloneMovesItsDoorAndGetsANewPartWithoutTouchingTheStockCar()
+    {
+        if (Open() is not { } catalog)
+        {
+            return;
+        }
+
+        using (catalog)
+        {
+            const string meshes = "/Game/ConZ_Files/Models/Vehicles2/WolfsWagen/Meshes/";
+            var plan = CloneFamilyPlanner.PlanVehicle(catalog, "/Game/ConZ_Files/Vehicles/Car/WolfsWagen/BPC_WolfsWagen", "PartsReal");
+            var map = plan.Packages.ToDictionary(p => p.Key, p => p.Value, StringComparer.OrdinalIgnoreCase);
+            var mesh = map[meshes + "SK_WolfsWagen"]; // the clone's own copy of the car's mesh (it wears paint)
+            var door = Assert.Single(VehicleSockets.Read(ModdableAssets.ReadPackage(catalog, meshes + "SK_WolfsWagen_Skeleton")), s => s.Name == "s_Door_FrontLeft");
+            var custom = VehicleAttachmentEdits.CustomName(Attachments.TrimEnd('/'), "PartsReal", catalog.PackageExists);
+            var socket = VehicleAttachmentEdits.CustomSocket(custom);
+            var part = new ClonePlan(Attachments + "BPC_WolfsWagen_RoofRack", custom, [new(Attachments + "BPC_WolfsWagen_RoofRack", custom)]);
+            var body = map[Attachments + "BPC_WolfsWagen_Body_Top"];
+            var roof = VehicleAttachmentEdits.SlotsOf(ModdableAssets.ReadPackage(catalog, Attachments + "BPC_WolfsWagen_Body_Top"));
+            var donorSlot = roof.Select((s, i) => (s, i)).First(x => x.s.Contains(Class("BPC_WolfsWagen_RoofRack"))).i;
+            var presetNode = Assert.Single(VehicleParts.Read(ModdableAssets.ReadPackage(catalog, Preset), _ => null), t => t.ExportClass == Class("BPC_WolfsWagen_Body_Top") && t.Path == "Children[0]").Export;
+            var meshEdits = VehicleSockets.Override("SK_PartsReal", door, door.Location + new System.Numerics.Vector3(10, 0, 0), door.Rotation, door.Scale)
+                .Concat([new("SK_PartsReal", VehicleSockets.Path(socket, VehicleSockets.Bone), "Root"), new("SK_PartsReal", VehicleSockets.Path(socket, VehicleSockets.Location), "-30, 0, 160")])
+                .ToList();
+            var result = AssetModBuilder.Build(catalog, new AssetModRequest([plan, part], new Dictionary<string, IReadOnlyList<TunableEdit>>
+            {
+                [mesh] = meshEdits,
+                [custom] = [new("Default__" + PackageMap.Leaf(custom) + "_C", VehicleAttachmentEdits.SocketPath, socket)],
+                [body] = [new("Default__BPC_PartsReal_Body_Top_C", VehicleAttachmentEdits.SlotPath(roof.Count), VehicleAttachmentEdits.SlotValue(VehicleAttachmentEdits.ClassPath(custom), donorSlot))],
+                [map[Preset]] = [new(presetNode, $"Children[{roof.Count}]", VehicleAttachmentEdits.ClassPath(custom))],
+            }));
+            output.WriteLine(string.Join('\n', result.Warnings));
+            Assert.DoesNotContain(result.Warnings, w => w.Contains("edits skipped", StringComparison.Ordinal));
+            Assert.All(result.Packages.Where(p => p.PackagePath != DataTableEdits.TradeableTable), p => Assert.False(catalog.PackageExists(p.PackagePath), p.PackagePath));
+            Assert.NotNull(result.AssetRegistry);
+
+            // CUE4Parse reads the clone's mesh whole and resolves both sockets on it.
+            var built = Assert.Single(result.Packages, p => p.PackagePath == mesh);
+            var dir = Path.Combine(Path.GetTempPath(), "scumstudio-parts-" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                var basePath = Path.Combine(dir, built.HeaderFilePath())[..^".uasset".Length];
+                await built.Bytes.WriteAsync(basePath);
+                if (built.UBulk is { } ubulk)
+                {
+                    await File.WriteAllBytesAsync(basePath + ".ubulk", ubulk);
+                }
+
+                using var loose = AssetCatalog.OpenLoose(dir);
+                var read = loose.LoadObject<CUE4Parse.UE4.Assets.Exports.SkeletalMesh.USkeletalMesh>(mesh + "." + mesh[(mesh.LastIndexOf('/') + 1)..]);
+                var names = (read.GetOrDefault<FPackageIndex[]>("Sockets") ?? []).Select(s => s.Load<UObject>()!.GetOrDefault<FName>("SocketName").Text).ToList();
+                Assert.Equal(new[] { "s_Door_FrontLeft", socket }.Order(StringComparer.Ordinal), names.Order(StringComparer.Ordinal));
             }
             finally
             {

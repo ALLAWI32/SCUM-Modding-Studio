@@ -44,6 +44,7 @@ public abstract partial class ModulePageViewModel
     private PaintMaterialViewModel? _paintLastChanged;
     private TimeSpan _paintLastTime;
     private CancellationTokenSource? _paintRest;
+    private CancellationTokenSource? _armourLoad;
     private bool _paintDragging;
     private bool _paintRestoring;
     private bool _armourQuiet;
@@ -52,7 +53,7 @@ public abstract partial class ModulePageViewModel
 
     /// <summary>The selected vehicle's paints.</summary>
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(HasPaints))]
+    [NotifyPropertyChangedFor(nameof(HasPaints), nameof(ShowStudioPanel))]
     private IReadOnlyList<PaintMaterialViewModel> _paints = [];
 
     /// <summary>Paint changes not applied yet.</summary>
@@ -85,6 +86,7 @@ public abstract partial class ModulePageViewModel
     /// <summary>Forgets the armour choice (another vehicle is selected).</summary>
     private void ClearArmour()
     {
+        _armourLoad?.Cancel();
         _armourQuiet = true;
         try
         {
@@ -184,7 +186,10 @@ public abstract partial class ModulePageViewModel
             foreach (var s in sources)
             {
                 var paint = new PaintMaterialViewModel(s.MaterialPath, s.Name, s.Colour, s.Second, s.Metal, s.ClearCoat, s.Added, s.Diffuse,
-                    s.Tint, s.Tint ? TintGain(model, s.MaterialPath, _paintPixels) : 1f);
+                    s.Tint, s.Tint ? TintGain(model, s.MaterialPath, _paintPixels) : 1f, s.Roughness?.A, s.Roughness?.B, s.Roughness?.Stock ?? 0.5)
+                {
+                    UsedBy = UsedBy(model, s.MaterialPath),
+                };
                 if (_paintCarry is { } carry && carry.TryGetValue(paint.MaterialPath, out var kept))
                 {
                     kept.ApplyTo(paint); // another armour kit: the paint chosen so far stays
@@ -203,14 +208,7 @@ public abstract partial class ModulePageViewModel
             }
 
             _paintCarry = null;
-            foreach (var paint in paints)
-            {
-                _paintShown[paint] = PaintState.Of(paint);
-                paint.Changed += (_, _) => OnPaintChanged(paint);
-            }
-
-            Paints = paints;
-            Repaint();
+            ShowPaints(paints);
         }
         catch (Exception ex) when (ex is FileNotFoundException or FormatException or InvalidDataException or IOException or InvalidOperationException)
         {
@@ -218,7 +216,37 @@ public abstract partial class ModulePageViewModel
         }
     }
 
-    /// <summary>What <see cref="ReadPaint"/> found for one material (the view model is made on the UI thread).</summary>
+    /// <summary>Puts <paramref name="paints"/> in the panel: each change repaints the 3D view and is a Ctrl+Z step.</summary>
+    internal void ShowPaints(IReadOnlyList<PaintMaterialViewModel> paints)
+    {
+        foreach (var paint in paints)
+        {
+            _paintShown[paint] = PaintState.Of(paint);
+            paint.Changed += (_, _) => OnPaintChanged(paint);
+        }
+
+        Paints = paints;
+        Repaint();
+    }
+
+    /// <summary>The parts of <paramref name="model"/> drawn with <paramref name="material"/>: their attachment's name (<c>Door_FrontLeft</c>) or their own.</summary>
+    internal static string UsedBy(PreviewModel model, string material)
+    {
+        static string Label(PreviewPart part)
+        {
+            if (part.Attachment.Length == 0)
+            {
+                return part.Name;
+            }
+
+            var leaf = part.Attachment[(part.Attachment.LastIndexOf('/') + 1)..];
+            leaf = leaf.StartsWith("BPC_", StringComparison.OrdinalIgnoreCase) ? leaf[4..] : leaf;
+            return leaf.IndexOf('_') is > 0 and var token ? leaf[(token + 1)..] : leaf;
+        }
+
+        return string.Join(", ", model.Parts.Where(p => string.Equals(p.Material, material, StringComparison.OrdinalIgnoreCase)).Select(Label).Distinct(StringComparer.OrdinalIgnoreCase));
+    }
+
     /// <summary>Every part back to the game's own paint (one undo step; Apply paint records it).</summary>
     [RelayCommand]
     private void AllOriginalPaint()
@@ -237,7 +265,11 @@ public abstract partial class ModulePageViewModel
         : IsVehicleModule ? Loc.T("Paint.Note") : Loc.T("Paint.Note.Weapon");
 
     private sealed record PaintSource(string MaterialPath, string Name, PaintValue Colour, PaintValue? Second, PaintValue? Metal, PaintValue? ClearCoat,
-        PaintValue? Added, TextureImage? Mask, PaintValue? Diffuse = null, bool Tint = false);
+        PaintValue? Added, TextureImage? Mask, PaintValue? Diffuse = null, bool Tint = false)
+    {
+        /// <summary><c>Bottom Roughness_01</c> / <c>_02</c> by name (car paint), and the roughness the material inherits when it stores none.</summary>
+        public (PaintValue A, PaintValue B, double Stock)? Roughness { get; init; }
+    }
 
     /// <summary>A master material's tint, metal and colour texture parameters (texture null: no even finish).</summary>
     private sealed record TintParameters(string Colour, string Metal, string? Texture);
@@ -408,12 +440,24 @@ public abstract partial class ModulePageViewModel
                 null, null, weapon.Texture is { } flat ? Keyed("TextureParameterValues", flat, TunableKind.Text, texture) : null, Tint: true);
         }
 
+        // M_Car_01's paint roughness (colour A and B), by name: the export patches a stored one or adds it. Boats have none.
+        (PaintValue, PaintValue, double)? roughness = null;
+        if (colourIndex < 0 || vectors[colourIndex] == "Base Color A")
+        {
+            var inherited = new MaterialInspector(catalog).Inspect(mi).Scalars;
+            PaintValue Rough(string param) => new(package, new Tunable(export, MaterialParameters.PathOf("ScalarParameterValues", param), TunableKind.Float, Stored(param)),
+                state?.GetAssetValue(package, export, MaterialParameters.PathOf("ScalarParameterValues", param))?.Current ?? Stored(param));
+            string Stored(string param) => scalars.IndexOf(param) is >= 0 and var i && tunables.FirstOrDefault(t => t.Path == $"ScalarParameterValues[{i}].ParameterValue") is { } t ? t.Value : string.Empty;
+            roughness = (Rough(PaintMaterialViewModel.RoughnessParameter), Rough(PaintMaterialViewModel.RoughnessBParameter),
+                inherited.FirstOrDefault(s => s.Name == PaintMaterialViewModel.RoughnessParameter)?.Value ?? 0.5);
+        }
+
         if (colourIndex < 0)
         {
             return new PaintSource(materialPath, name,
                 Added("VectorParameterValues", "Base Color A", TunableKind.Color), Added("VectorParameterValues", "Base Color B", TunableKind.Color),
                 Added("ScalarParameterValues", "CarPaint Metalness", TunableKind.Float), Added("ScalarParameterValues", "ClearCoat Amount", TunableKind.Float),
-                Added("TextureParameterValues", "Color Mask", TunableKind.Text), null, Added("TextureParameterValues", "Diffuse Map", TunableKind.Text));
+                Added("TextureParameterValues", "Color Mask", TunableKind.Text), null, Added("TextureParameterValues", "Diffuse Map", TunableKind.Text)) { Roughness = roughness };
         }
 
         return Value("VectorParameterValues", colourIndex) is not { } colour
@@ -422,10 +466,10 @@ public abstract partial class ModulePageViewModel
                 Value("VectorParameterValues", vectors.IndexOf("Base Color B")),
                 Value("ScalarParameterValues", scalars.IndexOf("CarPaint Metalness")),
                 Value("ScalarParameterValues", scalars.IndexOf("ClearCoat Amount")),
-                null, readMask ? ReadMask(catalog, mi) : null);
+                null, readMask ? ReadMask(catalog, mi) : null) { Roughness = roughness };
     }
 
-    /// <summary>The material's <c>Color Mask</c> (green: colour A, red: colour B), decoded at preview size; null without one.</summary>
+    /// <summary>The material's <c>Color Mask</c> (where the paint goes and in which colour, as <see cref="PaintBaker"/> reads it), decoded at preview size; null without one.</summary>
     private TextureImage? ReadMask(AssetCatalog catalog, UMaterialInstanceConstant mi)
     {
         try
@@ -444,8 +488,13 @@ public abstract partial class ModulePageViewModel
     {
         if (!_armourQuiet && _catalog is { } catalog && SelectedItem is { } item && value is not null && _previewBase is not null)
         {
+            // The last kit chosen wins: a slower load of the one before is dropped, and so is its paint load (it would
+            // take the carried paint and leave none for this one).
+            _armourLoad?.Cancel();
+            _armourLoad = new CancellationTokenSource();
+            _paintLoads++;
             _paintCarry = Paints.ToDictionary(p => p.MaterialPath, PaintState.Of, StringComparer.OrdinalIgnoreCase);
-            _previewTask = LoadPreviewAsync(catalog, item, value.Key.Length == 0 ? null : value.Key);
+            _previewTask = LoadPreviewAsync(catalog, item, value.Key.Length == 0 ? null : value.Key, _armourLoad.Token);
         }
     }
 
@@ -527,7 +576,7 @@ public abstract partial class ModulePageViewModel
             return;
         }
 
-        var byMaterial = Paints.Where(p => p.Painted).ToDictionary(p => p.MaterialPath, StringComparer.OrdinalIgnoreCase);
+        var byMaterial = Paints.Where(p => p.Painted || HasDecalsOn(p.MaterialPath)).ToDictionary(p => p.MaterialPath, StringComparer.OrdinalIgnoreCase);
         var textures = new Dictionary<string, TextureImage>(model.Textures, StringComparer.OrdinalIgnoreCase);
         var parts = new List<PreviewPart>(model.Parts.Count);
         foreach (var part in model.Parts)
@@ -539,6 +588,9 @@ public abstract partial class ModulePageViewModel
             }
 
             var surface = new Vector2((float)paint.Metal, (float)paint.ClearCoat);
+            // The paint's own roughness where the paint is (the shader mixes it in by the bake's coverage, as M_Car_01 lerps
+            // it by the colour mask); bare parts keep the texture's, or matte when the part had none.
+            var rough = paint.HasRoughness ? new Vector2(part.Roughness.Y > 0 ? part.Roughness.X : 0.8f, (float)paint.Roughness) : part.Roughness;
             if (paint.IsAdded && paint.Plain)
             {
                 parts.Add(part with { TexturePath = null, Tint = paint.LinearColour, Surface = surface }); // the plain white finish, painted
@@ -549,7 +601,7 @@ public abstract partial class ModulePageViewModel
                 // Through the colour mask; an added paint (armour) is paint all over, its plate print adding the scratches.
                 var key = "#paint/" + paint.MaterialPath;
                 textures[key] = Baked(paint, _paintDragging ? DragPixels(path, diffuse) : diffuse, mask);
-                parts.Add(part with { TexturePath = key, Tint = null, Surface = surface });
+                parts.Add(part with { TexturePath = key, Tint = null, Surface = surface, Roughness = rough });
             }
             else
             {
@@ -567,12 +619,14 @@ public abstract partial class ModulePageViewModel
     private TextureImage Baked(PaintMaterialViewModel paint, TextureImage diffuse, TextureImage mask)
     {
         var a = paint.LinearColour;
-        Vector4? b = paint.HasSecond ? PaintMaterialViewModel.ToLinear(paint.Second) : null;
+        Vector4? b = paint.HasSecond ? paint.LinearSecond : null;
         if (_paintBakes.TryGetValue(paint.MaterialPath, out var bake) && bake.A == a && bake.B == b && bake.Image.Width >= diffuse.Width)
         {
             return bake.Image;
         }
 
+        // The clone's decals first (half size while one is dragged), so the paint shows round them as the colour mask tells it.
+        (diffuse, mask) = ComposeDecals(paint.MaterialPath, diffuse, mask);
         var image = PaintBaker.Bake(diffuse, mask, a, b);
         _paintBakes[paint.MaterialPath] = (a, b, image);
         return image;
@@ -611,10 +665,39 @@ public abstract partial class ModulePageViewModel
         Repaint();
     }
 
-    /// <summary>The project changed (an apply, an undo): the applied values are the new starting point.</summary>
+    /// <summary>
+    /// The project changed (an apply, an undo, a redo): the applied values are the new starting point. Paint changed since
+    /// its last apply stays as shown on top of them (Apply then records it over what is applied now, never over a stale
+    /// value); without such paint the panel is read again.
+    /// </summary>
     private void ReloadPaints()
     {
-        if (HasPaints && PaintPendingCount == 0 && _catalog is { } catalog && SelectedItem is { } item && _previewBase is { } model)
+        if (!HasPaints)
+        {
+            return;
+        }
+
+        var state = _services.Projects.Current?.State;
+        _paintRestoring = true;
+        try
+        {
+            foreach (var paint in Paints)
+            {
+                paint.Rebase(v => state?.GetAssetValue(v.Package, v.Tunable.Export, v.Tunable.Path)?.Current ?? v.Tunable.Value);
+            }
+        }
+        finally
+        {
+            _paintRestoring = false;
+        }
+
+        foreach (var p in Paints)
+        {
+            _paintShown[p] = PaintState.Of(p);
+        }
+
+        PaintPendingCount = Paints.Count(p => p.IsPending); // a paint that changed look has repainted the view itself
+        if (PaintPendingCount == 0 && _catalog is { } catalog && SelectedItem is { } item && _previewBase is { } model)
         {
             _ = LoadPaintsAsync(catalog, item, model);
         }
@@ -632,25 +715,24 @@ public abstract partial class ModulePageViewModel
             return;
         }
 
-        var changes = Paints.SelectMany(p => p.Changes()).ToList();
-        PaintPendingCount = 0; // the project change that follows reads the paints again
-        var applied = 0;
-        foreach (var (value, text) in changes)
+        // One journal step for the whole paint: one project change (one reload of the panel), and one Ctrl+Z takes it all
+        // back (one entry per value reloaded the panel per value and undid an armour half: audit F229).
+        var ops = Paints.SelectMany(p => p.Changes())
+            .Select(c => (EditOp)new SetAssetValueOp(c.Value.Package, c.Value.Tunable.Export, c.Value.Tunable.Path, c.Value.Tunable.Kind.ToString(), c.Value.Committed, c.Text))
+            .ToList();
+        if (ops.Count == 0)
         {
-            try
-            {
-                _services.Projects.Apply(new SetAssetValueOp(value.Package, value.Tunable.Export, value.Tunable.Path, value.Tunable.Kind.ToString(), value.Committed, text));
-                applied++;
-            }
-            catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or IOException)
-            {
-                _services.Notifications.Error(Loc.T("Module.NotRecorded"), $"{value.Tunable.Path}: {ex.Message}");
-            }
+            return;
         }
 
-        if (applied > 0)
+        try
         {
-            _services.Notifications.Success(Loc.T("Paint.Applied"), Loc.F("Paint.AppliedDetail", applied));
+            _services.Projects.Apply(ops.Count == 1 ? ops[0] : new BatchOp(Loc.T("Paint.Applied"), ops));
+            _services.Notifications.Success(Loc.T("Paint.Applied"), Loc.F("Paint.AppliedDetail", ops.Count));
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or IOException)
+        {
+            _services.Notifications.Error(Loc.T("Module.NotRecorded"), ex.Message);
         }
     }
 
@@ -697,9 +779,10 @@ public sealed record PaintArmourChoice(string Key)
 }
 
 /// <summary>What a paint looks like at one moment (a Ctrl+Z step).</summary>
-internal readonly record struct PaintState(Avalonia.Media.Color Colour, Avalonia.Media.Color Second, double Metal, double ClearCoat, bool Painted, bool Plain)
+internal readonly record struct PaintState(Avalonia.Media.Color Colour, Avalonia.Media.Color Second, double Metal, double ClearCoat, bool Painted, bool Plain,
+    double Roughness, double Brightness, double Saturation)
 {
-    public static PaintState Of(PaintMaterialViewModel p) => new(p.Colour, p.Second, p.Metal, p.ClearCoat, p.Painted, p.Plain);
+    public static PaintState Of(PaintMaterialViewModel p) => new(p.Colour, p.Second, p.Metal, p.ClearCoat, p.Painted, p.Plain, p.Roughness, p.Brightness, p.Saturation);
 
-    public void ApplyTo(PaintMaterialViewModel p) => p.Set(Colour, Second, Metal, ClearCoat, Painted, Plain);
+    public void ApplyTo(PaintMaterialViewModel p) => p.Set(Colour, Second, Metal, ClearCoat, Painted, Plain, Roughness, Brightness, Saturation);
 }

@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging;
 using ScumStudio.Assets.Catalog;
 using ScumStudio.Core.Abstractions;
 using ScumStudio.Core.Games;
+using ScumStudio.Level.Economy;
 using ScumStudio.Level.Export;
 using ScumStudio.Level.Projects;
 using ScumStudio.Modding.Crafting;
@@ -40,13 +41,15 @@ public static class ModExportService
             return Localization.Loc.T("Export.OpenProjectFirst");
         }
 
-        // A craftables file, even an emptied one, is something to export: the export removes the old Craftables pak.
-        if (project.State.IsEmpty && !File.Exists(Path.Combine(project.DirectoryPath, CraftablesFile.FileName)))
+        // A craftables file, even an emptied one, is something to export: the export removes the old Craftables pak. So is
+        // an economy file on its own (audit F279: an economy-only project could not be exported).
+        var economyOnly = project.State.IsEmpty && !File.Exists(Path.Combine(project.DirectoryPath, CraftablesFile.FileName));
+        if (economyOnly && !File.Exists(Path.Combine(project.DirectoryPath, EconomyOverride.FileName)))
         {
             return Localization.Loc.T("Export.NothingYet");
         }
 
-        if (services.Workspace.Catalog is null)
+        if (services.Workspace.Catalog is null && !economyOnly)
         {
             return Localization.Loc.T("Export.ConnectFirst");
         }
@@ -84,6 +87,18 @@ public static class ModExportService
                 .SelectMany(role => CraftablesExporter.RemoveStale(Path.Combine(Path.GetFullPath(request.OutputFolder), ProjectExporter.RoleFolder(role)), modName, request.PakChunkIndex))
                 .ToList();
             services.Logger.LogInformation("Nothing to build for {Name}; removed {Count} old Craftables file(s).", modName, removed.Count);
+            if (ExportEconomyOnly(services, request, out var unreadable) is { } written)
+            {
+                services.Notifications.Success(Localization.Loc.T("Economy.Exported"), Localization.Loc.F("Economy.ExportedDetail", written));
+                return [];
+            }
+
+            if (unreadable is not null)
+            {
+                services.Notifications.Error(Localization.Loc.T("Economy.NotExported"), unreadable);
+                return [];
+            }
+
             services.Notifications.Info(Localization.Loc.T("Projects.Exported"), removed.Count > 0
                 ? Localization.Loc.F("Export.CraftablesRemoved", string.Join(", ", removed.Select(Path.GetFileName)))
                 : Localization.Loc.T("Export.NothingYet"));
@@ -111,16 +126,26 @@ public static class ModExportService
             // Imported mods go into both paks (the server needs a modded map's levels too).
             Mods = ProjectMods.Folders(request.Project.DirectoryPath),
         };
+
+        // The economy page's file (placed traders' sections, the hidden ones left out), as the page and MCP write it; a
+        // project without one exports none (the server keeps its own).
+        if (ReferenceEquals(services.Projects.Current, request.Project) && File.Exists(Path.Combine(request.Project.DirectoryPath, EconomyOverride.FileName)))
+        {
+            // A file the store could not read holds the game's defaults: never written as the server's economy (review, economy).
+            options = services.Economy.LoadError is { } error
+                ? options with { LeaveOutEconomy = true, Warnings = [.. options.Warnings, ProjectExporter.EconomyUnreadable(error)] }
+                : options with { Economy = services.Economy.ForExport() };
+        }
         var exporter = new ProjectExporter(services.Logger);
         var results = new List<ExportResult>(4);
 
         // The project's pak (levels, vehicles, items), then the Craftables pak on top of its registry.
-        async Task ExportRole(AssetCatalog source, ProjectSourceRole role)
+        async Task ExportRole(AssetCatalog source, ProjectSourceRole role, ExportOptions roleOptions)
         {
             ExportResult? main = null;
             if (!request.Project.State.IsEmpty)
             {
-                main = await exporter.ExportAsync(request.Project, source, options, role, new StepProgress(progress), cancellationToken).ConfigureAwait(false);
+                main = await exporter.ExportAsync(request.Project, source, roleOptions, role, new StepProgress(progress), cancellationToken).ConfigureAwait(false);
                 results.Add(main);
             }
 
@@ -130,7 +155,7 @@ public static class ModExportService
                 progress.Report(Localization.Loc.T("Export.Craftables"), 0, 0);
             }
 
-            if (await CraftablesExporter.ExportAsync(craftables, modName, source, options, role, CraftablesExporter.StagedRegistry(main),
+            if (await CraftablesExporter.ExportAsync(craftables, modName, source, roleOptions, role, CraftablesExporter.StagedRegistry(main),
                     services.Logger, cancellationToken).ConfigureAwait(false) is { } crafted)
             {
                 results.Add(crafted);
@@ -138,7 +163,7 @@ public static class ModExportService
         }
 
         progress.Report(Localization.Loc.T("Export.ClientPak"), 0, 0);
-        await ExportRole(catalog, ProjectSourceRole.Client).ConfigureAwait(false);
+        await ExportRole(catalog, ProjectSourceRole.Client, options).ConfigureAwait(false);
         CollisionDoctor.Exported(request.Project);
         if (results[0].SolidPieces > 0)
         {
@@ -180,7 +205,18 @@ public static class ModExportService
                         PakFileFilter = OwnPaks.Filter(ownNames),
                     });
                     progress.Report(Localization.Loc.T("Export.ServerPak"), 0, 0);
-                    await ExportRole(server, ProjectSourceRole.Server).ConfigureAwait(false);
+
+                    // Sound events of imported mods and clones become the stock server's 12-byte stubs (D12), read from the
+                    // server's own game paks, never the mods over them.
+                    var stubKey = key;
+                    var serverOptions = options with { ServerEventStubs = () => ServerEventStubs.FromServerPaks(serverFolder, stubKey, services.Logger) };
+                    await ExportRole(server, ProjectSourceRole.Server, serverOptions).ConfigureAwait(false);
+                }
+                catch (ServerEventStubException ex)
+                {
+                    services.Logger.LogWarning("The server pak was refused: {Message}", ex.Message);
+                    services.Notifications.Warning(Localization.Loc.T("Export.ServerSkipped"),
+                        Localization.Loc.F("Export.ServerNoStub", ex.Events, ex.FirstEvent ?? string.Empty, ex.Reason));
                 }
                 catch (Exception ex) when (ex is InvalidOperationException or IOException or InvalidDataException)
                 {
@@ -190,8 +226,132 @@ public static class ModExportService
             }
         }
 
+        // A server pak an earlier export left beside this new client pak no longer matches it (D12, D13): it goes.
+        var stale = RemoveStaleServerPaks(request.OutputFolder, modName, request.PakChunkIndex, results);
+        if (stale.Count > 0)
+        {
+            services.Logger.LogInformation("Removed {Count} old server file(s): {Files}", stale.Count, string.Join(", ", stale));
+            services.Notifications.Warning(Localization.Loc.T("Export.ServerSkipped"), Localization.Loc.F("Export.StaleServerPak", string.Join(", ", stale.Select(Path.GetFileName))));
+        }
+
+        foreach (var problem in ParityProblems(results))
+        {
+            services.Notifications.Warning(Localization.Loc.T("Export.ParityTitle"), problem);
+        }
+
+        if (results.Sum(r => r.RemovedItemSpawners.Count) is > 0 and var gone)
+        {
+            services.Notifications.Warning(Localization.Loc.T("Map.ItemSpawner.Title"), Localization.Loc.F("Export.ItemSpawnersRemoved", gone,
+                string.Join(", ", results.Where(r => r.Role == ProjectSourceRole.Client).SelectMany(r => r.RemovedItemSpawners).Take(4))));
+        }
+
         services.Logger.LogInformation("Exported {Name}: {Count} pak(s) to {Folder}.", results[0].ModName, results.Count, request.OutputFolder);
         return results;
+    }
+
+    /// <summary>
+    /// An economy-only project (no map edits, no craftables): its <c>EconomyOverride.json</c> written to the output's
+    /// <c>Server</c> and <c>Client</c> folders with the note; returns the server copy, or null when the project has no economy
+    /// or its file could not be read (<paramref name="unreadable"/> says why; nothing is written then).
+    /// </summary>
+    private static string? ExportEconomyOnly(AppServices services, ModExportRequest request, out string? unreadable)
+    {
+        unreadable = null;
+        if (!File.Exists(Path.Combine(request.Project.DirectoryPath, EconomyOverride.FileName)))
+        {
+            return null;
+        }
+
+        EconomyOverride? economy;
+        if (ReferenceEquals(services.Projects.Current, request.Project))
+        {
+            economy = services.Economy.LoadError is null ? services.Economy.ForExport() : null;
+            unreadable = services.Economy.LoadError is { } error ? ProjectExporter.EconomyUnreadable(error) : null;
+        }
+        else
+        {
+            // Not the open project: read as the command line does (a bad file is a warning, parked sections left out).
+            (economy, unreadable) = ProjectExporter.LoadEconomy(request.Project);
+            economy = unreadable is null ? ProjectExporter.EconomyFor(request.Project.State, economy) : null;
+        }
+
+        if (economy is null)
+        {
+            return null;
+        }
+
+        var output = Path.GetFullPath(request.OutputFolder);
+        var server = economy.SaveTo(Path.Combine(output, ProjectExporter.ServerFolderName), withNote: true);
+        economy.SaveTo(Path.Combine(output, ProjectExporter.ClientFolderName), withNote: true);
+        services.Logger.LogInformation("Economy written to {Path} (an economy-only project).", server);
+        return server;
+    }
+
+    /// <summary>
+    /// Deletes the server paks (and their signatures) of <paramref name="modName"/> that an earlier export left in
+    /// <c>&lt;root&gt;/Server</c> when this export built no server pak of that kind (<paramref name="results"/>): a server pak
+    /// beside a newer client pak no longer matches it. Returns the deleted files.
+    /// </summary>
+    public static IReadOnlyList<string> RemoveStaleServerPaks(string root, string modName, int pakChunkIndex, IReadOnlyList<ExportResult> results)
+    {
+        ArgumentNullException.ThrowIfNull(results);
+        var server = Path.Combine(Path.GetFullPath(root), ProjectExporter.RoleFolder(ProjectSourceRole.Server));
+        if (!Directory.Exists(server) || !results.Any(r => r.Role == ProjectSourceRole.Client))
+        {
+            return [];
+        }
+
+        var removed = new List<string>();
+        var craftables = ProjectExporter.SanitizeModName(modName) + CraftablesExporter.Suffix;
+        // The main server pak goes only when a new client main pak was built (an old pair left by a craftables-only export stays a pair).
+        if (results.Any(r => r.Role == ProjectSourceRole.Client && r.ModName != craftables) && !results.Any(r => r.Role == ProjectSourceRole.Server && r.ModName != craftables))
+        {
+            var pak = Path.Combine(server, ProjectExporter.PakFileName(modName, pakChunkIndex));
+            foreach (var file in new[] { pak, ScumStudio.Pak.Writing.SigCopier.GetSigPath(pak) }.Where(File.Exists))
+            {
+                File.Delete(file);
+                removed.Add(file);
+            }
+        }
+
+        if (!results.Any(r => r.Role == ProjectSourceRole.Server && r.ModName == craftables))
+        {
+            removed.AddRange(CraftablesExporter.RemoveStale(server, modName, pakChunkIndex));
+        }
+
+        return removed;
+    }
+
+    /// <summary>
+    /// The install rule of an export in the user's language (D13, D19): every player needs the client paks, the server the
+    /// server paks, and both restart.
+    /// </summary>
+    public static string InstallNote(IReadOnlyList<ExportResult> results)
+    {
+        ArgumentNullException.ThrowIfNull(results);
+        static string Paks(IEnumerable<ExportResult> of) => string.Join(" + ", of.Select(r => Path.GetFileName(r.PakPath)).OfType<string>());
+        var client = Paks(results.Where(r => r.Role == ProjectSourceRole.Client));
+        var server = Paks(results.Where(r => r.Role == ProjectSourceRole.Server));
+        return server.Length > 0 ? Localization.Loc.F("Export.Parity", client, server) : Localization.Loc.F("Export.ParityClientOnly", client);
+    }
+
+    /// <summary>
+    /// What is wrong with the pairing of an export's paks, in the user's language: a Craftables pak built for one cook only
+    /// (D13, D19: the server then does not know the recipes, and placed craftables can change).
+    /// </summary>
+    public static IReadOnlyList<string> ParityProblems(IReadOnlyList<ExportResult> results)
+    {
+        ArgumentNullException.ThrowIfNull(results);
+        static ExportResult? Crafted(IReadOnlyList<ExportResult> all, ProjectSourceRole role) =>
+            all.FirstOrDefault(r => r.Role == role && r.ModName.EndsWith(CraftablesExporter.Suffix, StringComparison.Ordinal));
+        var client = Crafted(results, ProjectSourceRole.Client);
+        var server = Crafted(results, ProjectSourceRole.Server);
+        if (client is not null && server is null)
+        {
+            return [Localization.Loc.F("Export.CraftablesServerMissing", Path.GetFileName(client.PakPath) ?? client.ModName)];
+        }
+
+        return server is not null && client is null ? [Localization.Loc.F("Export.CraftablesClientMissing", Path.GetFileName(server.PakPath) ?? server.ModName)] : [];
     }
 
     /// <summary>True when <paramref name="folder"/> holds the stock server cook (<c>pakchunk0*-WindowsServer.pak</c>), not just mod paks.</summary>
@@ -270,6 +430,14 @@ public static class ModExportService
             && !results.Any(r => r.Role == ProjectSourceRole.Server && r.ModName == ProjectExporter.SanitizeModName(project.Manifest.Name) + CraftablesExporter.Suffix))
         {
             CraftablesExporter.RemoveStale(serverMods, project.Manifest.Name, request.PakChunkIndex);
+        }
+
+        // No server pak this time, but an earlier one sits in the server's mods folder: it no longer matches the new client
+        // pak. That folder is the server's, so it is only named, never emptied.
+        var oldServerPak = string.IsNullOrWhiteSpace(serverMods) ? null : Path.Combine(serverMods, ProjectExporter.PakFileName(project.Manifest.Name, request.PakChunkIndex));
+        if (results.Count > 0 && !results.Any(r => r.Role == ProjectSourceRole.Server) && File.Exists(oldServerPak))
+        {
+            services.Notifications.Warning(Localization.Loc.T("Export.ParityTitle"), Localization.Loc.F("Export.StaleServerCopy", oldServerPak));
         }
 
         return (results, installed);

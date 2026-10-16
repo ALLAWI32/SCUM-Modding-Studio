@@ -394,6 +394,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IDisposable
             return;
         }
 
+        (CurrentPage as MapPageViewModel)?.CommitShape(); // Ctrl+Z takes back the Map's waiting scale or bend, not the edit before it
         try
         {
             Services.Projects.Undo();
@@ -407,6 +408,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IDisposable
     [RelayCommand]
     private void Redo()
     {
+        (CurrentPage as MapPageViewModel)?.CommitShape();
         try
         {
             Services.Projects.Redo();

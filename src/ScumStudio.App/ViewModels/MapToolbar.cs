@@ -50,11 +50,12 @@ public sealed partial class MapToolbar : ViewModelBase, IDisposable
     public static IReadOnlyList<(string Key, string TitleKey)> Layout { get; } =
     [
         ("Maximize", "Map.Maximize"), ("PopOut", "Map.PopOut"), ("Quality", "Map.Toolbar.Item.Quality"), ("Time", "Map.TimeOfDay"),
+        ("View", "Map.View"), ("Wireframe", "Map.Wireframe"),
         ("Spawns", "Map.Spawns"), ("Legend", "Map.Toolbar.Item.Legend"), ("Parts", "Map.Parts"), ("Brush", "Map.Brush"),
         ("Axes", "Map.Axes"), ("Ground", "Map.Ground"), ("Snap", "Map.Snap"), ("FrameAll", "Map.FrameAll"),
         ("FrameSelection", "Map.FrameSelection"), ("Shape", "Map.Shape"), ("Landscape", "Map.Landscape"), ("Replace", "Map.Replace"),
-        ("Extend", "Map.Extend"), ("LastObject", "Map.LastObject"), ("Prefabs", "Map.Prefabs"), ("Paste", "Map.Paste"),
-        ("AddObject", "Map.AddObject"), ("LoadMode", "Map.Toolbar.Item.LoadMode"), ("Project", "Map.Toolbar.Item.Project"),
+        ("Extend", "Map.Extend"), ("LastObject", "Map.LastObject"), ("GoTo", "Map.GoTo"), ("Prefabs", "Map.Prefabs"), ("Paste", "Map.Paste"),
+        ("AddObject", "Map.AddObject"), ("LoadMode", "Map.Toolbar.Item.LoadMode"), ("Isolate", "Map.Isolate"), ("Project", "Map.Toolbar.Item.Project"),
         ("Export", "Projects.Export"), ("LevelChip", "Map.Toolbar.Item.LevelChip"), ("WorldChip", "Map.Toolbar.Item.WorldChip"),
         ("Stats", "Map.Toolbar.Item.Stats"),
     ];
@@ -86,6 +87,12 @@ public sealed partial class MapToolbar : ViewModelBase, IDisposable
 
     /// <summary>The time-of-day slider.</summary>
     public MapToolbarItem Time => this["Time"];
+
+    /// <summary>The View menu (Top, Front, Right and their opposites; the numpad keys).</summary>
+    public MapToolbarItem View => this["View"];
+
+    /// <summary>The wireframe switch.</summary>
+    public MapToolbarItem Wireframe => this["Wireframe"];
 
     /// <summary>The spawn pins switch.</summary>
     public MapToolbarItem Spawns => this["Spawns"];
@@ -129,6 +136,9 @@ public sealed partial class MapToolbar : ViewModelBase, IDisposable
     /// <summary>Last object.</summary>
     public MapToolbarItem LastObject => this["LastObject"];
 
+    /// <summary>Go to coordinates.</summary>
+    public MapToolbarItem GoTo => this["GoTo"];
+
     /// <summary>The Prefabs menu.</summary>
     public MapToolbarItem Prefabs => this["Prefabs"];
 
@@ -140,6 +150,9 @@ public sealed partial class MapToolbar : ViewModelBase, IDisposable
 
     /// <summary>The load mode (whole island or one sector).</summary>
     public MapToolbarItem LoadMode => this["LoadMode"];
+
+    /// <summary>The Isolate switch (only the loaded levels, no island terrain, no streaming).</summary>
+    public MapToolbarItem Isolate => this["Isolate"];
 
     /// <summary>The project's name and its New / Open / Close buttons.</summary>
     public MapToolbarItem Project => this["Project"];

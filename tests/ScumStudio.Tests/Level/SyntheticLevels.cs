@@ -176,6 +176,82 @@ internal static class SyntheticLevels
     public static void WriteBlueprintOnlyLevel(string root, string levelName, string blueprintPackage, string actorName, FVector location, FRotator rotation) =>
         Write(root, MapsFolder + "/" + levelName, BuildBlueprintOnlyLevel(levelName, blueprintPackage, actorName, location, rotation), ".umap");
 
+    /// <summary>The loot preset of <see cref="BuildLockerLevel"/>'s locker.</summary>
+    public const string LockerPreset = "/Game/ConZ_Files/Items/SpawnerPresets2/Examine_Locker.Examine_Locker_C";
+
+    /// <summary>
+    /// A level with one searchable container: StaticMeshActor <c>Locker_1</c> whose mesh root stores an
+    /// <c>ExamineAssetData</c> entry naming <see cref="LockerPreset"/>, as the game's lockers and crates store their loot.
+    /// </summary>
+    public static PackageBytes BuildLockerLevel(string levelName)
+    {
+        var p = new SyntheticLevelPackage();
+        var world = p.Export(levelName, p.ScriptClass(Engine, "World"), 0);
+        var level = p.Export("PersistentLevel", p.ScriptClass(Engine, "Level"), world);
+        var rock = p.ObjectImport(RockPackage, Engine, "StaticMesh", "SM_Rock");
+        var preset = p.ObjectImport(LockerPreset[..LockerPreset.IndexOf('.')], Engine, "BlueprintGeneratedClass", LockerPreset[(LockerPreset.IndexOf('.') + 1)..]);
+        var locker = p.Export("Locker_1", p.ScriptClass(Engine, "StaticMeshActor"), level);
+        var mesh = p.Export("StaticMeshComponent0", p.ScriptClass(Engine, "StaticMeshComponent"), locker);
+        var examine = p.Export("ExamineAssetData_0", p.ScriptClass("/Script/ConZ", "ExamineAssetData"), mesh);
+        p.SetPayload(world, p.Properties(native: w =>
+        {
+            w.I32(level);
+            w.I32(0);
+            w.I32(0);
+        }));
+        p.SetPayload(level, p.Properties(native: w => LevelNative(w, [locker])));
+        p.SetPayload(locker, p.Properties(t => t.Object("RootComponent", mesh)));
+        p.SetPayload(mesh, p.Properties(t =>
+        {
+            t.Object("StaticMesh", rock);
+            t.ObjectArray("AssetUserData", examine);
+            t.Vector("RelativeLocation", 300, 0, 0);
+        }, w => w.I32(0)));
+        p.SetPayload(examine, p.Properties(t => t.TaggedStruct("SpawnerPreset", "ExamineSpawnerPreset", s => s.Object("Preset", preset))));
+        return p.Build();
+    }
+
+    /// <summary>
+    /// A level with <c>Building_1</c> storing a child actor, as the game's houses store their doors: its ChildActorComponent
+    /// <c>DoorSlot</c> names <c>Door_CAT</c> (an actor of the level), whose ParentComponent is that slot.
+    /// </summary>
+    public static PackageBytes BuildChildActorLevel(string levelName)
+    {
+        var p = new SyntheticLevelPackage();
+        var world = p.Export(levelName, p.ScriptClass(Engine, "World"), 0);
+        var level = p.Export("PersistentLevel", p.ScriptClass(Engine, "Level"), world);
+        var building = p.Export("Building_1", p.ScriptClass(Engine, "Actor"), level);
+        var root = p.Export("DefaultSceneRoot", p.ScriptClass(Engine, "SceneComponent"), building);
+        var slot = p.Export("DoorSlot", p.ScriptClass(Engine, "ChildActorComponent"), building);
+        var door = p.Export("Door_CAT", p.ScriptClass(Engine, "Actor"), level);
+        var doorRoot = p.Export("Root", p.ScriptClass(Engine, "SceneComponent"), door);
+        p.SetPayload(world, p.Properties(native: w =>
+        {
+            w.I32(level);
+            w.I32(0);
+            w.I32(0);
+        }));
+        p.SetPayload(level, p.Properties(native: w => LevelNative(w, [building, door])));
+        p.SetPayload(building, p.Properties(t => t.Object("RootComponent", root)));
+        p.SetPayload(root, p.Properties(t => t.Vector("RelativeLocation", 500, 0, 0)));
+        p.SetPayload(slot, p.Properties(t =>
+        {
+            t.Object("AttachParent", root);
+            t.Object("ChildActor", door);
+        }));
+        p.SetPayload(door, p.Properties(t =>
+        {
+            t.Object("RootComponent", doorRoot);
+            t.Object("ParentComponent", slot);
+        }));
+        p.SetPayload(doorRoot, p.Properties(t => t.Object("AttachParent", slot)));
+        return p.Build();
+    }
+
+    /// <summary>Writes <see cref="BuildLockerLevel"/> as <c>SCUM/Content/ConZ_Files/Maps/The_Island/&lt;levelName&gt;.umap</c>.</summary>
+    public static void WriteLockerLevel(string root, string levelName) =>
+        Write(root, MapsFolder + "/" + levelName, BuildLockerLevel(levelName), ".umap");
+
     /// <summary>The_Island: World with two StreamingLevels (one present, one missing).</summary>
     public static PackageBytes BuildPersistentLevel()
     {
@@ -212,7 +288,7 @@ internal static class SyntheticLevels
     }
 
     /// <summary>ULevel native data after the tagged properties (UE 4.27 <c>ULevel::Serialize</c>, cooked).</summary>
-    private static void LevelNative(ByteWriter w, IReadOnlyList<int> actors)
+    internal static void LevelNative(ByteWriter w, IReadOnlyList<int> actors)
     {
         w.I32(actors.Count);
         foreach (var a in actors)

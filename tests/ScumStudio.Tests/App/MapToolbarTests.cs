@@ -306,9 +306,10 @@ public sealed class MapToolbarTests
         ["Spawns"] = "SpawnsButton", ["Legend"] = "SpawnLegendButton", ["Parts"] = "PartsButton", ["Brush"] = "BrushButton",
         ["Axes"] = "AxesBox", ["Ground"] = "DropButton", ["Snap"] = "SnapButton", ["FrameAll"] = "FrameAllButton",
         ["FrameSelection"] = "FrameSelectionButton", ["Shape"] = "ShapeButton", ["Landscape"] = "LandscapeButton",
-        ["Replace"] = "ReplaceButton", ["Extend"] = "ExtendButton", ["LastObject"] = "LastObjectButton", ["Prefabs"] = "PrefabsButton",
+        ["Replace"] = "ReplaceButton", ["Extend"] = "ExtendButton", ["LastObject"] = "LastObjectButton", ["GoTo"] = "GoToButton", ["Prefabs"] = "PrefabsButton",
         ["Paste"] = "PasteButton", ["AddObject"] = "AddObjectButton", ["LoadMode"] = "LoadModeItem", ["Project"] = "ProjectControls",
         ["Export"] = "ExportModButton", ["LevelChip"] = "LevelChip", ["WorldChip"] = "WorldChip", ["Stats"] = "FrameStats",
+        ["View"] = "ViewPresetButton", ["Wireframe"] = "WireframeButton", ["Isolate"] = "IsolateButton",
     };
 
     /// <summary>The gear menu's switches (the menu opens if it is closed).</summary>

@@ -1,0 +1,62 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:ScumStudio.App.ViewModels"
+             x:Class="ScumStudio.App.Views.Pages.VehicleStudioParts"
+             x:DataType="vm:ModulePageViewModel">
+  <Border Classes="panel" Padding="10">
+    <StackPanel Spacing="8">
+      <TextBlock Text="{Tr Studio.Parts.Title}" Classes="h3" />
+      <TextBlock Text="{Tr Studio.Parts.Caption}" Classes="caption wrap" TextWrapping="Wrap" />
+      <TextBlock Text="{Binding StudioPartName}" Classes="h2" TextTrimming="CharacterEllipsis" />
+      <TextBlock Text="{Binding StudioPartNote}" Classes="muted wrap" TextWrapping="Wrap" IsVisible="{Binding StudioPartNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+
+      <Border Classes="segmented" HorizontalAlignment="Left">
+        <StackPanel Orientation="Horizontal">
+          <Button Classes="ghost" Content="{Tr Studio.Parts.Move}" Command="{Binding SetPartToolCommand}" CommandParameter="{x:Static vm:PartTool.Move}" ToolTip.Tip="{Tr Studio.Parts.Move.Tip}" />
+          <Button Classes="ghost" Content="{Tr Studio.Parts.Rotate}" Command="{Binding SetPartToolCommand}" CommandParameter="{x:Static vm:PartTool.Rotate}" ToolTip.Tip="{Tr Studio.Parts.Rotate.Tip}" />
+          <Button Classes="ghost" Content="{Tr Studio.Parts.Scale}" Command="{Binding SetPartToolCommand}" CommandParameter="{x:Static vm:PartTool.Scale}" ToolTip.Tip="{Tr Studio.Parts.Scale.Tip}" />
+        </StackPanel>
+      </Border>
+
+      <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="8" RowSpacing="6" IsEnabled="{Binding CanEditPart}">
+        <TextBlock Grid.Row="0" Text="{Tr Studio.Parts.Position}" Classes="caption" VerticalAlignment="Center" />
+        <TextBox Grid.Row="0" Grid.Column="1" Classes="mono" Text="{Binding PartLocation}" ToolTip.Tip="{Tr Studio.Parts.Position.Tip}">
+          <TextBox.KeyBindings>
+            <KeyBinding Gesture="Enter" Command="{Binding ApplyPartPlaceCommand}" />
+          </TextBox.KeyBindings>
+        </TextBox>
+        <TextBlock Grid.Row="1" Text="{Tr Studio.Parts.Angles}" Classes="caption" VerticalAlignment="Center" />
+        <TextBox Grid.Row="1" Grid.Column="1" Classes="mono" Text="{Binding PartRotation}" ToolTip.Tip="{Tr Studio.Parts.Angles.Tip}">
+          <TextBox.KeyBindings>
+            <KeyBinding Gesture="Enter" Command="{Binding ApplyPartPlaceCommand}" />
+          </TextBox.KeyBindings>
+        </TextBox>
+        <TextBlock Grid.Row="2" Text="{Tr Studio.Parts.Size}" Classes="caption" VerticalAlignment="Center" />
+        <TextBox Grid.Row="2" Grid.Column="1" Classes="mono" Text="{Binding PartScale}" ToolTip.Tip="{Tr Studio.Parts.Size.Tip}">
+          <TextBox.KeyBindings>
+            <KeyBinding Gesture="Enter" Command="{Binding ApplyPartPlaceCommand}" />
+          </TextBox.KeyBindings>
+        </TextBox>
+      </Grid>
+
+      <WrapPanel Orientation="Horizontal">
+        <Button Classes="ghost" Margin="0,0,6,6" Content="{Tr Studio.Parts.Hide}" Command="{Binding HidePartCommand}" ToolTip.Tip="{Tr Studio.Parts.Hide.Tip}" />
+        <Button Classes="ghost" Margin="0,0,6,6" Content="{Tr Studio.Parts.Remove}" Command="{Binding RemovePartCommand}" ToolTip.Tip="{Tr Studio.Parts.Remove.Tip}" />
+        <Button Classes="ghost" Margin="0,0,6,6" Content="{Tr Studio.Parts.Reset}" Command="{Binding ResetPartCommand}" ToolTip.Tip="{Tr Studio.Parts.Reset.Tip}" />
+      </WrapPanel>
+
+      <TextBox Classes="search" Text="{Binding PartMeshSearch}" Watermark="{Tr Studio.Parts.MeshSearch}" ToolTip.Tip="{Tr Studio.Parts.MeshSearch.Tip}" />
+      <ListBox Classes="plain" MaxHeight="180" ItemsSource="{Binding PartMeshChoices}" SelectedItem="{Binding SelectedPartMesh}" ToolTip.Tip="{Tr Studio.Parts.MeshSearch.Tip}">
+        <ListBox.ItemTemplate>
+          <DataTemplate x:DataType="x:String">
+            <TextBlock Text="{Binding}" Classes="mono caption" TextTrimming="PrefixCharacterEllipsis" />
+          </DataTemplate>
+        </ListBox.ItemTemplate>
+      </ListBox>
+      <WrapPanel Orientation="Horizontal">
+        <Button Classes="ghost" Margin="0,0,6,6" Content="{Tr Studio.Parts.SwapMesh}" Command="{Binding SwapPartToSelectedMeshCommand}" ToolTip.Tip="{Tr Studio.Parts.SwapMesh.Tip}" />
+        <ToggleButton Classes="ghost" Margin="0,0,6,6" Content="{Tr Studio.Parts.Add}" IsChecked="{Binding IsAddingPart}" ToolTip.Tip="{Tr Studio.Parts.Add.Tip}" />
+      </WrapPanel>
+    </StackPanel>
+  </Border>
+</UserControl>

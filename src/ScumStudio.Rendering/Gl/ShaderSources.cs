@@ -35,16 +35,62 @@ internal static class ShaderSources
         flat out uint vFlags;
         flat out vec2 vSurface;
         flat out float vSide;
+        flat out float vCard;
+
+        // The eye in homogeneous world coordinates: the point uViewProj maps to x = y = w = 0 (the 4D cross product of its
+        // rows x, y and w). The shadow and ID passes set no camera position; for the sun's orthographic view w is 0 and xyz
+        // the direction toward it.
+        vec4 eyeOf(mat4 viewProj)
+        {
+            mat4 t = transpose(viewProj);
+            vec4 a = t[0];
+            vec4 b = t[1];
+            vec4 c = t[3];
+            return vec4(dot(a.yzw, cross(b.yzw, c.yzw)), -dot(a.xzw, cross(b.xzw, c.xzw)), dot(a.xyw, cross(b.xyw, c.xyw)), -dot(a.xyz, cross(b.xyz, c.xyz)));
+        }
 
         void main()
         {
             vec4 world = iModel * vec4(aPosition, 1.0);
             mat3 m = mat3(iModel);
-            float det = determinant(m);
-            mat3 normalMatrix = abs(det) > 1e-12 ? transpose(inverse(m)) : m;
-            vNormal = normalMatrix * aNormal;
+            // The normal matrix is the cofactor matrix (inverse-transpose times the determinant); its sign keeps a mirrored
+            // instance's normals pointing out. Three cross products per vertex instead of an inverse.
+            vec3 c12 = cross(m[1], m[2]);
+            float det = dot(m[0], c12);
+            vNormal = mat3(c12, cross(m[2], m[0]), cross(m[0], m[1])) * aNormal * (det < 0.0 ? -1.0 : 1.0);
             vSide = sign(det); // a mirrored instance turns its triangles' winding around
-            if (uBillboard != 0)
+            vCard = 0.0;
+            vUv = aUv;
+            if (aNormal.z > 1.5 && uBillboard == 0)
+            {
+                // An impostor card (GpuMesh.SetImpostor): aPosition is the bounds centre, aNormal.xy the corner times the half
+                // size, aNormal.z the number of headings the atlas was baked from. It stands on the instance's up axis turned
+                // toward the eye and shows the heading nearest the eye's; seen from high above it leans back so it never
+                // goes edge-on. Its normal leans out toward the edges like a round crown's (lit as two-sided leaves, see vCard).
+                vec3 centre = world.xyz;
+                vec3 up = iModel[1].xyz;
+                float height = length(up);
+                up /= max(height, 1e-20);
+                vec4 eye = eyeOf(uViewProj);
+                vec3 toEye = abs(eye.w) > 1e-30 ? eye.xyz / eye.w - centre : eye.xyz;
+                vec3 level = toEye - up * dot(toEye, up);
+                vec3 h = dot(level, level) > 1e-12 * dot(toEye, toEye) ? normalize(level) : normalize(iModel[0].xyz);
+                vec3 x = normalize(iModel[0].xyz);
+                vec3 z = normalize(iModel[2].xyz);
+                float views = floor(aNormal.z + 0.5);
+                float cell = mod(floor(atan(dot(h, z), dot(h, x)) / (6.2831853 / views) + 0.5), views);
+                float u = det < 0.0 ? 1.0 - aUv.x : aUv.x; // a mirrored instance shows the picture mirrored
+                vUv = vec2((cell + u) / views, aUv.y);
+                float tilt = max(asin(clamp(dot(normalize(toEye), up), -1.0, 1.0)) - 0.87, 0.0);
+                vec3 right = cross(up, h);
+                vec3 cardUp = up * cos(tilt) - h * sin(tilt);
+                float width = 0.5 * (length(iModel[0].xyz) + length(iModel[2].xyz));
+                world = vec4(centre + right * (aNormal.x * width) + cardUp * (aNormal.y * height), 1.0);
+                vNormal = cross(right, cardUp) + (right * sign(aNormal.x) + cardUp * sign(aNormal.y)) * 2.0;
+                vSide = 0.0;
+                vCard = 1.0;
+            }
+            else if (uBillboard != 0)
             {
                 // A camera-facing card (an item's inventory icon): the mesh's x/y span the camera's right and up at the
                 // instance's origin, scaled like the instance; it faces the camera, so it is lit as if seen head-on.
@@ -54,7 +100,6 @@ internal static class ShaderSources
                 vSide = 0.0;
             }
 
-            vUv = aUv;
             vWorld = world.xyz;
             vView = world.xyz - uCameraPosition; // small numbers: smooth screen derivatives for normal mapping near the camera
             vTint = iTint;
@@ -81,6 +126,7 @@ internal static class ShaderSources
         flat in uint vFlags;
         flat in vec2 vSurface;
         flat in float vSide;
+        flat in float vCard;
 
         uniform sampler2D uTexture;
         uniform sampler2D uNormalMap;
@@ -314,6 +360,14 @@ internal static class ShaderSources
 
             vec3 hemi = mix(uGroundColor, uSkyColor, n.y * 0.5 + 0.5);
             float key = max(dot(n, -uLightDirection), 0.0);
+            if (vCard != 0.0)
+            {
+                // An impostor card stands for leaves that face every way and are seen from either side: lit as the mean of
+                // both sides of its rounded normal, as the leaves of the mesh average out (no sunny half that the mesh lacks).
+                hemi = (uGroundColor + uSkyColor) * 0.5;
+                key = abs(dot(n, -uLightDirection)) * 0.5;
+            }
+
             key *= key > 0.0 ? sunShadow(geometric) : 1.0;
             vec3 lit = albedo.rgb * (hemi + uLightColor * key);
             if (uRoughness.y > 0.0 && uHasTexture != 0)

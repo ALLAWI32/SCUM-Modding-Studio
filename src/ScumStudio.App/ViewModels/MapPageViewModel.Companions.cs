@@ -141,6 +141,7 @@ public sealed partial class MapPageViewModel
             OnDeleteAll = chosen => Commit(request, chosen),
             OnOnlyThis = () => Commit(request, []),
             OnWholeObject = request.Whole is { } whole ? () => _ = DeleteWithCompanionsAsync(whole, alone: false) : null,
+            OnCleanSaved = OpenSavedItems,
             OnCancel = CloseCompanions,
         };
     }
@@ -395,6 +396,8 @@ public sealed partial class CompanionsPreviewViewModel : ObservableObject
 
     internal Action? OnCancel { get; init; }
 
+    internal Action? OnCleanSaved { get; init; }
+
     /// <summary>Deletes the object and every ticked row (Enter).</summary>
     [RelayCommand]
     private void DeleteAll() => OnDeleteAll?.Invoke(Checked);
@@ -406,6 +409,10 @@ public sealed partial class CompanionsPreviewViewModel : ObservableObject
     /// <summary>Deletes the whole object the part belongs to (its class's effects go with it).</summary>
     [RelayCommand]
     private void WholeObject() => OnWholeObject?.Invoke();
+
+    /// <summary>Opens Clean saved items: what an item spawner already spawned is in the save, not in the mod (D02).</summary>
+    [RelayCommand]
+    private void CleanSaved() => OnCleanSaved?.Invoke();
 
     /// <summary>Deletes nothing (Esc).</summary>
     [RelayCommand]

@@ -552,6 +552,8 @@ public sealed partial class ProjectsPageViewModel : PageViewModel, IDisposable
         }
 
         rows.Add(new PropertyRow(Loc.T("Projects.Row.Report"), results[0].ReportPath ?? string.Empty));
+        rows.Add(new PropertyRow(Loc.T("Projects.Row.Install"), ModExportService.InstallNote(results)));
+        warnings.AddRange(ModExportService.ParityProblems(results));
         ExportRows = rows;
         ExportWarnings = warnings;
         _services.UpdateSettings(s => s with { ClientModsOutputFolder = folder });
@@ -562,7 +564,7 @@ public sealed partial class ProjectsPageViewModel : PageViewModel, IDisposable
         }
         else
         {
-            _services.Notifications.Success(Loc.T("Projects.Exported"), results[0].PakPath ?? folder);
+            _services.Notifications.Success(Loc.T("Projects.Exported"), $"{results[0].PakPath ?? folder} · {ModExportService.InstallNote(results)}");
         }
     }
 

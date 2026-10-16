@@ -77,6 +77,13 @@ public sealed record Tunable(string Export, string Path, TunableKind Kind, strin
     /// <summary>Why <see cref="CanEdit"/> is false.</summary>
     public string? ReadOnlyReason { get; init; }
 
+    /// <summary>
+    /// For a value the package does not store but takes from a parent class (<see cref="InheritedValues"/>): that class
+    /// (<c>/Script/SCUM.ItemEntitySetup</c>, <c>/Game/…/2H_Katana.2H_Katana_C</c>), else null. Its <see cref="Value"/> is the
+    /// parent's, or empty when the parent is game code (the value is in no file).
+    /// </summary>
+    public string? InheritedFrom { get; init; }
+
     /// <summary>Stable key within a package: <c>Export|Path</c>.</summary>
     public string Key => Export + "|" + Path;
 }

@@ -266,10 +266,14 @@ public sealed partial class MapPageViewModel
         return _outpostDocuments;
     }
 
-    /// <summary>True when a game trader or a trader of the project already has <paramref name="name"/> (it is an economy section).</summary>
-    private static bool TraderNameTaken(IReadOnlyList<TraderInfo> gameTraders, EditState state, string name) =>
+    /// <summary>
+    /// True when a game trader or a trader of the project already has <paramref name="name"/> (it is an economy section),
+    /// a placed one off the map included (audit F277: its section waits for an undo or a redo).
+    /// </summary>
+    private bool TraderNameTaken(IReadOnlyList<TraderInfo> gameTraders, EditState state, string name) =>
         TraderPosts.Placed(state).Any(p => string.Equals(p.Op.Trader!.Name, name, StringComparison.OrdinalIgnoreCase))
-        || gameTraders.Any(t => string.Equals(t.Name, name, StringComparison.OrdinalIgnoreCase));
+        || gameTraders.Any(t => string.Equals(t.Name, name, StringComparison.OrdinalIgnoreCase))
+        || _services.Economy.IsNameReserved(name);
 
     /// <summary>
     /// The default name of a new trader (owner: "numbered per sector and type", see <see cref="TraderPosts.DefaultName"/>):
@@ -303,6 +307,12 @@ public sealed partial class MapPageViewModel
         foreach (var (_, op) in TraderPosts.Placed(state))
         {
             yield return (op.Trader!.Name, op.Trader.Type);
+        }
+
+        // Names taken without a trader on the map: parked placed traders and the file's other sections.
+        foreach (var name in _services.Economy.Parked.Concat(_services.Economy.Economy.Traders))
+        {
+            yield return (name, string.Empty);
         }
 
         if (reserved is not null && _stepTraders.TryGetValue(reserved, out var step))

@@ -127,6 +127,13 @@ public sealed record RenderSettings
     /// <summary>Light and shade surfaces (sun, sky light, shadows, reflections); off draws each in its own colour, without the shadow pass.</summary>
     public bool Lighting { get; init; } = true;
 
+    /// <summary>
+    /// Draw the scene's surfaces as their triangles' edges (seviscache: "a wireframe view"): the opaque and translucent
+    /// passes only; the sky, the grid, the overlays and the pick pass stay filled, and there is no shadow pass. Ignored on
+    /// OpenGL ES (<see cref="Context.GlInfo.IsEs"/>), which has no polygon mode.
+    /// </summary>
+    public bool Wireframe { get; init; }
+
     /// <summary>Move the sea's waves with <see cref="SceneRenderer.Time"/>; off keeps the water still.</summary>
     public bool AnimateWater { get; init; } = true;
 

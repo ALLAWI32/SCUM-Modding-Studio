@@ -48,7 +48,7 @@ public sealed partial class AssetsPageViewModel : PageViewModel, ISearchablePage
     /// <summary>True when the selected asset can become a craftable (a static mesh or a Blueprint that does not move on its own, or an item of the game).</summary>
     public bool CanMakeCraftable => _makeCraftable is not null && SelectedItem?.Entry is { } e
         && (Modding.Crafting.RecipeRules.IsAllowedSource(e.PackagePath, e.ClassName)
-            || (_services.Workspace.Catalog is { } catalog && Modding.Crafting.CraftablesPlanner.IsItem(catalog, e.PackagePath)));
+            || (_services.Workspace.Catalog is { } catalog && Modding.Crafting.CraftablesPlanner.IsItem(catalog, e.PackagePath, wait: false)));
 
     /// <summary>True when the selected asset is a static mesh or a Blueprint and a Map page can place it.</summary>
     public bool CanPlaceInMap => _placeMesh is not null && AssetDetailsViewModel.IsPlaceable(SelectedItem?.Entry.ClassName);

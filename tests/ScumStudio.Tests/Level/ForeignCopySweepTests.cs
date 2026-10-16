@@ -48,6 +48,11 @@ public sealed class ForeignCopySweepTests
             // Top-level actors only (child actors travel with their parents); a handful per level keeps the run short.
             foreach (var actor in document.Actors.Where(a => a.ParentComponent is null).Take(6))
             {
+                if (LevelPackageEditor.CheckCopy(package, actor.Name, otherLevel: true) is not null)
+                {
+                    continue; // refused by the copy guard (a volume's brush shape, a foliage actor): not the copier's to write
+                }
+
                 var name = $"{source.Name}__{actor.Name}";
                 copies.Add(new ForeignActorCopy(package, actor.Name, name, new TransformValue(actor.Root?.Relative.Location ?? default, default, new ScumStudio.Core.Mathematics.FVector(1, 1, 1)), actor.Root is { IsSynthesized: false } r ? r.Name : null));
                 expected.Add((name, actor.ClassName, actor.Components.Count(c => !c.IsSynthesized)));

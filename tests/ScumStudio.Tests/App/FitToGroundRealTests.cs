@@ -265,6 +265,11 @@ public sealed class FitToGroundRealTests
         project.Apply(new BendActorOp(piece.Reference, 0f, 60f));
         ctx.Services.Projects.Refresh();
         await WaitForMesh(Fill);
+        for (var i = 0; i < 300 && !map.Bends.ContainsKey(Now(piece).SelectableId); i++)
+        {
+            await Task.Delay(100); // the loaded mesh lands in ExtraMeshes before RefreshBends shapes it (another thread)
+        }
+
         Assert.True(map.Bends.TryGetValue(Now(piece).SelectableId, out var pieces));
         var fill = MeshOf(Fill);
         var at = Now(piece).Actor.WorldTransform;
@@ -322,6 +327,102 @@ public sealed class FitToGroundRealTests
                 await Task.Delay(100);
             }
         }
+    }
+
+    /// <summary>
+    /// seviscache: "spawners below the terrain" (#14, audit F273). A world vehicle spawn place of the island's static data is
+    /// only a pin (a root "Place", no mesh): sunk 2 m, Fit to ground puts its root back on the ground instead of saying there
+    /// is no ground.
+    /// </summary>
+    [Fact]
+    public async Task SpawnPlaceIsGroundedAsAPoint()
+    {
+        if (Environment.GetEnvironmentVariable("SCUM_PAKS") is not { Length: > 0 } paks || !Directory.Exists(paks))
+        {
+            return; // not asked for
+        }
+
+        using var ctx = AppTestContext.Create();
+        ctx.Services.Keys.Set(AesKeyText.FromEnvironmentOrStore()!);
+        ctx.Services.UpdateSettings(s => s with { GamePaksFolder = paks });
+        await ctx.Services.Workspace.ConnectAsync(ProgressSink.Null);
+        using var map = new MapPageViewModel(ctx.Services);
+        await map.LoadCompletion;
+        await ctx.Services.Projects.CreateAsync(ctx.Combine("projects"), "Places");
+        await map.LoadLevelsAsync([Farm]);
+        var world = WorldIndex.FromCatalog(ctx.Services.Workspace.Catalog!).WithTileInfo(ctx.Services.Workspace.Catalog!, null);
+        var centre = map.AllActors.First(a => a.Actor.Kind == ActorKind.StaticMeshActor).Actor.WorldTransform.Translation;
+        var tiles = MapPageViewModel.LevelsAround(world, centre, 3000f).Where(p => p.Contains("/Landscape_", StringComparison.OrdinalIgnoreCase)).ToList();
+        await map.LoadLevelsAsync([Farm, .. tiles]);
+        var scene = map.PreparedScene!;
+        var place = map.AllActors.First(a => a.Level.PackagePath == ScumStudio.Level.Spawns.SpawnPlaces.StaticDataPath
+                                             && ScumStudio.Level.Spawns.SpawnPlaces.KindOfClass(a.Actor.ClassName) == ScumStudio.Level.Spawns.SpawnPlaceKind.Vehicle
+                                             && scene.HeightField!.SampleHeight(a.Actor.WorldTransform.Translation.X, a.Actor.WorldTransform.Translation.Y) is not null);
+        var at = place.Actor.WorldTransform.Translation;
+        var terrain = scene.HeightField!.SampleHeight(at.X, at.Y)!.Value;
+        var root = place.Actor.Root!.Relative;
+        ctx.Services.Projects.Apply(EditOpFactory.SetTransform(place.Level, place.Actor, root with { Location = root.Location with { Z = terrain - 200f } }, ctx.Services.Projects.Current!.State));
+        map.RefreshEdits();
+        map.SelectedActor = map.AllActors.First(a => a.Name == place.Name && a.Level.PackagePath == place.Level.PackagePath);
+        Assert.True(map.FitToGroundCommand.CanExecute(null));
+        var toasts = ctx.Services.Notifications.Toasts.Count;
+        map.FitToGroundCommand.Execute(null);
+
+        var placed = ctx.Services.Projects.Current!.State.GetTransformOverride(new ActorRef(place.Level.PackagePath, place.Name))!.Value;
+        _output.WriteLine($"{place.Name}: terrain {terrain:0.0} cm, set to {placed.Location.Z:0.0} cm");
+        Assert.Equal(2, ctx.Services.Projects.History.Count);
+        Assert.True(placed.Location.Z >= terrain - 5f, $"{placed.Location.Z} under {terrain}");
+        Assert.True(placed.Location.Z - terrain < 1500f, "on the ground or what stands on it, not in the sky");
+        Assert.Equal((root.Location.X, root.Location.Y), (placed.Location.X, placed.Location.Y));
+        Assert.DoesNotContain(ctx.Services.Notifications.Toasts.Skip(toasts), t => t.Message == ScumStudio.App.Localization.Loc.T("Map.Ground.NoGround"));
+    }
+
+    /// <summary>
+    /// Audit F272: with one patrol point of a sentry selected, Fit to ground sets that point down and leaves the spawner (and
+    /// its other point) where they are; a loot point of a building cannot be fitted (it moves with its building).
+    /// </summary>
+    [Fact]
+    public async Task SelectedSpawnPointIsGroundedAloneNotItsSpawner()
+    {
+        if (Environment.GetEnvironmentVariable("SCUM_PAKS") is not { Length: > 0 } paks || !Directory.Exists(paks))
+        {
+            return; // not asked for
+        }
+
+        const string Barracks = "/Game/ConZ_Files/Maps/The_Island/D_0_Military_Barracks";
+        using var ctx = AppTestContext.Create();
+        ctx.Services.Keys.Set(AesKeyText.FromEnvironmentOrStore()!);
+        ctx.Services.UpdateSettings(s => s with { GamePaksFolder = paks });
+        await ctx.Services.Workspace.ConnectAsync(ProgressSink.Null);
+        using var map = new MapPageViewModel(ctx.Services);
+        await map.LoadCompletion;
+        await ctx.Services.Projects.CreateAsync(ctx.Combine("projects"), "Points");
+        await map.LoadLevelsAsync([Barracks]);
+        var world = WorldIndex.FromCatalog(ctx.Services.Workspace.Catalog!).WithTileInfo(ctx.Services.Workspace.Catalog!, null);
+        var sentry = map.AllActors.Single(a => a.Name == "SentrySpawner_0");
+        var tiles = MapPageViewModel.LevelsAround(world, sentry.Actor.WorldTransform.Translation, 3000f).Where(p => p.Contains("/Landscape_", StringComparison.OrdinalIgnoreCase)).ToList();
+        await map.LoadLevelsAsync([Barracks, .. tiles]);
+        map.ShowSpawns = true;
+        sentry = map.AllActors.Single(a => a.Name == "SentrySpawner_0");
+        var stored = sentry.Actor.PatrolPoints;
+        var pin = map.PreparedScene!.Placements.Single(p => p.SelectableId == sentry.SelectableId && p.SpawnPoint?.Index == 1);
+
+        // The second point 3 m up in the air, then selected alone and fitted.
+        map.SelectedInstanceKey = pin.PickKey(map.PickParts);
+        map.SelectedActorId = sentry.SelectableId;
+        var lifted = map.SelectedRootWorld!.Value;
+        map.ApplyDraggedTransform(sentry.SelectableId, lifted with { Translation = lifted.Translation + new FVector(0f, 0f, 300f) });
+        var rootBefore = map.ActorTransforms.GetValueOrDefault(sentry.SelectableId, sentry.Actor.WorldTransform);
+        Assert.True(map.FitToGroundCommand.CanExecute(null));
+        map.FitToGroundCommand.Execute(null);
+
+        var points = ctx.Services.Projects.Current!.State.GetSpawnPoints(sentry.Reference, null, ScumStudio.Level.Spawns.SpawnPointArrays.PatrolPoints)!;
+        var foot = sentry.Actor.WorldTransform.TransformPosition(points[1].Local.Location);
+        var ground = map.PreparedScene!.HeightField!.SampleHeight(foot.X, foot.Y)!.Value;
+        _output.WriteLine($"patrol point 2: {foot.Z:0.0} cm, terrain {ground:0.0} cm");
+        Assert.True(foot.Z >= ground - 5f && foot.Z < lifted.Translation.Z + 250f, $"{foot.Z} vs ground {ground}, lifted {lifted.Translation.Z + 300f}");
+        Assert.True(FVector.Distance(points[0].Local.Location, stored[0]) < 0.01f, "the other point stays");
+        Assert.True(map.ActorTransforms.GetValueOrDefault(sentry.SelectableId, sentry.Actor.WorldTransform).Translation.Equals(rootBefore.Translation, 0.01f), "the spawner stays");
     }
 
     private static bool Near(ScumStudio.Core.Geometry.BoundingBox b, FVector p, float margin) =>

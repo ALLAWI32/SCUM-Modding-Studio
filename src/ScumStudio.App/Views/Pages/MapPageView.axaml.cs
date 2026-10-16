@@ -148,6 +148,21 @@ public partial class MapPageView : UserControl
                 vm.CommitShape();
             }
         };
+        // Esc during a drag (seviscache): a handle's previewed shape goes; a short note says the move was cancelled.
+        Viewport3d.ShapeDragCancelled += (_, _) => _viewModel?.CancelShape();
+        Viewport3d.DragCancelled += (_, _) => _viewModel?.ReportDragCancelled();
+        // The World tree selects several levels with Ctrl or Shift; they load together (seviscache). Its own Ctrl+A would
+        // select (and load) every level: the page's Ctrl+A (all of this kind) runs instead, as before.
+        WorldTree.AddHandler(PointerPressedEvent, (_, e) => OnWorldTreeInput(e.KeyModifiers), RoutingStrategies.Tunnel, handledEventsToo: true);
+        WorldTree.AddHandler(KeyDownEvent, (_, e) =>
+        {
+            OnWorldTreeInput(e.KeyModifiers);
+            if (e.Key == Key.A && e.KeyModifiers.HasFlag(KeyModifiers.Control))
+            {
+                HandleShortcut(e);
+            }
+        }, RoutingStrategies.Tunnel, handledEventsToo: true);
+        WorldTree.SelectionChanged += (_, _) => _viewModel?.SelectNodes(WorldTree.SelectedItems.OfType<WorldTreeNode>().ToList());
         Viewport3d.ActorPicked += (_, id) =>
         {
             _viewBeforeJump = null; // a click of its own: "Last object" starts over
@@ -306,7 +321,11 @@ public partial class MapPageView : UserControl
 
     private void OnExtendClick(object? sender, RoutedEventArgs e) => _viewModel?.Extend();
 
-    private void OnAddObjectOpened(object? sender, EventArgs e) => _viewModel?.PrepareTraders();
+    private void OnAddObjectOpened(object? sender, EventArgs e)
+    {
+        _viewModel?.PrepareTraders();
+        _viewModel?.RefreshMyModels();
+    }
 
     /// <summary>First press: to the object picked before, camera on it. Second press: back to the object and view before.</summary>
     private void JumpToLastObject()
@@ -332,6 +351,38 @@ public partial class MapPageView : UserControl
     }
 
     private void OnFrameAllClick(object? sender, RoutedEventArgs e) => Viewport3d.FrameAll();
+
+    /// <summary>The View menu: a view along an axis, the other side, or the selection framed (the numpad keys do the same).</summary>
+    private void OnViewPresetClick(object? sender, RoutedEventArgs e)
+    {
+        switch ((sender as MenuItem)?.Tag as string)
+        {
+            case "Opposite":
+                Viewport3d.ViewFromOtherSide();
+                break;
+            case "Frame":
+                if (!Viewport3d.FrameSelection())
+                {
+                    Viewport3d.FrameAll();
+                }
+
+                break;
+            case { } name when Enum.TryParse<ScumStudio.Viewport.ViewPreset>(name, out var preset):
+                Viewport3d.SetViewPreset(preset);
+                break;
+        }
+
+        Viewport3d.Focus();
+    }
+
+    /// <summary>Ctrl or Shift on a click or key in the World tree extends its selection: the chosen levels load together.</summary>
+    private void OnWorldTreeInput(KeyModifiers modifiers)
+    {
+        if (_viewModel is { } vm)
+        {
+            vm.ExtendingSelection = (modifiers & (KeyModifiers.Control | KeyModifiers.Shift | KeyModifiers.Meta)) != 0;
+        }
+    }
 
     /// <summary>A separator shows only between two groups that both show something (items switched off, or waiting for a selection).</summary>
     private void UpdateSeparators()
@@ -489,6 +540,12 @@ public partial class MapPageView : UserControl
             return;
         }
 
+        if (Viewport3d.HandleViewKey(e))
+        {
+            e.Handled = true; // Esc cancelling a drag, the numpad's views (before End, PageDown and Delete: Num Lock off), wireframe
+            return;
+        }
+
         var shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
         if (_viewModel.Companions is { } preview && e.Key is Key.Enter or Key.Escape)
         {
@@ -544,6 +601,11 @@ public partial class MapPageView : UserControl
         else if (e.Key == Key.Back && e.KeyModifiers == KeyModifiers.None)
         {
             JumpToLastObject();
+            e.Handled = true;
+        }
+        else if (e.Key == Key.N && e.KeyModifiers == (KeyModifiers.Control | KeyModifiers.Shift))
+        {
+            _viewModel.CycleNearClip(); // F15: how close the camera still draws (Settings › Near clip)
             e.Handled = true;
         }
         else if (e.Key == Key.V && e.KeyModifiers.HasFlag(KeyModifiers.Control))

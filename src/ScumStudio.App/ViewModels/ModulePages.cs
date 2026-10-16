@@ -53,7 +53,7 @@ public sealed class WeaponsPageViewModel : ModulePageViewModel
         "GridInventoryColumnSpan", "_rarity", "_noiseLevel", "_damageOverTime", "Multiplier", "AddImpulseOnHit",
         "PitchMin", "PitchMax", "YawMin", "YawMax", "IsCarriedWithTwoHands", "_spawnRotationRandomization",
         "Urban", "Rural", "Industrial", "Police", "MilitaryMedium", "MilitaryAdvanced", "Sport", "Market", "GasStation",
-        "Damage", "Energy", "SharpnessSlash", "SharpnessPierce", "CombatAnimationPlayRateModifier", "DamageOnUse",
+        "Damage", "Energy", "SharpnessSlash", "SharpnessPierce", "CombatAnimationPlayRateModifier", "DamageOnUse", "MaxHealth",
         "BasePurchasePrice", "BaseSalePrice", "RequiredFamePoints", "CanBePurchasedByPlayer", "CanBeSoldByPlayer", "MaxAmountPurchasedAtOnce",
     };
 

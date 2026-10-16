@@ -133,6 +133,9 @@ public sealed record LevelEditRequest
     /// <summary>Loot of mesh components (pristine or created by this request) to write.</summary>
     public IReadOnlyList<LootPatch> Loot { get; init; } = [];
 
+    /// <summary>Soft class properties of actors (pristine or created by this request) to point elsewhere: a sentry spawner's <c>SentryClass</c>.</summary>
+    public IReadOnlyList<SoftClassPatch> SoftClasses { get; init; } = [];
+
     /// <summary>
     /// Trade posts created by this request (<see cref="ForeignCopies"/>) to list in the <c>_assignedTradePosts</c> of the
     /// level's own outpost manager of that outpost, as (post actor name, outpost name). A post whose outpost has no manager in
@@ -140,9 +143,22 @@ public sealed record LevelEditRequest
     /// </summary>
     public IReadOnlyList<(string Post, string Outpost)> TradeJoins { get; init; } = [];
 
+    /// <summary>
+    /// The pristine package of a path (a Blueprint whose template holds the loot points a <see cref="SpawnPoints"/> patch
+    /// moves), or null when unavailable; without it such a patch is refused.
+    /// </summary>
+    public Func<string, CookedPackage?>? Packages { get; init; }
+
+    /// <summary>
+    /// The class of an asset's main object (a material of <see cref="StaticMeshActorAdd.OverrideMaterials"/> the level does
+    /// not import yet), or null when unknown; without it such a slot keeps the mesh's own material.
+    /// </summary>
+    public Func<string, string?>? AssetClass { get; init; }
+
     /// <summary>True when the request changes nothing.</summary>
     public bool IsEmpty => DeleteActors.Count == 0 && DeleteComponents.Count == 0 && Detach.Count == 0 && Transforms.Count == 0 && Instances.Count == 0 && InstanceAdds.Count == 0 && Copies.Count == 0
-        && StaticMeshAdds.Count == 0 && ForeignCopies.Count == 0 && SplinePatches.Count == 0 && SpawnPoints.Count == 0 && Meshes.Count == 0 && Loot.Count == 0;
+        && StaticMeshAdds.Count == 0 && ForeignCopies.Count == 0 && SplinePatches.Count == 0 && SpawnPoints.Count == 0 && Meshes.Count == 0 && Loot.Count == 0
+        && SoftClasses.Count == 0;
 }
 
 /// <summary>What <see cref="LevelPackageEditor.Apply"/> did to a level package.</summary>
@@ -247,7 +263,7 @@ public static partial class LevelPackageEditor
         // dependency groups are then re-emitted once with every new actor, and the actors are added to ULevel::Actors.
         var imports = package.Imports.ToList();
         var (addedIndices, addedActors) = CopyActors(package, levelIndex, request.Copies, exports, data, imports, names, wide, addedNames, preload, warnings);
-        addedIndices.AddRange(AddStaticMeshActors(package, levelIndex, request.StaticMeshAdds, exports, data, imports, names, wide, addedNames, preload, addedActors, warnings));
+        addedIndices.AddRange(AddStaticMeshActors(package, levelIndex, request.StaticMeshAdds, exports, data, imports, names, wide, addedNames, preload, addedActors, request.AssetClass, warnings));
         addedIndices.AddRange(ImportActors(package, levelIndex, request.ForeignCopies, exports, data, imports, names, wide, addedNames, preload, addedActors, warnings));
         addedIndices.AddRange(JoinSentrySpawners(package, levelIndex, request, exports, data, imports, names, wide, addedNames, preload, addedActors, warnings));
         RegisterActorsWithLevel(package, levelIndex, exports, preload, addedIndices);
@@ -261,7 +277,7 @@ public static partial class LevelPackageEditor
         var patched = new List<string>();
         foreach (var patch in request.Transforms)
         {
-            if (TryPatchTransform(package, levelIndex, patch, data, names, wide, addedNames, warnings) is { } label)
+            if (TryPatchTransform(package, levelIndex, patch, exports, imports, data, names, wide, addedNames, warnings) is { } label)
             {
                 patched.Add(label);
             }
@@ -270,6 +286,14 @@ public static partial class LevelPackageEditor
         foreach (var patch in request.Loot)
         {
             if (TryPatchLoot(package, levelIndex, patch, exports, data, imports, names, wide, addedNames, preload, warnings) is { } label)
+            {
+                patched.Add(label);
+            }
+        }
+
+        foreach (var patch in request.SoftClasses)
+        {
+            if (TryPatchSoftClass(package, levelIndex, patch, exports, data, names, wide, addedNames, warnings) is { } label)
             {
                 patched.Add(label);
             }
@@ -284,10 +308,10 @@ public static partial class LevelPackageEditor
             }
         }
 
-        var (deletedInstances, movedInstances, addedInstances) = PatchInstances(package, levelIndex, request, data, warnings);
+        var (deletedInstances, movedInstances, addedInstances) = PatchInstances(package, levelIndex, request, exports, data, names, warnings);
         foreach (var patch in request.SplinePatches)
         {
-            if (TryPatchSpline(package, levelIndex, patch, data, names, wide, addedNames, warnings))
+            if (TryPatchSpline(package, levelIndex, patch, exports, data, names, wide, addedNames, warnings))
             {
                 patched.Add($"{patch.Actor}.{patch.Component} (spline)");
             }
@@ -295,7 +319,7 @@ public static partial class LevelPackageEditor
 
         foreach (var patch in request.SpawnPoints)
         {
-            if (TryPatchSpawnPoints(package, levelIndex, patch, data, warnings) is { } label)
+            if (TryPatchSpawnPoints(package, levelIndex, patch, exports, data, imports, names, wide, addedNames, preload, request.Packages, warnings) is { } label)
             {
                 patched.Add(label);
             }
@@ -625,13 +649,13 @@ public static partial class LevelPackageEditor
     private static string? TryPatchMesh(CookedPackage package, int levelIndex, MeshPatch patch, IList<ReadOnlyMemory<byte>> data, List<ExportEntry> exports,
         List<ImportEntry> imports, List<string> names, List<bool> wide, List<string> addedNames, List<int> preload, List<string> warnings)
     {
-        var componentIndex = FindComponent(package, levelIndex, patch.Actor, patch.Component, "mesh", warnings);
+        var componentIndex = FindComponent(package, levelIndex, exports, data, names, patch.Actor, patch.Component, "mesh", warnings);
         if (componentIndex < 0)
         {
             return null;
         }
 
-        var label = $"{patch.Actor}.{package.ResolveName(package.Exports[componentIndex].ObjectName)}";
+        var label = $"{patch.Actor}.{exports[componentIndex].ObjectName.Format(names)}";
         var (meshPackage, meshName) = SplitObjectPath(patch.StaticMesh);
         if (meshPackage.Length == 0 || meshName.Length == 0)
         {
@@ -643,14 +667,14 @@ public static partial class LevelPackageEditor
         PropertyBlock block;
         try
         {
-            block = PropertyReader.ReadPayload(package, payload, componentIndex);
+            block = PropertyReader.ReadPayload(package, payload, names);
 
             // The new mesh is drawn with its own materials: the old mesh's OverrideMaterials address the old mesh's slots
             // (a gravel road's end material on an asphalt piece), so the tag goes.
             if (block.Find("OverrideMaterials") is { } overrides)
             {
                 payload = [.. payload[..overrides.Offset], .. payload[overrides.EndOffset..]];
-                block = PropertyReader.ReadPayload(package, payload, componentIndex);
+                block = PropertyReader.ReadPayload(package, payload, names);
             }
         }
         catch (Exception ex) when (ex is FormatException or EndOfStreamException or ArgumentOutOfRangeException or NotSupportedException or InvalidDataException or IndexOutOfRangeException)
@@ -694,31 +718,34 @@ public static partial class LevelPackageEditor
         data[componentIndex] = payload;
 
         // The new mesh exists before the component is read: its dependency groups again, with the import added.
-        var entry = exports[componentIndex];
-        var first = preload.Count;
-        AppendGroups(package, package.Exports[componentIndex], new Dictionary<int, int>(), preload, extraCreateBeforeSerialize: [mesh]);
-        exports[componentIndex] = entry with
-        {
-            FirstExportDependency = first,
-            CreateBeforeSerializationDependencies = package.Exports[componentIndex].CreateBeforeSerializationDependencies + 1,
-        };
+        AddCreateBeforeSerialize(exports, preload, componentIndex, [mesh]);
         return label + " (mesh)";
     }
 
     private static string? TryPatchTransform(
-        CookedPackage package, int levelIndex, TransformPatch patch, IList<ReadOnlyMemory<byte>> data,
+        CookedPackage package, int levelIndex, TransformPatch patch, List<ExportEntry> exports, List<ImportEntry> imports, IList<ReadOnlyMemory<byte>> data,
         List<string> names, List<bool> wide, List<string> addedNames, List<string> warnings)
     {
-        var componentIndex = FindComponent(package, levelIndex, patch.Actor, patch.Component, "transform", warnings);
+        var componentIndex = FindComponent(package, levelIndex, exports, data, names, patch.Actor, patch.Component, "transform", warnings);
         if (componentIndex < 0)
         {
             return null;
         }
 
-        var componentName = package.ResolveName(package.Exports[componentIndex].ObjectName);
+        var componentName = exports[componentIndex].ObjectName.Format(names);
         var label = $"{patch.Actor}.{componentName}";
         var payload = data[componentIndex].ToArray();
-        var block = package.ReadProperties(componentIndex);
+        PropertyBlock block;
+        try
+        {
+            block = PropertyReader.ReadPayload(package, payload, names);
+        }
+        catch (Exception ex) when (ex is FormatException or EndOfStreamException or ArgumentOutOfRangeException or NotSupportedException or InvalidDataException or IndexOutOfRangeException)
+        {
+            warnings.Add($"'{label}': the export could not be read after its other edits ({ex.Message}); its transform was not written.");
+            return null;
+        }
+
         var patched = PatchTransformPayload(payload, block, patch.Value, label, names, wide, addedNames, warnings);
         if (patched is null)
         {
@@ -727,7 +754,7 @@ public static partial class LevelPackageEditor
 
         if (patch.Value.Scale == FVector.Zero)
         {
-            patched = RemoveMesh(patched, payload.Length, block, package.GetExportClassName(componentIndex), names, wide, addedNames);
+            patched = RemoveMesh(patched, payload.Length, block, ClassNameOf(exports, imports, names, componentIndex), names, wide, addedNames);
         }
 
         data[componentIndex] = patched;
@@ -885,11 +912,13 @@ public static partial class LevelPackageEditor
     /// (<see cref="Spawns.SpawnPlacesEditor.WritePoint"/>), and the array is rebuilt with the new count. Returns the label
     /// written, or null (with a warning) when the array is not stored there.
     /// </summary>
-    private static string? TryPatchSpawnPoints(CookedPackage package, int levelIndex, SpawnPointsPatch patch, IList<ReadOnlyMemory<byte>> data, List<string> warnings)
+    private static string? TryPatchSpawnPoints(
+        CookedPackage package, int levelIndex, SpawnPointsPatch patch, List<ExportEntry> exports, List<ReadOnlyMemory<byte>> data, List<ImportEntry> imports,
+        List<string> names, List<bool> wide, List<string> addedNames, List<int> preload, Func<string, CookedPackage?>? packages, List<string> warnings)
     {
         var label = $"{patch.Actor}{(patch.Component is null ? string.Empty : "." + patch.Component)}.{patch.Array}";
-        var actorIndex = FindExport(package, patch.Actor, levelIndex + 1);
-        var exportIndex = actorIndex < 0 ? -1 : patch.Component is null ? actorIndex : FindExport(package, patch.Component, actorIndex + 1);
+        var actorIndex = FindLevelActor(exports, names, levelIndex + 1, patch.Actor) - 1;
+        var exportIndex = actorIndex < 0 ? -1 : patch.Component is null ? actorIndex : FindChild(exports, names, actorIndex + 1, patch.Component) - 1;
         if (exportIndex < 0)
         {
             warnings.Add($"'{label}': {(actorIndex < 0 ? "the actor" : "the component")} is not stored in the level package; its spawn points were not written.");
@@ -900,7 +929,7 @@ public static partial class LevelPackageEditor
         PropertyBlock block;
         try
         {
-            block = PropertyReader.ReadPayload(package, payload, exportIndex);
+            block = PropertyReader.ReadPayload(package, payload, names);
         }
         catch (Exception ex) when (ex is FormatException or EndOfStreamException or ArgumentOutOfRangeException or NotSupportedException)
         {
@@ -911,8 +940,8 @@ public static partial class LevelPackageEditor
 
         if (block.Find(patch.Array) is not { Value: ArrayValue { InnerTag: not null } array } tag)
         {
-            warnings.Add($"'{label}': the array is not stored on the export (it comes from the class or a template); its spawn points were not written.");
-            return null;
+            // The loot points of a building's spawner come from its Blueprint's template: the array is written from there.
+            return InsertTemplateArray(package, levelIndex, patch, label, exportIndex, payload, block, exports, data, imports, names, wide, addedNames, preload, packages, warnings);
         }
 
         var items = new List<byte[]>(patch.Points.Count);
@@ -925,9 +954,9 @@ public static partial class LevelPackageEditor
             }
 
             var bytes = payload.AsSpan(item.Offset, item.Size).ToArray();
-            if (!Spawns.SpawnPlacesEditor.WritePoint(bytes, item, point.Local, -item.Offset))
+            if (Spawns.SpawnPlacesEditor.WritePoint(bytes, item, point.Local, -item.Offset) is { } problem)
             {
-                warnings.Add($"'{label}[{point.Source}]': the element has no location to write; the point keeps its stored place.");
+                warnings.Add($"'{label}[{point.Source}]': {problem}; the point keeps its stored place.");
             }
 
             items.Add(bytes);
@@ -943,7 +972,7 @@ public static partial class LevelPackageEditor
     private const int MatrixSize = 64;
 
     private static (int Deleted, int Moved, int Added) PatchInstances(
-        CookedPackage package, int levelIndex, LevelEditRequest request, IList<ReadOnlyMemory<byte>> data, List<string> warnings)
+        CookedPackage package, int levelIndex, LevelEditRequest request, List<ExportEntry> exports, IList<ReadOnlyMemory<byte>> data, List<string> names, List<string> warnings)
     {
         if (request.Instances.Count == 0 && request.InstanceAdds.Count == 0)
         {
@@ -967,8 +996,8 @@ public static partial class LevelPackageEditor
                 continue;
             }
 
-            var actorIndex = FindExport(package, actorName, levelIndex + 1);
-            var componentIndex = actorIndex < 0 ? -1 : FindExport(package, componentName, actorIndex + 1);
+            var actorIndex = FindLevelActor(exports, names, levelIndex + 1, actorName) - 1;
+            var componentIndex = actorIndex < 0 ? -1 : FindChild(exports, names, actorIndex + 1, componentName) - 1;
             if (componentIndex < 0)
             {
                 warnings.Add($"Component '{label}' is not stored in the level package; its instance edits were not written.");
@@ -976,7 +1005,7 @@ public static partial class LevelPackageEditor
             }
 
             var payload = data[componentIndex].ToArray();
-            var block = package.ReadProperties(componentIndex);
+            var block = PropertyReader.ReadPayload(package, payload, names);
             var location = FindInstanceArray(payload, block.EndOffset, hint.Instances);
             if (location is null)
             {
@@ -985,7 +1014,7 @@ public static partial class LevelPackageEditor
             }
 
             var (dataOffset, elementSize) = location.Value;
-            var moves = new List<(int Index, FTransform From, FTransform To)>();
+            var edits = new List<(int Index, FTransform From, FTransform To)>();
             foreach (var patch in group)
             {
                 if (patch.Index < 0 || patch.Index >= hint.Instances.Count)
@@ -997,6 +1026,7 @@ public static partial class LevelPackageEditor
                 var pristine = hint.Instances[patch.Index];
                 var transform = patch.Local ?? new FTransform(pristine.Rotation, pristine.Translation, new FVector(CollapsedInstanceScale));
                 WriteMatrix(payload.AsSpan(dataOffset + patch.Index * elementSize, MatrixSize), transform.ToMatrixWithScale());
+                edits.Add((patch.Index, pristine, transform));
                 if (patch.Local is null)
                 {
                     deleted++;
@@ -1004,16 +1034,16 @@ public static partial class LevelPackageEditor
                 else
                 {
                     moved++;
-                    moves.Add((patch.Index, pristine, transform));
                 }
             }
 
             // Appended instances grow the array (and the custom floats) behind the stored ones; the render copy and the
-            // tagged block before the array keep their offsets, so the draw copy is dropped next and the reorder table
-            // (inside the tagged block) grown last.
+            // tagged block before the array keep their offsets. Moved and collapsed instances are then written into the
+            // draw copy and their clusters refitted (with appended ones the copy is dropped: the game rebuilds it), and the
+            // reorder table (inside the tagged block) grown last.
             payload = AppendInstances(payload, block, dataOffset, elementSize, hint.Instances.Count, adds);
             added += adds.Count;
-            payload = InstanceRenderData.Refresh(payload, block, dataOffset + (elementSize * (hint.Instances.Count + adds.Count)), hint.Instances.Count, moves);
+            payload = InstanceRenderData.Refresh(payload, block, dataOffset + (elementSize * (hint.Instances.Count + adds.Count)), hint.Instances.Count, elementSize, adds.Count, edits);
             data[componentIndex] = adds.Count == 0 ? payload : GrowReorderTable(payload, block, hint.Instances.Count, adds.Count);
         }
 

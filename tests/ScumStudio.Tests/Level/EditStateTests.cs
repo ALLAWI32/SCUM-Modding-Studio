@@ -152,7 +152,7 @@ public sealed class EditStateTests
         state.Apply(new DeleteActorOp(House));
         Assert.NotNull(state.Validate(new DeleteActorOp(House)));
         Assert.NotNull(state.Validate(new SetTransformOp(House, TransformValue.Identity, Somewhere)));
-        Assert.NotNull(state.Validate(new DuplicateActorOp(House, "Copy", Somewhere)));
+        Assert.Null(state.Validate(new DuplicateActorOp(House, "Copy", Somewhere))); // copied from its stored exports (F203)
         var ex = Assert.Throws<InvalidOperationException>(() => state.Apply(new DeleteActorOp(new ActorRef(Outpost.ToLowerInvariant(), "STATICMESHACTOR_12"))));
         Assert.Contains("already deleted", ex.Message, StringComparison.Ordinal);
 

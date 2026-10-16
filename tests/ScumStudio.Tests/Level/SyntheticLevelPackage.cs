@@ -1,3 +1,4 @@
+using ScumStudio.Core.Mathematics;
 using ScumStudio.Formats;
 using ScumStudio.Formats.IO;
 using ScumStudio.Formats.Packages;
@@ -17,6 +18,7 @@ internal sealed class SyntheticLevelPackage
     private readonly List<ExportEntry> _exports = [];
     private readonly List<byte[]> _payloads = [];
     private readonly Dictionary<(string Package, string Class), int> _classes = [];
+    private readonly List<int> _preload = [];
 
     public SyntheticLevelPackage()
     {
@@ -88,6 +90,23 @@ internal sealed class SyntheticLevelPackage
 
     public void SetPayload(int exportIndex, byte[] payload) => _payloads[exportIndex - 1] = payload;
 
+    /// <summary>
+    /// The export's four event-driven-loader dependency groups (package indices), as the cooker writes them: serialize before
+    /// serialize, create before serialize, serialize before create, create before create (where the outer goes).
+    /// </summary>
+    public void Dependencies(int exportIndex, int[] serializeBeforeSerialize, int[] createBeforeSerialize, int[] serializeBeforeCreate, int[] createBeforeCreate)
+    {
+        _exports[exportIndex - 1] = _exports[exportIndex - 1] with
+        {
+            FirstExportDependency = _preload.Count,
+            SerializationBeforeSerializationDependencies = serializeBeforeSerialize.Length,
+            CreateBeforeSerializationDependencies = createBeforeSerialize.Length,
+            SerializationBeforeCreateDependencies = serializeBeforeCreate.Length,
+            CreateBeforeCreateDependencies = createBeforeCreate.Length,
+        };
+        _preload.AddRange([.. serializeBeforeSerialize, .. createBeforeSerialize, .. serializeBeforeCreate, .. createBeforeCreate]);
+    }
+
     /// <summary>Tagged properties + <c>None</c> + the UObject <c>bHasGuid</c> (0), then optional native data.</summary>
     public byte[] Properties(Action<TagWriter>? tags = null, Action<ByteWriter>? native = null)
     {
@@ -124,6 +143,7 @@ internal sealed class SyntheticLevelPackage
         Imports = _imports,
         Exports = _exports,
         ExportData = _payloads.Select(p => (ReadOnlyMemory<byte>)p).ToList(),
+        PreloadDependencies = _preload,
         AssetRegistryData = assetRegistryData ?? new byte[4],
     });
 
@@ -164,6 +184,9 @@ internal sealed class SyntheticLevelPackage
         public void Rotator(string name, float pitch, float yaw, float roll) => Struct(name, "Rotator", w => { w.F32(pitch); w.F32(yaw); w.F32(roll); });
 
         public void Quat(string name, float x, float y, float z, float w) => Struct(name, "Quat", b => { b.F32(x); b.F32(y); b.F32(z); b.F32(w); });
+
+        /// <summary>A struct with a native serializer (e.g. <c>Guid</c>): its bytes, written by <paramref name="value"/>, after the struct tag.</summary>
+        public void NativeStruct(string name, string structName, Action<ByteWriter> value) => Struct(name, structName, value);
 
         /// <summary>A struct serialized as nested tagged properties (e.g. <c>Transform</c>).</summary>
         public void TaggedStruct(string name, string structName, Action<TagWriter> inner) =>
@@ -230,6 +253,73 @@ internal sealed class SyntheticLevelPackage
             writer.Raw(inner.WrittenSpan);
             writer.Raw(body.WrittenSpan);
         }
+
+        /// <summary>An array of natively serialized structs (no tags inside, e.g. <c>NiagaraVariableWithOffset</c>): <paramref name="items"/> writes them all.</summary>
+        public void NativeStructArray(string name, string structName, int count, Action<ByteWriter> items)
+        {
+            var body = new ByteWriter();
+            items(body);
+            var inner = new ByteWriter();
+            new TagWriter(package, inner).Header(name, "StructProperty", body.Length);
+            inner.FName(package.Name(structName));
+            inner.Guid(default);
+            inner.U8(0);
+            Header(name, "ArrayProperty", 4 + inner.Length + body.Length);
+            writer.FName(package.Name("StructProperty"));
+            writer.U8(0);
+            writer.I32(count);
+            writer.Raw(inner.WrittenSpan);
+            writer.Raw(body.WrittenSpan);
+        }
+
+        /// <summary>A map whose keys and values are structs (a 4.27 map tag names only <c>StructProperty</c>): <paramref name="entries"/> writes them.</summary>
+        public void StructMap(string name, int count, Action<ByteWriter> entries)
+        {
+            var body = new ByteWriter();
+            body.I32(0); // keys to remove
+            body.I32(count);
+            entries(body);
+            Header(name, "MapProperty", body.Length);
+            writer.FName(package.Name("StructProperty"));
+            writer.FName(package.Name("StructProperty"));
+            writer.U8(0);
+            writer.Raw(body.WrittenSpan);
+        }
+
+        /// <summary>A value of any type written by <paramref name="value"/> (a field path, a text …) after its tag and the tag's guid flag.</summary>
+        public void Typed(string name, string type, Action<ByteWriter> value)
+        {
+            var body = new ByteWriter();
+            value(body);
+            Header(name, type, body.Length);
+            writer.U8(0);
+            writer.Raw(body.WrittenSpan);
+        }
+
+        /// <summary>An array of int32 (e.g. a HISM's <c>InstanceReorderTable</c>).</summary>
+        public void IntArray(string name, params int[] values)
+        {
+            Header(name, "ArrayProperty", 4 + (4 * values.Length));
+            writer.FName(package.Name("IntProperty"));
+            writer.U8(0);
+            writer.I32(values.Length);
+            foreach (var v in values)
+            {
+                writer.I32(v);
+            }
+        }
+
+        /// <summary>An <c>FBox</c> (Min, Max, IsValid: 25 bytes), e.g. a HISM's <c>BuiltInstanceBounds</c>.</summary>
+        public void Box(string name, FVector min, FVector max) => Struct(name, "Box", w =>
+        {
+            w.F32(min.X);
+            w.F32(min.Y);
+            w.F32(min.Z);
+            w.F32(max.X);
+            w.F32(max.Y);
+            w.F32(max.Z);
+            w.U8(1);
+        });
 
         private void Struct(string name, string structName, Action<ByteWriter> value)
         {

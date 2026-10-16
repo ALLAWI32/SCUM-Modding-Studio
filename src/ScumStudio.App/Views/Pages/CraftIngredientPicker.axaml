@@ -1,0 +1,114 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:ScumStudio.App.ViewModels"
+             xmlns:c="using:ScumStudio.App.Controls"
+             xmlns:conv="using:ScumStudio.App.Converters"
+             x:Class="ScumStudio.App.Views.Pages.CraftIngredientPicker"
+             x:DataType="vm:IngredientPickerViewModel"
+             IsVisible="{Binding IsOpen}">
+  <!-- Over the recipe: every item a player can carry and the game's ingredient groups, as the gallery's 3D tiles. -->
+  <Border Classes="dialog" Margin="6">
+    <DockPanel Margin="12">
+      <DockPanel DockPanel.Dock="Top" Margin="2,0,0,10">
+        <Button x:Name="CraftPickerCancel" DockPanel.Dock="Right" Classes="ghost" VerticalAlignment="Top" Content="{Tr Craftables.Picker.Cancel}"
+                ToolTip.Tip="{Tr Craftables.Picker.Cancel.Tip}" Command="{Binding CancelCommand}" />
+        <StackPanel Spacing="2">
+          <TextBlock Text="{Tr Craftables.Picker.Title}" Classes="h3" />
+          <TextBlock Text="{Tr Craftables.Picker.Hint}" Classes="caption wrap" />
+        </StackPanel>
+      </DockPanel>
+
+      <!-- The pick: its badge, the amount, tool, a tag of its own, and Use -->
+      <Border DockPanel.Dock="Bottom" Classes="card" Padding="10" Margin="0,10,0,0">
+        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+          <StackPanel Grid.Column="0" Spacing="6">
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <TextBlock Text="{Binding SelectedText}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+              <Border Classes="chip" IsVisible="{Binding HasBadge}" ToolTip.Tip="{Binding BadgeTip}">
+                <TextBlock x:Name="CraftPickerBadge" Text="{Binding BadgeText}" />
+              </Border>
+            </StackPanel>
+            <WrapPanel Orientation="Horizontal" ItemSpacing="12" LineSpacing="6">
+              <StackPanel Orientation="Horizontal" Spacing="6">
+                <TextBlock Text="{Tr Craftables.Picker.Amount}" Classes="caption" VerticalAlignment="Center" />
+                <NumericUpDown x:Name="CraftPickerAmount" Value="{Binding Amount}" Minimum="1" Maximum="9999" Increment="1" FormatString="0" Width="130"
+                               ToolTip.Tip="{Tr Craftables.Picker.Amount.Tip}" />
+              </StackPanel>
+              <CheckBox x:Name="CraftPickerTool" IsChecked="{Binding IsTool}" Content="{Tr Craftables.Tool}" VerticalAlignment="Center" ToolTip.Tip="{Tr Craftables.Tool.Tip}" />
+              <CheckBox x:Name="CraftPickerAddTag" IsChecked="{Binding AddTag}" IsEnabled="{Binding CanAddTag}" VerticalAlignment="Center"
+                        ToolTip.Tip="{Tr Craftables.Ingredient.AddTag.Tip}">
+                <TextBlock Text="{Tr Craftables.Ingredient.AddTag}" TextWrapping="Wrap" />
+              </CheckBox>
+            </WrapPanel>
+          </StackPanel>
+          <Button x:Name="CraftPickerOk" Grid.Column="1" Classes="accent" VerticalAlignment="Center" Content="{Tr Craftables.Picker.Ok}"
+                  ToolTip.Tip="{Tr Craftables.Picker.Ok.Tip}" Command="{Binding OkCommand}" />
+        </Grid>
+      </Border>
+
+      <Grid ColumnDefinitions="230,*">
+        <TreeView Grid.Column="0" x:Name="CraftPickerTree" ItemsSource="{Binding Roots}" SelectedItem="{Binding SelectedCategory}">
+          <TreeView.Styles>
+            <Style Selector="TreeViewItem" x:DataType="vm:ObjectCategoryNode">
+              <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}" />
+            </Style>
+          </TreeView.Styles>
+          <TreeView.ItemTemplate>
+            <TreeDataTemplate x:DataType="vm:ObjectCategoryNode" ItemsSource="{Binding Children}">
+              <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                <TextBlock Grid.Column="0" Text="{Binding Title}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Title}" />
+                <TextBlock Grid.Column="1" Text="{Binding CountText}" Classes="caption" VerticalAlignment="Center" Margin="0,0,6,0" />
+              </Grid>
+            </TreeDataTemplate>
+          </TreeView.ItemTemplate>
+        </TreeView>
+        <DockPanel Grid.Column="1" Margin="10,0,0,0">
+          <StackPanel DockPanel.Dock="Top" Spacing="6" Margin="0,0,8,8">
+            <TextBox x:Name="CraftPickerSearch" Classes="search" Text="{Binding Query}" Watermark="{Tr Craftables.Picker.Search}" ToolTip.Tip="{Tr Craftables.Picker.Search.Tip}" />
+            <TextBlock Text="{Binding ResultText}" Classes="muted" />
+            <ProgressBar IsIndeterminate="True" IsVisible="{Binding IsLoading}" />
+          </StackPanel>
+          <!-- Rows virtualized; a tile's picture is made only while it is on screen -->
+          <ScrollViewer x:Name="CraftPickerScroll" HorizontalScrollBarVisibility="Disabled">
+            <ItemsControl x:Name="CraftPickerGrid" ItemsSource="{Binding Rows}">
+              <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate><VirtualizingStackPanel /></ItemsPanelTemplate>
+              </ItemsControl.ItemsPanel>
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:IngredientTileRow">
+                  <ItemsControl ItemsSource="{Binding Tiles}">
+                    <ItemsControl.ItemsPanel>
+                      <ItemsPanelTemplate><StackPanel Orientation="Horizontal" /></ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="vm:IngredientTileViewModel">
+                        <Button Classes="tile" Classes.selected="{Binding IsSelected}" ToolTip.Tip="{Binding Tip}"
+                                Command="{Binding $parent[UserControl].((vm:IngredientPickerViewModel)DataContext).SelectCommand}" CommandParameter="{Binding}">
+                          <StackPanel Width="120" Spacing="5">
+                            <Border Height="120" CornerRadius="{DynamicResource SmallCornerRadius}" Background="{DynamicResource ViewportBrush}" ClipToBounds="True">
+                              <Panel>
+                                <c:GlyphIcon Kind="{Binding IconKey}" IconSize="30" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                             Foreground="{Binding Tint, Converter={x:Static conv:HexBrushConverter.Instance}}"
+                                             IsVisible="{Binding Thumbnail, Converter={x:Static ObjectConverters.IsNull}}" />
+                                <c:ThumbnailImage Source="{Binding Thumbnail}" Stretch="Uniform" Margin="2" />
+                                <Border Classes="badge" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="4" IsVisible="{Binding IsGroup}">
+                                  <TextBlock Text="{Tr Craftables.Ingredient.Badge.Group}" />
+                                </Border>
+                              </Panel>
+                            </Border>
+                            <TextBlock Text="{Binding Name}" FontSize="12" TextAlignment="Center" TextTrimming="CharacterEllipsis" />
+                            <TextBlock Text="{Binding Detail}" Classes="caption" FontSize="10.5" TextAlignment="Center" TextTrimming="CharacterEllipsis" />
+                          </StackPanel>
+                        </Button>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </ScrollViewer>
+        </DockPanel>
+      </Grid>
+    </DockPanel>
+  </Border>
+</UserControl>

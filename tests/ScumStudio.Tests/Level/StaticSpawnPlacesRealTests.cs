@@ -139,7 +139,7 @@ public sealed class StaticSpawnPlacesRealTests
         try
         {
             var result = await new ScumStudio.Level.Export.ProjectExporter().ExportAsync(state, "Places", catalog,
-                new ScumStudio.Level.Export.ExportOptions { OutputDirectory = dir, WritePak = false }, ScumStudio.Level.Projects.ProjectSourceRole.Server);
+                new ScumStudio.Level.Export.ExportOptions { OutputDirectory = dir, WritePak = false }, ScumStudio.Level.Projects.ProjectSourceRole.Client);
             var stem = Path.Combine(result.StagingDirectory, "SCUM", "Content", "ConZ_Files", "Maps", "The_Island", "The_Island_LevelStaticData");
             var written = SpawnPlaces.Read(CookedPackage.Parse(File.ReadAllBytes(stem + ".uasset"), File.ReadAllBytes(stem + ".uexp"), null, SpawnPlaces.StaticDataPath));
             var cars = written.Where(p => p.Kind == SpawnPlaceKind.Vehicle).ToList();
@@ -147,6 +147,99 @@ public sealed class StaticSpawnPlacesRealTests
             Assert.Equal(new FVector(11f, 22f, 33f), cars[3].Transform.Translation);
             Assert.Equal(places.Single(p => p.Kind == SpawnPlaceKind.Vehicle && p.Index == 5).Transform.Translation, cars[4].Transform.Translation);
             Assert.Equal(new FVector(-1f, -2f, -3f), cars[^1].Transform.Translation);
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
+            {
+                Directory.Delete(dir, recursive: true);
+            }
+        }
+    }
+
+    /// <summary>
+    /// New places (not copies: owner, "create a NEW spawn, not a clone") of every kind and a zone's own settings asset the
+    /// island data does not import yet are written into the real static data; the stock places stay as they were, in order.
+    /// </summary>
+    [Fact]
+    public void NewPlacesRoundTripOnTheRealStaticData()
+    {
+        using var catalog = Open();
+        if (catalog is null)
+        {
+            return; // not asked for
+        }
+
+        var package = ModdableAssets.ReadPackage(catalog, SpawnPlaces.StaticDataPath);
+        var stock = SpawnPlaces.Read(package);
+        var zone = stock.First(p => p.Kind == SpawnPlaceKind.Zone);
+        var at = new FVector(-600000f, -560000f, 5000f);
+        var mine = "/Game/ConZ_Files/Encounters/EncounterZones/Medium_Threat/" + zone.Group + "_Mine";
+        var state = ScumStudio.Level.Editing.EditState.Replay(
+        [
+            new ScumStudio.Level.Editing.AddSpawnPlaceOp("NewVehicleSpawn_0001", SpawnPlaceKind.Vehicle, "City", new TransformValue(at, new FRotator(0f, 30f, 0f), FVector.One)),
+            new ScumStudio.Level.Editing.AddSpawnPlaceOp("NewZombieSpawn_0001", SpawnPlaceKind.Character, "Interior", TransformValue.At(at.X + 100f, at.Y, at.Z)),
+            new ScumStudio.Level.Editing.AddSpawnPlaceOp("NewThreatZone_0001", SpawnPlaceKind.Zone, zone.Group, new TransformValue(at, new FRotator(0f, 30f, 0f), new FVector(50f, 30f, 1f))),
+            new ScumStudio.Level.Editing.AddSpawnPlaceOp("NewHuntingArea_0001", SpawnPlaceKind.Animal, stock.First(p => p.Kind == SpawnPlaceKind.Animal).Group, new TransformValue(at, FRotator.Zero, new FVector(100f, 100f, 1f))),
+            new ScumStudio.Level.Editing.SetSpawnChoiceOp(new ScumStudio.Level.Editing.ActorRef(SpawnPlaces.StaticDataPath, zone.ActorName), SpawnChoices.ZoneData, null, mine),
+        ]);
+
+        var warnings = new List<string>();
+        var (bytes, report) = SpawnPlacesEditor.Apply(package, SpawnPlacesEditor.Plan(state, warnings), p => p == mine || catalog.PackageExists(p));
+
+        Assert.Empty(warnings.Concat(report.Warnings));
+        Assert.Equal((4, 1), (report.Created, report.Chosen));
+        var after = CookedPackage.Parse(bytes.UAsset, bytes.UExp, null, SpawnPlaces.StaticDataPath);
+        Assert.Equal(package.Imports.Count + 2, after.Imports.Count);
+        var zones = (ScumStudio.Formats.Properties.ArrayValue)after.ReadProperties(SpawnPlaces.StaticDataExport(after)).Find(SpawnPlaces.ArrayOf(SpawnPlaceKind.Zone))!.Value;
+        Assert.DoesNotContain(((ScumStudio.Formats.Properties.StructValue)zones.Items[^1]).Properties, p => p.Name is "_subZoneData" or "_flyingSpawnedCharacterApproachLocations");
+        var expected = SpawnPlaces.WithEdits(stock, state);
+        var written = SpawnPlaces.Read(after);
+        Assert.Equal(expected.Count, written.Count);
+        Assert.All(expected.Zip(written), pair =>
+        {
+            Assert.Equal((pair.First.Kind, pair.First.Group), (pair.Second.Kind, pair.Second.Group));
+            Assert.True(FVector.Distance(pair.First.Transform.Translation, pair.Second.Transform.Translation) < 0.01f, pair.First.ActorName);
+        });
+        Assert.Equal(zone.Group + "_Mine", written.First(p => p.Kind == SpawnPlaceKind.Zone).Group);
+    }
+
+    /// <summary>
+    /// Audit F281: the edits name stock places by their number in the client's lists. With <c>SCUM_SERVER_PAKS</c> too, the
+    /// server cook of the same build holds the same lists (the edited places where the client has them), and a server cook
+    /// whose lists differ gets none of the edits.
+    /// </summary>
+    [Fact]
+    public async Task ServerCookCountMismatchIsRefused()
+    {
+        using var client = Open();
+        using var server = Environment.GetEnvironmentVariable("SCUM_SERVER_PAKS") is { Length: > 0 } paks && Directory.Exists(paks)
+            ? AssetCatalog.OpenPaks(paks, new AssetCatalogOptions { AesKey = AesKeyText.FromEnvironmentOrStore() })
+            : null;
+        if (client is null || server is null)
+        {
+            return; // not asked for
+        }
+
+        var state = new ScumStudio.Level.Editing.EditState();
+        state.Apply(new ScumStudio.Level.Editing.DeleteActorOp(new ScumStudio.Level.Editing.ActorRef(SpawnPlaces.StaticDataPath, SpawnPlaces.ActorName(SpawnPlaceKind.Vehicle, 4))));
+        var request = SpawnPlacesEditor.Plan(state);
+        var reference = SpawnPlacesEditor.Reference(ModdableAssets.ReadPackage(client, SpawnPlaces.StaticDataPath), request);
+        var warnings = new List<string>();
+        Assert.Same(request, SpawnPlacesEditor.ForOtherCook(request, reference, ModdableAssets.ReadPackage(server, SpawnPlaces.StaticDataPath), warnings));
+        Assert.Empty(warnings);
+
+        var dir = Path.Combine(Path.GetTempPath(), "scumstudio-places-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var exporter = new ScumStudio.Level.Export.ProjectExporter
+            {
+                ClientSpawnReference = reference with { Counts = reference.Counts.ToDictionary(c => c.Key, c => c.Key == SpawnPlaceKind.Vehicle ? c.Value + 1 : c.Value) },
+            };
+            var refused = await Assert.ThrowsAsync<InvalidOperationException>(() => exporter.ExportAsync(state, "Places", server,
+                new ScumStudio.Level.Export.ExportOptions { OutputDirectory = dir, WritePak = false }, ScumStudio.Level.Projects.ProjectSourceRole.Server));
+            Assert.Contains("VehicleSpawnPoints", refused.Message, StringComparison.Ordinal);
+            Assert.Contains("none of the removed, moved, re-chosen or copied stock places were written", refused.Message, StringComparison.Ordinal);
         }
         finally
         {

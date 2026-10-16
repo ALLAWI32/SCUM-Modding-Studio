@@ -3,6 +3,7 @@ using ScumStudio.App.Localization;
 using ScumStudio.App.Services;
 using ScumStudio.App.ViewModels;
 using ScumStudio.Core.Abstractions;
+using ScumStudio.Level.Spawns;
 using ScumStudio.Pak;
 
 namespace ScumStudio.Tests.App;
@@ -63,11 +64,16 @@ public sealed class SpawnsRealTests
             if (serverPaks is not null)
             {
                 Assert.NotEmpty(spawns.ServerCards);
+                // Showing the server's values marks nothing pending; saving one key leaves every other line as it was.
+                Assert.Equal(0, spawns.PendingCount);
+                var file = ServerSettingsFile.PathFor(serverPaks)!;
+                var before = File.ReadAllLines(file).Where(l => !l.StartsWith("scum.MaxAllowedDrones=", StringComparison.Ordinal)).ToList();
                 var drones = spawns.ServerCards.SelectMany(c => c.Rows).OfType<ServerSettingViewModel>().First(r => r.Key == "scum.MaxAllowedDrones");
                 drones.Value = 3;
                 spawns.ApplyCommand.Execute(null);
-                var ini = File.ReadAllText(ServerSettingsFile.PathFor(serverPaks)!);
+                var ini = File.ReadAllText(file);
                 Assert.Contains("scum.MaxAllowedDrones=3", ini, StringComparison.Ordinal);
+                Assert.Equal(before, File.ReadAllLines(file).Where(l => !l.StartsWith("scum.MaxAllowedDrones=", StringComparison.Ordinal)));
                 Assert.True(File.Exists(ServerSettingsFile.PathFor(serverPaks) + ".bak"));
             }
 
@@ -99,16 +105,22 @@ public sealed class SpawnsRealTests
         await ctx.Services.Workspace.ConnectAsync(ProgressSink.Null);
         using var spawns = new SpawnsPageViewModel(ctx.Services);
         spawns.IsZombiesTab = true;
+        for (var i = 0; i < 600 && !spawns.Entries.Any(e => e.PackagePath.EndsWith("/MTZ_Settlement_Village", StringComparison.Ordinal)); i++)
+        {
+            await Task.Delay(100); // the list loads in the background
+        }
+
         spawns.SelectedEntry = spawns.Entries.First(e => e.PackagePath.EndsWith("/MTZ_Settlement_Village", StringComparison.Ordinal));
         for (var i = 0; i < 300 && spawns.DetailCards.Count == 0; i++)
         {
             await Task.Delay(100);
         }
 
-        var groups = spawns.DetailCards.Single(c => c.Title == Loc.T("Spawns.Card.What")).Rows.Cast<SpawnSliderViewModel>().ToList();
-        Assert.Equal([Loc.T("Spawns.Encounter.Zombies"), Loc.T("Spawns.Encounter.Npcs")], groups.Select(g => g.Label));
-        Assert.Equal([75d, 25d], groups.Select(g => g.Value));
-        Assert.EndsWith("MTZ_Settlement_Village_NPC_Encounter_C", groups[1].Tip, StringComparison.Ordinal);
+        var groups = spawns.DetailCards.Single(c => c.Title == Loc.T("Spawns.Card.What")).Rows.OfType<SpawnWeightRowViewModel>().Where(r => r.IsEntry).ToList(); // under the list's header row
+        Assert.Equal([Loc.T("Spawns.Encounter.Zombies"), Loc.T("Spawns.Encounter.Npcs")], groups.Select(g => g.Name));
+        Assert.Equal([75d, 25d], groups.Select(g => Math.Round(g.Percent, 3)));
+        Assert.Equal("MTZ_Settlement_Village_NPC_Encounter", groups[1].Detail);
+        Assert.Equal(SpawnCategory.Npcs, groups[1].Kind);
     }
 
     // The server's settings, copied into the test folder (never the real server's file) next to an empty Paks folder

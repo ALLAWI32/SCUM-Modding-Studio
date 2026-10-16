@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Numerics;
 using Avalonia;
 using Avalonia.Controls;
@@ -6,6 +7,7 @@ using Avalonia.Input;
 using Avalonia.OpenGL;
 using Avalonia.OpenGL.Controls;
 using Avalonia.Threading;
+using ScumStudio.App.Localization;
 using ScumStudio.App.Services;
 using ScumStudio.Core.Geometry;
 using ScumStudio.Core.Mathematics;
@@ -152,6 +154,17 @@ public sealed partial class LevelViewport : OpenGlControlBase
     /// </summary>
     public static readonly StyledProperty<bool> AntiAliasedFoliageProperty = AvaloniaProperty.Register<LevelViewport, bool>(nameof(AntiAliasedFoliage), true);
 
+    /// <summary>How many sectors (<see cref="SectorSizeCm"/>) around the camera the backdrop draws the game's far models (1-4).</summary>
+    public static readonly StyledProperty<int> RenderDistanceProperty = AvaloniaProperty.Register<LevelViewport, int>(nameof(RenderDistance), 2);
+
+    private const float DefaultSectorSizeCm = 300_000f;
+
+    /// <summary>A map sector's edge in cm, the unit of <see cref="RenderDistance"/>.</summary>
+    public static readonly StyledProperty<float> SectorSizeCmProperty = AvaloniaProperty.Register<LevelViewport, float>(nameof(SectorSizeCm), DefaultSectorSizeCm);
+
+    /// <summary>Keep frames under 16.7 ms by drawing less while they take longer (<see cref="FrameBudget"/>); off: as the quality asks.</summary>
+    public static readonly StyledProperty<bool> SmoothProperty = AvaloniaProperty.Register<LevelViewport, bool>(nameof(Smooth), true);
+
     /// <summary>Auto-snap: a dragged object jumps flush against (or in line with) a neighbour that comes within 30 cm.</summary>
     public static readonly StyledProperty<bool> AutoSnapProperty =
         AvaloniaProperty.Register<LevelViewport, bool>(nameof(AutoSnap), defaultValue: true);
@@ -228,7 +241,25 @@ public sealed partial class LevelViewport : OpenGlControlBase
     // Milliseconds a frame may spend sending a new scene's meshes and textures: little while the camera moves, more at rest.
     private const double StageBudgetMovingMs = 4.0;
     private const double StageBudgetRestingMs = 30.0;
-    private LevelScene? _backdrop;
+
+    // The island backdrop goes to the GPU a few milliseconds a frame too (it was sent in one frame: audit F323).
+    private readonly BackdropStager _backdropStager = new();
+    private LevelScene? BackdropScene => _backdropStager.Scene;
+
+    // Smooth: the view draws less while frames take too long (see FrameBudget); the GPU half of a frame's cost.
+    private readonly FrameBudget _budget = new();
+    private GpuFrameTimer? _gpuTimer;
+
+    // The settings of the two scenes, made again only when an input changes (a `with` every frame was garbage).
+    private (RenderQuality Quality, float Hour, bool Lighting, bool Water) _detailKey;
+    private RenderSettings? _detailSettings;
+    private (RenderSettings? Detail, int Sectors, float SectorCm) _backdropKey;
+    private RenderSettings? _backdropSettings;
+
+    // The frame readout: CPU time of the draw calls (moving average), and the collector's pauses since the last readout.
+    private double _cpuMs;
+    private TimeSpan _hudPause;
+    private int _hudGen2;
     private object? _backdropHiddenFor;
     private static readonly object EmptyMarker = new();
     private bool _selectionDirty;
@@ -323,9 +354,13 @@ public sealed partial class LevelViewport : OpenGlControlBase
         PartMeshesProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.MarkDirty(ref c._bendsDirty));
         ShapeHandlesProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.RequestNextFrameRendering());
         TimeOfDayProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.RequestNextFrameRendering());
+        NearClipProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.RequestNextFrameRendering()); // D09/F15 near clip
         LightingProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.RequestNextFrameRendering());
         AnimateWaterProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.RequestNextFrameRendering());
         AntiAliasedFoliageProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.RequestNextFrameRendering());
+        RenderDistanceProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.RequestNextFrameRendering());
+        SectorSizeCmProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.RequestNextFrameRendering());
+        SmoothProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.RequestNextFrameRendering());
         ScaleHandlesProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.RequestNextFrameRendering());
         LegHandleProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.RequestNextFrameRendering());
         SelectedRootWorldProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.RequestNextFrameRendering());
@@ -580,6 +615,27 @@ public sealed partial class LevelViewport : OpenGlControlBase
     {
         get => GetValue(AntiAliasedFoliageProperty);
         set => SetValue(AntiAliasedFoliageProperty, value);
+    }
+
+    /// <inheritdoc cref="RenderDistanceProperty" />
+    public int RenderDistance
+    {
+        get => GetValue(RenderDistanceProperty);
+        set => SetValue(RenderDistanceProperty, value);
+    }
+
+    /// <inheritdoc cref="SectorSizeCmProperty" />
+    public float SectorSizeCm
+    {
+        get => GetValue(SectorSizeCmProperty);
+        set => SetValue(SectorSizeCmProperty, value);
+    }
+
+    /// <inheritdoc cref="SmoothProperty" />
+    public bool Smooth
+    {
+        get => GetValue(SmoothProperty);
+        set => SetValue(SmoothProperty, value);
     }
 
     /// <summary>Samples a pixel of the target (<see cref="AntiAliasedFoliage"/>).</summary>
@@ -968,9 +1024,13 @@ public sealed partial class LevelViewport : OpenGlControlBase
         try
         {
             _context = new ProcAddressGlContext(gl.GetProcAddress, PixelSize);
-            _renderer = new SceneRenderer(_context);
+            _renderer = new SceneRenderer(_context, GraphicsStatus.Fallbacks);
             _renderer.Settings = _renderer.Settings with { ShowGrid = true };
+            (_detailSettings, _backdropSettings) = (null, null);
+            _gpuTimer = new GpuFrameTimer(_context.Gl);
+            (_hudPause, _hudGen2) = (GC.GetTotalPauseDuration(), GC.CollectionCount(2));
             GpuName = _renderer.Info.Renderer;
+            ReportGlStart();
             _target = _renderer.CreateTarget(Math.Max(1, PixelSize().W), Math.Max(1, PixelSize().H), TargetSamples);
             _sceneDirty = _pendingScene is not null;
             _backdropDirty = Backdrop is not null;
@@ -982,6 +1042,7 @@ public sealed partial class LevelViewport : OpenGlControlBase
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             FrameInfo = "OpenGL 4.3 is not available: " + ex.Message;
+            GraphicsStatus.StartFailed("map view", ex);
             IsGlReady = false;
         }
     }
@@ -989,13 +1050,14 @@ public sealed partial class LevelViewport : OpenGlControlBase
     /// <inheritdoc />
     protected override void OnOpenGlDeinit(GlInterface gl)
     {
-        _backdrop?.Dispose();
-        _backdrop = null;
+        _backdropStager.Clear();
         _backdropDirty = Backdrop is not null;
         _level?.Dispose();
         _level = null;
         _gpuMeshes.Clear(); // the context and every mesh in it go away with the renderer
         _stagedScene = null;
+        _gpuTimer?.Dispose();
+        _gpuTimer = null;
         _target?.Dispose();
         _target = null;
         _renderer?.Dispose();
@@ -1004,8 +1066,8 @@ public sealed partial class LevelViewport : OpenGlControlBase
         IsGlReady = false;
     }
 
-    /// <inheritdoc />
-    protected override void OnOpenGlRender(GlInterface gl, int fb)
+    /// <summary>One frame (see <see cref="OnOpenGlRender"/>, which catches what it throws).</summary>
+    private void RenderFrame(GlInterface gl, int fb)
     {
         if (_renderer is null || _target is null)
         {
@@ -1019,20 +1081,16 @@ public sealed partial class LevelViewport : OpenGlControlBase
         }
 
         _target.Resize(w, h, Math.Min(TargetSamples, _renderer.Info.MaxSamples));
-        var quality = RenderQualityProfile.For(Quality);
-        var shadows = Quality != RenderQuality.Performance; // sun shadows cost a second geometry pass near the camera
-        var hour = (float)TimeOfDay;
-        var (lighting, water) = (Lighting, AnimateWater);
-        if (_renderer.Settings.ObjectDrawDistance != quality.ObjectDistanceCm || _renderer.Settings.LodBias != quality.LodBias
-            || _renderer.Settings.CullPixelSize != quality.CullPixels || _renderer.Settings.Shadows != shadows || _renderer.Settings.TimeOfDay != hour
-            || _renderer.Settings.Lighting != lighting || _renderer.Settings.AnimateWater != water)
-        {
-            _renderer.Settings = _renderer.Settings with
-            {
-                ObjectDrawDistance = quality.ObjectDistanceCm, LodBias = quality.LodBias, CullPixelSize = quality.CullPixels, Shadows = shadows, TimeOfDay = hour,
-                Lighting = lighting, AnimateWater = water,
-            };
-        }
+        _budget.Enabled = Smooth;
+        var detailSettings = _budget.Apply(DetailSettings(_renderer));
+        _renderer.Settings = detailSettings;
+
+        // What the camera does in this frame (keys held, looking, panning) sets how long staging may take, not what it did in
+        // the last one: the first frame of a move spent the 30 ms of a resting frame (audit F459).
+        var stageBudget = _forward || _backward || _left || _right || _up || _down || _looking || _panning || _velocity != Vector3.Zero
+            ? StageBudgetMovingMs
+            : StageBudgetRestingMs;
+        var stageStart = Stopwatch.GetTimestamp();
 
         if (_sceneDirty)
         {
@@ -1052,7 +1110,7 @@ public sealed partial class LevelViewport : OpenGlControlBase
             // the current one stays on screen; then it is shown at once, keeping the nodes of the levels both scenes have
             // (owner: "it stutters while I fly": every streaming step re-uploaded and rebuilt the whole scene).
             // The new levels' nodes are built on a worker meanwhile (LevelScene.Prebuild), so the switch only hangs them in.
-            if (_gpuMeshes.Stage(_renderer, prepared, _wasContinuous ? StageBudgetMovingMs : StageBudgetRestingMs) && (_level?.Prebuild(prepared) ?? true))
+            if (_gpuMeshes.Stage(_renderer, prepared, stageBudget) && (_level?.Prebuild(prepared) ?? true))
             {
                 _stagedScene = null;
                 // The same scene uploaded again (the page came back, the view docked back) keeps the camera where it was.
@@ -1069,6 +1127,7 @@ public sealed partial class LevelViewport : OpenGlControlBase
                 }
 
                 _gpuMeshes.Trim(_renderer);
+                GraphicsStatus.Streamed("the map view");
                 _uploadedScene = prepared;
                 if (!KeepCamera && !reupload && !ViewBounds(_level).IsEmpty)
                 {
@@ -1087,26 +1146,36 @@ public sealed partial class LevelViewport : OpenGlControlBase
             }
         }
 
-        if (_backdropDirty)
+        // The island backdrop with what this frame's staging budget has left (the detail levels go first: the camera is there);
+        // the one on screen stays drawn until the new one is all on the GPU.
+        var shownBackdrop = BackdropScene;
+        var backdropLeftMs = stageBudget - Stopwatch.GetElapsedTime(stageStart).TotalMilliseconds;
+        if (_backdropDirty && (backdropLeftMs <= 0 || !_backdropStager.Step(_renderer, Backdrop, backdropLeftMs)))
+        {
+            RequestNextFrameRendering();
+        }
+        else if (_backdropDirty)
         {
             _backdropDirty = false;
-            _backdrop?.Dispose();
-            _backdrop = Backdrop is { } island ? LevelSceneUploader.Upload(_renderer, island) : null;
+        }
+
+        if (!ReferenceEquals(shownBackdrop, BackdropScene))
+        {
             _backdropHiddenFor = null;
             var sameIsland = ReferenceEquals(Backdrop, _framedBackdrop);
             _framedBackdrop = Backdrop;
-            if (_backdrop is { } b && !sameIsland && !b.TerrainBounds.IsEmpty && !TakeInitialView() && _level is null)
+            if (BackdropScene is { } b && !sameIsland && !b.TerrainBounds.IsEmpty && !TakeInitialView() && _level is null)
             {
                 FrameBounds(b.TerrainBounds, yaw: -90f, pitch: -55f, resetSpeed: true);
             }
 
-            if (_backdrop is not null)
+            if (BackdropScene is not null)
             {
                 _camera.SetClipRange(10f, 3_000_000f); // reverse-Z keeps precision from 10 cm to the far side of the island
             }
         }
 
-        if (_backdrop is { } backdrop && !ReferenceEquals(_backdropHiddenFor, _uploadedScene ?? EmptyMarker))
+        if (BackdropScene is { } backdrop && !ReferenceEquals(_backdropHiddenFor, _uploadedScene ?? EmptyMarker))
         {
             // The tiles the detail scene brings at full resolution are hidden in the coarse backdrop.
             _backdropHiddenFor = _uploadedScene ?? EmptyMarker;
@@ -1123,29 +1192,6 @@ public sealed partial class LevelViewport : OpenGlControlBase
                 _transformsDirty = true;
                 _clonesDirty = true;
                 _appliedClones.Clear();
-            }
-
-            if (_pinsDirty)
-            {
-                // Spawn point pins follow the project's point lists: rebuilt for the actors with a changed list, put back
-                // as the level stores them for the others; then selection, visibility and moves are applied to the new nodes.
-                _pinsDirty = false;
-                var wanted = PinOverrides ?? new Dictionary<uint, IReadOnlyList<ScenePlacement>>();
-                foreach (var id in _appliedPins.Where(id => !wanted.ContainsKey(id)).ToList())
-                {
-                    level.ReplacePins(id, level.Prepared.Placements.Where(p => p.SelectableId == id && p.SpawnPoint is not null).ToList());
-                    _appliedPins.Remove(id);
-                }
-
-                foreach (var (id, pins) in wanted)
-                {
-                    level.ReplacePins(id, pins);
-                    _appliedPins.Add(id);
-                }
-
-                _selectionDirty = true;
-                _visibilityDirty = true;
-                _transformsDirty = true;
             }
 
             if (_clonesDirty)
@@ -1181,10 +1227,45 @@ public sealed partial class LevelViewport : OpenGlControlBase
                     {
                         level.AddClone(clone.Id, clone.SourceId, clone.RootWorld, clone.Name, clone.MeshPath, clone.Placements);
                         _appliedClones[clone.Id] = clone;
+                        _pinsDirty |= PinOverrides?.ContainsKey(clone.Id) == true; // a re-added copy took its source's pins again
                     }
                 }
 
                 _bendsDirty = true; // re-added clones come back straight
+            }
+
+            if (_pinsDirty)
+            {
+                // Spawn point pins follow the project's point lists: rebuilt for the actors with a changed list, put back
+                // as the level stores them for the others (a copy takes its source's again); then selection, visibility and
+                // moves are applied to the new nodes. After the copies: a copy's own pins replace the ones it took (igor8802).
+                _pinsDirty = false;
+                var wanted = PinOverrides ?? new Dictionary<uint, IReadOnlyList<ScenePlacement>>();
+                foreach (var id in _appliedPins.Where(id => !wanted.ContainsKey(id)).ToList())
+                {
+                    if (_appliedClones.TryGetValue(id, out var clone))
+                    {
+                        level.RemoveClone(id);
+                        level.AddClone(clone.Id, clone.SourceId, clone.RootWorld, clone.Name, clone.MeshPath, clone.Placements);
+                        _bendsDirty = true;
+                    }
+                    else
+                    {
+                        level.ReplacePins(id, level.Prepared.Placements.Where(p => p.SelectableId == id && p.SpawnPoint is not null).ToList());
+                    }
+
+                    _appliedPins.Remove(id);
+                }
+
+                foreach (var (id, pins) in wanted)
+                {
+                    level.ReplacePins(id, pins);
+                    _appliedPins.Add(id);
+                }
+
+                _selectionDirty = true;
+                _visibilityDirty = true;
+                _transformsDirty = true;
             }
 
             if (_bendsDirty)
@@ -1262,6 +1343,7 @@ public sealed partial class LevelViewport : OpenGlControlBase
                 var hidden = HiddenIds;
                 var hiddenInstances = HiddenInstances;
                 var hiddenPins = HiddenPinKinds;
+                var shimmer = false;
                 foreach (var node in level.Scene.Nodes)
                 {
                     var visible = node.SelectableId == 0 || hidden is null || !hidden.Contains(node.SelectableId);
@@ -1276,7 +1358,15 @@ public sealed partial class LevelViewport : OpenGlControlBase
                     }
 
                     node.Visible = visible;
+                    shimmer |= level.HasShimmer && Shimmers(node);
                 }
+
+                (_shimmerShown, _shimmerNodes) = (shimmer, level.NodesBuilt);
+            }
+            else if (level.NodesBuilt != _shimmerNodes)
+            {
+                // Nodes built since (a copy re-added, a piece re-bent) may be stand-ins.
+                (_shimmerShown, _shimmerNodes) = (level.HasShimmer && level.Scene.Nodes.Any(Shimmers), level.NodesBuilt);
             }
 
             if (preview is not null)
@@ -1347,6 +1437,8 @@ public sealed partial class LevelViewport : OpenGlControlBase
             _velocity = Vector3.Zero;
         }
 
+        UpdateClipRange(); // D09/F15: near and far from what is drawn, every frame (LevelViewport.Clip.cs)
+
         if (_freeDragging && (_shownYaw != _freeYaw || _shownLift != _freeLift))
         {
             // Wheel turns and lifts glide to their target (about 0.08 s) instead of jumping a step per notch.
@@ -1413,20 +1505,34 @@ public sealed partial class LevelViewport : OpenGlControlBase
         }
 
         RenderStats stats;
+        RenderStats? farStats = null;
         _renderer.Time = (float)(now % 3600.0); // the stand-ins' glint; wrapped so a long session keeps float precision
+        SyncViewSettings(_renderer);          // r33-mapux: push the Wireframe toggle onto the renderer
+        detailSettings = _renderer.Settings;  // keep the synced wireframe for the backdrop and detail passes
+        var renderStart = Stopwatch.GetTimestamp();
+        _gpuTimer?.Begin();
+        if (ShownBackdrop is { } islandScene)
+        {
+            // The island with the game's far view out to the chosen sectors; the detail levels over it (hidden by Show backdrop).
+            _renderer.Settings = BackdropSettings(detailSettings);
+            farStats = _renderer.Render(_target, islandScene.Scene, _camera);
+            _renderer.Settings = detailSettings;
+        }
+
         if (_level is { } scene)
         {
-            if (_backdrop is { } island)
-            {
-                _renderer.Render(_target, island.Scene, _camera);
-            }
-
-            stats = _renderer.Render(_target, scene.Scene, _camera, clear: _backdrop is null);
+            stats = _renderer.Render(_target, scene.Scene, _camera, clear: farStats is null);
         }
         else
         {
-            stats = _renderer.Render(_target, _backdrop?.Scene ?? EmptyScene, _camera);
+            stats = farStats ?? _renderer.Render(_target, EmptyScene, _camera);
+            farStats = null;
         }
+
+        _gpuTimer?.End();
+        var renderMs = Stopwatch.GetElapsedTime(renderStart).TotalMilliseconds;
+        _cpuMs = _cpuMs <= 0 ? renderMs : (_cpuMs * 0.9) + (renderMs * 0.1);
+        _budget.Add(renderMs, _gpuTimer?.LastMs ?? double.NaN, now);
 
         if (_pendingScreenshot is { } shotPath)
         {
@@ -1461,7 +1567,7 @@ public sealed partial class LevelViewport : OpenGlControlBase
             var done = _captureResult;
             try
             {
-                done?.TrySetResult(ViewportCapture.RenderOffscreen(_renderer, _camera, _backdrop?.Scene, _level?.Scene, capture.Width, capture.Height));
+                done?.TrySetResult(ViewportCapture.RenderOffscreen(_renderer, _camera, ShownBackdrop?.Scene, _level?.Scene, capture.Width, capture.Height));
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
@@ -1481,25 +1587,26 @@ public sealed partial class LevelViewport : OpenGlControlBase
 
         _wasContinuous = moving || _looking || _panning;
 
-        var info = _level is { } l
-            ? $"{l.PlacedCount:N0} placements · {stats.Instances:N0} drawn · {stats.Culled:N0} culled · {stats.Triangles:N0} tris" + (_frameMs > 0 ? $" · {1000.0 / _frameMs:0} fps" : string.Empty)
-            : "no level loaded";
-        if (info != _lastInfo && now - _lastInfoSeconds > 0.25)
+        if (now - _lastInfoSeconds > 0.25)
         {
-            // A few updates a second: posting a new text every frame re-lays out the HUD and costs frame time.
-            _lastInfo = info;
+            // A few updates a second, and the text is only made then: posting a new one every frame re-lays out the HUD.
+            var info = FrameText(stats, farStats, now - _lastInfoSeconds);
             _lastInfoSeconds = now;
-            Dispatcher.UIThread.Post(() => FrameInfo = info, DispatcherPriority.Background);
+            if (info != _lastInfo)
+            {
+                _lastInfo = info;
+                Dispatcher.UIThread.Post(() => FrameInfo = info, DispatcherPriority.Background);
+            }
         }
 
         if (moving || _looking || _panning)
         {
             RequestNextFrameRendering();
         }
-        else if (_level is { HasShimmer: true } && !_shimmerQueued)
+        else if (_shimmerShown && _level is not null && !_shimmerQueued)
         {
-            // Stand-ins keep glinting at rest: a frame every 40 ms (25 fps) is smooth for a 1.5 s pulse and cheap.
-            // ponytail: runs while any stand-in is in the scene, hidden layers included; gate on the spawn layers if it costs.
+            // Stand-ins keep glinting at rest: a frame every 40 ms (25 fps) is smooth for a 1.5 s pulse and cheap. Only while
+            // one is shown: hidden spawn layers left the view drawing 25 times a second at rest (audit F271/F456).
             _shimmerQueued = true;
             DispatcherTimer.RunOnce(() =>
             {
@@ -1510,8 +1617,75 @@ public sealed partial class LevelViewport : OpenGlControlBase
     }
 
     private bool _shimmerQueued;
+    private bool _shimmerShown;
+    private int _shimmerNodes = -1;
 
     private static readonly Rendering.SceneGraph.Scene EmptyScene = new();
+
+    /// <summary>True when <paramref name="node"/> is shown and draws a glinting stand-in (<c>GpuMesh.Shimmer</c>).</summary>
+    private bool Shimmers(SceneNode node) =>
+        node.Visible && node.Mesh is { } mesh && _renderer is not null && _renderer.Meshes.TryGetValue(mesh.Id, out var gpu) && gpu.Shimmer;
+
+    /// <summary>
+    /// The detail scene's settings for the quality, hour, light and water: the same object until one of them changes
+    /// (<see cref="FrameBudget.Apply"/> lowers them while Smooth needs it).
+    /// </summary>
+    private RenderSettings DetailSettings(SceneRenderer renderer)
+    {
+        var key = (Quality, (float)TimeOfDay, Lighting, AnimateWater);
+        if (_detailSettings is null || key != _detailKey)
+        {
+            var quality = RenderQualityProfile.For(key.Quality);
+            _detailKey = key;
+            _detailSettings = (_detailSettings ?? renderer.Settings) with
+            {
+                ObjectDrawDistance = quality.ObjectDistanceCm, LodBias = quality.LodBias, CullPixelSize = quality.CullPixels,
+                Shadows = key.Quality != RenderQuality.Performance, // sun shadows cost a second geometry pass near the camera
+                ShadowDistance = quality.ShadowDistanceCm, TimeOfDay = key.Item2, Lighting = key.Lighting, AnimateWater = key.AnimateWater,
+            };
+        }
+
+        return _detailSettings;
+    }
+
+    /// <summary>
+    /// The island backdrop's settings: <paramref name="detail"/> with the game's far models drawn out to
+    /// <see cref="RenderDistance"/> sectors (one less at Smooth's last step); the same object while nothing changes.
+    /// </summary>
+    private RenderSettings BackdropSettings(RenderSettings detail)
+    {
+        var (sectors, sectorCm) = (_budget.RenderDistance(RenderDistance), SectorSizeCm > 0f ? SectorSizeCm : DefaultSectorSizeCm);
+        if (_backdropSettings is null || !ReferenceEquals(_backdropKey.Detail, detail) || _backdropKey.Sectors != sectors || _backdropKey.SectorCm != sectorCm)
+        {
+            _backdropKey = (detail, sectors, sectorCm);
+            _backdropSettings = FrameBudget.Backdrop(detail, sectors, sectorCm);
+        }
+
+        return _backdropSettings;
+    }
+
+    /// <summary>
+    /// The frame readout: placements, what was drawn (backdrop and levels), draw calls, CPU and GPU time of the draw calls,
+    /// frame rate, the collector's pauses per second since the last readout and its full collections since the view opened,
+    /// and how far Smooth lowered the view (owner: a line to screenshot when it stutters).
+    /// </summary>
+    private string FrameText(RenderStats stats, RenderStats? farStats, double seconds)
+    {
+        var pause = GC.GetTotalPauseDuration();
+        var pausePerSecond = seconds > 0 ? (pause - _hudPause).TotalMilliseconds / seconds : 0.0;
+        _hudPause = pause;
+        if (_level is not { } level)
+        {
+            return Loc.T("Map.NoLevelLoaded");
+        }
+
+        var culture = CultureInfo.CurrentCulture;
+        var gpu = _gpuTimer?.LastMs is { } gpuMs && double.IsFinite(gpuMs) ? gpuMs.ToString("0.0", culture) : "-";
+        var fps = _frameMs > 0 ? (1000.0 / _frameMs).ToString("0", culture) : "-";
+        var text = Loc.F("Map.Hud.Stats", level.PlacedCount, stats.Instances + (farStats?.Instances ?? 0), stats.Triangles + (farStats?.Triangles ?? 0),
+            stats.Batches + (farStats?.Batches ?? 0), _cpuMs, gpu, fps, pausePerSecond, GC.CollectionCount(2) - _hudGen2);
+        return _budget.Level > 0 ? text + " · " + Loc.F("Map.Hud.Smoothed", _budget.Level) : text;
+    }
 
     /// <summary>
     /// Gives the control a hit area. The GL frame is a child surface visual that Avalonia's hit test ignores, so without
@@ -1848,7 +2022,11 @@ public sealed partial class LevelViewport : OpenGlControlBase
     protected override void OnKeyDown(KeyEventArgs e)
     {
         base.OnKeyDown(e);
-        if (e.Key == Key.Tab && e.KeyModifiers == KeyModifiers.None)
+        if (HandleViewKey(e))
+        {
+            e.Handled = true; // Esc cancelling a drag, the numpad's views, wireframe (LevelViewport.Views.cs)
+        }
+        else if (e.Key == Key.Tab && e.KeyModifiers == KeyModifiers.None)
         {
             ToggleDrone();
             e.Handled = true;
@@ -2121,7 +2299,7 @@ public sealed partial class LevelViewport : OpenGlControlBase
     /// </summary>
     private Vector3 BrushCentre(Vector3 origin, Vector3 direction, Func<Vector3?> pick)
     {
-        Vector3? Terrain() => (Scene?.HeightField?.RaycastGl(origin, direction, _camera.FarPlane) ?? Backdrop?.HeightField?.RaycastGl(origin, direction, _camera.FarPlane)) is { } ground
+        Vector3? Terrain() => (Scene?.HeightField?.RaycastGl(origin, direction, _camera.FarPlane) ?? HitBackdrop?.HeightField?.RaycastGl(origin, direction, _camera.FarPlane)) is { } ground
             ? UeToGl.Point(new FVector(ground.Position.X, ground.Position.Y, ground.Position.Z))
             : null;
 

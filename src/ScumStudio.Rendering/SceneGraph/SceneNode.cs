@@ -130,11 +130,17 @@ public sealed class SceneNode
     /// <summary>On the top node of a tree: true when changes were dropped past <see cref="MaxChangeLog"/> (the log is incomplete: rebuild everything).</summary>
     internal bool LogOverflow { get; set; }
 
-    /// <summary>The batch result this node's instance record lives in (set by <see cref="SceneBatcher.Get"/>), or null.</summary>
-    internal BatchResult? SlotOwner { get; set; }
+    /// <summary>
+    /// The batch holding this node's instance record (set by <see cref="SceneBatcher.Get"/>), or null. A batch a partial
+    /// rebuild keeps keeps its nodes: only the batch learns its new result and index.
+    /// </summary>
+    internal RenderBatch? Slot { get; set; }
+
+    /// <summary>The batch result this node's instance record lives in, or null.</summary>
+    internal BatchResult? SlotOwner => Slot?.Owner;
 
     /// <summary>Batch index of the node's instance record in <see cref="SlotOwner"/>.</summary>
-    internal int SlotBatch { get; set; }
+    internal int SlotBatch => Slot?.Index ?? 0;
 
     /// <summary>Instance index of the node's record inside its batch.</summary>
     internal int SlotIndex { get; set; }

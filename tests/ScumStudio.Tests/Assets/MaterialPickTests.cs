@@ -133,6 +133,42 @@ public sealed class MaterialPickTests
     }
 
     [Fact]
+    public void TheMastersSnowLayerIsNeverTheBaseColour()
+    {
+        // D06 (seviscache, defolt_0999): Mi_Cliff_01 and MI_Shelves_04_Inst set only masks and normals, their colour slots
+        // hold dummies; the master's 'SnowTexture' default (T_SnowTexture, a normal map cooked as TC_Default BC7) matched the
+        // "Texture" hint and the cliffs and shelves were drawn purple-blue on the Map.
+        var cliff = MaterialInspector.Pick(
+            new([], [], [T("Atlas_Masks", "T_Cliff_01_Dirt_Edge_Mask"), T("Atlas_Normal", "T_Cliff_01_N"), T("Organic Overlay D", "T_Moss_D")]),
+            new([], [], [T("PrecipitationRT", "RT_PrecipitationMask"), T("SnowMask", "T_FlatWhiteMask_Dummy_01"), T("SnowTexture", "T_SnowTexture")]));
+        Assert.Null(cliff.BaseColor);
+        Assert.Equal("/Game/T/T_Cliff_01_N.T_Cliff_01_N", cliff.Normal);
+
+        var shelf = MaterialInspector.Pick(
+            new([], [], [T("BM Normal", "T_PlasterDetail_N"), T("Mask 01", "T_MarketShelve_04_Mask"), T("Mesh Stains/AO Map", "T_MarketShelve_04_DetailMask")]),
+            new([], [], [T("BM Diffuse", "T_FlatWhiteColor_Dummy_01"), T("SnowCoverageMask", "T_Snow_Mask"), T("SnowTexture", "T_SnowTexture")]));
+        Assert.Null(shelf.BaseColor);
+
+        // Moss and dirt layers named "... Texture" neither (a Zil truck drew T_CoastalRock_Moss_06_D), while a real colour still wins.
+        Assert.Null(MaterialInspector.PickTexture([T("Moss Texture", "T_CoastalRock_Moss_06_D"), T("Snow Texture", "T_Snow_02_D")]));
+        Assert.Equal("/Game/T/Gravel_Road_02_D.Gravel_Road_02_D", MaterialInspector.PickTexture([T("Snow Texture", "T_Snow_02_D"), T("Road Texture", "Gravel_Road_02_D")]));
+
+        // M_Background_01 (the far hills): its first "...Texture" holds the normal map.
+        Assert.Equal("/Game/T/Background_01_D.Background_01_D",
+            MaterialInspector.PickTexture([T("Base_DistaneTexture_1", "Background_01_N"), T("DistaneTexture", "Background_01_D")]));
+    }
+
+    [Fact]
+    public void EmissiveAndSubsurfaceTintsAreNoSurfaceColour()
+    {
+        // With the snow layer gone, untextured masters (SCUM spells it 'Emisive') and road sides ('SS Color') drew black.
+        var white = new Vector4(1f, 1f, 1f, 1f);
+        Assert.Equal(white, MaterialInspector.PickTint([new("B Emisive Tint", new Vector4(0f, 0f, 0f, 1f), "M"), new("B Material Tint", white, "M")]));
+        Assert.Null(MaterialInspector.PickTint([new("SS Color", new Vector4(0f, 0f, 0f, 1f), "M_SideObject_RVT")]));
+        Assert.Null(MaterialInspector.PickTint([new("Subsurface Color", new Vector4(0.2f, 0.5f, 0.1f, 1f), "M")]));
+    }
+
+    [Fact]
     public void TheObjectsOwnNormalMap_NotADetailOrBlendLayerOrAFlatDummy()
     {
         // MI_CliffRock_01: 'Normal' is the rock's; 'DetailNormal' a tiled flat dummy.

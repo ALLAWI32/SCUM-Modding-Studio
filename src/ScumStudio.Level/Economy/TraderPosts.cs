@@ -173,11 +173,18 @@ public static partial class TraderPosts
             }
         }
 
-        // A copy of a stock post (Duplicate) carries its trader along: the trader is still on the island.
+        // A copy of a stock post (Duplicate, or Copy and Paste: an added Blueprint without a trader of its own) carries its
+        // trader along: the trader is still on the island (audit F278).
         foreach (var (copy, op) in state.AddedActors)
         {
-            if (op is DuplicateActorOp duplicate && !state.IsDeleted(copy)
-                && levels.FirstOrDefault(l => string.Equals(l.PackagePath, duplicate.Source.Level, StringComparison.OrdinalIgnoreCase))?.FindActor(duplicate.Source.Actor) is { } source)
+            var from = op switch
+            {
+                DuplicateActorOp duplicate => duplicate.Source,
+                AddBlueprintActorOp { Trader: null, Mechanic: null } pasted => pasted.Source,
+                _ => null,
+            };
+            if (from is not null && !state.IsDeleted(copy)
+                && levels.FirstOrDefault(l => string.Equals(l.PackagePath, from.Level, StringComparison.OrdinalIgnoreCase))?.FindActor(from.Actor) is { } source)
             {
                 kept.UnionWith(source.TraderMarkers.Select(m => m.Name));
             }
@@ -186,6 +193,34 @@ public static partial class TraderPosts
         gone.ExceptWith(kept);
         return gone;
     }
+
+    /// <summary>
+    /// The placed traders that are off the island (audit F100): named in an <see cref="AddBlueprintActorOp"/> of any recorded
+    /// edit (applied, undone or discarded; batches included) and not placed now (<see cref="Placed"/>). Their sections stay in
+    /// the project's file, "parked": hidden on the Economy page and left out of the export, until a redo or an undo brings them
+    /// back (a discarded placement never does, and its section is never exported).
+    /// </summary>
+    public static IReadOnlySet<string> ParkedTraders(Journal journal, EditState state)
+    {
+        ArgumentNullException.ThrowIfNull(journal);
+        ArgumentNullException.ThrowIfNull(state);
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var item in journal.History) // discarded placements too: their sections are never exported
+        {
+            names.UnionWith(PlacedNames(item.Op));
+        }
+
+        names.ExceptWith(Placed(state).Select(p => p.Op.Trader!.Name));
+        return names;
+    }
+
+    /// <summary>The trader names an edit places (<see cref="AddBlueprintActorOp.Trader"/>, through batches).</summary>
+    public static IEnumerable<string> PlacedNames(EditOp op) => op switch
+    {
+        AddBlueprintActorOp { Trader.Name.Length: > 0 } add => [add.Trader!.Name],
+        BatchOp batch => batch.Ops.SelectMany(PlacedNames),
+        _ => [],
+    };
 
     /// <summary>A cell's outpost name (<c>A_0</c> → <c>Outpost_A_0</c>, the stock outposts' own naming).</summary>
     public static string DefaultOutpost(string cell) => $"Outpost_{cell}";

@@ -1,5 +1,6 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.VisualTree;
@@ -18,6 +19,17 @@ public partial class ModulePageView : UserControl
         InitializeComponent();
         // Right-click selects the row under the pointer first, so the context menu acts on it (like a file explorer).
         ItemList.AddHandler(PointerPressedEvent, OnItemPointerPressed, RoutingStrategies.Tunnel);
+        // The Vehicles studio: the 3D view's surface clicks (decals, a new part), gizmo drags and part picks go to the page.
+        ItemPreview.SurfacePointer += (_, e) => _viewModel?.OnStudioSurface(e.PartIndex, new System.Numerics.Vector3(e.Origin.X, e.Origin.Y, e.Origin.Z),
+            new System.Numerics.Vector3(e.Direction.X, e.Direction.Y, e.Direction.Z), e.IsDrag, e.IsRelease, e.IsCancel);
+        ItemPreview.PartGizmo += (_, e) => _viewModel?.OnStudioGizmo(e.PartIndex, e.Start, e.Transform, e.Committed);
+        ItemPreview.PropertyChanged += (_, e) =>
+        {
+            if (e.Property == ScumStudio.App.Controls.MeshPreview.SelectedPartIndexProperty && e.NewValue is int index)
+            {
+                _viewModel?.OnStudioPick(index);
+            }
+        };
     }
 
     /// <inheritdoc />
@@ -45,7 +57,7 @@ public partial class ModulePageView : UserControl
 
     private void OnViewModelPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == nameof(ModulePageViewModel.HasPaints))
+        if (e.PropertyName == nameof(ModulePageViewModel.ShowStudioPanel))
         {
             ShowPaintColumn();
         }
@@ -60,11 +72,20 @@ public partial class ModulePageView : UserControl
             _paintWidth = columns[2].ActualWidth;
         }
 
-        var shown = _viewModel?.HasPaints == true;
+        var shown = _viewModel?.ShowStudioPanel == true;
         columns[1].Width = new GridLength(shown ? 8 : 0);
         columns[2].MinWidth = shown ? 240 : 0;
         columns[2].MaxWidth = shown ? 760 : 0;
         columns[2].Width = new GridLength(shown ? _paintWidth : 0);
+    }
+
+    /// <summary>A click on the studio tab shown keeps it shown (a toggle unchecks itself on a second click).</summary>
+    private void OnStudioTabClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is ToggleButton { IsChecked: false } tab)
+        {
+            tab.SetCurrentValue(ToggleButton.IsCheckedProperty, true);
+        }
     }
 
     private void OnCloneRequested(object? sender, EventArgs e)

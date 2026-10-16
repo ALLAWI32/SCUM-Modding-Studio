@@ -49,6 +49,17 @@ public sealed partial class MapPageViewModel
             areas.Add(around);
         }
 
-        return areas.Count == 0 ? null : SpawnPlaces.Over(places, areas);
+        // The project's new places (not copies) stand in the document where they were made, so the map moves, copies and
+        // deletes them like a stock place (its edits apply on top); a copy is drawn from its source as any copy is.
+        return areas.Count == 0 ? null : SpawnPlaces.Over(places.Concat(NewPlaces()), areas);
     }
+
+    /// <summary>
+    /// The project's new spawn places where they were made. Read on the loading worker from the state's own snapshot (a list
+    /// the UI thread replaces, never changes, while it applies edits); one made meanwhile shows on the next load.
+    /// </summary>
+    private List<SpawnPlace> NewPlaces() =>
+        _services.Projects.Current?.State is { } state
+            ? state.NewSpawnPlaces.Select(p => SpawnPlaces.At(p.Kind, p.Setting, p.Transform) with { Name = p.NewName }).ToList()
+            : [];
 }

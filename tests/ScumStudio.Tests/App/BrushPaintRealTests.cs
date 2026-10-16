@@ -105,9 +105,13 @@ public sealed class BrushPaintRealTests
         map.PaintSpacing = Spacing / 100f;
 
         // The stroke: 20 m along X, a dab every 50 cm on the terrain.
-        var before = map.AllActors.SelectMany(a => a.Actor.InstanceTransforms).Where(i => IsTree(i.StaticMeshPath) || i.StaticMeshPath?.Contains("/Bush/", StringComparison.OrdinalIgnoreCase) == true)
-            .Where(i => Across(scene, i.StaticMeshPath!, i.WorldTransform) >= 100f)
-            .Select(i => i.WorldTransform.Translation).Where(t => Flat(t, best.At) < 3_500f).ToList();
+        // A bush (the brush's rule: a bush folder mesh, or foliage the game clears like grass) keeps a planted tree only
+        // SpacingIndex.UndergrowthClear off: a tree passes over undergrowth (SM_Bush_03 of FoliageInstancedBush_19 stands here).
+        var before = map.AllActors.SelectMany(a => a.Actor.InstanceTransforms.Select(i => (Instance: i, Component: a.Actor.FindComponent(i.ComponentName))))
+            .Where(p => IsTree(p.Instance.StaticMeshPath) || p.Instance.StaticMeshPath?.Contains("/Bush/", StringComparison.OrdinalIgnoreCase) == true)
+            .Where(p => Across(scene, p.Instance.StaticMeshPath!, p.Instance.WorldTransform) >= 100f)
+            .Select(p => (At: p.Instance.WorldTransform.Translation, Bush: p.Instance.StaticMeshPath!.Contains("/Bush/", StringComparison.OrdinalIgnoreCase) || (p.Component is not null && GrassClearing.IsClearedFoliage(p.Component))))
+            .Where(t => Flat(t.At, best.At) < 3_500f).ToList();
         var rows = ctx.Services.Projects.History.Count;
         var applied = project.Journal.Applied.Count;
         var times = new List<double>();
@@ -156,7 +160,7 @@ public sealed class BrushPaintRealTests
                 Assert.True(Flat(planted[i], planted[j]) >= Spacing - 1f, $"{planted[i]} and {planted[j]} are {Flat(planted[i], planted[j]):0} cm apart");
             }
 
-            Assert.All(before, t => Assert.True(Flat(planted[i], t) >= Spacing - 1f, $"{planted[i]} is {Flat(planted[i], t):0} cm from the tree at {t}"));
+            Assert.All(before, t => Assert.True(Flat(planted[i], t.At) >= (t.Bush ? SpacingIndex.UndergrowthClear : Spacing) - 1f, $"{planted[i]} is {Flat(planted[i], t.At):0} cm from the {(t.Bush ? "bush" : "tree")} at {t.At}"));
         }
 
         // The export appends them to the tile's foliage: the game's reader counts the stored trees and the planted ones.

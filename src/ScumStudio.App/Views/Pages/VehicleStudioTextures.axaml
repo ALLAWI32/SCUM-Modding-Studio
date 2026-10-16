@@ -1,0 +1,38 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:ScumStudio.App.ViewModels"
+             x:Class="ScumStudio.App.Views.Pages.VehicleStudioTextures"
+             x:DataType="vm:ModulePageViewModel">
+  <StackPanel Spacing="6" Margin="12,8">
+    <TextBlock Text="{Tr Studio.Textures.Title}" Classes="h2" />
+    <TextBlock Text="{Tr Studio.Textures.Caption}" Classes="caption wrap" />
+    <ComboBox x:Name="TextureMaterialPicker" ItemsSource="{Binding Paints}" SelectedItem="{Binding TextureMaterial}" HorizontalAlignment="Stretch"
+              ToolTip.Tip="{Tr Studio.Textures.Slots.Tip}">
+      <ComboBox.ItemTemplate>
+        <DataTemplate x:DataType="vm:PaintMaterialViewModel">
+          <TextBlock Text="{Binding Name}" />
+        </DataTemplate>
+      </ComboBox.ItemTemplate>
+    </ComboBox>
+    <ItemsControl x:Name="TextureSlotList" ItemsSource="{Binding TextureSlots}">
+      <ItemsControl.ItemTemplate>
+        <DataTemplate x:DataType="vm:TextureSlotViewModel">
+          <StackPanel Spacing="4" Margin="0,6,0,2">
+            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+              <TextBlock Text="{Binding Parameter}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+              <TextBlock Grid.Column="1" Text="{Binding Info}" Classes="caption" VerticalAlignment="Center" />
+            </Grid>
+            <WrapPanel Orientation="Horizontal">
+              <Button Classes="accent small" Margin="0,0,6,4" Content="{Tr Studio.Textures.Replace}" Command="{Binding ReplaceCommand}"
+                      ToolTip.Tip="{Tr Studio.Textures.Replace.Tip}" />
+              <Button Classes="ghost small" Margin="0,0,6,4" Content="{Tr Studio.Textures.SavePng}" Command="{Binding SavePngCommand}"
+                      ToolTip.Tip="{Tr Studio.Textures.SavePng.Tip}" />
+              <Button Classes="ghost small" Margin="0,0,6,4" Content="{Tr Studio.Textures.Reset}" Command="{Binding ResetCommand}"
+                      ToolTip.Tip="{Tr Studio.Textures.Reset.Tip}" />
+            </WrapPanel>
+          </StackPanel>
+        </DataTemplate>
+      </ItemsControl.ItemTemplate>
+    </ItemsControl>
+  </StackPanel>
+</UserControl>

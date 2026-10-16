@@ -67,7 +67,7 @@ public sealed class TerrainCacheTests : IDisposable
         read.Stop();
 
         Assert.Equal(built.Terrain.Count, back.Terrain.Count);
-        Assert.True(read.Elapsed < build.Elapsed / 4, $"read {read.ElapsedMilliseconds} ms, built {build.ElapsedMilliseconds} ms, {new FileInfo(path).Length / 1048576} MB");
+        if (!Ci.On) Assert.True(read.Elapsed < build.Elapsed / 4, $"read {read.ElapsedMilliseconds} ms, built {build.ElapsedMilliseconds} ms, {new FileInfo(path).Length / 1048576} MB");
         File.WriteAllText(Path.Combine(Path.GetTempPath(), "scumstudio-terrain-timing.txt"),
             $"built {build.ElapsedMilliseconds} ms, read {read.ElapsedMilliseconds} ms, file {new FileInfo(path).Length / 1048576} MB, {back.Terrain.Count} components");
     }

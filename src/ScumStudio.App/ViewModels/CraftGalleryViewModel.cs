@@ -110,7 +110,7 @@ public sealed partial class CraftGalleryViewModel : ViewModelBase
     {
         try
         {
-            var sorted = await Task.Run(() => Sort(catalog.Index ?? catalog.BuildIndex(resolveClasses: false), CraftablesPlanner.Items(catalog))).ConfigureAwait(true);
+            var sorted = await Task.Run(() => Sort(catalog.Index ?? catalog.BuildIndex(resolveClasses: false), CraftablesPlanner.Items(catalog), p => CraftablesPlanner.NativeClassOf(catalog, p))).ConfigureAwait(true);
             if (!ReferenceEquals(_catalog, catalog))
             {
                 return;
@@ -145,9 +145,12 @@ public sealed partial class CraftGalleryViewModel : ViewModelBase
     /// Sorts the package index into objects, <paramref name="gameItems"/> and packages the catalogue does not know (on a
     /// worker; the ingredient picker lists the same items). <c>Search</c> holds all three in the Assets page's order (the
     /// catalogue's, then the unknown packages), so a search ranks like the Assets page's (seviscache found
-    /// AnimalBaitFeederItem there and not here).
+    /// AnimalBaitFeederItem there and not here). An item the catalogue files outside the pick-up categories (a
+    /// DLC's jacket under its pack, at its <c>/SCUM/Plugins/...</c> path) or not at all goes to the category of what it is,
+    /// by its native class (<paramref name="nativeOf"/>, <see cref="CraftablesPlanner.NativeClassOf"/>): clothes with the
+    /// clothes, a bow with the ranged weapons.
     /// </summary>
-    internal static (List<(DumpPackage Package, PackageEntry Entry)> Objects, List<(DumpPackage Package, PackageEntry Entry)> Items, List<(DumpPackage Package, PackageEntry Entry)> Other, List<PackageEntry> Search) Sort(PackageIndex index, IReadOnlySet<string> gameItems)
+    internal static (List<(DumpPackage Package, PackageEntry Entry)> Objects, List<(DumpPackage Package, PackageEntry Entry)> Items, List<(DumpPackage Package, PackageEntry Entry)> Other, List<PackageEntry> Search) Sort(PackageIndex index, IReadOnlySet<string> gameItems, Func<string, string?>? nativeOf = null)
     {
         var catalogue = new Dictionary<string, DumpPackage>(StringComparer.OrdinalIgnoreCase);
         var order = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
@@ -174,7 +177,15 @@ public sealed partial class CraftGalleryViewModel : ViewModelBase
                 : e.ClassName ?? (e.Name.StartsWith("SM_", StringComparison.OrdinalIgnoreCase) ? "StaticMesh" : e.Name.StartsWith("BP", StringComparison.OrdinalIgnoreCase) ? "Blueprint" : null);
             if (gameItems.Contains(path))
             {
-                (known ? items : other).Add((known ? package : new DumpPackage(path, string.Empty, "Blueprint"), e with { ClassName = "Blueprint" }));
+                known = known || catalogue.TryGetValue(CraftablesPlanner.GamePath(path), out package);
+                if ((!known || !AssetsPageViewModel.PickUpRoots.Contains(Root(package.Node))) && nativeOf?.Invoke(path) is { } native)
+                {
+                    items.Add((new DumpPackage(path, PickUpNode(native), "Blueprint"), e with { ClassName = "Blueprint" }));
+                }
+                else
+                {
+                    (known ? items : other).Add((known ? package : new DumpPackage(path, string.Empty, "Blueprint"), e with { ClassName = "Blueprint" }));
+                }
             }
             else if (className is not null && RecipeRules.IsAllowedSource(path, className) && !FarModels.IsFarViewMesh(path) && !FarModels.IsUndersideMesh(path))
             {
@@ -189,11 +200,27 @@ public sealed partial class CraftGalleryViewModel : ViewModelBase
             }
         }
 
-        var search = objects.Concat(items).OrderBy(o => order[o.Item1.PackagePath]).Concat(other).Select(o => o.Item2).ToList();
+        // An item sorted by its native class may be a package the catalogue knows only at its game path, or not at all.
+        int Rank(string p) => order.TryGetValue(p, out var i) || order.TryGetValue(CraftablesPlanner.GamePath(p), out i) ? i : order.Count;
+        var search = objects.Concat(items).OrderBy(o => Rank(o.Item1.PackagePath)).Concat(other).Select(o => o.Item2).ToList();
         return (objects, items, other, search);
     }
 
     private static string Root(string node) => node[..(node.IndexOf('.') is var dot and >= 0 ? dot : node.Length)];
+
+    /// <summary>The catalogue category of an item by its native class (<c>ClothesItem</c>: clothing and armour).</summary>
+    internal static string PickUpNode(string native) => native switch
+    {
+        "ClothesItem" or "Quiver" or "WeaponHolsterItem" or "NightVisionGogglesItem" => "items.clothing",
+        "Weapon" or "WeaponRevolver" or "WeaponBow" or "WeaponCrossbow" or "WeaponAutoCrossbow" => "weapons.ranged",
+        "WeaponItem" or "Chainsaw" => "weapons.melee",
+        _ when native.StartsWith("WeaponAttachment", StringComparison.Ordinal) || native.StartsWith("BowAttachment", StringComparison.Ordinal) => "attachments",
+        _ when native.StartsWith("Ammunition", StringComparison.Ordinal) => "ammo",
+        _ when native.Contains("Grenade", StringComparison.Ordinal) => "weapons.throwables",
+        _ when native.Contains("Trap", StringComparison.Ordinal) => "explosives",
+        "FoodItem" or "CookedFoodItem" or "FishItem" => "items.food",
+        _ => "items",
+    };
 
     partial void OnSelectedCategoryChanged(ObjectCategoryNode? value)
     {

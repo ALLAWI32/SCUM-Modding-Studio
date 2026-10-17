@@ -82,6 +82,7 @@ You need Windows 10 or 11 (x64), SCUM installed, and a graphics card with OpenGL
 | **Far view follows your edits** | Delete or move a building and it is cut out of the island's far-view models and the outposts' HLODs too, so it no longer shows from far away. |
 | **Objects browser** | Every placeable object of the game in categories (buildings, furniture, nature, vehicles, items …) with thumbnails, plus building sets: all walls, all roads, all bridges. Place one in front of the camera with a click. |
 | **Vehicles and weapons** | Change the stored values (damage, rate of fire, range, handling, mass, capacity, names …) or clone a vehicle or item under a new name, ready to spawn with `#SpawnItem` / `#SpawnVehicle`. Knives, axes and bats with their **hit damage**; a vehicle's **engine power** (torque at each rpm). A clone keeps its own damage, engine and paint; the original stays as it is. |
+| **Any item** | The Items page lists every other inventory item (copper coins, medicine, food, resources, clothes, weapon attachments …) by folder. Change its name, description, weight, stack size or uses, inventory size and trader price, or clone it under a new name that `#SpawnItem` finds. |
 | **Vehicle and weapon paint** | Repaint a vehicle, plane or weapon in the 3D view: any colour or a finish (gold, rose gold, chrome, bronze, pink, candy red, metallic blue, pearl white, matte black) with metal and clear-coat shine. Fit the light or heavy armour kit and paint it with the car (a plain finish gives the scrap-metal plates one even colour). `Ctrl+Z` steps back; **Game colours** puts the stock paint back. |
 | **Assets** | Browse all 110,000 game packages, preview meshes and textures, export textures as PNG and meshes as glTF (Blender), dump whole categories of game files. |
 | **Mod export** | One click writes the client pak (and the server pak when a server is set) with an export report. It checks the collision of every shaped piece, makes the game load your additions wherever you built them, and never modifies the original game files. |
@@ -156,7 +157,7 @@ included in this repository.</sub>
 
 ### Top bar
 
-- **Map, Vehicles, Weapons, Spawns, Assets, Projects, Settings**: the pages.
+- **Map, Vehicles, Weapons, Items, Spawns, Assets, Projects, Settings**: the pages.
 - **Update x.y.z** (only when a new version is out): the release notes and **Install and restart**.
 - **Search** (`Ctrl+K`): searches the current page; elsewhere it searches the Assets page.
 - **PROJECT**: the open project; the plug icon opens the setup.
@@ -208,9 +209,12 @@ included in this repository.</sub>
 - **History**: the project's edits, newest first, with undo (`Ctrl+Z`) and redo (`Ctrl+Y`).
 - **New project / Open project / Export mod**: top right.
 
-### Vehicles and Weapons
+### Vehicles, Weapons and Items
 
-- The list on the left with a filter and category chips (Weapons, Melee, Magazines, Ammunition, Projectiles; Car, Bike, Boat …).
+- The list on the left with a filter and category chips (Weapons, Melee, Magazines, Ammunition, Projectiles; Car, Bike, Boat …;
+  on the Items page the game's item folders: Equipment, Medications, Food, Clothes …).
+- **Items**: the entity setup holds the in-game name, description, weight, inventory size and, where the item has one, its
+  stack size or number of uses (**Max quantity**: nails 10, a painkiller blister 8). Copper coins have none in the game files.
 - **Values** / **3D**: the stored values, or the model in 3D (the whole stock vehicle, doors and panels included).
 - **Paint** (vehicles, next to the 3D view): each body material's colour, a second colour on two-tone bodies, **Metal**
   and **Clear coat**, and finishes (gold, rose gold, chrome, bronze, pink, candy red, metallic blue, pearl white, matte

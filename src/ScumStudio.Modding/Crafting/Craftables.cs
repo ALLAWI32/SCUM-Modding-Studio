@@ -60,7 +60,17 @@ public enum CraftMaterial
 /// item's own tag (<see cref="IngredientIndex.Resolve"/>).
 /// </param>
 /// <param name="AddTag">The user allows a new tag on the item's stock entity setup when the item has no tag of its own.</param>
-public sealed record CraftIngredient(string Tag, int Amount, bool IsTool = false, string? Item = null, bool AddTag = false);
+/// <param name="Levels">
+/// The amount at each skill level, set by the user; null asks the higher levels for less, as the game's recipes do
+/// (<see cref="RecipeIngredients.PerSkill"/> of <paramref name="Amount"/>). When set it is what the recipe gets, its no-skill
+/// amount included.
+/// </param>
+public sealed record CraftIngredient(string Tag, int Amount, bool IsTool = false, string? Item = null, bool AddTag = false, LevelAmounts? Levels = null)
+{
+    /// <summary>The amounts the recipe gets per skill level (<see cref="Levels"/>, else the automatic ones), each at least 1.</summary>
+    [JsonIgnore]
+    public LevelAmounts PerLevel => (Levels ?? LevelAmounts.Auto(Amount)).Clamped();
+}
 
 /// <summary>Power settings of a <see cref="CraftKind.Power"/> craftable (the generator's entity setup values).</summary>
 /// <param name="RadiusMeters">Power radius, the green circle (game: 10 m, the small generator 5 m).</param>
@@ -132,6 +142,26 @@ public sealed record Craftable
 
     /// <summary>Power settings (used when <see cref="Kind"/> is <see cref="CraftKind.Power"/>).</summary>
     public PowerSettings Power { get; init; } = new();
+
+    /// <summary>
+    /// The folder its new packages go in, inside each template's folder (HexTer: "organize things neatly"): <c>Furniture</c>
+    /// puts its recipe at <c>…/Recipes/Placeables/Furniture/CR_SS_Chair</c> and its element at
+    /// <c>…/BaseElements/Furniture/BP_SS_Chair</c> (a station's ingredient tag stays in the game's tag folder). Null: beside
+    /// the template, as every craftable before 3.3 (<see cref="CraftableNames.IsValidFolder"/>). Chosen until the first
+    /// export, like <see cref="Token"/>.
+    /// </summary>
+    public string? Folder { get; init; }
+
+    /// <summary>
+    /// True once an export wrote it into a Craftables pak; false while it never was; null for one stored before the studio
+    /// kept track (it may have been exported). Only a false one may change its <see cref="Token"/> and <see cref="Folder"/>:
+    /// the game saves what players built by the asset path.
+    /// </summary>
+    public bool? Exported { get; init; }
+
+    /// <summary>Its asset name and folder are fixed (<see cref="Exported"/> is not false).</summary>
+    [JsonIgnore]
+    public bool IsLocked => Exported != false;
 }
 
 /// <summary>The project's craftables, stored as <c>craftables.json</c> in the project folder.</summary>
@@ -149,6 +179,26 @@ public sealed record CraftablesFile
 
     /// <summary>The craftables, in list order.</summary>
     public IReadOnlyList<Craftable> Items { get; init; } = [];
+
+    /// <summary>
+    /// Recipes of the game whose amounts per skill level the user changed (an explicit override: the Craftables pak ships
+    /// them at the game's own paths; another mod changing the same recipe conflicts).
+    /// </summary>
+    [JsonIgnore]
+    public IReadOnlyList<StockRecipeOverride> RecipeOverrides { get; init; } = [];
+
+    // Stored only when there is one: a file without overrides stays as every earlier version wrote it.
+    [JsonInclude]
+    [JsonPropertyName(nameof(RecipeOverrides))]
+    private IReadOnlyList<StockRecipeOverride>? StoredOverrides
+    {
+        get => RecipeOverrides.Count == 0 ? null : RecipeOverrides;
+        init => RecipeOverrides = value ?? [];
+    }
+
+    /// <summary>Nothing to export: no craftable and no recipe override.</summary>
+    [JsonIgnore]
+    public bool IsEmpty => Items.Count == 0 && RecipeOverrides.Count == 0;
 
     /// <summary>The project folder it was loaded from (where <see cref="Craftable.Imported"/> folders are), or null.</summary>
     [JsonIgnore]
@@ -180,7 +230,50 @@ public sealed record CraftablesFile
     /// Writes the file into <paramref name="projectDirectory"/>; an emptied list is kept too, so the next export still runs
     /// and removes the Craftables pak an earlier one left.
     /// </summary>
-    public void Save(string projectDirectory) => File.WriteAllText(Path.Combine(projectDirectory, FileName), ToJson());
+    public void Save(string projectDirectory) => File.WriteAllText(Path.Combine(projectDirectory, FileName), KeepExported(projectDirectory).ToJson());
+
+    /// <summary>
+    /// This file with every craftable the file in <paramref name="projectDirectory"/> marks exported marked too: an export
+    /// marks the file on disk (<see cref="MarkExported"/>), and a page that read it before must not take the mark back.
+    /// </summary>
+    public CraftablesFile KeepExported(string projectDirectory)
+    {
+        var path = Path.Combine(projectDirectory, FileName);
+        HashSet<string> exported;
+        try
+        {
+            exported = File.Exists(path)
+                ? Parse(File.ReadAllText(path)).Items.Where(i => i.Exported == true && i.Token is not null).Select(i => i.Token!).ToHashSet(StringComparer.OrdinalIgnoreCase)
+                : [];
+        }
+        catch (JsonException)
+        {
+            return this; // a broken file is replaced as before
+        }
+
+        return Items.Any(i => i.Exported != true && i.Token is not null && exported.Contains(i.Token))
+            ? this with { Items = Items.Select(i => i.Exported != true && i.Token is not null && exported.Contains(i.Token) ? i with { Exported = true } : i).ToList() }
+            : this;
+    }
+
+    /// <summary>
+    /// Marks the craftables of <paramref name="tokens"/> exported in the file of <paramref name="projectDirectory"/> (a
+    /// Craftables pak now has them, so their asset names and folders stay); returns the tokens newly marked.
+    /// </summary>
+    public static IReadOnlyList<string> MarkExported(string projectDirectory, IEnumerable<string> tokens)
+    {
+        ArgumentNullException.ThrowIfNull(tokens);
+        var wanted = tokens.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var file = Load(projectDirectory);
+        var marked = file.Items.Where(i => i.Exported != true && i.Token is not null && wanted.Contains(i.Token)).Select(i => i.Token!).ToList();
+        if (marked.Count > 0 || file.TokensAdded)
+        {
+            var set = marked.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            (file with { Items = file.Items.Select(i => i.Token is not null && set.Contains(i.Token) ? i with { Exported = true } : i).ToList() }).Save(projectDirectory);
+        }
+
+        return marked;
+    }
 
     /// <summary>
     /// The token every export before 3.2 gave a craftable, computed from its name: <c>SS_</c> + the Latin letters and digits
@@ -230,8 +323,11 @@ public sealed record CraftablesFile
         return token;
     }
 
-    /// <summary>True for a token the planner accepts: <c>SS_</c> and 1 to 61 letters, digits or '_' (a stored one is never renamed).</summary>
-    public static bool IsValidToken(string? token) => token is not null && Regex.IsMatch(token, "^SS_[A-Za-z0-9_]{1,61}$", RegexOptions.CultureInvariant);
+    /// <summary>
+    /// True for a token the planner accepts: a letter, then letters, digits or '_', at most <see cref="CraftableNames.MaxToken"/>
+    /// (every <c>SS_</c> token the studio gave; a stored one is never renamed, so one from before the FName number rule still is).
+    /// </summary>
+    public static bool IsValidToken(string? token) => token is not null && Regex.IsMatch(token, "^[A-Za-z][A-Za-z0-9_]{0,63}$", RegexOptions.CultureInvariant);
 
     /// <summary>
     /// <paramref name="items"/> with every token set (the same list when none was missing). A missing token is the one every

@@ -88,6 +88,7 @@ public sealed partial class MapPageViewModel
         SpawnInfo = [];
         RefreshLootEditor();
         RefreshGrassOption();
+        RefreshGuardsOption();
         if (item is null || _services.Workspace.Catalog is not { } catalog)
         {
             return;

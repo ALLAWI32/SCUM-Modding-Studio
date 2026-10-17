@@ -68,6 +68,8 @@
           </StackPanel>
           <CheckBox x:Name="ReopenLastProject" IsChecked="{Binding ReopenLastProject}" Content="{Tr Settings.ReopenLast}" ToolTip.Tip="{Tr Settings.ReopenLast.Tip}" />
           <CheckBox x:Name="ClearGrassUnderNew" IsChecked="{Binding ClearGrassUnderNew}" Content="{Tr Settings.ClearGrass}" ToolTip.Tip="{Tr Settings.ClearGrass.Tip}" />
+          <!-- Owner 2026-10-16: holes in the ground for bunkers; the game still draws the ground over them, so it stays opt-in -->
+          <CheckBox x:Name="TerrainHolesBox" IsChecked="{Binding TerrainHoles}" Content="{Tr Settings.TerrainHoles}" ToolTip.Tip="{Tr Settings.TerrainHoles.Tip}" />
           <!-- Owner: "when I delete it, everything of it must be deleted"; off, Delete takes the object alone as before -->
           <CheckBox x:Name="DeleteWithCompanionsBox" IsChecked="{Binding DeleteWithCompanions}" Content="{Tr Settings.DeleteWithCompanions}" ToolTip.Tip="{Tr Settings.DeleteWithCompanions.Tip}" />
           <!-- Owner: the toolbar button for this was pointless; the choice lives here now -->

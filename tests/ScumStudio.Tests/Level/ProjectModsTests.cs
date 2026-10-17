@@ -140,7 +140,7 @@ public sealed class ProjectModsTests : IDisposable
             [new PackagePair(SyntheticGame.Gen, "/Game/T/BP_Ours"), new PackagePair(SyntheticGame.GenEs, "/Game/T/BP_Ours_ES")]));
 
         var result = await new ProjectExporter().ExportAsync(project, catalog,
-            new ExportOptions { OutputDirectory = Path.Combine(_dir, "out"), WritePak = false, Mods = [mod] });
+            new ExportOptions { OutputDirectory = Path.Combine(_dir, "out"), WritePak = false, Mods = [mod], Validate = false }); // the synthetic game names packages it does not hold
 
         var shipped = AssetRegistryFile.Load(Path.Combine(result.StagingDirectory, "SCUM", "AssetRegistry.bin"));
         ExportSafety.AssertRegistrySuperset(stock, shipped, result.Registered.Select(r => r.ObjectPath).Append("/Game/Mods/BP_ModCar.BP_ModCar"));

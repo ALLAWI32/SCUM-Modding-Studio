@@ -273,20 +273,27 @@ public sealed class AppStudioUi : IStudioUi
     /// <inheritdoc />
     public Task<string> ShowItemAsync(string packagePath, CancellationToken cancellationToken) => OnUi(async () =>
     {
+        // A clone is listed where its template is; its own path may read as another kind (a knife clone named
+        // HedgehogKatana is not 1H_/2H_), so the other item page is tried next.
         var kind = ModdableAssets.Classify(packagePath)?.Kind;
-        var key = kind == ModdableKind.Vehicle ? "vehicles" : "weapons";
-        if (_shell.NavigateTo(key) is not ModulePageViewModel page)
+        string[] keys = kind switch
         {
-            throw new InvalidOperationException("The " + key + " page is not available.");
-        }
-
+            ModdableKind.Vehicle => ["vehicles"],
+            ModdableKind.Item => ["items", "weapons"],
+            _ => ["weapons", "items"],
+        };
         var name = ShortName(packagePath);
-        if (!await page.SelectAsync(name).ConfigureAwait(true))
+        ModulePageViewModel? page = null;
+        foreach (var key in keys)
         {
-            throw new InvalidOperationException($"{name} is not listed on the {page.Title} page.");
+            page = _shell.NavigateTo(key) as ModulePageViewModel ?? throw new InvalidOperationException("The " + key + " page is not available.");
+            if (await page.SelectAsync(name).ConfigureAwait(true))
+            {
+                return $"Showing {name} on the {page.Title} page ({page.ValuesSummary}).";
+            }
         }
 
-        return $"Showing {name} on the {page.Title} page ({page.ValuesSummary}).";
+        throw new InvalidOperationException($"{name} is not listed on the {page!.Title} page.");
     });
 
     private MapPageViewModel ShowMap() =>

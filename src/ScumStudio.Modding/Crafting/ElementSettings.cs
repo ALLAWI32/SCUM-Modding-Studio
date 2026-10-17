@@ -28,6 +28,9 @@ public sealed record ElementSettings
     /// </summary>
     public IReadOnlyList<IReadOnlyDictionary<string, string>> Levels { get; init; } = [];
 
+    /// <summary>What the item the element spawns holds, and which item that is (a chest's size, the fridge), or null.</summary>
+    public StorageSettings? Storage { get; init; }
+
     /// <summary>The element values the page offers (<c>UBaseBuildingComponent</c> properties).</summary>
     public static IReadOnlyList<string> Editable { get; } =
     [
@@ -44,4 +47,20 @@ public sealed record ElementSettings
         "_maxInstancesPerSquad",
         "_isUsedForRespawn",
     ];
+}
+
+/// <summary>
+/// The container item an <see cref="CraftKind.Element"/> craftable spawns (<see cref="ItemStorage"/>): the item (null = its
+/// element's own, a chest's chest) and the storage values its copy changes.
+/// </summary>
+public sealed record StorageSettings
+{
+    /// <summary>
+    /// A container item of the game the element spawns instead of its own (package path; the fridge on the large cabinet),
+    /// or null for its own.
+    /// </summary>
+    public string? Item { get; init; }
+
+    /// <summary>Changed values of <see cref="ItemStorage.Editable"/> (<c>NumRows</c> …) as text; a missing key keeps the game's.</summary>
+    public IReadOnlyDictionary<string, string> Values { get; init; } = new Dictionary<string, string>();
 }

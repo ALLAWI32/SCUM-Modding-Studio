@@ -208,6 +208,12 @@ public sealed record UiPreferences
     public bool ClearGrassUnderNewObjects { get; init; } = true;
 
     /// <summary>
+    /// Experimental: the Map's Landscape menu offers the hole tool (a bunker entrance's opening in the ground). It opens the
+    /// collision only: the game still draws the ground over the hole (no new landscape shaders can be shipped in a pak).
+    /// </summary>
+    public bool TerrainHolesExperimental { get; init; }
+
+    /// <summary>
     /// A delete takes what belongs to the object with it (its fire, light, smoke and sound at the spot, attached and child
     /// actors); off, or with Shift+Delete: the object alone.
     /// </summary>

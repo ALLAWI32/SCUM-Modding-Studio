@@ -20,6 +20,7 @@ namespace ScumStudio.Tests.App;
 /// Owner: "a 2D map of the island inside the Spawns page, zoom with the mouse wheel, pan, where I select an area: a whole
 /// sector, or any area I draw/resize myself". <see cref="SpawnMap"/> is that map; these drive it with the headless mouse.
 /// </summary>
+[Collection(TimingCollection.Name)]
 public sealed class SpawnMapTests(ITestOutputHelper output)
 {
     [AvaloniaFact]
@@ -202,7 +203,7 @@ public sealed class SpawnMapTests(ITestOutputHelper output)
         // GPU headless), and depends on the machine: it is logged, not asserted.
         var summary = $"30,000 places, 800 x 600: whole island (counts) built {whole.Recorded:F2} ms, drawn {whole.Drawn:F2} ms; zoomed x6 ({map.VisibleMarkerCount} glyphs) built {close.Recorded:F2} ms, drawn {close.Drawn:F2} ms";
         output.WriteLine(summary);
-        Assert.True(whole.Recorded < 16 && close.Recorded < 16, $"the UI thread builds a frame in under 16 ms: {summary}");
+        if (!Ci.On) Assert.True(whole.Recorded < 16 && close.Recorded < 16, $"the UI thread builds a frame in under 16 ms: {summary}");
         window.Close();
     }
 

@@ -12,7 +12,14 @@ public sealed partial class CraftablesPageViewModel
     [ObservableProperty]
     private bool _isGalleryOpen = true;
 
-    partial void OnSelectedItemChanged(CraftableRowViewModel? oldValue, CraftableRowViewModel? newValue) => IsGalleryOpen = newValue is null;
+    partial void OnSelectedItemChanged(CraftableRowViewModel? oldValue, CraftableRowViewModel? newValue)
+    {
+        IsGalleryOpen = newValue is null;
+        if (newValue is not null && !_loading)
+        {
+            IsStockOpen = false; // a craftable picked in the list is shown, not hidden under the game's recipes
+        }
+    }
 
     // Nothing selected: the gallery stays, the "Add from the game" tab clicked again would leave an empty panel (after the
     // tab's own write, so it shows checked again).
@@ -30,6 +37,7 @@ public sealed partial class CraftablesPageViewModel
         if (SelectedItem is not null)
         {
             IsGalleryOpen = false;
+            IsStockOpen = false;
         }
     }
 

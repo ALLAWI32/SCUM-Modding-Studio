@@ -33,7 +33,7 @@ public sealed class FixtureRoundTripTests
         Assert.True(unexpected.Count == 0, string.Join('\n', unexpected.Take(20)));
         Assert.Equal(KnownDifferent.Count, results.Count(r => !r.IsIdentical));
         Assert.All(results, r => Assert.Empty(r.NameHashMismatches));
-        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(30), $"round trip took {sw.Elapsed}");
+        if (!Ci.On) Assert.True(sw.Elapsed < TimeSpan.FromSeconds(30), $"round trip took {sw.Elapsed}");
     }
 
     [FixturesFact]

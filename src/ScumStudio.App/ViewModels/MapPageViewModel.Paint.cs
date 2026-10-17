@@ -147,8 +147,11 @@ public sealed partial class MapPageViewModel
     /// <summary>Strokes made so far, the hover preview's included (each gathers the ground under the circle anew).</summary>
     internal int PaintStrokesMade { get; private set; }
 
-    /// <summary>True when the brush plants on bare ground only: the viewport lays the circle on the landscape.</summary>
-    public bool BrushOnGround => BrushPaint && !PaintOnObjects;
+    /// <summary>True when the brush plants on bare ground only (or the hole tool aims): the viewport lays the circle on the landscape.</summary>
+    public bool BrushOnGround => (BrushPaint && !PaintOnObjects) || HoleTool;
+
+    /// <summary>The viewport's brush events are on: the brush, or the hole tool riding on them.</summary>
+    public bool ViewportBrushMode => BrushSelect || HoleTool;
 
     /// <summary>The spacing range as text ("1–3 m", or "3.5 m" when both ends are the same).</summary>
     public string PaintSpacingText => Math.Abs(PaintSpacingMax - PaintSpacing) < 0.05
@@ -296,6 +299,12 @@ public sealed partial class MapPageViewModel
         {
             ShowPaintSpots(null);
         }
+        else
+        {
+            HoleTool = false; // one tool at a time under the cursor
+        }
+
+        OnPropertyChanged(nameof(ViewportBrushMode));
     }
 
     /// <summary>The palette file of the open project (null without one).</summary>

@@ -41,9 +41,9 @@ public sealed class AvaloniaDialogService : IDialogService
         {
             Title = title,
             SuggestedFileName = suggestedName,
-            DefaultExtension = extension,
+            DefaultExtension = BareExtension(extension),
             ShowOverwritePrompt = true,
-            FileTypeChoices = [new FilePickerFileType(filterName) { Patterns = ["*." + extension] }],
+            FileTypeChoices = [new FilePickerFileType(filterName) { Patterns = PickerPatterns(extension) }],
         }).ConfigureAwait(true);
         return file?.TryGetLocalPath();
     }
@@ -65,10 +65,20 @@ public sealed class AvaloniaDialogService : IDialogService
             Title = title,
             AllowMultiple = false,
             SuggestedStartLocation = start,
-            FileTypeFilter = [new FilePickerFileType(filterName) { Patterns = extension.Split(';').Select(e => "*." + e).ToList() }],
+            FileTypeFilter = [new FilePickerFileType(filterName) { Patterns = PickerPatterns(extension) }],
         }).ConfigureAwait(true);
         return files.Count > 0 ? files[0].TryGetLocalPath() : null;
     }
+
+    /// <summary>
+    /// The picker patterns for <paramref name="extensions"/> ("json", ".json", "*.json" or several joined with ';'):
+    /// always "*.ext". A caller that passed ".json" used to get "*..json", which hid EconomyOverride.json (Игорь).
+    /// </summary>
+    internal static List<string> PickerPatterns(string extensions) =>
+        extensions.Split(';').Select(BareExtension).Where(e => e.Length > 0).Select(e => "*." + e).ToList();
+
+    /// <summary>An extension without its leading "*" and "." ("*.json", ".json" and "json" all give "json").</summary>
+    internal static string BareExtension(string extension) => extension.Trim().TrimStart('*').TrimStart('.');
 
     /// <inheritdoc />
     public async Task SetClipboardTextAsync(string text)

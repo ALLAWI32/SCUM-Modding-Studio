@@ -49,6 +49,12 @@ public sealed record UiState
     /// </summary>
     public IReadOnlyList<string> HiddenSpawnLayers { get; init; } = ["Zones", "Animals"];
 
+    /// <summary>
+    /// Project folders whose hole tool warning list was set to "Do not show again" (owner, 2026-10-16: the list shows at
+    /// the tool's first use in each project and as a short reminder at export).
+    /// </summary>
+    public IReadOnlyList<string> HoleWarningDismissed { get; init; } = [];
+
     /// <summary>Reopen the last project at start-up (owner: after an update he could not find his project).</summary>
     public bool ReopenLastProject { get; init; } = true;
 

@@ -89,7 +89,7 @@ public sealed class ProjectExporterTests
         var instance = new InstanceRef(LevelPath, "Rocks_Actor", "Rocks", 0);
         project.Apply(new SetInstanceTransformOp(instance, TransformValue.FromTransform(SyntheticLevels.Instance0), TransformValue.At(1, 2, 300)));
         var result = await new ProjectExporter().ExportAsync(project, catalog,
-            new ExportOptions { OutputDirectory = temp.Combine("out"), WritePak = false, BendMeshes = Describe, Ground = (_, _) => 0f });
+            new ExportOptions { OutputDirectory = temp.Combine("out"), WritePak = false, BendMeshes = Describe, Ground = (_, _) => 0f, Validate = false }); // meshes the synthetic game does not hold
 
         // The bent rock is written straight: the game's own triangle collision, not rough boxes.
         Assert.Contains(result.Warnings, w => w.Contains("Shell_Lifted: exported straight", StringComparison.Ordinal) && w.Contains("collision check", StringComparison.Ordinal));

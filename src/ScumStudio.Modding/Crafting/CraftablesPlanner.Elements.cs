@@ -20,13 +20,14 @@ public static partial class CraftablesPlanner
 {
     static partial void PlanElement(AssetCatalog catalog, Craftable craftable, string token, List<KeyValuePair<string, string>> packages, List<KeyValuePair<string, string>> redirects, ref CraftablePackages? result)
     {
-        var family = ElementFamilies.Of(catalog, craftable.Source) ?? throw new ArgumentException(ElementFamilies.WhyNot(catalog, craftable.Source));
+        var source = ElementSource(craftable);
+        var family = ElementFamilies.Of(catalog, source) ?? throw new ArgumentException(ElementFamilies.WhyNot(catalog, source));
         if (craftable.Element is { Template: { Length: > 0 } template } && !string.Equals(PackageMap.Normalize(template), family.Element, StringComparison.OrdinalIgnoreCase))
         {
-            throw new ArgumentException($"{craftable.Source} is now the element {PackageMap.Leaf(family.Element)}, not {PackageMap.Leaf(template)}; add it again");
+            throw new ArgumentException($"{source} is now the element {PackageMap.Leaf(family.Element)}, not {PackageMap.Leaf(template)}; add it again");
         }
 
-        void Add(string stock, string leaf) => packages.Add(new(stock, PackageMap.Folder(stock) + "/" + leaf));
+        void Add(string stock, string leaf) => packages.Add(new(stock, InFolder(stock, craftable.Folder, leaf)));
         for (var n = 0; n < family.Levels.Count; n++)
         {
             Add(family.Levels[n].Recipe, n == 0 ? "CR_" + token : $"CR_{token}_Up{n}");
@@ -35,7 +36,27 @@ public static partial class CraftablesPlanner
 
         // A chest, lamp or fridge spawns its item: the clone spawns a renamed copy (its entity setup is its twin).
         string? item = null;
-        if (family.ItemClass is { } stockItem && stockItem.StartsWith("/Game/", StringComparison.OrdinalIgnoreCase) && catalog.PackageExists(stockItem + "_ES"))
+        if (craftable.Element?.Storage?.Item is { Length: > 0 } spawned)
+        {
+            // Another container of the game (the fridge on the large cabinet): the element spawns a copy of it instead of its
+            // own item; every reference to its own item names the copy.
+            spawned = PackageMap.Normalize(spawned);
+            if (family.ItemClass is not { } own)
+            {
+                throw new ArgumentException($"{PackageMap.Leaf(family.Element)} spawns no item, so it cannot hold {PackageMap.Leaf(spawned)}");
+            }
+
+            if (!spawned.StartsWith("/Game/", StringComparison.OrdinalIgnoreCase) || ItemStorage.Of(catalog, spawned).Count == 0)
+            {
+                throw new ArgumentException($"{PackageMap.Leaf(spawned)} is not a container item of the game");
+            }
+
+            Add(spawned, token);
+            Add(spawned + "_ES", token + "_ES");
+            item = packages[^2].Value;
+            redirects.Add(new(own, item));
+        }
+        else if (family.ItemClass is { } stockItem && stockItem.StartsWith("/Game/", StringComparison.OrdinalIgnoreCase) && catalog.PackageExists(stockItem + "_ES"))
         {
             Add(stockItem, token);
             Add(stockItem + "_ES", token + "_ES");
@@ -64,7 +85,7 @@ public static partial class CraftablesPlanner
 
         // Both: the bag gets the spawned item too, by a copy of a stock item recipe of its kind made to make the clone.
         string? itemRecipe = null;
-        if (craftable.Use == CraftUse.Both && item is not null)
+        if (craftable.Use == CraftUse.Both && item is not null && craftable.Element?.Storage?.Item is not { Length: > 0 })
         {
             var recipeTemplate = ItemTemplate(catalog, family.ItemClass!);
             Add(recipeTemplate, $"CR_{token}_Item");
@@ -80,7 +101,7 @@ public static partial class CraftablesPlanner
 
     static partial void AddElementEdits(AssetCatalog catalog, Craftable craftable, ClonePlan plan, CraftablePackages packages, Dictionary<string, IReadOnlyList<TunableEdit>> edits, List<string> warnings)
     {
-        var family = ElementFamilies.Of(catalog, craftable.Source);
+        var family = ElementFamilies.Of(catalog, ElementSource(craftable));
         if (family is null)
         {
             return;
@@ -139,7 +160,31 @@ public static partial class CraftablesPlanner
             warnings.Add($"{craftable.Name}: it spawns the game's own {PackageMap.Leaf(stockItem)} (no entity setup beside it to copy), which keeps the game's name.");
         }
 
-        if (craftable.Use == CraftUse.Both && packages.ItemRecipe is null)
+        // What the spawned item holds: its copy's storage setup (a pak sets the size; a fridge's cooling is the game's code).
+        var storage = craftable.Element?.Storage;
+        var stockSpawned = storage?.Item is { Length: > 0 } spawned ? PackageMap.Normalize(spawned) : family.ItemClass;
+        foreach (var (key, value) in storage?.Values ?? new Dictionary<string, string>())
+        {
+            var stock = packages.Item is not null && stockSpawned is not null ? ItemStorage.Of(catalog, stockSpawned).FirstOrDefault(t => t.Path == key) : null;
+            if (stock is null)
+            {
+                warnings.Add($"{craftable.Name}: {key} is not written ({(packages.Item is null ? "it spawns no item of its own" : $"{PackageMap.Leaf(stockSpawned!)}_ES stores no {key}")}).");
+            }
+            else if (ItemStorage.Refusal(key, value) is { } refusal)
+            {
+                warnings.Add($"{craftable.Name}: {refusal}; the game's {stock.Value} is kept.");
+            }
+            else
+            {
+                Edit(packages.Item! + "_ES", stock.Export, key, value);
+            }
+        }
+
+        if (storage?.Item is { Length: > 0 } && craftable.Use == CraftUse.Both)
+        {
+            warnings.Add($"{craftable.Name}: {PackageMap.Leaf(storage.Item)} fits in no inventory; it is only built, not crafted into the bag.");
+        }
+        else if (craftable.Use == CraftUse.Both && packages.ItemRecipe is null)
         {
             warnings.Add($"{craftable.Name}: {PackageMap.Leaf(family.Element)} spawns no item of its own to craft into the bag; it is only built.");
         }

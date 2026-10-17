@@ -112,12 +112,32 @@ public sealed class IslandMapRealTests
             Assert.Equal(outpost.Cell, IslandMap.CellAt(outpost.Tile!.Center.X, outpost.Tile.Center.Y));
         }
 
-        // Every place sublevel (outposts, airfields, towns: <cell>_<name>) lies in its named cell, give or take the few
-        // that reach over a cell border.
-        var places = Tiles(catalog, WorldPackageKind.Poi);
+        // Every place sublevel (outposts, airfields, towns: <cell>_<name>) lies in its named cell or less than 1 km past its
+        // border; a calibration off by a cell, mirrored or turned puts them 3 km and more away. Read on the game files of
+        // 2026-10-17: 1,336 of 1,457 centres lie inside. The town of Samobor (D_4) reaches up to 560 m into D_3, the Z_1
+        // trainyard 301 m into Z_2, C_1_Veliki_Tabor_03 is a 4 x 3 km box centred 866 m out, and the four
+        // *_Outpost_BossHouse_02 sublevels hold nothing: their bounds are the engine's empty 10 m box at the world origin.
+        var places = Tiles(catalog, WorldPackageKind.Poi).Where(t => !IsEmptyBox(t.Tile!)).ToList();
+        Assert.True(places.Count > 1000, $"{places.Count} place sublevels");
+        var far = places.Where(t => OutsideCm(t.Cell!.Value, t.Tile!.Center.X, t.Tile.Center.Y) >= 100_000f)
+            .Select(t => $"{t.Name} at {t.Tile!.Center} ({OutsideCm(t.Cell!.Value, t.Tile.Center.X, t.Tile.Center.Y) / 100f:0} m outside {t.Cell})").ToList();
+        Assert.True(far.Count == 0, string.Join(Environment.NewLine, far));
         var inside = places.Count(t => IslandMap.CellAt(t.Tile!.Center.X, t.Tile.Center.Y) == t.Cell);
-        Assert.True(inside >= places.Count * 0.95, $"{inside} of {places.Count} place sublevels lie in their cell");
+        Assert.True(inside >= places.Count * 0.85, $"{inside} of {places.Count} place sublevels lie in their cell");
         Assert.Contains(places, t => t.Name.Contains("Airfield", StringComparison.OrdinalIgnoreCase) || t.Name.Contains("Airport", StringComparison.OrdinalIgnoreCase));
+    }
+
+    // The bounds a sublevel with nothing in it is saved with: a 10 m box around the world origin.
+    private static bool IsEmptyBox(ScumStudio.Formats.Packages.WorldTileInfo tile) =>
+        tile.Center.X == 0f && tile.Center.Y == 0f && tile.Size.X <= 1000f && tile.Size.Y <= 1000f;
+
+    // How far (cm) the world point lies outside the cell's rectangle; 0 inside.
+    private static float OutsideCm(MapCell cell, float x, float y)
+    {
+        var (minX, minY, maxX, maxY) = IslandMap.CellRect(cell);
+        var dx = MathF.Max(0f, MathF.Max(minX - x, x - maxX));
+        var dy = MathF.Max(0f, MathF.Max(minY - y, y - maxY));
+        return MathF.Sqrt((dx * dx) + (dy * dy));
     }
 
     // Blue minus green (0-255) of the mean of the 9 x 9 pixels at the world point.

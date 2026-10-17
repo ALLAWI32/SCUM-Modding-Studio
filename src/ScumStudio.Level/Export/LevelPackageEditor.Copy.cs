@@ -158,7 +158,8 @@ public static partial class LevelPackageEditor
 
     /// <summary>
     /// A copy's own <c>_gameUniqueId</c> (UInt64; a trade post's quest giver has one): the game keeps state by it, so a copy
-    /// must not share its source's. Derived from the level, the copy's name and the member, so an export is repeatable.
+    /// must not share its source's. Its <c>LightGuid</c> and <c>MapBuildDataId</c> are its own too. Derived from the level, the copy's
+    /// name and the member, so an export is repeatable.
     /// </summary>
     private static void FreshGameUniqueId(byte[] payload, PropertyBlock block, string? level, string copyName, int member)
     {
@@ -166,6 +167,17 @@ public static partial class LevelPackageEditor
         {
             var id = System.Security.Cryptography.MD5.HashData(System.Text.Encoding.UTF8.GetBytes($"{level}|{copyName}|{member}"));
             id.AsSpan(0, 8).CopyTo(payload.AsSpan(unique.Offset));
+        }
+
+        // As the editor's duplicate does (a light's and a reflection capture's PostDuplicate): a copy keys no built data by its
+        // source's id. Two lights or captures with one id in a level share one light's shadow data or one capture's cubemap
+        // (the package check names it, 2026-10-16: a copied city hall's neon lamps and reflection captures).
+        foreach (var property in new[] { "LightGuid", "MapBuildDataId" })
+        {
+            if (block.Find(property)?.Value is GuidValue { Offset: >= 0 } guid && guid.Offset + 16 <= payload.Length && guid.Value != default)
+            {
+                System.Security.Cryptography.MD5.HashData(System.Text.Encoding.UTF8.GetBytes($"{level}|{copyName}|{member}|{property}")).CopyTo(payload.AsSpan(guid.Offset));
+            }
         }
     }
 

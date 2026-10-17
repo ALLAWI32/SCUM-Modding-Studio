@@ -529,6 +529,11 @@ public sealed partial class ProjectsPageViewModel : PageViewModel, IDisposable
             return;
         }
 
+        if (TerrainHoleWarning.ExportReminder(_services.UiState.Current, project) is { } holeReminder)
+        {
+            _services.Notifications.Warning(Loc.T("Map.Hole.Title"), holeReminder);
+        }
+
         var folder = Path.GetFullPath(ExportFolder.Trim());
         var request = new ModExportRequest(project, folder, string.IsNullOrWhiteSpace(ExportModName) ? null : ExportModName.Trim(), ExportServer) { IncludeCraftables = ExportCraftables };
         var (ok, results) = await _services.Operations.RunAsync(Loc.F("Projects.Exporting", project.Manifest.Name),
@@ -548,6 +553,12 @@ public sealed partial class ProjectsPageViewModel : PageViewModel, IDisposable
             rows.Add(new PropertyRow(Loc.F("Projects.Row.Sig", result.Role), result.SigPath ?? Loc.T("Projects.Row.NoSig")));
             rows.Add(new PropertyRow(Loc.F("Projects.Row.Levels", result.Role),
                 Loc.F("Projects.Row.LevelsValue", result.Levels.Count, result.RemovedActorCount, result.PatchedTransformCount)));
+            if (result.Validation is { } check)
+            {
+                // Every staged package was read back before packing (a pak with problems is never written).
+                rows.Add(new PropertyRow(Loc.F("Projects.Row.Validator", result.Role), Loc.F("Projects.Row.ValidatorValue", check.Packages, check.Problems.Count)));
+            }
+
             warnings.AddRange(result.Warnings.Select(w => $"{result.Role}: {w}"));
         }
 

@@ -1,0 +1,29 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:ScumStudio.App.ViewModels"
+             x:Class="ScumStudio.App.Views.Pages.SkillLevelsEditor"
+             x:DataType="vm:SkillLevelsViewModel">
+  <!-- The amount a player pays at each level of the recipe's skill (the game stores five per ingredient slot). -->
+  <WrapPanel Orientation="Horizontal" ItemSpacing="6" LineSpacing="4">
+    <StackPanel Spacing="1">
+      <TextBlock Text="{Tr Craftables.Level.NoSkill}" Classes="caption" />
+      <NumericUpDown x:Name="CraftLevelNoSkill" Value="{Binding NoSkill}" Minimum="1" Maximum="9999" Increment="1" FormatString="0" Width="124" ToolTip.Tip="{Tr Craftables.Level.Tip}" />
+    </StackPanel>
+    <StackPanel Spacing="1">
+      <TextBlock Text="{Tr Craftables.Level.Basic}" Classes="caption" />
+      <NumericUpDown x:Name="CraftLevelBasic" Value="{Binding Basic}" Minimum="1" Maximum="9999" Increment="1" FormatString="0" Width="124" ToolTip.Tip="{Tr Craftables.Level.Tip}" />
+    </StackPanel>
+    <StackPanel Spacing="1">
+      <TextBlock Text="{Tr Craftables.Level.Medium}" Classes="caption" />
+      <NumericUpDown x:Name="CraftLevelMedium" Value="{Binding Medium}" Minimum="1" Maximum="9999" Increment="1" FormatString="0" Width="124" ToolTip.Tip="{Tr Craftables.Level.Tip}" />
+    </StackPanel>
+    <StackPanel Spacing="1">
+      <TextBlock Text="{Tr Craftables.Level.Advanced}" Classes="caption" />
+      <NumericUpDown x:Name="CraftLevelAdvanced" Value="{Binding Advanced}" Minimum="1" Maximum="9999" Increment="1" FormatString="0" Width="124" ToolTip.Tip="{Tr Craftables.Level.Tip}" />
+    </StackPanel>
+    <StackPanel Spacing="1">
+      <TextBlock Text="{Tr Craftables.Level.AboveAdvanced}" Classes="caption" />
+      <NumericUpDown x:Name="CraftLevelAboveAdvanced" Value="{Binding AboveAdvanced}" Minimum="1" Maximum="9999" Increment="1" FormatString="0" Width="124" ToolTip.Tip="{Tr Craftables.Level.Tip}" />
+    </StackPanel>
+  </WrapPanel>
+</UserControl>

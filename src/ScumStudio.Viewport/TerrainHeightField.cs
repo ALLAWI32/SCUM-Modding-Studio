@@ -84,8 +84,17 @@ public sealed class TerrainHeightField
     /// <summary>Smallest quad edge length of the components (cm).</summary>
     public float QuadSizeCm { get; }
 
-    /// <summary>The ground height at world (<paramref name="x"/>, <paramref name="y"/>), or null outside the terrain.</summary>
-    public float? SampleHeight(float x, float y) => TryLocate(x, y, out var e, out var qx, out var qy) ? e.Surface.SampleHeight(qx, qy) : null;
+    /// <summary>
+    /// Places with no ground (the project's terrain holes): true for a world X/Y there. Picks, the brush and anything set
+    /// on the ground fall through them, as a player does in game.
+    /// </summary>
+    public Func<float, float, bool>? Holes { get; set; }
+
+    /// <summary>The ground height at world (<paramref name="x"/>, <paramref name="y"/>), or null outside the terrain or in a hole.</summary>
+    public float? SampleHeight(float x, float y) => Holes?.Invoke(x, y) == true ? null : SurfaceHeight(x, y);
+
+    /// <summary>The landscape's own height at world (<paramref name="x"/>, <paramref name="y"/>), holes or not (a hole's rim is drawn on it); null outside the terrain.</summary>
+    public float? SurfaceHeight(float x, float y) => TryLocate(x, y, out var e, out var qx, out var qy) ? e.Surface.SampleHeight(qx, qy) : null;
 
     /// <summary>The ground normal (unit, UE axes) at world (<paramref name="x"/>, <paramref name="y"/>), or null outside the terrain.</summary>
     public Vector3? Normal(float x, float y) => TryLocate(x, y, out var e, out var qx, out var qy) ? e.Surface.SampleNormal(qx, qy) : null;

@@ -41,7 +41,11 @@ public sealed class CraftIngredientsRealTests
         var folder = (catalog.Index ?? catalog.BuildIndex(resolveClasses: false)).Entries
             .Count(e => e.PackagePath.StartsWith(RecipeIngredients.TagFolder + "/", StringComparison.OrdinalIgnoreCase) && e.Name.StartsWith("CI_", StringComparison.OrdinalIgnoreCase));
         Assert.InRange(index.Tags.Count, folder, folder + 16); // every tag of the folder, and the few DLC packs keep in their own
-        Assert.EndsWith("/Lead_Plate", index.Tag("CI_Lead_Plate")?.Representative, StringComparison.Ordinal);
-        Assert.Equal(PackageMap.Leaf(CraftablesPlanner.ItemTagTemplate), index.Tag("CI_Lead_Plate")?.Name);
+        // The tag template stores only ConsumptionMethod and PlaceableFillSound: no UIClassRepresentative (21 of the game's
+        // 236 tags store one), so a new tag copied from it names no picture and the planner says so.
+        var template = index.Tag("CI_Lead_Plate");
+        Assert.Equal(PackageMap.Leaf(CraftablesPlanner.ItemTagTemplate), template?.Name);
+        Assert.Null(template!.Representative);
+        Assert.Contains(index.Tags, t => t.Representative is { Length: > 0 });
     }
 }

@@ -117,8 +117,11 @@ public static class PackageCloner
 
         for (var i = 0; i < source.Exports.Count; i++)
         {
+            // A texture that moved carries its skip offsets along (TextureSkipOffsets): the same payload at its new place.
             var expected = payloads?[i] ?? source.GetExportData(i);
-            if (!check.GetExportData(i).Span.SequenceEqual(expected.Span))
+            var actual = check.GetExportData(i).Span;
+            if (!actual.SequenceEqual(expected.Span)
+                && !actual.SequenceEqual(TextureSkipOffsets.Relocate(expected, check.Names, source.Exports[i].SerialOffset, check.Exports[i].SerialOffset).Span))
             {
                 throw new InvalidOperationException($"{packagePath}: export {i + 1} payload changed while cloning.");
             }

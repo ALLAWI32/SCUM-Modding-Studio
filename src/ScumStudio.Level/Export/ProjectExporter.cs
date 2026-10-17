@@ -86,6 +86,18 @@ public sealed record ExportOptions
     /// export's catalog (<c>ServerEventStubs.FromCatalog</c>).
     /// </summary>
     public Func<ScumStudio.Pak.Server.AkAudioEventStubBuilder>? ServerEventStubs { get; init; }
+
+    /// <summary>
+    /// Draws a craftable's 3D model as the picture its recipe shows in the crafting menu (Viewport <c>CraftIconRenderer</c>),
+    /// or null when this export cannot draw: such a craftable keeps its template's picture, with a warning.
+    /// </summary>
+    public Func<Modding.Crafting.CraftPictureRequest, Assets.Textures.TextureImage?>? ModelPictures { get; init; }
+
+    /// <summary>
+    /// Read every staged package back before packing (<see cref="ModPackageValidator"/>) and refuse the pak when anything is
+    /// wrong. Always on in the app and the command line; off only for tests that stage packages they know are partial.
+    /// </summary>
+    public bool Validate { get; init; } = true;
 }
 
 /// <summary>One rewritten level.</summary>
@@ -159,6 +171,9 @@ public sealed record ExportResult
     /// export into this folder placed. Items they already spawned stay in players' worlds (the server saves them).
     /// </summary>
     public IReadOnlyList<string> RemovedItemSpawners { get; init; } = [];
+
+    /// <summary>What the package check found (null when <see cref="ExportOptions.Validate"/> was off).</summary>
+    public ValidationResult? Validation { get; init; }
 
     /// <summary>Total actors removed across levels.</summary>
     public int RemovedActorCount => Levels.Sum(l => l.Report.RemovedActors.Count);
@@ -458,6 +473,12 @@ public sealed partial class ProjectExporter
             ClearGrassUnder(catalog, reader, volumes.Select(v => v.Outline).ToList(), staging, levels, warnings, cancellationToken);
         }
 
+        if (state.TerrainHoles.Count > 0)
+        {
+            progress?.Report("Cutting the terrain holes");
+            CutTerrainHoles(catalog, state.TerrainHoles, staging, levels, warnings, cancellationToken);
+        }
+
         if ((volumes.Count > 0 || state.ChangedLevels.Any(Spawns.SpawnPlaces.IsStaticData))
             && catalog.TryGetPackageFile(Spawns.SpawnPlaces.StaticDataPath, out var placesFile)
             && await WriteSpawnPlacesAsync(state, catalog, placesFile, staging, warnings, volumes, role, cancellationToken).ConfigureAwait(false) is { } placesAsset)
@@ -547,6 +568,11 @@ public sealed partial class ProjectExporter
         var stubbed = await StubEventsAsync(staging, catalog, options, role, warnings, cancellationToken).ConfigureAwait(false);
         var removedSpawners = ItemSpawnersGone(state, roleDirectory, documentCache, warnings);
 
+        // Every staged package is read back against the game's own before anything is packed: a pak the game could trip
+        // over (loading, playing, leaving a server, closing the game) is never written (owner 2026-10-16). It runs after
+        // the server's stubs are written, so it checks the packages that go into the pak.
+        var validation = Validate(staging, catalog, options, progress, cancellationToken);
+
         string? pakPath = null;
         string? sigPath = null;
         if (options.WritePak)
@@ -596,10 +622,35 @@ public sealed partial class ProjectExporter
             RemovedTraders = economyPath is null ? [] : removedTraders,
             StubbedEvents = stubbed,
             RemovedItemSpawners = removedSpawners,
+            Validation = validation,
         };
         var reportPath = Path.Combine(roleDirectory, ReportFileName);
         await File.WriteAllTextAsync(reportPath, BuildReport(result, catalog), new UTF8Encoding(false), cancellationToken).ConfigureAwait(false);
         return result with { ReportPath = reportPath };
+    }
+
+    /// <summary>
+    /// Runs <see cref="ModPackageValidator"/> over <paramref name="staging"/> (unless <see cref="ExportOptions.Validate"/> is
+    /// off) and throws <see cref="ModValidationException"/> when it found anything; the pak is then not written.
+    /// </summary>
+    internal static ValidationResult? Validate(string staging, AssetCatalog catalog, ExportOptions options, IProgress<string>? progress, CancellationToken cancellationToken)
+    {
+        if (!options.Validate)
+        {
+            return null;
+        }
+
+        progress?.Report("Checking every package");
+        var result = ModPackageValidator.Validate(staging, catalog, cancellationToken);
+        var list = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(staging))!, ModPackageValidator.ListFileName);
+        if (result.Passed)
+        {
+            File.Delete(list); // an earlier export's list
+            return result;
+        }
+
+        File.WriteAllLines(list, [result.Summary, .. result.Problems], new UTF8Encoding(false));
+        throw new ModValidationException(result, list);
     }
 
     /// <summary>

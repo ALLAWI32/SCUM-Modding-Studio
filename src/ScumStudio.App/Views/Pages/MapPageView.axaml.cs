@@ -28,8 +28,17 @@ public partial class MapPageView : UserControl
         InitializeComponent();
         DataContextChanged += (_, _) => Attach(DataContext as MapPageViewModel);
         Viewport3d.PickToggled += (_, pick) => _viewModel?.ToggleGroup(pick.Id, pick.Instance);
+        // The hole tool rides on the brush's ground events: a click or drag puts the hole down, hovering moves its outline,
+        // the wheel sizes it.
+        Viewport3d.HoleWheel += (_, notches) => _viewModel?.ResizeHole(notches);
         Viewport3d.BrushPainted += (_, stroke) =>
         {
+            if (_viewModel is { HoleTool: true } holes)
+            {
+                holes.PlaceHole(stroke.To);
+                return;
+            }
+
             if (_viewModel is not { BrushSelect: true })
             {
                 return; // a dab the view resolved after the brush was turned off: its stroke is already journaled
@@ -66,7 +75,11 @@ public partial class MapPageView : UserControl
         // Hovering in paint mode marks the spots a click would plant and those it would leave out.
         Viewport3d.BrushHovered += (_, at) =>
         {
-            if (_viewModel is { BrushSelect: true, BrushPaint: true } painting)
+            if (_viewModel is { HoleTool: true } holes)
+            {
+                holes.HoverHole(at);
+            }
+            else if (_viewModel is { BrushSelect: true, BrushPaint: true } painting)
             {
                 painting.PreviewPaintAt(at);
             }
@@ -561,6 +574,21 @@ public partial class MapPageView : UserControl
         else if (e.Key == Key.Escape && _viewModel.HasKindSelection)
         {
             _viewModel.ClearKindSelection();
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Delete && _viewModel.HoleTool)
+        {
+            // The hole tool on: Delete cuts the hole under its outline (owner: "press Delete and it opens the hole").
+            if (_viewModel.CutHoleCommand.CanExecute(null))
+            {
+                _viewModel.CutHoleCommand.Execute(null);
+            }
+
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Escape && _viewModel.HoleTool)
+        {
+            _viewModel.HoleTool = false;
             e.Handled = true;
         }
         else if (e.Key == Key.Delete && _viewModel.HasKindSelection)

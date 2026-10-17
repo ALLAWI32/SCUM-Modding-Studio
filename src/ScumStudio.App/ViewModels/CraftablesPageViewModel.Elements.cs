@@ -46,10 +46,21 @@ public sealed partial class CraftablesPageViewModel
         var source = row.ToModel().Element?.Template ?? row.Source;
         try
         {
-            var (family, why) = await Task.Run<(ElementFamily? Family, string? Why)>(() => ElementOf(catalog, source) is { } found ? (found, null) : ((ElementFamily?)null, ElementFamilies.WhyNot(catalog, source)), cancellationToken).ConfigureAwait(true);
+            var spawned = row.ToModel().Element?.Storage?.Item;
+            var (family, why, storage, fridge) = await Task.Run<(ElementFamily? Family, string? Why, IReadOnlyList<Tunable> Storage, bool Fridge)>(() =>
+            {
+                if (ElementOf(catalog, source) is not { } found)
+                {
+                    return (null, ElementFamilies.WhyNot(catalog, source), [], false);
+                }
+
+                // What the item it spawns holds (a chest, the fridge): its size is set here too.
+                var item = spawned ?? found.ItemClass;
+                return item is null ? (found, null, [], false) : (found, null, ItemStorage.Of(catalog, item), CraftablesPlanner.NativeClassOf(catalog, item) == "RefrigeratorItem");
+            }, cancellationToken).ConfigureAwait(true);
             if (!cancellationToken.IsCancellationRequested && ReferenceEquals(_services.Workspace.Catalog, catalog))
             {
-                row.SetFamily(family, why);
+                row.SetFamily(family, why, storage, fridge);
             }
         }
         catch (OperationCanceledException)
@@ -141,19 +152,20 @@ public sealed partial class CraftableRowViewModel
     public bool CanCraft => Kind is CraftKind.Item or CraftKind.Power;
 
     /// <summary>Both recipes: only an element whose game element spawns an item (a workbench, a lamp; a bed has none).</summary>
-    public bool CanBoth => IsElement && Element?.HasItem == true;
+    public bool CanBoth => IsElement && Element is { HasItem: true, SpawnsOther: false };
 
     /// <summary>The source is a base element of the game (or the craftable is one already): Element is offered.</summary>
     private bool OffersElement => _source.Element is not null || _source.Kind == CraftKind.Element || Element is not null;
 
     /// <summary>The family of its element (<see cref="ElementFamilies.Of"/>), or null with <paramref name="whyNot"/>.</summary>
-    internal void SetFamily(ElementFamily? family, string? whyNot)
+    internal void SetFamily(ElementFamily? family, string? whyNot, IReadOnlyList<Tunable>? storage = null, bool fridge = false)
     {
         ElementLoaded = true;
         var quiet = _quiet;
         _quiet = true;
-        Element = family is null ? null : new ElementEditorViewModel(family, _source.Element, Changed);
+        Element = family is null ? null : new ElementEditorViewModel(family, _source.Element, Changed, storage, fridge);
         ElementNote = family is null ? Loc.F("Craftables.Element.NotOffered", whyNot ?? Source) : null;
+        RefreshSections(); // "Shows in" defaults to the game element's own section
         _quiet = quiet;
     }
 
@@ -180,7 +192,7 @@ public sealed partial class CraftableRowViewModel
     partial void OnKindChanged(CraftKind value)
     {
         _use = null;
-        KindWarning = MayBeExported ? Loc.T("Craftables.KindChange.Warning") : null;
+        KindWarning = MayBeExported && IsLocked ? Loc.T("Craftables.KindChange.Warning") : null;
         foreach (var name in new[] { nameof(IsElement), nameof(HasElement), nameof(Use), nameof(IsBuild), nameof(IsCraft), nameof(IsBoth), nameof(CanBuild), nameof(CanCraft), nameof(CanBoth) })
         {
             OnPropertyChanged(name);
@@ -192,10 +204,15 @@ public sealed partial class CraftableRowViewModel
 public sealed partial class ElementEditorViewModel : ObservableObject
 {
     /// <summary>Creates the editor of <paramref name="family"/> with the values <paramref name="saved"/> changed; <paramref name="changed"/> runs after each edit.</summary>
-    public ElementEditorViewModel(ElementFamily family, ElementSettings? saved, Action changed)
+    public ElementEditorViewModel(ElementFamily family, ElementSettings? saved, Action changed, IReadOnlyList<Tunable>? storage = null, bool isFridge = false)
     {
         Family = family;
         Levels = family.Levels.Select((level, i) => new ElementLevelViewModel(i, level, saved?.Levels.ElementAtOrDefault(i), changed)).ToList();
+        _storageItem = saved?.Storage?.Item;
+        var values = saved?.Storage?.Values ?? new Dictionary<string, string>();
+        Storage = (storage ?? []).Select(t => new ElementValueViewModel(t, values.GetValueOrDefault(t.Path), changed)).ToList();
+        _keptStorage = values.Where(e => Storage.All(s => s.Key != e.Key)).ToDictionary(e => e.Key, e => e.Value);
+        IsFridge = isFridge;
         _selectedLevel = Levels.FirstOrDefault();
     }
 
@@ -221,6 +238,21 @@ public sealed partial class ElementEditorViewModel : ObservableObject
     [ObservableProperty]
     private ElementLevelViewModel? _selectedLevel;
 
+    private readonly string? _storageItem;
+    private readonly IReadOnlyDictionary<string, string> _keptStorage;
+
+    /// <summary>What the item it spawns holds (rows, columns, weight; <see cref="ItemStorage"/>), with the game's values.</summary>
+    public IReadOnlyList<ElementValueViewModel> Storage { get; }
+
+    /// <summary>It spawns another container of the game than its own item (the fridge): it fits in no bag, so it is only built.</summary>
+    public bool SpawnsOther => _storageItem is not null;
+
+    /// <summary>The item it spawns holds things (the storage card is shown).</summary>
+    public bool HasStorage => Storage.Count > 0;
+
+    /// <summary>It spawns a copy of the game's fridge (native <c>RefrigeratorItem</c>): the note says what the game's code does.</summary>
+    public bool IsFridge { get; }
+
     /// <summary>The settings to store: the template and each level's changed values (none when nothing changed).</summary>
     public ElementSettings ToModel()
     {
@@ -230,7 +262,18 @@ public sealed partial class ElementEditorViewModel : ObservableObject
             levels.RemoveAt(levels.Count - 1);
         }
 
-        return new ElementSettings { Template = Family.Element, Levels = levels };
+        var storage = new Dictionary<string, string>(_keptStorage, StringComparer.Ordinal);
+        foreach (var value in Storage.Where(v => v.IsEdited))
+        {
+            storage[value.Key] = value.Text;
+        }
+
+        return new ElementSettings
+        {
+            Template = Family.Element,
+            Levels = levels,
+            Storage = _storageItem is null && storage.Count == 0 ? null : new StorageSettings { Item = _storageItem, Values = storage },
+        };
     }
 
     internal static string Leaf(string path) => path[(path.LastIndexOf('/') + 1)..];
@@ -302,6 +345,9 @@ public sealed partial class ElementValueViewModel : ObservableObject
         ["_canBePlacedOnOtherBaseElements"] = "PlaceOnOtherElements",
         ["_maxInstancesPerFlagArea"] = "MaxPerFlagArea",
         ["_maxInstancesPerSquad"] = "MaxPerSquad",
+        ["NumRows"] = "StorageRows",
+        ["NumColumns"] = "StorageColumns",
+        ["MaxContainedWeight"] = "StorageWeight",
     };
 
     private readonly Action _changed;

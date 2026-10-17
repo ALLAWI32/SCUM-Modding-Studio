@@ -39,6 +39,7 @@ public abstract partial class PageViewModel : ViewModelBase
         "map" => "Icon.Map",
         "vehicles" => "Icon.Vehicle",
         "weapons" => "Icon.Weapon",
+        "items" => "Icon.Basket",
         "assets" => "Icon.Assets",
         "projects" => "Icon.Projects",
         "settings" => "Icon.Settings",

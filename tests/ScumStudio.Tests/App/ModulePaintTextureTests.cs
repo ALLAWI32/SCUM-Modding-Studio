@@ -11,6 +11,7 @@ namespace ScumStudio.Tests.App;
 /// Paint on the Vehicles/Weapons 3D tab, which now loads full-size textures kept compressed for the GPU: the colour
 /// textures a paint bakes or tints are decoded on their own (<see cref="ModulePageViewModel.RgbaOf"/>).
 /// </summary>
+[Collection(TimingCollection.Name)]
 public sealed class ModulePaintTextureTests(ITestOutputHelper output)
 {
     private const string Texture = "/Game/Weapons/T_Gun_D.T_Gun_D";

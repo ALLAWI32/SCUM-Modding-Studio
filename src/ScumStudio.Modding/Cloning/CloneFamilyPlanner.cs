@@ -67,6 +67,13 @@ public static partial class CloneFamilyPlanner
             throw new ArgumentException($"'{newName}' is not a valid asset name (letters, digits, '_' or '-', starting with a letter, not ending in _<number>: Rager2 or Rager_v2, not Rager_2).", nameof(newName));
         }
 
+        // #SpawnItem finds an item by its name alone (PrimaryAssetName): the name of an item in another folder would give the
+        // game two items of one name (an Items-page clone called "Nails" beside Equipment/Active_Items/Nails).
+        if (TakenItemName(catalog, newName) is { } taken)
+        {
+            throw new ArgumentException($"'{newName}' is already the name of {taken}; #SpawnItem finds items by their name alone, so choose another one.", nameof(newName));
+        }
+
         var folder = PackageMap.Folder(template);
         var newPrimary = $"{folder}/{newName}";
         var packages = new List<KeyValuePair<string, string>> { new(template, newPrimary) };
@@ -354,6 +361,30 @@ public static partial class CloneFamilyPlanner
 
         var (text, number) = FNameRef.Split(renamed);
         return number == 0 ? renamed : $"{text}_v{(number - 1).ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+    }
+
+    /// <summary>
+    /// The package path of a game item or vehicle package (the folders the game registers primary assets from) whose name is
+    /// <paramref name="name"/> or <c>&lt;name&gt;_ES</c>, or null.
+    /// </summary>
+    private static string? TakenItemName(AssetCatalog catalog, string name)
+    {
+        foreach (var file in catalog.PackageFiles)
+        {
+            var leaf = Path.GetFileNameWithoutExtension(file);
+            if (!leaf.StartsWith(name, StringComparison.OrdinalIgnoreCase) || (leaf.Length != name.Length && !leaf.Equals(name + "_ES", StringComparison.OrdinalIgnoreCase)))
+            {
+                continue;
+            }
+
+            var path = AssetPaths.ToPackagePath(file, catalog.ProjectName);
+            if (path.StartsWith(ModdableAssets.ConZ + "Items/", StringComparison.OrdinalIgnoreCase) || path.StartsWith(ModdableAssets.ConZ + "Vehicles/", StringComparison.OrdinalIgnoreCase))
+            {
+                return path;
+            }
+        }
+
+        return null;
     }
 
     private static bool CarriesToken(string leaf, string token) =>

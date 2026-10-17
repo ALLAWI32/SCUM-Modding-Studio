@@ -91,6 +91,22 @@ public sealed class PreviewSurfaceEventArgs(int partIndex, FVector origin, FVect
     public bool IsCancel { get; } = isCancel;
 }
 
+/// <summary>The wheel or a key over the model in <see cref="PreviewTool.Surface"/> mode (a decal sized, turned, moved); <see cref="Handled"/> keeps the camera's own use of it.</summary>
+public sealed class PreviewSurfaceInputEventArgs(Key key, float notches, KeyModifiers modifiers) : EventArgs
+{
+    /// <summary>The key pressed, or <see cref="Key.None"/> for the wheel.</summary>
+    public Key Key { get; } = key;
+
+    /// <summary>Wheel notches (up positive), 0 for a key.</summary>
+    public float Notches { get; } = notches;
+
+    /// <summary>Ctrl, Shift … held.</summary>
+    public KeyModifiers Modifiers { get; } = modifiers;
+
+    /// <summary>Set by a handler that used it.</summary>
+    public bool Handled { get; set; }
+}
+
 /// <summary>A part of <see cref="MeshPreview.Model"/> drawn away from its place: moved by <paramref name="Delta"/> (drawn as its place times the delta), or hidden.</summary>
 public readonly record struct PreviewPartOverride(FTransform Delta, bool Hidden);
 
@@ -232,6 +248,9 @@ public sealed class MeshPreview : OpenGlControlBase
 
     /// <summary>Raised in <see cref="PreviewTool.Surface"/> mode on a press, each drag step (at most one a frame) and the release (UI thread).</summary>
     public event EventHandler<PreviewSurfaceEventArgs>? SurfacePointer;
+
+    /// <summary>Raised in <see cref="PreviewTool.Surface"/> mode for the wheel and keys before the view uses them (UI thread).</summary>
+    public event EventHandler<PreviewSurfaceInputEventArgs>? SurfaceInput;
 
     /// <summary>Raised in <see cref="PreviewTool.Gizmo"/> mode while a part is dragged and once when it is dropped or the drag is cancelled (UI thread).</summary>
     public event EventHandler<PreviewGizmoEventArgs>? PartGizmo;
@@ -806,6 +825,18 @@ public sealed class MeshPreview : OpenGlControlBase
     protected override void OnKeyDown(KeyEventArgs e)
     {
         base.OnKeyDown(e);
+        if (Tool == PreviewTool.Surface && !_surfaceDown && SurfaceInput is { } surface)
+        {
+            var args = new PreviewSurfaceInputEventArgs(e.Key, 0f, e.KeyModifiers);
+            surface(this, args);
+            if (args.Handled)
+            {
+                e.Handled = true;
+                RequestNextFrameRendering();
+                return;
+            }
+        }
+
         if (e.Key == Key.Escape && (_gizmoHandle != GizmoAxis.None || _surfaceDown))
         {
             CancelDrags();
@@ -1070,6 +1101,17 @@ public sealed class MeshPreview : OpenGlControlBase
         if (notches == 0f)
         {
             return;
+        }
+
+        if (Tool == PreviewTool.Surface && SurfaceInput is { } surface)
+        {
+            var args = new PreviewSurfaceInputEventArgs(Key.None, notches, e.KeyModifiers);
+            surface(this, args);
+            if (args.Handled)
+            {
+                RequestNextFrameRendering();
+                return; // a decal took it: the camera stays
+            }
         }
 
         var radius = Radius();

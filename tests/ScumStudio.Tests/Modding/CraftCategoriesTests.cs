@@ -229,7 +229,9 @@ public sealed class CraftCategoriesTests
         {
             var result = await CraftablesExporter.ExportAsync(craftables, "MyMod", catalog, new ExportOptions { OutputDirectory = dir, WritePak = false }, ProjectSourceRole.Client);
             Assert.NotNull(result);
-            Assert.Equal([$"Odd Chair: the section {item.Tag} is not one of the game's building sections; it shows in its default section."], result!.Warnings);
+            // No renderer here: a mesh craftable keeps its template's picture and says so (CraftablesExporter.MakePictures).
+            Assert.Equal([$"Odd Chair: the section {item.Tag} is not one of the game's building sections; it shows in its default section."],
+                result!.Warnings.Where(w => !w.Contains("cannot draw 3D models", StringComparison.Ordinal)));
 
             const string recipes = "/Game/ConZ_Files/Items/Crafting/Recipes/Placeables/";
             CraftCategory Staged(string name)
@@ -302,7 +304,7 @@ public sealed class CraftCategoriesTests
     /// A recipe package as the game cooks one: the recipe export (its <c>CraftingMetadata</c> links and two
     /// <c>FCraftingIngredientSlot</c>s of <c>CI_Wood</c>), its section sub-object (tag, domain, priority) and a skin link.
     /// </summary>
-    private static CookedPackage Recipe(SyntheticPackage s)
+    internal static CookedPackage Recipe(SyntheticPackage s)
     {
         const string wood = RecipeIngredients.TagFolder + "/CI_Wood";
         s.Names.AddRange(["/Script/SCUM", "PlaceableCraftingRecipe", "CraftingMetadata_RecipeCategory", "CR_Test", "CraftingMetadata_RecipeCategory_0",

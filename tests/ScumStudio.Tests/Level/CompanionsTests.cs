@@ -13,6 +13,7 @@ namespace ScumStudio.Tests.Level;
 /// <see cref="Companions"/>: what goes with a deleted object (the owner: "When I delete it, EVERYTHING of it must be
 /// deleted: the fire object itself, its sound, its particles, everything").
 /// </summary>
+[Collection(TimingCollection.Name)] // FindIsFastOnALoadedIsland: 1.5 s next to the real-file Level tests, under 0.5 s alone
 public sealed class CompanionsTests
 {
     private const string Camp = SyntheticCampLevel.LevelPath;

@@ -1,5 +1,7 @@
+using System.Buffers.Binary;
 using ScumStudio.Formats.IO;
 using ScumStudio.Formats.Packages;
+using ScumStudio.Formats.Properties;
 
 namespace ScumStudio.Level.Export;
 
@@ -23,7 +25,7 @@ public static partial class LevelPackageEditor
     /// </summary>
     private static int NeutralizeDeletedExports(
         CookedPackage package, int levelIndex, IReadOnlyList<string> removed, List<ExportEntry> exports, List<ReadOnlyMemory<byte>> data,
-        List<ImportEntry> imports, List<string> names, List<bool> wide, List<string> addedNames, List<int> preload, List<string> warnings)
+        List<ImportEntry> imports, List<string> names, List<bool> wide, List<string> addedNames, List<int> preload, HashSet<int> replaced, List<string> warnings)
     {
         if (removed.Count == 0)
         {
@@ -31,7 +33,7 @@ public static partial class LevelPackageEditor
         }
 
         var pinned = ReadLevelNativeReferences(package, levelIndex);
-        var inert = new InertObject(imports, names, wide, addedNames);
+        var inert = new InertObject(imports, names, wide, addedNames, replaced);
         var count = 0;
         foreach (var name in removed)
         {
@@ -62,7 +64,7 @@ public static partial class LevelPackageEditor
     private static int NeutralizeComponents(
         CookedPackage package, int levelIndex, IReadOnlyList<(string Actor, string Component)> components, List<ExportEntry> exports,
         List<ReadOnlyMemory<byte>> data, List<ImportEntry> imports, List<string> names, List<bool> wide, List<string> addedNames, List<int> preload,
-        List<string> done, List<string> warnings)
+        HashSet<int> replaced, List<string> done, List<string> warnings)
     {
         if (components.Count == 0)
         {
@@ -70,7 +72,7 @@ public static partial class LevelPackageEditor
         }
 
         var pinned = ReadLevelNativeReferences(package, levelIndex);
-        var inert = new InertObject(imports, names, wide, addedNames);
+        var inert = new InertObject(imports, names, wide, addedNames, replaced);
         var count = 0;
         foreach (var (actor, component) in components)
         {
@@ -103,16 +105,18 @@ public static partial class LevelPackageEditor
         private readonly List<string> _names;
         private readonly List<bool> _wide;
         private readonly List<string> _addedNames;
+        private readonly HashSet<int> _replaced;
         private readonly byte[] _payload;
         private int _objectClass;
         private int _objectTemplate;
 
-        public InertObject(List<ImportEntry> imports, List<string> names, List<bool> wide, List<string> addedNames)
+        public InertObject(List<ImportEntry> imports, List<string> names, List<bool> wide, List<string> addedNames, HashSet<int> replaced)
         {
             _imports = imports;
             _names = names;
             _wide = wide;
             _addedNames = addedNames;
+            _replaced = replaced;
             var blank = new ByteWriter(12);
             blank.FName(GetOrAddName(names, wide, addedNames, "None"));
             blank.I32(0); // bHasGuid
@@ -152,9 +156,192 @@ public static partial class LevelPackageEditor
                     CreateBeforeCreateDependencies = entry.OuterIndex > 0 ? 1 : 0,
                 };
                 data[i] = _payload;
+                _replaced.Add(i);
             }
 
             return members.Count;
+        }
+    }
+
+    /// <summary>
+    /// After the deletions, what kept objects of the level still point at a deleted one is cleared (owner 2026-10-16: the
+    /// game crashed on leaving a server and on Alt+F4 with a mod; the package check found kept actors pointing at deleted
+    /// ones). The game would null such a reference itself when it loads ("Reference will be NULLed"), leaving lists with
+    /// null entries that code tearing the level down (EndPlay, unregistering from a group, a door's or switch's targets)
+    /// walks into. A single reference is written null, as the game would make it; a list of objects loses the entry. The
+    /// level's own native data (actor list, script actor, model) is handled where it is written. Returns the references
+    /// cleared, as <c>Object.Property</c> labels.
+    /// </summary>
+    private static List<string> ForgetDeletedObjects(CookedPackage package, IReadOnlySet<int> deleted, List<ReadOnlyMemory<byte>> data, List<string> names)
+    {
+        var forgotten = new List<string>();
+        if (deleted.Count == 0)
+        {
+            return forgotten;
+        }
+
+        bool IsDeleted(int index) => index > 0 && deleted.Contains(index - 1);
+        for (var i = 0; i < data.Count; i++)
+        {
+            if (deleted.Contains(i) || data[i].Length == 0)
+            {
+                continue;
+            }
+
+            var payload = data[i].ToArray();
+            PropertyBlock block;
+            try
+            {
+                block = PropertyReader.ReadPayload(package, payload, names);
+            }
+            catch (Exception ex) when (ex is FormatException or EndOfStreamException or ArgumentOutOfRangeException or InvalidDataException or IndexOutOfRangeException)
+            {
+                continue; // no tagged block this reader follows: left as it is (the package check reads it again)
+            }
+
+            var label = i < package.Exports.Count ? package.ResolveName(package.Exports[i].ObjectName) : $"#{i + 1}";
+            var changed = false;
+            foreach (var tag in block.Properties.Where(t => !IsObjectList(t)))
+            {
+                foreach (var (index, offset) in References(tag.Value).Where(r => IsDeleted(r.Index)))
+                {
+                    BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(offset), 0);
+                    forgotten.Add($"{label}.{tag.Name}");
+                    changed = true;
+                }
+            }
+
+            // Lists of objects lose the entries (one list at a time: the payload shifts behind each one).
+            while (block.Properties.FirstOrDefault(t => IsObjectList(t) && ((ArrayValue)t.Value).Items.Any(v => IsDeleted(((ObjectValue)v).Index))) is { } list)
+            {
+                var items = ((ArrayValue)list.Value).Items.Cast<ObjectValue>().Select(o => o.Index).ToList();
+                var removed = items.RemoveAll(IsDeleted);
+                forgotten.AddRange(Enumerable.Repeat($"{label}.{list.Name}[]", removed));
+                payload = WriteObjectArray(payload, list, items);
+                block = PropertyReader.ReadPayload(package, payload, names);
+                changed = true;
+            }
+
+            if (changed)
+            {
+                data[i] = payload;
+            }
+        }
+
+        return forgotten;
+    }
+
+    /// <summary>
+    /// References whose holder the game never has without the target: a vehicle trader's bike and car lifts name it in
+    /// <c>_assignedTradePost</c> (every lift of the game's outposts does, 4 + 4 checked 2026-10-16), so a deleted trader takes
+    /// its lifts along instead of leaving lifts the game has never run without one.
+    /// </summary>
+    private static readonly string[] OwnerReferences = ["_assignedTradePost"];
+
+    /// <summary>
+    /// <paramref name="delete"/> plus the kept actors of the level that hold an <see cref="OwnerReferences"/> property naming
+    /// one of them (each with a warning).
+    /// </summary>
+    private static IReadOnlyCollection<string> WithDependents(CookedPackage package, int levelIndex, IReadOnlyCollection<string> delete, List<string> warnings)
+    {
+        if (delete.Count == 0)
+        {
+            return delete;
+        }
+
+        var level = levelIndex + 1;
+        var names = new HashSet<string>(delete, StringComparer.OrdinalIgnoreCase);
+        var deleted = new Dictionary<int, string>();
+        for (var i = 0; i < package.Exports.Count; i++)
+        {
+            if (package.Exports[i].OuterIndex == level && names.Contains(package.ResolveName(package.Exports[i].ObjectName)))
+            {
+                deleted[i + 1] = package.ResolveName(package.Exports[i].ObjectName);
+            }
+        }
+
+        var added = new List<string>();
+        for (var i = 0; i < package.Exports.Count; i++)
+        {
+            if (package.Exports[i].OuterIndex != level || deleted.ContainsKey(i + 1))
+            {
+                continue;
+            }
+
+            PropertyBlock block;
+            try
+            {
+                block = package.ReadProperties(i);
+            }
+            catch (Exception ex) when (ex is FormatException or EndOfStreamException or ArgumentOutOfRangeException or InvalidDataException or IndexOutOfRangeException or NotSupportedException)
+            {
+                continue;
+            }
+
+            foreach (var property in OwnerReferences)
+            {
+                if (block.Find(property)?.Value is ObjectValue { Index: var target } && deleted.TryGetValue(target, out var owner))
+                {
+                    var name = package.ResolveName(package.Exports[i].ObjectName);
+                    added.Add(name);
+                    warnings.Add($"Actor '{name}' was removed with '{owner}': it belongs to it ({property}), and the game has none without one.");
+                    break;
+                }
+            }
+        }
+
+        return added.Count == 0 ? delete : [.. delete, .. added];
+    }
+
+    private static bool IsObjectList(PropertyTag tag) =>
+        tag.Value is ArrayValue { InnerType: "ObjectProperty", Items.Count: > 0 } array && array.Items.All(v => v is ObjectValue);
+
+    /// <summary>Every object reference inside a property value (package index, offset of the index in the payload).</summary>
+    private static IEnumerable<(int Index, int Offset)> References(PropertyValue value)
+    {
+        switch (value)
+        {
+            case ObjectValue o:
+                yield return (o.Index, o.Offset);
+                break;
+            case DelegateValue d:
+                yield return (d.Object, d.Offset);
+                break;
+            case MulticastDelegateValue m:
+                foreach (var r in m.Delegates.SelectMany(References))
+                {
+                    yield return r;
+                }
+
+                break;
+            case StructValue s:
+                foreach (var r in s.Properties.SelectMany(p => References(p.Value)))
+                {
+                    yield return r;
+                }
+
+                break;
+            case ArrayValue a:
+                foreach (var r in a.Items.SelectMany(References))
+                {
+                    yield return r;
+                }
+
+                break;
+            case SetValue set:
+                foreach (var r in set.Items.SelectMany(References))
+                {
+                    yield return r;
+                }
+
+                break;
+            case MapValue map:
+                foreach (var r in map.Entries.SelectMany(e => References(e.Key).Concat(References(e.Value))))
+                {
+                    yield return r;
+                }
+
+                break;
         }
     }
 

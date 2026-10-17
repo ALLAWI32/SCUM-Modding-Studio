@@ -18,7 +18,7 @@ public static class RecipeIngredients
     /// <summary>Folder of the game's ingredient tags (<c>CI_*</c>); a craftable station's tag is cloned into it.</summary>
     public const string TagFolder = "/Game/ConZ_Files/Items/Crafting/Ingredients";
 
-    private static readonly string[] Levels = ["NoSkill", "Basic", "Medium", "Advanced", "AboveAdvanced"];
+    private static readonly string[] Levels = [.. LevelAmounts.Names];
 
     /// <summary>The object path of tag <paramref name="tag"/> (<c>CI_Plank</c> → <c>/Game/…/Ingredients/CI_Plank.CI_Plank</c>).</summary>
     public static string TagPath(string tag) => tag.StartsWith('/') ? tag : $"{TagFolder}/{tag}.{tag}";
@@ -68,7 +68,7 @@ public static class RecipeIngredients
             var entry = payload.AsSpan(model.Offset, model.Size).ToArray();
             var import = tables.Import("/Script/SCUM", "CraftingIngredientTag", TagPath(ingredient.Tag));
             BinaryPrimitives.WriteInt32LittleEndian(entry.AsSpan(allowed.Offset - model.Offset), import);
-            var perSkill = PerSkill(Math.Max(1, ingredient.Amount));
+            var perSkill = ingredient.PerLevel.ToArray();
             for (var i = 0; i < Levels.Length; i++)
             {
                 if (Member(amounts, Levels[i]) is { Value: IntValue } level)
@@ -159,6 +159,80 @@ public static class RecipeIngredients
             var isTool = Member(s, "Purpose")?.Value is EnumValue e && e.Value.EndsWith("Tool", StringComparison.Ordinal);
             return new CraftIngredient(tag, amount, isTool);
         }).ToList();
+    }
+
+    /// <summary>
+    /// The recipe's slots as the game stores them: the tags each accepts, tool or material, and the amount per skill level
+    /// (a level a slot does not store reads 0).
+    /// </summary>
+    public static IReadOnlyList<RecipeSlot> ReadSlots(CookedPackage package)
+    {
+        ArgumentNullException.ThrowIfNull(package);
+        if (package.ReadProperties(RecipeExport(package)).Find("Ingredients")?.Value is not ArrayValue list)
+        {
+            return [];
+        }
+
+        return list.Items.OfType<StructValue>().Select(s =>
+        {
+            var tags = Member(s, "AllowedTypes")?.Value is ArrayValue allowed
+                ? allowed.Items.OfType<ObjectValue>().Where(o => o.Index < 0).Select(o => package.ResolveName(package.Imports[-o.Index - 1].ObjectName)).ToList()
+                : [];
+            var amounts = Member(s, "Amount")?.Value is StructValue a
+                ? Levels.Select(l => Member(a, l)?.Value is IntValue v ? v.Value : 0).ToArray()
+                : new int[Levels.Length];
+            var isTool = Member(s, "Purpose")?.Value is EnumValue e && e.Value.EndsWith("Tool", StringComparison.Ordinal);
+            return new RecipeSlot(tags, isTool, LevelAmounts.From(amounts));
+        }).ToList();
+    }
+
+    /// <summary>
+    /// The skill whose level picks the amounts (<c>RelevantSkill</c>: <c>EngineeringSkill</c>, <c>SurvivalSkill</c>,
+    /// <c>DemolitionSkill</c> …), or null when the recipe names none.
+    /// </summary>
+    public static string? Skill(CookedPackage package)
+    {
+        ArgumentNullException.ThrowIfNull(package);
+        return package.ReadProperties(RecipeExport(package)).Find("RelevantSkill")?.Value is ObjectValue { Index: < 0 } skill
+            ? package.ResolveName(package.Imports[-skill.Index - 1].ObjectName)
+            : null;
+    }
+
+    /// <summary>
+    /// The recipe with the amount per skill level of each slot set to <paramref name="amounts"/> (one per slot, in order):
+    /// the five ints of each slot's <c>Amount</c> are written in place, so the package keeps its size, tables and everything
+    /// else (tags, tools, sections, skins).
+    /// </summary>
+    /// <exception cref="InvalidOperationException">No recipe, another number of slots, or a slot that does not store all five levels.</exception>
+    public static PackageBytes SetAmounts(CookedPackage package, IReadOnlyList<LevelAmounts> amounts)
+    {
+        ArgumentNullException.ThrowIfNull(package);
+        ArgumentNullException.ThrowIfNull(amounts);
+        var exportIndex = RecipeExport(package);
+        var payload = package.GetExportData(exportIndex).ToArray();
+        var block = PropertyReader.ReadPayload(package, payload, exportIndex);
+        var slots = block.Find("Ingredients")?.Value is ArrayValue list ? list.Items.OfType<StructValue>().ToList() : [];
+        if (slots.Count != amounts.Count)
+        {
+            throw new InvalidOperationException($"{package.BasePath}: the recipe has {slots.Count} ingredient slot(s), not {amounts.Count}.");
+        }
+
+        for (var s = 0; s < slots.Count; s++)
+        {
+            var values = amounts[s].Clamped().ToArray();
+            for (var i = 0; i < Levels.Length; i++)
+            {
+                if (Member(slots[s], "Amount")?.Value is not StructValue stored || Member(stored, Levels[i]) is not { Value: IntValue } level)
+                {
+                    throw new InvalidOperationException($"{package.BasePath}: ingredient slot {s + 1} stores no {Levels[i]} amount.");
+                }
+
+                BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(level.ValueOffset), values[i]);
+            }
+        }
+
+        var data = Enumerable.Range(0, package.Exports.Count).Select(i => i == exportIndex ? (ReadOnlyMemory<byte>)payload : package.GetExportData(i)).ToArray();
+        return PackageWriter.Build(PackageWriter.ToBuildInput(package) with { ExportData = data });
     }
 
     /// <summary>The index of the package's recipe export.</summary>

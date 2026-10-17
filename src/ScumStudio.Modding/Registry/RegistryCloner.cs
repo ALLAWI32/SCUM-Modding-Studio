@@ -30,13 +30,17 @@ public static class RegistryCloner
     /// Object paths whose records are never replaced (default: every record <paramref name="registry"/> holds now), the
     /// game's own: a new path among them is skipped with a warning.
     /// </param>
+    /// <param name="anyRecord">
+    /// True: a record without a <c>PrimaryAssetType</c> (a texture's) is copied too, and <see cref="RegisteredAsset.PrimaryAssetType"/>
+    /// is its asset class. False (the default): only primary assets.
+    /// </param>
     /// <remarks>
     /// A record at the new object path that is not kept (one an earlier export left) is replaced, so its tags are the
     /// template's of today. Name and export path tags may carry FName numbers (<c>CR_Improvised_Bow_20</c>): they are
     /// remapped on their text and stored split again.
     /// </remarks>
     public static IReadOnlyList<RegisteredAsset> Register(AssetRegistryFile registry, PackageMap map, ICollection<string>? warnings = null, string? owner = null,
-        IEnumerable<KeyValuePair<string, string>>? copied = null, IReadOnlySet<string>? kept = null)
+        IEnumerable<KeyValuePair<string, string>>? copied = null, IReadOnlySet<string>? kept = null, bool anyRecord = false)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(map);
@@ -61,7 +65,7 @@ public static class RegistryCloner
                 }
 
                 var tags = registry.GetTags(template);
-                var type = tags.FirstOrDefault(t => t.Key == "PrimaryAssetType").Value?.Text;
+                var type = tags.FirstOrDefault(t => t.Key == "PrimaryAssetType").Value?.Text ?? (anyRecord ? template.AssetClass : null);
                 if (type is null)
                 {
                     continue;

@@ -197,11 +197,20 @@ public sealed record LevelEditReport
     /// <summary>Landscape grass density samples set to 0 under placed objects (see <see cref="GrassClearing"/>).</summary>
     public int ClearedGrassSamples { get; init; }
 
+    /// <summary>Landscape collision cells turned into holes (see <see cref="TerrainHoles"/>).</summary>
+    public int TerrainHoleCells { get; init; }
+
+    /// <summary>Visibility-layer samples set to a hole, so the game draws the hole too (see <see cref="TerrainHoleLayers"/>).</summary>
+    public int TerrainHoleVisibleSamples { get; init; }
+
     /// <summary>Exports of deleted actors (the actors and everything under them) turned into inert objects.</summary>
     public int NeutralizedExports { get; init; }
 
     /// <summary>Components of kept actors turned into inert objects (see <see cref="LevelEditRequest.DeleteComponents"/>), as <c>Actor.Component</c>.</summary>
     public IReadOnlyList<string> NeutralizedComponents { get; init; } = [];
+
+    /// <summary>References of kept objects to deleted ones that were cleared, as <c>Object.Property</c> (<c>[]</c>: a list entry removed).</summary>
+    public IReadOnlyList<string> ForgottenReferences { get; init; } = [];
 
     /// <summary>Trade posts added to an outpost manager of the level, as (post, manager).</summary>
     public IReadOnlyList<(string Post, string Manager)> JoinedTradePosts { get; init; } = [];
@@ -268,7 +277,7 @@ public static partial class LevelPackageEditor
         addedIndices.AddRange(JoinSentrySpawners(package, levelIndex, request, exports, data, imports, names, wide, addedNames, preload, addedActors, warnings));
         RegisterActorsWithLevel(package, levelIndex, exports, preload, addedIndices);
 
-        var actors = RemoveActors(package, levelIndex, request.DeleteActors, addedIndices, warnings);
+        var actors = RemoveActors(package, levelIndex, WithDependents(package, levelIndex, request.DeleteActors, warnings), addedIndices, warnings);
         data[levelIndex] = actors.Payload;
         ForgetTradePosts(package, actors.Removed, data);
         ForgetSentrySpawners(package, levelIndex, actors.Removed, data);
@@ -336,8 +345,12 @@ public static partial class LevelPackageEditor
 
         // Last: a deleted actor's exports become inert objects, whatever another patch wrote into them.
         var neutralizedComponents = new List<string>();
-        var neutralized = NeutralizeDeletedExports(package, levelIndex, actors.Removed, exports, data, imports, names, wide, addedNames, preload, warnings)
-            + NeutralizeComponents(package, levelIndex, request.DeleteComponents, exports, data, imports, names, wide, addedNames, preload, neutralizedComponents, warnings);
+        var inert = new HashSet<int>();
+        var neutralized = NeutralizeDeletedExports(package, levelIndex, actors.Removed, exports, data, imports, names, wide, addedNames, preload, inert, warnings)
+            + NeutralizeComponents(package, levelIndex, request.DeleteComponents, exports, data, imports, names, wide, addedNames, preload, inert, neutralizedComponents, warnings);
+
+        // Then nothing kept points at what was deleted (a door's or switch's target, a group's member, a component list).
+        var forgotten = ForgetDeletedObjects(package, inert, data, names);
 
         var bytes = PackageWriter.Build(new PackageBuildInput
         {
@@ -365,6 +378,7 @@ public static partial class LevelPackageEditor
             AddedInstances = addedInstances,
             NeutralizedExports = neutralized,
             NeutralizedComponents = neutralizedComponents,
+            ForgottenReferences = forgotten,
             JoinedTradePosts = joined,
             Warnings = warnings,
         };

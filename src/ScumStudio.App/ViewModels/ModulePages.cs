@@ -91,3 +91,37 @@ public sealed class WeaponsPageViewModel : ModulePageViewModel
         return filters;
     }
 }
+
+/// <summary>
+/// Items module (CwHedgehog: "duplicate some in-game items, such as copper coins; at the moment only weapons can be
+/// duplicated"): every other inventory item of the game files (coins, medicine, food, resources, clothes, weapon
+/// attachments …) with its stored values (name, description, weight, stack or uses, inventory size, spawn rarity, trade
+/// row …); tune them or clone one under a new name that <c>#SpawnItem</c> finds, with its own class, entity setup and
+/// registry records, exactly as the Weapons page clones a weapon.
+/// </summary>
+public sealed class ItemsPageViewModel : ModulePageViewModel
+{
+    private static readonly HashSet<string> KeyNames = new(StringComparer.Ordinal)
+    {
+        "Caption", "Description", "Weight", "MaxQuantity", "GridInventoryRowSpan", "GridInventoryColumnSpan", "MaxHealth",
+        "ShelfLife", "_rarity", "_isIgnoredBySpawners", "_noiseLevel", "_damageOverTime",
+        "Urban", "Rural", "Industrial", "Police", "MilitaryBasic", "MilitaryMedium", "MilitaryAdvanced", "MilitaryWW2", "Sport", "Market", "GasStation",
+        "BasePurchasePrice", "BaseSalePrice", "RequiredFamePoints", "CanBePurchasedByPlayer", "CanBeSoldByPlayer", "MaxAmountPurchasedAtOnce",
+    };
+
+    /// <summary>Creates the page.</summary>
+    public ItemsPageViewModel(AppServices services, Action? openSetup = null)
+        : base(services, openSetup, "items", "Items", "Tune any inventory item or clone it under a new name", [ModdableKind.Item])
+    {
+    }
+
+    /// <inheritdoc />
+    protected override IReadOnlySet<string> KeyStats => KeyNames;
+
+    /// <inheritdoc />
+    protected override IReadOnlyList<ModuleFilter> BuildFilters(IReadOnlyList<ModuleItemViewModel> items) =>
+        new[] { new ModuleFilter(Localization.Loc.T("Module.Filter.All"), null, null) }
+            .Concat(items.Select(i => i.Asset.Category).Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase)
+                .Select(c => new ModuleFilter(c, ModdableKind.Item, c)))
+            .ToList();
+}

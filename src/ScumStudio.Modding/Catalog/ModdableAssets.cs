@@ -21,6 +21,12 @@ public enum ModdableKind
 
     /// <summary>A projectile class (<c>BP_WeaponBullet_*</c>): muzzle velocity, damage, penetration.</summary>
     Projectile,
+
+    /// <summary>
+    /// Any other inventory item under <c>Items/</c> (copper coins, painkillers, nails, food, clothes, weapon attachments …):
+    /// a Blueprint item class with its entity setup <c>X_ES</c> beside it, cloned like a weapon (CwHedgehog: "only weapons can be duplicated").
+    /// </summary>
+    Item,
 }
 
 /// <summary>A stock (or cloned) asset the Vehicles/Weapons modules can tune and clone.</summary>
@@ -47,10 +53,23 @@ public static class ModdableAssets
 
     private const string MeleeFolder = "New_Melee";
 
+    /// <summary>
+    /// Folders under <c>Items/</c> that hold no inventory items (loot presets, post-spawn actions, icons, texts, tags): their
+    /// packages are never an <see cref="ModdableKind.Item"/>.
+    /// </summary>
+    private static readonly HashSet<string> NotItemFolders = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "SpawnerPresets", "SpawnerPresets2", "PostSpawnActions", "Item_Icons", "StringTables", "Tags",
+    };
+
     /// <summary>True for a melee weapon (its hit damage is the row of <c>WeaponDesc_Table</c> named after it).</summary>
     public static bool IsMelee(string packagePath) => Classify(packagePath) is { Kind: ModdableKind.Weapon, Category: MeleeCategory };
 
-    /// <summary>Every moddable asset of <paramref name="catalog"/>, sorted by kind then name.</summary>
+    /// <summary>
+    /// Every moddable asset of <paramref name="catalog"/>, sorted by kind then name. An <see cref="ModdableKind.Item"/> is listed
+    /// only with its entity setup beside it (<c>X</c> and <c>X_ES</c>, as every stock inventory item has: 2,351 items in 29
+    /// folders besides the weapons, magazines and ammunition in SCUM 1.3).
+    /// </summary>
     public static IReadOnlyList<ModdableAsset> Find(AssetCatalog catalog)
     {
         ArgumentNullException.ThrowIfNull(catalog);
@@ -69,6 +88,11 @@ public static class ModdableAssets
             }
 
             var es = EntitySetupCandidate(asset);
+            if (asset.Kind == ModdableKind.Item && (es is null || !set.Contains(es)))
+            {
+                continue; // a mesh, sound or other helper package of an item folder, not an item
+            }
+
             result.Add(es is not null && set.Contains(es) ? asset with { EntitySetupPath = es } : asset);
         }
 
@@ -132,6 +156,13 @@ public static class ModdableAssets
                 {
                     return new ModdableAsset(ModdableKind.Projectile, p, "Projectiles");
                 }
+            }
+
+            // Every other package of an item folder (Equipment/Active_Items/Copper_Coins, Medications/Painkillers_01): grouped by
+            // its top folder. Find lists only those with an entity setup beside them.
+            if (!NotItemFolders.Contains(parts[1]))
+            {
+                return new ModdableAsset(ModdableKind.Item, p, parts[1]);
             }
         }
 

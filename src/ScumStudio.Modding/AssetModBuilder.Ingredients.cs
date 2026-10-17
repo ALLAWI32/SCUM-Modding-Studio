@@ -19,6 +19,12 @@ public sealed partial record AssetModRequest
     /// its edits are kept under the higher pak), or null to read the catalog.
     /// </summary>
     public Func<string, CookedPackage?>? BasePackage { get; init; }
+
+    /// <summary>
+    /// The game's recipe → its amounts per skill level, one per slot (<see cref="RecipeIngredients.SetAmounts"/>): the user's
+    /// explicit override of a stock recipe, written at the stock path.
+    /// </summary>
+    public IReadOnlyDictionary<string, IReadOnlyList<LevelAmounts>> RecipeAmounts { get; init; } = new Dictionary<string, IReadOnlyList<LevelAmounts>>();
 }
 
 public static partial class AssetModBuilder
@@ -40,6 +46,26 @@ public static partial class AssetModBuilder
             catch (Exception ex) when (ex is FileNotFoundException or FormatException or InvalidDataException or IOException or InvalidOperationException)
             {
                 warnings.Add($"{path}: the new ingredient tags are not added ({ex.Message}).");
+            }
+        }
+    }
+
+    /// <summary>Writes <see cref="AssetModRequest.RecipeAmounts"/> into the game's recipes (on the project pak's copy when there is one).</summary>
+    private static void SetRecipeAmounts(AssetCatalog catalog, AssetModRequest request,
+        Dictionary<string, (CookedPackage Package, PackageBytes Bytes, bool IsClone)> built, List<string> warnings)
+    {
+        foreach (var (recipe, amounts) in request.RecipeAmounts)
+        {
+            var path = PackageMap.Normalize(recipe);
+            try
+            {
+                var package = built.TryGetValue(path, out var kept) ? kept.Package : request.BasePackage?.Invoke(path) ?? ModdableAssets.ReadPackage(catalog, path);
+                var bytes = RecipeIngredients.SetAmounts(package, amounts);
+                built[path] = (CookedPackage.Parse(bytes.UAsset, bytes.UExp, package.UBulk, path), bytes, false);
+            }
+            catch (Exception ex) when (ex is FileNotFoundException or FormatException or InvalidDataException or IOException or InvalidOperationException)
+            {
+                warnings.Add($"{path}: the amounts per skill level are not written ({ex.Message}).");
             }
         }
     }

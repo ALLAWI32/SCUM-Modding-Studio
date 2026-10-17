@@ -95,10 +95,13 @@ public sealed class ServerEventStubsTests : IDisposable
         using var project = Project.Create(Path.Combine(_dir, "project", "Car.ssproj"), "Car");
         project.Apply(new CloneAssetOp("item", SyntheticGame.Gen, "/Game/T/BP_Ours",
             [new PackagePair(SyntheticGame.Gen, "/Game/T/BP_Ours"), new PackagePair(SyntheticGame.GenEs, "/Game/T/BP_Ours_ES")]));
-        var options = new ExportOptions { OutputDirectory = Path.Combine(_dir, "out"), WritePak = false, Mods = [mod] };
+        var options = new ExportOptions { OutputDirectory = Path.Combine(_dir, "out"), WritePak = false, Mods = [mod], Validate = false }; // the synthetic game names packages it does not hold
 
         var server = await new ProjectExporter().ExportAsync(project, catalog, options with { ServerEventStubs = Stub }, ProjectSourceRole.Server);
         Assert.Equal(new[] { ModEvent }, server.StubbedEvents);
+
+        // The package check holds the stub to the game's own copy, never to the imported mod's client event it replaced.
+        Assert.DoesNotContain(ModPackageValidator.Validate(server.StagingDirectory, catalog).Problems, p => p.Contains("sound", StringComparison.Ordinal));
         Assert.Equal(AkAudioEventStubBuilder.StubExportSize, Read(server.StagingDirectory, ModEvent).Exports[0].SerialSize);
         Assert.Contains("## Sound events (server)", await File.ReadAllTextAsync(server.ReportPath!));
 

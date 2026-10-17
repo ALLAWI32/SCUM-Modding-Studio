@@ -159,6 +159,8 @@ public static partial class AssetModBuilder
                     var bytes = CookedTexture2D.Relayout(clone.Bytes, clone.UBulk);
                     copies.Add((newPath, CookedPackage.Parse(bytes.UAsset, bytes.UExp, clone.UBulk, newPath), bytes));
                 }
+
+                SettleRedirectedImports(catalog, plan, copies);
             }
             catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or FormatException)
             {
@@ -330,9 +332,11 @@ public static partial class AssetModBuilder
         }
 
         AddIngredientInstances(catalog, request, built, warnings);
+        SetRecipeAmounts(catalog, request, built, warnings);
 
         var applied = new List<(string, string, string, string)>();
         WriteTextures(catalog, request, built, applied, warnings);
+        var pictures = WritePictures(catalog, request, built, dropped, warnings);
         foreach (var (packagePath, all) in request.Edits)
         {
             var edits = all.Where(e => !TextureWrites.IsEdit(e.Path)).ToList();
@@ -400,7 +404,7 @@ public static partial class AssetModBuilder
 
                 if (stored.Count > 0)
                 {
-                    var result = TunablePatcher.Apply(package, stored);
+                    var result = TunablePatcher.Apply(package, stored, isClone); // a copy of its own may re-point a reference (a zone's NPC row)
                     bytes = result.Bytes;
                     package = CookedPackage.Parse(bytes.UAsset, bytes.UExp, package.UBulk, path);
                     applied.AddRange(result.Applied.Select(a => (path, a.Key, a.Old, a.New)));
@@ -434,7 +438,7 @@ public static partial class AssetModBuilder
 
         byte[]? registryBytes = null;
         var registered = new List<RegisteredAsset>();
-        if (maps.Count > 0 && request.WriteRegistry)
+        if ((maps.Count > 0 || pictures.Count > 0) && request.WriteRegistry)
         {
             // Stock plus additions (P0 #1): never the registry the catalog happens to read (an imported mod's, an installed pak's).
             // The base's own records (the game's; under the Craftables pak the project pak's too) are never rewritten.
@@ -446,6 +450,12 @@ public static partial class AssetModBuilder
                 foreach (var (owner, map, copied) in maps)
                 {
                     registered.AddRange(RegistryCloner.Register(registry, map, warnings, owner, copied, kept));
+                }
+
+                // A new picture is a texture: its record (size, format, group) is its template's, which has no primary type.
+                foreach (var (owner, pair) in pictures)
+                {
+                    registered.AddRange(RegistryCloner.Register(registry, new PackageMap([pair]), warnings, owner, null, kept, anyRecord: true));
                 }
 
                 registryBytes = registry.Save();
@@ -461,6 +471,59 @@ public static partial class AssetModBuilder
             .Select(b => new BuiltAssetPackage(b.Key, b.Value.Bytes, b.Value.Package.UBulk, b.Value.IsClone))
             .ToList();
         return new AssetModBuildResult(packages, registryBytes, registered, applied, warnings);
+    }
+
+    /// <summary>
+    /// A redirect to another class (the cabinet's element given a fridge copy to spawn) leaves the old class's default
+    /// subobjects among a clone's imports; those the redirect's target has no object for are rewritten to their class's
+    /// default object (<see cref="RedirectedImports"/>). Only imports into a redirect's target are looked at.
+    /// </summary>
+    private static void SettleRedirectedImports(AssetCatalog catalog, ClonePlan plan, List<(string New, CookedPackage Package, PackageBytes Bytes)> copies)
+    {
+        if (plan.Redirects.Count == 0)
+        {
+            return;
+        }
+
+        var targets = plan.Redirects.Select(r => PackageMap.Normalize(r.Value)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var objects = new Dictionary<string, HashSet<string>?>(StringComparer.OrdinalIgnoreCase);
+        bool? Exists(string path)
+        {
+            var dot = path.IndexOf('.');
+            var package = dot > 0 ? path[..dot] : path;
+            if (dot <= 0 || !targets.Contains(package))
+            {
+                return null;
+            }
+
+            if (!objects.TryGetValue(package, out var known))
+            {
+                var target = copies.FirstOrDefault(c => string.Equals(PackageMap.Normalize(c.New), package, StringComparison.OrdinalIgnoreCase)).Package;
+                try
+                {
+                    target ??= catalog.PackageExists(package) ? ModdableAssets.ReadPackage(catalog, package) : null;
+                }
+                catch (Exception ex) when (ex is IOException or InvalidDataException or FormatException or ArgumentException)
+                {
+                    target = null; // unknown: left as it is
+                }
+
+                known = target is null ? null : Enumerable.Range(1, target.Exports.Count).Select(target.GetFullPath).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                objects[package] = known;
+            }
+
+            return known?.Contains(path[(dot + 1)..]);
+        }
+
+        for (var i = 0; i < copies.Count; i++)
+        {
+            var (newPath, package, _) = copies[i];
+            if (RedirectedImports.Settle(package, Exists, out _) is { } settled)
+            {
+                var bytes = CookedTexture2D.Relayout(settled, package.UBulk);
+                copies[i] = (newPath, CookedPackage.Parse(bytes.UAsset, bytes.UExp, package.UBulk, newPath), bytes);
+            }
+        }
     }
 
     /// <summary>

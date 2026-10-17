@@ -55,6 +55,25 @@ public static class DecalBaker
     }
 
     /// <summary>
+    /// The decal's axes on the surface: across (<c>S</c>, the picture's left to right), up (<c>T</c>, its bottom to top) and
+    /// the normal, from the surface <paramref name="normal"/>, the decal's <paramref name="up"/> and its turn.
+    /// </summary>
+    public static (Vector3 S, Vector3 T, Vector3 N) Axes(Vector3 normal, Vector3 up, float rotationDeg)
+    {
+        var n = Vector3.Normalize(normal);
+        var u = up - (Vector3.Dot(up, n) * n);
+        if (u.LengthSquared() < 1e-6f)
+        {
+            u = MathF.Abs(n.Z) < 0.9f ? Vector3.UnitZ - (n.Z * n) : Vector3.UnitX - (n.X * n);
+        }
+
+        var t0 = Vector3.Normalize(u);
+        var s0 = Vector3.Cross(n, t0);
+        var (sin, cos) = MathF.SinCos(rotationDeg * MathF.PI / 180f);
+        return ((s0 * cos) + (t0 * sin), (t0 * cos) - (s0 * sin), n);
+    }
+
+    /// <summary>
     /// Bakes <paramref name="stamps"/> (bottom first) into <paramref name="diffuse"/> and <paramref name="mask"/> through the
     /// triangles of <paramref name="parts"/> (all drawn with that material), at <paramref name="size"/> pixels on the long side
     /// (0: the diffuse's own size).
@@ -304,18 +323,8 @@ public static class DecalBaker
     {
         public static Frame Of(DecalStamp stamp)
         {
-            var n = Vector3.Normalize(stamp.Normal);
-            var up = stamp.Up - (Vector3.Dot(stamp.Up, n) * n);
-            if (up.LengthSquared() < 1e-6f)
-            {
-                up = MathF.Abs(n.Z) < 0.9f ? Vector3.UnitZ - (n.Z * n) : Vector3.UnitX - (n.X * n);
-            }
-
-            var t0 = Vector3.Normalize(up);
-            var s0 = Vector3.Cross(n, t0);
-            var (sin, cos) = MathF.SinCos(stamp.RotationDeg * MathF.PI / 180f);
-            return new Frame(stamp.Position, (s0 * cos) + (t0 * sin), (t0 * cos) - (s0 * sin), n, stamp.WidthCm / 2, stamp.HeightCm / 2,
-                MathF.Min(stamp.WidthCm, stamp.HeightCm) / 2, stamp);
+            var (s, t, n) = Axes(stamp.Normal, stamp.Up, stamp.RotationDeg);
+            return new Frame(stamp.Position, s, t, n, stamp.WidthCm / 2, stamp.HeightCm / 2, MathF.Min(stamp.WidthCm, stamp.HeightCm) / 2, stamp);
         }
 
         /// <summary>Whether the triangle faces the decal and its corners are not all on one outer side of the box.</summary>

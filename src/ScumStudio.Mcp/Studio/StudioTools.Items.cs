@@ -14,8 +14,9 @@ public sealed partial class StudioTools
     private IEnumerable<McpTool> ItemTools()
     {
         yield return new McpTool("list_items",
-            "Lists vehicles (BPC_*), weapons (Weapon_*), magazines, ammunition (Cal_*) and projectiles (BP_WeaponBullet_*) of the " +
-            "game files plus the project's clones, with their entity setup (_ES: in-game name, weight, inventory size).",
+            "Lists vehicles (BPC_*), weapons (Weapon_*), magazines, ammunition (Cal_*), projectiles (BP_WeaponBullet_*) and every other " +
+            "inventory item (kind Item: Copper_Coins, Painkillers_01, Nails, food, clothes, attachments …) of the game files plus the " +
+            "project's clones, with their entity setup (_ES: in-game name, weight, inventory size, stack or uses as MaxQuantity).",
             ToolSchema.Object()
                 .String("kind", "Only this kind.", choices: Enum.GetNames<ModdableKind>())
                 .String("filter", "Words that must all appear in the name or folder.")
@@ -116,7 +117,7 @@ public sealed partial class StudioTools
             "meshes and textures stay shared. The clone is registered in AssetRegistry.bin at export, so #SpawnItem <newName> or " +
             "#SpawnVehicle BPC_<newName> finds it. 'caption' sets its in-game name.",
             ToolSchema.Object()
-                .String("template", "Stock asset name or path (Weapon_RPK-74, BPC_WolfsWagen, …).", required: true)
+                .String("template", "Stock asset name or path (Weapon_RPK-74, BPC_WolfsWagen, Copper_Coins, …).", required: true)
                 .String("newName", "Items: the new asset name (Weapon_RPK-74_Gold). Vehicles: the new token (Hunter → BPC_Hunter). Letters, digits, _ and -, not ending in _<number>, which the engine reads as an FName number (Hunter2 or Hunter_v2, not Hunter_2).", required: true)
                 .String("caption", "In-game name written to the clone's entity setup.")
                 .Boolean("includeAttachments", "Vehicles: also clone the attachment classes (default true).")

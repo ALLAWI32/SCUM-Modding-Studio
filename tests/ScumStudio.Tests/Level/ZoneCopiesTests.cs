@@ -51,7 +51,7 @@ public sealed class ZoneCopiesTests
         Assert.Equal("MTZ_Village_OwnB", ZoneCopies.SuggestName("MTZ_Village", ZoneCopies.Taken(catalog, [op.NewPrimary])));
     }
 
-    [Fact(Skip = "Needs AssetModBuilder.cs:242 to pass the package's isClone to TunablePatcher.Apply (not this branch's file); passes with that change.")]
+    [Fact]
     public void ZoneCopyWithARepointedRowIsExportedWithOnlyNpcs()
     {
         // igor8802: "assign NPCs instead of zombies". The whole flow of a zone's own settings: the copy, its zombie row

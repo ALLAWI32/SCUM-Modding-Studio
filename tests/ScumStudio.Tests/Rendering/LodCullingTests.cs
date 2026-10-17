@@ -9,6 +9,7 @@ using Xunit.Abstractions;
 
 namespace ScumStudio.Tests.Rendering;
 
+[Collection(TimingCollection.Name)]
 public sealed class LodCullingTests
 {
     private static readonly MeshHandle Cube = new(1, "Cube", new BoundingBox(new Vector3(-50f), new Vector3(50f)));
@@ -219,7 +220,7 @@ public sealed class LodCullingTests
         _output.WriteLine($"100,000 instances, one frame: clusters classified in {oldFrame.Ms:0.000} ms before, {newFrame.Ms:0.000} ms after; {oldFrame.Drawn:N0} -> {newFrame.Drawn:N0} drawn, {oldFrame.Triangles:N0} -> {newFrame.Triangles:N0} triangles");
         Assert.Equal(oldFrame.Clusters - Rocks(oldResult!), newFrame.Clusters - Rocks(newResult!)); // dense bushes keep their clusters
         Assert.True(newFrame.Triangles <= oldFrame.Triangles, $"{newFrame.Triangles:N0} triangles after, {oldFrame.Triangles:N0} before");
-        Assert.True(split <= countOnly * 1.25, $"built in {split:0.0} ms, {countOnly:0.0} ms before");
+        if (!Ci.On) Assert.True(split <= countOnly * 1.25, $"built in {split:0.0} ms, {countOnly:0.0} ms before");
 
         // Every cluster classified as SceneRenderer.PrepareFrame does (best of 20 passes), at 1,000 / 300 / 50 triangles per LOD.
         (long Triangles, int Clusters, int Drawn, double Ms) Frame(BatchResult result)

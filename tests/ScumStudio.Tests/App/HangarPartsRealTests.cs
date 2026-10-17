@@ -127,10 +127,14 @@ public sealed class HangarPartsRealTests
         Assert.DoesNotContain(newHangar.Components, c => c.Name == spawner.Name);
         Assert.Equal(oldHangar.Components.Count - 1, newHangar.Components.Count);
 
-        // The door's copy is a door of its own: no child of the hangar's component, attached to the hangar still.
+        // The door's copy is a door of its own: no child of the hangar's component. It hung on that component, which went with
+        // the deleted door: the game read the reference to it as null, and since 2026-10-16 the export writes it null (the
+        // package check refuses kept objects pointing at deleted ones); the export warns that such a copy may leave its place.
         var copiedDoor = after.FindActor(doorCopy.NewName)!;
         Assert.Equal(oldDoor.ClassPath, copiedDoor.ClassPath);
         Assert.Null(copiedDoor.ParentComponent);
-        Assert.Equal(oldDoor.Root!.AttachParent, copiedDoor.Root!.AttachParent);
+        Assert.NotNull(oldDoor.Root!.AttachParent);
+        Assert.Null(copiedDoor.Root!.AttachParent);
+        Assert.Contains(result.Warnings, w => w.Contains(doorCopy.NewName + " copies", StringComparison.Ordinal) && w.Contains("may leave its place", StringComparison.Ordinal));
     }
 }

@@ -32,7 +32,7 @@ public sealed partial class CraftablesPageViewModel
             () =>
             {
                 var items = CraftablesPlanner.Items(catalog);
-                var sorted = CraftGalleryViewModel.Sort(catalog.Index ?? catalog.BuildIndex(resolveClasses: false), items);
+                var sorted = CraftGalleryViewModel.Sort(catalog.Index ?? catalog.BuildIndex(resolveClasses: false), items, p => CraftablesPlanner.NativeClassOf(catalog, p));
                 return (sorted.Items, sorted.Other.Where(o => items.Contains(o.Entry.PackagePath)).Select(o => o.Entry).ToList());
             },
             () => IngredientIndex.Of(catalog).Tags.Select(t => new IngredientGroup(t.Name, t.Caption, t.Representative)).ToList(),
@@ -117,7 +117,7 @@ public sealed partial class CraftablesPageViewModel
         // One change, one Undo step; the other rows keep their badges and pictures.
         var shown = row.Ingredients.Select(i => i.ToPick()).ToList();
         Remember();
-        row.SetIngredients(row.Ingredients.Select((i, n) => n == at ? pick.ToIngredient() : i.ToModel()).ToList());
+        row.SetIngredients(row.Ingredients.Select((i, n) => n == at ? pick.ToIngredient(i.ToModel()) : i.ToModel()).ToList());
         for (var n = 0; n < row.Ingredients.Count; n++)
         {
             var was = n == at ? pick : shown[n];
@@ -228,9 +228,15 @@ public sealed partial class IngredientRowViewModel
     /// <summary>Kept by the recipe: an item, or a tag.</summary>
     internal bool IsKept => Item is not null || !string.IsNullOrWhiteSpace(Tag);
 
-    /// <summary>The row as a <see cref="CraftIngredient"/> (amount within 1 and <see cref="IngredientPickerViewModel.MaxAmount"/>).</summary>
-    public CraftIngredient ToModel() =>
-        new(Tag.Trim(), (int)Math.Clamp(Math.Round(Amount), 1, IngredientPickerViewModel.MaxAmount), IsTool, Item, Item is not null && AddTag);
+    /// <summary>
+    /// The row as a <see cref="CraftIngredient"/> (amounts within 1 and <see cref="IngredientPickerViewModel.MaxAmount"/>);
+    /// with <see cref="PerLevel"/> on it carries the five amounts, its amount being the no-skill one.
+    /// </summary>
+    public CraftIngredient ToModel()
+    {
+        var levels = PerLevel ? Levels.ToModel() : (LevelAmounts?)null;
+        return new(Tag.Trim(), levels?.NoSkill ?? (int)Math.Clamp(Math.Round(Amount), 1, IngredientPickerViewModel.MaxAmount), IsTool, Item, Item is not null && AddTag, levels);
+    }
 
     /// <summary>The row as the picker opens it.</summary>
     internal IngredientPick ToPick() => new(Item, Tag, ToModel().Amount, IsTool, AddTag, Lookup, Item ?? _picturePath);
@@ -256,6 +262,13 @@ internal static class IngredientPicks
 {
     /// <summary>The ingredient <paramref name="pick"/> adds to a recipe.</summary>
     public static CraftIngredient ToIngredient(this IngredientPick pick) => new(pick.Tag, pick.Amount, pick.IsTool, pick.Item, pick.Item is not null && pick.AddTag);
+
+    /// <summary>
+    /// The ingredient <paramref name="pick"/> puts in place of <paramref name="was"/>: its amounts per skill level stay
+    /// while the amount is the same (another item for the same price), a new amount starts them again.
+    /// </summary>
+    public static CraftIngredient ToIngredient(this IngredientPick pick, CraftIngredient was) =>
+        pick.ToIngredient() is var picked && was.Levels is not null && picked.Amount == was.Amount ? picked with { Levels = was.Levels } : picked;
 }
 
 /// <summary>The pictures of a craftable's ingredients.</summary>

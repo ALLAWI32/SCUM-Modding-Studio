@@ -321,7 +321,7 @@ internal sealed class SyntheticLevelPackage
             w.U8(1);
         });
 
-        private void Struct(string name, string structName, Action<ByteWriter> value)
+        public void Struct(string name, string structName, Action<ByteWriter> value)
         {
             var body = new ByteWriter();
             value(body);

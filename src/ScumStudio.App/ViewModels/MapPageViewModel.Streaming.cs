@@ -143,6 +143,7 @@ public sealed partial class MapPageViewModel
             (RenderDistance, SmoothFrames) = (ui.RenderDistanceSectors, ui.SmoothFrames);
             SpawnModelsShown = ui.SpawnModels;
             NearClip = ui.NearClipCentimetres;
+            RefreshHoles();
         });
 
     /// <summary>

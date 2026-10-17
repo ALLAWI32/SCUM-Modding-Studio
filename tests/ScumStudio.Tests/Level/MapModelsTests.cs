@@ -115,7 +115,7 @@ public sealed class MapModelsTests
         project.Apply(new SetTransformOp(placed.Created, placed.Transform, at));
         project.Apply(new AddStaticMeshActorOp(LevelPath, "SM_SS_Gone_Added", UeCook.ImportsRoot + "/SS_Gone/SM_SS_Gone.SM_SS_Gone", TransformValue.At(100, 0, 0)));
 
-        var options = new ExportOptions { OutputDirectory = temp.Combine("out"), BendMeshes = _ => null };
+        var options = new ExportOptions { OutputDirectory = temp.Combine("out"), BendMeshes = _ => null, Validate = false }; // the import's stand-in files are no packages to read back
         var result = await new ProjectExporter().ExportAsync(project, catalog, options);
 
         // The model's cooked files are in the pak, at its own folder.

@@ -46,12 +46,49 @@ public sealed record DecalSet(string CloneLeaf, IReadOnlyList<DecalLayer> Layers
     }
 
     /// <summary>Writes the set to <c>decals/&lt;clone&gt;.json</c> in <paramref name="projectDirectory"/> (through a temporary file).</summary>
-    public void Save(string projectDirectory)
+    public void Save(string projectDirectory) => Write(PathOf(projectDirectory, CloneLeaf));
+
+    /// <summary><c>&lt;project&gt;/decals/presets/&lt;name&gt;.json</c>.</summary>
+    public static string PresetPathOf(string projectDirectory, string name) =>
+        System.IO.Path.Combine(projectDirectory, "decals", "presets", string.Concat(name.Trim().Split(System.IO.Path.GetInvalidFileNameChars())) + ".json");
+
+    /// <summary>The project's saved presets by name, sorted.</summary>
+    public static IReadOnlyList<string> Presets(string projectDirectory) => Names(System.IO.Path.Combine(projectDirectory, "decals", "presets"));
+
+    /// <summary>The project's clones that have decals (their <c>decals/&lt;clone&gt;.json</c>), sorted.</summary>
+    public static IReadOnlyList<string> Clones(string projectDirectory) => Names(System.IO.Path.Combine(projectDirectory, "decals"));
+
+    /// <summary>Saves these decals as the preset <paramref name="name"/> of the project (replacing one of that name).</summary>
+    public void SavePreset(string projectDirectory, string name)
     {
-        var path = PathOf(projectDirectory, CloneLeaf);
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        (this with { CloneLeaf = name.Trim() }).Write(PresetPathOf(projectDirectory, name));
+    }
+
+    /// <summary>The preset <paramref name="name"/> of the project.</summary>
+    public static DecalSet LoadPreset(string projectDirectory, string name) => FromJson(File.ReadAllText(PresetPathOf(projectDirectory, name)));
+
+    /// <summary>
+    /// <paramref name="target"/> with these decals put on top of its own: each a new layer (its own id) in the same order,
+    /// at the same place, size and colours, so a clone of the same vehicle bakes them alike.
+    /// </summary>
+    public DecalSet AddTo(DecalSet target)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+        var above = target.Layers.Count == 0 ? 0 : target.Layers.Max(l => l.Order) + 1;
+        var copies = Ordered.Select((l, i) => l with { Id = new DecalLayer().Id, Order = above + i });
+        return target with { Layers = [.. target.Layers, .. copies] };
+    }
+
+    private void Write(string path)
+    {
         Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path)!);
         var temp = path + ".tmp";
         File.WriteAllText(temp, ToJson());
         File.Move(temp, path, overwrite: true);
     }
+
+    private static IReadOnlyList<string> Names(string folder) => Directory.Exists(folder)
+        ? [.. Directory.EnumerateFiles(folder, "*.json").Select(f => System.IO.Path.GetFileNameWithoutExtension(f)).Order(StringComparer.OrdinalIgnoreCase)]
+        : [];
 }

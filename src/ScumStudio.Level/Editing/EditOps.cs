@@ -47,6 +47,7 @@ namespace ScumStudio.Level.Editing;
 [JsonDerivedType(typeof(SetEconomySettingOp), "setEconomySetting")]
 [JsonDerivedType(typeof(SetEconomySectionOp), "setEconomySection")]
 [JsonDerivedType(typeof(ReplaceEconomyOp), "replaceEconomy")]
+[JsonDerivedType(typeof(TerrainHoleOp), "terrainHole")]
 public abstract record EditOp
 {
     /// <summary>The operation that exactly undoes this one.</summary>
@@ -846,8 +847,16 @@ public sealed record SetSpawnChoiceOp(ActorRef Target, string Property, string? 
 /// A tagged zombie / NPC point's gameplay tags (which encounters use it), each one the island data already names; null or
 /// empty = none (no stock point's tags come along). Other kinds have none.
 /// </param>
-public sealed record AddSpawnPlaceOp(string NewName, SpawnPlaceKind Kind, string Setting, TransformValue Transform, IReadOnlyList<string>? Tags = null) : EditOp
+/// <param name="Points">
+/// A group of zombie / NPC points' posts (<see cref="SpawnPlaceKind.CharacterGroup"/>), relative to <paramref name="Transform"/>
+/// (they move and turn with the place; the first is usually the origin). Other kinds have none.
+/// </param>
+public sealed record AddSpawnPlaceOp(string NewName, SpawnPlaceKind Kind, string Setting, TransformValue Transform, IReadOnlyList<string>? Tags = null,
+    IReadOnlyList<Core.Mathematics.FVector>? Points = null) : EditOp
 {
+    /// <summary>The posts of a group in the world, for the place standing at <paramref name="at"/> (where it was added, or moved to).</summary>
+    public IReadOnlyList<Core.Mathematics.FVector> PostsAt(TransformValue at) => (Points ?? []).Select(p => at.ToTransform().TransformPositionNoScale(p)).ToList();
+
     /// <summary>The new place's actor.</summary>
     [JsonIgnore]
     public ActorRef Created => new(SpawnPlaces.StaticDataPath, NewName);
@@ -871,8 +880,9 @@ public sealed record AddSpawnPlaceOp(string NewName, SpawnPlaceKind Kind, string
         && Kind == other.Kind
         && string.Equals(Setting, other.Setting, StringComparison.Ordinal)
         && Transform.Equals(other.Transform)
-        && (Tags ?? []).SequenceEqual(other.Tags ?? [], StringComparer.Ordinal);
+        && (Tags ?? []).SequenceEqual(other.Tags ?? [], StringComparer.Ordinal)
+        && (Points ?? []).SequenceEqual(other.Points ?? []);
 
     /// <inheritdoc />
-    public override int GetHashCode() => HashCode.Combine(NewName, Kind, Setting, Transform, Tags?.Count ?? 0);
+    public override int GetHashCode() => HashCode.Combine(NewName, Kind, Setting, Transform, Tags?.Count ?? 0, Points?.Count ?? 0);
 }

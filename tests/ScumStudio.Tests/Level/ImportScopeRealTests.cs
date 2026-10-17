@@ -12,6 +12,7 @@ namespace ScumStudio.Tests.Level;
 /// <see cref="ScumFileProvider.ImportScope"/> (every level read and prepare opens one) each is read once. Real game files
 /// only (<c>SCUM_PAKS</c>).
 /// </summary>
+[Collection(TimingCollection.Name)] // the allocation count is the whole process's
 public sealed class ImportScopeRealTests(ITestOutputHelper output)
 {
     private const string Base = "/Game/ConZ_Files/Maps/The_Island/TV_Base_A_3_Abandoned";

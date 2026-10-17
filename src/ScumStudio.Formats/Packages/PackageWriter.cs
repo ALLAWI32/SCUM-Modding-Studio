@@ -180,9 +180,20 @@ public static class PackageWriter
         }
 
         var ux = new ByteWriter((int)Math.Min(int.MaxValue, uexpLen + 4));
-        foreach (var d in data)
+        long at = totalHeader;
+        for (var i = 0; i < data.Count; i++)
         {
+            // A moved texture takes its absolute skip offsets along (see TextureSkipOffsets).
+            var d = data[i];
+            if (exports[i].ClassIndex < 0 && -exports[i].ClassIndex <= imports.Count
+                && imports[-exports[i].ClassIndex - 1].ObjectName is { Number: 0 } cls && cls.Index >= 0 && cls.Index < names.Count
+                && TextureSkipOffsets.IsTextureClass(names[cls.Index]))
+            {
+                d = TextureSkipOffsets.Relocate(d, names, exports[i].SerialOffset, at);
+            }
+
             ux.Raw(d.Span);
+            at += d.Length;
         }
 
         ux.U32(PackageSummary.PackageMagic);

@@ -23,6 +23,9 @@ public partial class ModulePageView : UserControl
         ItemPreview.SurfacePointer += (_, e) => _viewModel?.OnStudioSurface(e.PartIndex, new System.Numerics.Vector3(e.Origin.X, e.Origin.Y, e.Origin.Z),
             new System.Numerics.Vector3(e.Direction.X, e.Direction.Y, e.Direction.Z), e.IsDrag, e.IsRelease, e.IsCancel);
         ItemPreview.PartGizmo += (_, e) => _viewModel?.OnStudioGizmo(e.PartIndex, e.Start, e.Transform, e.Committed);
+        // Decals like the game's tattoos: Ctrl/Shift+wheel and the keys size, turn and move the selected decal.
+        ItemPreview.SurfaceInput += (_, e) => e.Handled = _viewModel is { } page
+            && (e.Key == Key.None ? page.OnStudioWheel(e.Notches, e.Modifiers) : page.OnStudioKey(e.Key, e.Modifiers));
         ItemPreview.PropertyChanged += (_, e) =>
         {
             if (e.Property == ScumStudio.App.Controls.MeshPreview.SelectedPartIndexProperty && e.NewValue is int index)

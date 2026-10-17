@@ -3,6 +3,182 @@
 All notable changes are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [semantic versioning](https://semver.org/).
 
+## [3.4.0] - 2026-10-17
+
+### New in this release
+- **Replace a sentry robot with NPC guards** (igor8802: "when creating patrols at points of interest, the robots can be
+  replaced with NPCs"): on the Map, a selected sentry robot spawner has *Replace with NPC guards*. Pick the armed NPCs (one
+  of the game's NPC encounters, guards or drifters of a level), how many posts along each route, and whether every robot of
+  the place goes. In one undo step the robot is removed (its guarded zone forgets it), a group of NPC spawn points stands on
+  posts along its route, and a new threat zone over the posts gets its own copy of zone settings in which only that NPC
+  encounter has a weight. SCUM's NPCs cannot walk a route: their AI (the guard and drifter controllers) has idle, alerted,
+  combat, investigate and return-to-post states and no patrol, and no spawner or spawn point stores a path for them, so
+  they stand guard at the posts. The panel lists what happens before anything changes. Checked on the real barracks: the
+  client export, and the server export made from the same game files, has the robot gone, its manager listing the other
+  seven, the posts and the guard zone in the island's spawn data, and the zone's settings weighting only the guards. Whether the guards appear at those posts in a
+  running game, and how the guard zone shares the place with the place's own zone, only the game shows: try it on a local
+  server first.
+- **NPC group points**: the island's groups of zombie / NPC points (1,883 of them, where an encounter that spawns a group,
+  as the armed NPC ones do, puts it) are spawn places on the Map and in Spawns › Zombies and NPCs. They move, copy and
+  delete with all their posts.
+- **Craftables: your own asset names and folders** (HexTer: "customize the names of crafting recipes and furniture items
+  in the crafting section before exporting the mod ... organize things neatly"): each craftable has an *Asset name* box
+  (`CR_` + it is its recipe, `BP_` + it what is built) and a *Folder* box (Furniture, Lights, Storage … or your own, sub-folders
+  with `/`). Its recipe and element go to that folder inside the game's recipe and element folders
+  (`…/Recipes/Placeables/Furniture/CR_SS_Chair`, `…/BaseElements/Furniture/BP_SS_Chair`), the way the game keeps its own
+  Asian decor pack in `Placeables/AsianDecorDLC`; a station's ingredient tag stays in the game's tag folder, where recipes
+  look for it. A new building craftable gets a folder from what it is (Furniture, Lights, Storage, Beds, Stations); an
+  item recipe stays beside the game's unless you choose a folder: the game keeps placeable recipes in sub-folders of its
+  own (`Placeables/Skins`, `Placeables/AsianDecorDLC/Upgrade`) but none of its item recipes, so an item recipe in a
+  sub-folder is not tried in game yet. Both can change until the first export: a written Craftables
+  pak records its craftables in `craftables.json` (`Exported`), and from then on their asset name and folder stay, with a
+  badge and a tooltip that says why (the game saves what players built by its asset path). The name shown in game still
+  changes at any time, and Undo does not step back over an export. A name is checked as it is typed: letters A-Z, digits
+  and `_` (a letter first, at most 64), never `_` and a number at the end (`Shelf_2` is `Shelf` #3 to the game; `Shelf_v2`
+  is suggested), no name another craftable's files would get, and none the game has in any folder (the game knows a recipe
+  or an element by its last name only); the export stops with the reason if one gets through anyway. Craftables of a
+  project from an earlier version keep their names and stay beside the game's files: nothing is renamed, and since those
+  files did not record exports, they are treated as exported.
+- **A large fridge for food** (defolt_0999: "It would be great if we could install large refrigerators for storing food"):
+  the game's fridge, picked in the Craftables gallery, becomes a built element: the game's large wooden cabinet spawning a
+  copy of the game's fridge instead of the cabinet, placed and owned like a player's chest. It is never a world item
+  spawner, so it cannot leave phantom fridges behind (D02). Its *Storage* card sets rows, columns (1–255) and the most it
+  holds; the game's fridge is 30 × 15 and 500. Keeping food cool, and needing a generator nearby for it, is the code of the
+  game's fridge class (`RefrigeratorItem`): the copy keeps it and a pak cannot change it. Not yet tried in game. The same
+  card sets the size of any chest, cabinet or wardrobe element that spawns a container. The fridge is only built: it fits
+  in no inventory, so it is never crafted into the bag.
+- **Vehicle decals like the game's tattoos, and more control** (owner: "decals like the game's tattoos, and more
+  control from outside"; m7ammed: "importing textures"):
+  - *Game tattoos*: a new chip in the decal library shows SCUM's own tattoos with their real pictures (78 of the 90 in
+    the game's list: the disabled ones and the two of the Supporter Pack DLC are left out, so a mod does not hand paid
+    pictures to every player). They are read from your own game files when shown and kept in the thumbnail cache; the
+    studio carries none of them. One goes on the car like any design, tinted with one colour as the game tints a tattoo
+    (black ink by default), with opacity, size, turn, flip and Other side.
+  - *Placing like a tattoo*: click on the car to put it there, then on the 3D view Ctrl+wheel sizes it, Shift+wheel
+    turns it, the arrows move it along the surface (Shift: 10 cm), Q/E turn, +/− size, X flips, M or Other side puts the
+    same design mirrored on the car's other side where the surface is (a layer of its own), Delete removes, Ctrl+D copies.
+    No handles are drawn in the 3D view: the wheel, the keys and the fields do it.
+  - *Layers and exact values*: an eye (a hidden decal is not baked) and a lock (the 3D view cannot pick, move or turn
+    it) on every decal in the list; exact width, height (stretches the design), turn and position in cm (the position
+    goes onto the surface along the decal's normal).
+  - *Your own pictures*: Add sticker takes a PNG with its transparency, a JPG, or an SVG drawing; an SVG gets a colour
+    picker per colour of the drawing (filled shapes, groups and transforms; strokes, gradients and text are not drawn).
+  - *Presets*: save a clone's decals as a preset of the project, add a preset to another clone, or copy another clone's
+    decals onto this one. Checked on two Rager clones: the same bake byte for byte. Every action above is one undo step.
+  - Only the game can confirm: a game tattoo baked into a clone looks right on the car in the game's light and under
+    the paint the player sprays, and Other side sits where expected on a vehicle that is not symmetric (checked on the
+    Rager: 0.07 cm from the mirrored point).
+- **Items page: clone any item, not only weapons** (CwHedgehog: "duplicate some in-game items, such as copper coins"):
+  a new Items page lists every other inventory item of the game (2,351 in 29 folders: coins, medicine, food, resources,
+  clothes, weapon attachments …) with the same 3D preview, search and folder categories as the Weapons page. Clone one under a new name
+  and it gets its own item class, entity setup and registry records, so `#SpawnItem <name>` finds it; its name,
+  description, weight, stack size or uses (`MaxQuantity`), inventory size and its trader row (when the traders sell the
+  original) are editable, and so is every other stored or inherited value. Copper coins have no stack size in the game
+  files, so theirs is not offered.
+- **Materials per skill level** (CwHedgehog: "adjust the materials required for each level of Engineering/Survival"):
+  every ingredient of a SCUM recipe stores its amount for each level of the recipe's skill (no skill, basic, medium,
+  advanced, above advanced; Engineering for buildings, Survival, Demolition, Rifles or Medical for items). On the
+  Craftables page an ingredient's **Per level** switch shows the five amounts to set yourself (off, the higher levels pay
+  less, as in the game's recipes, and the page shows what they pay). **Game recipes** opens the game's own recipes: search
+  one (the workbench, a bow …), add it and set what each level pays for every ingredient, with the game's own values
+  shown and a Game values button. This is an explicit override: the Craftables pak ships that recipe at the game's path
+  for client and server, with only those amounts changed, and the export warns that another mod changing the same
+  recipe conflicts with it. A recipe whose ingredients a game update changed is not exported and says so. Every change is
+  one Undo step.
+
+### Fixes
+- **A drawn bridge blocks at its railings, not only its road** (Discord Blondiiile: "I got too close to the edge and
+  fell through, the bridge railing has no collision"): a bridge drawn with the studio only stopped a car on its deck, so
+  a wheel near the edge dropped past the railing. The collision a drawn piece carries now follows the mesh's railings,
+  posts and curbs as well as its deck (a wall at each steep face, standing on the deck or curb under it), fills the thin
+  gaps between a plank deck's boards, and does so on both straight and bent pieces; players, vehicles and shots are
+  stopped the same, and the server pak gets the same collision as the client. The deck itself is unchanged.
+- **Crafted things are the game's own** (seviscache, #10: "craft the Animal Bait Feeder ... it should work as it normally
+  does"; "if we wanted to craft clothing; once created, we should be able to equip it as usual"): checked on the game
+  files, a *Craft* recipe makes the game's own class (`Camouflage_Jacket_01_C`, `AnimalBaitFeederItem_C`), never a copy,
+  so a crafted jacket is the real jacket and a crafted feeder the real feeder. Wearing and baiting them in game is not
+  tried by the tests.
+- **A craftable like the game's element says it is built**: a bed, a chest or the large fridge made *Like the game's*
+  showed "Made in: Crafting" and checked a chosen section against the crafting menu's item sections; it is built from the
+  game's placeable recipe, so it now shows as built and takes the building sections, and its "Shows in" default is the
+  game element's own section (it named the improvised chair's recipe).
+- **Clothes in the Craftables gallery and the ingredient picker** (owner: clothes in 3D with their textures, in a Clothes
+  category): items of a DLC are now listed in the category of what they are, by their class, instead of under their pack:
+  a DLC jacket is under *Clothing & armor* with the others, a DLC bow under the ranged weapons. Every clothing item
+  already showed its own model with its textures; all 848 were checked on the game files (backpacks, vests, helmets and
+  shoes included).
+- **A bed shows a bed, a fridge a fridge** (Jenni, Discord D07: her sofas, beds, fridges, cabinets, stoves and tables all
+  showed the improvised chair in the base building menu; owner: "a bed must show a bed, a fridge a fridge, a table a
+  table"): a craftable the game has no picture of (one made from a static mesh) now gets the real picture of its object,
+  drawn from its 3D model with its own textures at export like the game's icons: the object alone on a transparent
+  background, seen from the front left and a little above, filling the square, at the size of the game's icon. It is
+  written as a new texture of the mod next to the craftable's recipe (`ICO_<asset name>`), in the stock icon's format
+  (BC7, sRGB, one mip in the package, UI group), registered like the stock icon, and the recipe's `Icon` names it (a power
+  craftable's generator item too: an item recipe has no picture of its own). The Picture box keeps the game's pictures and
+  adds *3D model* (draw it even when the game has a picture) and *Import…* (a PNG or JPG of yours, kept in the project's
+  `icons` folder and fitted at export). The name typed is the recipe's caption and description and the element's name,
+  and a rename changes only that text, never an asset name. Checked with the game's reader on a sofa, a bed, a fridge and a
+  table: four different pictures, none the chair's, each with a transparent background. Only the game can confirm the
+  crafting menu showing them. A PC without OpenGL 4.3 keeps the template's picture and says so in the export report.
+- **Dragging a decal no longer stutters**: the 3D view baked the decals on the UI thread, 70-190 ms for every step of a
+  drag over a 2048 px texture. The bake now runs on a worker, 1024 px while the drag lasts and full size on release, and
+  the 3D view shows the newest finished bake: under 2 ms of UI thread per drag step in the timing test.
+- **Every export is checked before it is packed** (owner ALLAWI32: "with the mod the game crashes when I leave the
+  server or press Alt+F4; I want everything safe, 100%"): every package of the client and the server pak (and the
+  Craftables pak) is read back against the game's own copy of it, object by object. The export stops and writes no pak
+  when an object does not read exactly as the game's does, a reference points outside the package or at an object the
+  export deleted (a door's or switch's target, a group's member, an attach parent), the level's actor list holds a
+  deleted object, a component or an actor twice, two objects share one name, an attach chain loops, something is
+  imported that neither the game nor the mod has, a light or built-lighting id repeats, a sound event is the other cook's
+  (a dedicated server's stub, or the game's whole event), or a registry record names a missing package; the list is in
+  `package-check.txt` next to the staging folder, and the export summary says "Validator: N packages checked, 0
+  problems" (defolt_0999's 43-level Z_4 project: 83 packages, 24,510 objects in 2.3 s). `scumstudio project validate`
+  runs the same check on a staging folder. What it found and the export now fixes:
+  - a landscape tile whose grass was cleared kept its heightmap and weightmap textures' stored skip offsets at their old
+    place (31 textures in defolt_0999's Landscape_Z_4_1b and _1d); moved textures now take them along;
+  - a deleted actor stayed the target of the kept actors that pointed at it (the game nulls such a reference with a
+    warning and keeps a null entry in a list, which code tearing the level down can walk into): single references are
+    now written null and lists lose the entry (real levels: power poles' and mounts' `_connectionTarget`, which the game's
+    own poles leave empty too);
+  - a deleted vehicle trader left its bike and car lifts pointing at nothing (`_assignedTradePost`; every lift of the
+    game's outposts has its trader): the lifts now go with their trader, with a line in the report.
+  - a copied building kept its lamps' `LightGuid` and its reflection captures' `MapBuildDataId` (the abandoned city hall:
+    9 lamps and a capture keyed the same built data twice in one level): copies now get ids of their own, as the editor's
+    duplicate does;
+  - texture clones (snow ground) were refused by the clone check once their textures' skip offsets moved with them;
+  - the large fridge was refused: its element (the game's cabinet, made to spawn a fridge copy) still listed four of the
+    cabinet item's parts among its imports (`BuriableComponent`, `ThrowingComponent` and two component templates) that a
+    fridge does not have. Nothing in the element uses them, so they now name their class's own default object, which
+    always exists, and the fridge exports.
+  After a server export the two paks are compared: a level changed in one pak only, actors removed or added on one side
+  only, or a clone in one pak only is listed with the server's warnings (players and the server would disagree about
+  what stands where or what can exist).
+  The cause of the crash on leaving or closing is not proven yet: players can send the game's crash folder and log as
+  `docs/CRASH-REPORT.md` explains.
+- **Import… on the Economy page shows EconomyOverride.json again** (Игорь: "The economy file is not visible because of
+  the extra dot"): the picker asked Windows for `*..json`, so the file was hidden; every file picker now builds its
+  pattern from the extension with or without its dot.
+
+### New (experimental)
+- **Holes in the ground for bunkers** (owner: "pick a square or a circle on the ground, make it bigger or smaller, press
+  Delete, and it opens a hole, like the game's own bunker entrances"). Switch it on in Settings ("Hole tool for bunkers
+  (experimental)"), then in the Map open Landscape > Hole tool: a red outline follows the cursor on the ground, a click
+  puts it down, the mouse wheel or the Size slider makes it bigger or smaller in steps of 1.5 m (the landscape's own
+  grid), a square can be turned, and Delete (or Cut hole) cuts it. Ctrl+Z puts the ground back. The export opens the
+  ground's collision there, in the client pak and in the server pak, exactly the way the game marks its own 173 bunker
+  and cave openings, so a player walks into it and falls through; nothing else in the landscape changes. In the Map the
+  cut holes show crossed in dark red and clicks go through them. On the 174 landscape pieces that already carry one of the
+  game's own hole layers the export now also **draws** the hole (opens the visibility layer), so there the opening is
+  see-through like the game's bunker entrances; everywhere else only the collision opens and the game still draws the
+  ground, so cover the opening with your own model (a hatch, a frame, a bunker entrance). The Map shows which is which
+  before you cut: the ground glows green where the game can draw the hole and amber where only the collision opens, and a
+  line under the toolbar says the same for the hole under the cursor. Drawing a hole on ground without the layer needs
+  landscape shaders that only the Unreal editor can build, and a pak cannot add them. A hole replaces the whole landscape
+  tile it is in: export again after every SCUM update. The first time the tool is used in a project it shows a warning
+  list (re-export after every update, other mods that change the same tile, client and server need the same pak, cover
+  amber openings, keep a backup, test on your own server), with a short reminder at export; "Do not show again" per
+  project.
+
 ## [3.3.0] - 2026-10-16
 
 ### New in this release

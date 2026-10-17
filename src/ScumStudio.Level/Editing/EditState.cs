@@ -27,6 +27,7 @@ public sealed partial class EditState
     private readonly Dictionary<ActorRef, bool> _grass = new(ActorRef.Comparer);
     private readonly HashSet<(ActorRef Actor, string Component)> _deletedComponents = new(TransformKeyComparer.Instance);
     private readonly Dictionary<(ActorRef Actor, string Property), string> _choices = new(TransformKeyComparer.Instance);
+    private readonly List<TerrainHole> _holes = [];
 
     // The new spawn places of _added, for readers on another thread: replaced on every change, never changed.
     private volatile AddSpawnPlaceOp[] _newPlaces = [];
@@ -35,7 +36,10 @@ public sealed partial class EditState
     public bool IsEmpty =>
         _deletedActors.Count == 0 && _deletedInstances.Count == 0 && _transforms.Count == 0 && _instanceTransforms.Count == 0 && _added.Count == 0
         && _addedInstances.Count == 0 && _clones.Count == 0 && _values.Count == 0 && _replacements.Count == 0 && _bends.Count == 0 && _segmentSways.Count == 0 && _spawnPoints.Count == 0
-        && _meshes.Count == 0 && _loot.Count == 0 && _deletedComponents.Count == 0 && _choices.Count == 0;
+        && _meshes.Count == 0 && _loot.Count == 0 && _deletedComponents.Count == 0 && _choices.Count == 0 && _holes.Count == 0;
+
+    /// <summary>Holes cut into the landscape (see <see cref="TerrainHoleOp"/>), oldest first. Not in <see cref="ChangedLevels"/>: the export cuts them after the levels.</summary>
+    public IReadOnlyList<TerrainHole> TerrainHoles => _holes;
 
     /// <summary>Deleted components of kept actors (see <see cref="DeleteComponentsOp"/>).</summary>
     public IReadOnlyCollection<(ActorRef Actor, string Component)> DeletedComponents => _deletedComponents;
@@ -263,6 +267,9 @@ public sealed partial class EditState
                 return !Enum.IsDefined(place.Kind) ? $"Unknown kind of spawn place ({place.Kind})."
                     : string.IsNullOrWhiteSpace(place.Setting) ? "A new spawn place needs what spawns there (a group, a type, zone settings or a biome)."
                     : place.Tags is { Count: > 0 } tags && (place.Kind != SpawnPlaceKind.TaggedCharacter || tags.Any(string.IsNullOrWhiteSpace)) ? "Only a tagged zombie / NPC point has tags, and each tag needs a name."
+                    : (place.Kind == SpawnPlaceKind.CharacterGroup) != (place.Points is { Count: > 0 }) ? "A group of zombie / NPC points needs its posts, and only a group has posts."
+                    : place.Points is { Count: > SpawnPlaces.MaxGroupPosts } ? $"A group of zombie / NPC points holds at most {SpawnPlaces.MaxGroupPosts} posts."
+                    : place.Points?.Any(p => !float.IsFinite(p.X) || !float.IsFinite(p.Y) || !float.IsFinite(p.Z)) == true ? "A post of the group is not a number."
                     : SpawnPlaces.ParseName(place.NewName) is not null ? $"{place.NewName} is the name of a stock spawn place."
                     : ValidateNewActor(place.Created);
             case RemoveAddedActorOp remove:
@@ -277,6 +284,9 @@ public sealed partial class EditState
             case SetSpawnChoiceOp choice:
                 return _deletedActors.Contains(choice.Target) ? $"{choice.Target} is deleted."
                     : GetSpawnChoice(choice.Target, choice.Property) != choice.Old ? $"{choice.Target}: what it spawns is not as expected (edit is out of date)." : null;
+            case TerrainHoleOp hole:
+                return hole.Hole.Validate()
+                       ?? (hole.Cut == _holes.Contains(hole.Hole) ? $"The {hole.Hole} is {(hole.Cut ? "already cut" : "not cut")}." : null);
             case SetClearGrassOp grass:
                 return _deletedActors.Contains(grass.Target) ? $"{grass.Target} is deleted."
                     : GetClearGrass(grass.Target) != grass.Old ? $"{grass.Target}: the grass setting is not as expected (edit is out of date)." : null;
@@ -569,6 +579,17 @@ public sealed partial class EditState
             case SetTransformOp set:
                 SetOverride(_transforms, (set.Target, set.Component ?? string.Empty), set.Old, set.New);
                 break;
+            case TerrainHoleOp hole:
+                if (hole.Cut)
+                {
+                    _holes.Add(hole.Hole);
+                }
+                else
+                {
+                    _holes.Remove(hole.Hole);
+                }
+
+                break;
             case SetSpawnPointsOp points:
                 var pointsKey = (points.Target, points.Component ?? string.Empty, points.Array);
                 if (!_spawnPoints.TryGetValue(pointsKey, out var entry))
@@ -684,6 +705,7 @@ public sealed partial class EditState
         Copy(_meshes, copy._meshes);
         Copy(_grass, copy._grass);
         Copy(_choices, copy._choices);
+        copy._holes.AddRange(_holes);
         CopyAssets(copy);
         return copy;
 

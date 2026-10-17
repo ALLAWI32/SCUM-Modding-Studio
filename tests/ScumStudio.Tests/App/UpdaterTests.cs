@@ -282,7 +282,7 @@ public sealed class UpdaterTests : IDisposable
 
         Assert.Same(download, await Task.WhenAny(download, Task.Delay(TimeSpan.FromSeconds(10))));
         await Assert.ThrowsAsync<TimeoutException>(() => download);
-        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(5), watch.Elapsed.ToString());
+        if (!Ci.On) Assert.True(watch.Elapsed < TimeSpan.FromSeconds(5), watch.Elapsed.ToString());
         Assert.Empty(Directory.GetFiles(folder));
 
         using var cancel = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));

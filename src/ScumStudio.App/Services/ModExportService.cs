@@ -6,6 +6,7 @@ using ScumStudio.Level.Economy;
 using ScumStudio.Level.Export;
 using ScumStudio.Level.Projects;
 using ScumStudio.Modding.Crafting;
+using ScumStudio.Viewport;
 
 namespace ScumStudio.App.Services;
 
@@ -81,7 +82,7 @@ public static class ModExportService
         var catalog = services.Workspace.Catalog!;
         var craftables = request.IncludeCraftables ? CraftablesFile.Load(request.Project.DirectoryPath) : new CraftablesFile();
         var modName = request.ModName ?? request.Project.Manifest.Name;
-        if (request.Project.State.IsEmpty && craftables.Items.Count == 0)
+        if (request.Project.State.IsEmpty && craftables.IsEmpty)
         {
             var removed = new[] { ProjectSourceRole.Client, ProjectSourceRole.Server }
                 .SelectMany(role => CraftablesExporter.RemoveStale(Path.Combine(Path.GetFullPath(request.OutputFolder), ProjectExporter.RoleFolder(role)), modName, request.PakChunkIndex))
@@ -139,6 +140,11 @@ public static class ModExportService
         var exporter = new ProjectExporter(services.Logger);
         var results = new List<ExportResult>(4);
 
+        // A craftable without a picture of its own gets one drawn from its 3D model (the client's meshes; the server cook
+        // reuses the same pictures).
+        using var pictures = new CraftIconRenderer(catalog, services.Logger);
+        options = options with { ModelPictures = pictures.Render };
+
         // The project's pak (levels, vehicles, items), then the Craftables pak on top of its registry.
         async Task ExportRole(AssetCatalog source, ProjectSourceRole role, ExportOptions roleOptions)
         {
@@ -150,7 +156,7 @@ public static class ModExportService
             }
 
             // Without craftables (none, or unticked) this removes the Craftables pak an earlier export left there.
-            if (craftables.Items.Count > 0)
+            if (!craftables.IsEmpty)
             {
                 progress.Report(Localization.Loc.T("Export.Craftables"), 0, 0);
             }
@@ -211,6 +217,15 @@ public static class ModExportService
                     var stubKey = key;
                     var serverOptions = options with { ServerEventStubs = () => ServerEventStubs.FromServerPaks(serverFolder, stubKey, services.Logger) };
                     await ExportRole(server, ProjectSourceRole.Server, serverOptions).ConfigureAwait(false);
+
+                    // The two cooks must change the same levels the same way (and carry the same clones): what one side
+                    // lacks is listed with the server's warnings.
+                    var mains = results.Where(r => string.Equals(Path.GetFileName(r.StagingDirectory), ProjectExporter.StagingFolderName, StringComparison.OrdinalIgnoreCase)).ToList();
+                    if (mains.FirstOrDefault(r => r.Role == ProjectSourceRole.Client) is { } clientMain && mains.FirstOrDefault(r => r.Role == ProjectSourceRole.Server) is { } serverMain
+                        && ModPackageValidator.CompareCooks(clientMain, serverMain) is { Count: > 0 } parity)
+                    {
+                        results[results.IndexOf(serverMain)] = serverMain with { Warnings = [.. serverMain.Warnings, .. parity] };
+                    }
                 }
                 catch (ServerEventStubException ex)
                 {

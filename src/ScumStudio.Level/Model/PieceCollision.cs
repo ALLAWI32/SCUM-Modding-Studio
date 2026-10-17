@@ -104,6 +104,8 @@ public static class PieceCollision
             }
         }
 
+        stretches = Bridged(stretches, nx, ny);
+
         // Merge along X with the same stretches, then rows along Y with the same run.
         var runs = new List<(int X0, int X1, int Y0, int Y1, float Low, float High)>();
         var open = new Dictionary<(int X0, int X1, float Low, float High), int>();
@@ -141,7 +143,7 @@ public static class PieceCollision
         }
 
         // Each box trimmed to the mesh: nothing solid past its outer edges.
-        return runs.Select(r =>
+        var boxes = runs.Select(r =>
         {
             var x0 = MathF.Max(b.Min.X + (r.X0 * cell), b.Min.X);
             var x1 = MathF.Min(b.Min.X + ((r.X1 + 1) * cell), b.Max.X);
@@ -150,11 +152,240 @@ public static class PieceCollision
             return new CollisionBox(new FVector((x0 + x1) * 0.5f, (y0 + y1) * 0.5f, (r.Low + r.High) * 0.5f), FRotator.Zero,
                 new FVector(x1 - x0, y1 - y0, MathF.Max(r.High - r.Low, 5f)));
         }).ToList();
+        boxes.AddRange(Walls(mesh, cell, nx, ny, bins, stretches));
+        return boxes;
 
         static float Round(float v) => MathF.Round(v / 5f) * 5f;
 
         static bool Same(List<(float Low, float High)> a, List<(float Low, float High)> c) =>
             a.Count == c.Count && a.Zip(c).All(z => MathF.Abs(z.First.Low - z.Second.Low) < 5f && MathF.Abs(z.First.High - z.Second.High) < 5f);
+    }
+
+    /// <summary>
+    /// Cells whose line fell through a thin gap: a plank deck's boards lie 2 cm apart, and a line through a gap finds no
+    /// deck there, a hole as big as the cell (a whole row of them across SM_RiverBridge_02, 25 cm wide). A cell takes each
+    /// stretch its two neighbours on either side share (within 5 cm) where it has none at that height.
+    /// </summary>
+    private static List<(float Low, float High)>[] Bridged(List<(float Low, float High)>[] stretches, int nx, int ny)
+    {
+        var bridged = new List<(float Low, float High)>[stretches.Length];
+        for (var y = 0; y < ny; y++)
+        {
+            for (var x = 0; x < nx; x++)
+            {
+                var here = stretches[(y * nx) + x];
+                var added = new List<(float Low, float High)>();
+                foreach (var (before, after) in new[] { (x > 0 && x + 1 < nx ? (y * nx) + x - 1 : -1, (y * nx) + x + 1), (y > 0 && y + 1 < ny ? ((y - 1) * nx) + x : -1, ((y + 1) * nx) + x) })
+                {
+                    if (before < 0)
+                    {
+                        continue;
+                    }
+
+                    foreach (var s in stretches[before])
+                    {
+                        if (stretches[after].Any(t => MathF.Abs(t.Low - s.Low) < 5f && MathF.Abs(t.High - s.High) < 5f)
+                            && !here.Concat(added).Any(t => MathF.Abs(t.High - s.High) < 5f))
+                        {
+                            added.Add(s);
+                        }
+                    }
+                }
+
+                bridged[(y * nx) + x] = added.Count == 0 ? here : Joined([.. here, .. added]);
+            }
+        }
+
+        return bridged;
+    }
+
+    /// <summary>Stretches bottom up, overlapping ones joined.</summary>
+    private static List<(float Low, float High)> Joined(List<(float Low, float High)> stretches)
+    {
+        stretches.Sort();
+        var solid = new List<(float Low, float High)>();
+        foreach (var (low, high) in stretches)
+        {
+            if (solid.Count > 0 && low <= solid[^1].High)
+            {
+                solid[^1] = (solid[^1].Low, MathF.Max(solid[^1].High, high));
+            }
+            else
+            {
+                solid.Add((low, high));
+            }
+        }
+
+        return solid;
+    }
+
+    /// <summary>
+    /// What the vertical lines miss: a railing's bars, rails and diagonals, a fence, the side of a pier. A line through a
+    /// cell's middle meets a 3 cm bar only where one happens to cross it: a drawn river bridge kept 23 of the 80 places along
+    /// each railing where the mesh stops a car (Discord Blondiiile, 2026-10-16: "I got too close to the edge and fell
+    /// through, the bridge railing has no collision"). So every triangle steeper than 45 degrees is also cut to each cell it
+    /// crosses; in a cell the cut parts less than <see cref="WallGap"/> apart in height make one wall (a railing's rails and
+    /// bars one fence, standing on the deck or curb when that is at most as far under it), at least <see cref="MinWall"/>
+    /// thick; walls that line up in the next cells join. Parts inside a cell's solid stretches are already covered.
+    /// </summary>
+    /// <remarks>ponytail: a wall takes all steep parts of its cell, so it reaches up to a cell (25-150 cm) across where a curb and a railing share one.</remarks>
+    private static List<CollisionBox> Walls(MeshData mesh, float cell, int nx, int ny, List<int>?[] bins, List<(float Low, float High)>[] stretches)
+    {
+        var b = mesh.Bounds;
+        var p = mesh.Positions;
+        var idx = mesh.Indices;
+        var walls = new List<Extent>();
+        var parts = new List<Extent>();
+        for (var y = 0; y < ny; y++)
+        {
+            for (var x = 0; x < nx; x++)
+            {
+                parts.Clear();
+                var solid = stretches[(y * nx) + x];
+                var (x0, y0) = (b.Min.X + (x * cell), b.Min.Y + (y * cell));
+                foreach (var t in bins[(y * nx) + x] ?? [])
+                {
+                    var (c0, c1, c2) = (Corner(p, idx[t]), Corner(p, idx[t + 1]), Corner(p, idx[t + 2]));
+                    var normal = Vector3.Cross(c1 - c0, c2 - c0);
+                    var size = normal.Length();
+                    if (size < 1e-6f || MathF.Abs(normal.Z) > Steep * size
+                        || Clip(c0, c1, c2, x0, x0 + cell, y0, y0 + cell) is not { } part
+                        || solid.Any(s => part.Z0 >= s.Low - 1f && part.Z1 <= s.High + 1f))
+                    {
+                        continue;
+                    }
+
+                    parts.Add(part);
+                }
+
+                parts.Sort((l, r) => l.Z0.CompareTo(r.Z0));
+                for (var i = 0; i < parts.Count;)
+                {
+                    var wall = parts[i++];
+                    while (i < parts.Count && parts[i].Z0 <= wall.Z1 + WallGap)
+                    {
+                        wall = wall.Union(parts[i++]);
+                    }
+
+                    // Standing on the deck or curb under it (no gap a wheel or a foot slips through).
+                    var floor = solid.Where(s => s.High <= wall.Z0 + 1f && wall.Z0 - s.High <= WallGap).Select(s => s.High).DefaultIfEmpty(wall.Z0).Max();
+                    walls.Add(Thick(wall with { Z0 = MathF.Min(wall.Z0, floor) }, b));
+                }
+            }
+        }
+
+        return Join(Join(walls, 0), 1).Select(w => new CollisionBox(
+            new FVector((w.X0 + w.X1) * 0.5f, (w.Y0 + w.Y1) * 0.5f, (w.Z0 + w.Z1) * 0.5f), FRotator.Zero, new FVector(w.X1 - w.X0, w.Y1 - w.Y0, w.Z1 - w.Z0))).ToList();
+    }
+
+    private const float Steep = 0.7f; // |normal.Z| under this: steeper than about 45 degrees
+    private const float WallGap = 100f; // cm: parts of a wall closer than this in height join (a railing's rails, its curb)
+    private const float MinWall = 10f; // cm: thinnest wall (a 3 cm bar as written would let a fast wheel through)
+
+    /// <summary>An axis-aligned stretch of space, cm.</summary>
+    private readonly record struct Extent(float X0, float X1, float Y0, float Y1, float Z0, float Z1)
+    {
+        public Extent Union(Extent o) =>
+            new(MathF.Min(X0, o.X0), MathF.Max(X1, o.X1), MathF.Min(Y0, o.Y0), MathF.Max(Y1, o.Y1), MathF.Min(Z0, o.Z0), MathF.Max(Z1, o.Z1));
+    }
+
+    private static Vector3 Corner(float[] p, uint i) => new(p[i * 3], p[(i * 3) + 1], p[(i * 3) + 2]);
+
+    /// <summary>The part of the triangle over the cell [x0, x1] x [y0, y1] (seen from above), as its extent, or null when none is.</summary>
+    private static Extent? Clip(Vector3 a, Vector3 b, Vector3 c, float x0, float x1, float y0, float y1)
+    {
+        Span<Vector3> one = stackalloc Vector3[8];
+        Span<Vector3> two = stackalloc Vector3[8];
+        (one[0], one[1], one[2]) = (a, b, c);
+        var n = Keep(one, 3, two, 0, x0, 1f);
+        n = Keep(two, n, one, 0, x1, -1f);
+        n = Keep(one, n, two, 1, y0, 1f);
+        n = Keep(two, n, one, 1, y1, -1f);
+        if (n == 0)
+        {
+            return null;
+        }
+
+        var (min, max) = (one[0], one[0]);
+        for (var i = 1; i < n; i++)
+        {
+            (min, max) = (Vector3.Min(min, one[i]), Vector3.Max(max, one[i]));
+        }
+
+        return new Extent(min.X, max.X, min.Y, max.Y, min.Z, max.Z);
+    }
+
+    /// <summary>One Sutherland-Hodgman step: the polygon's part on the kept side of the line <paramref name="axis"/> = <paramref name="at"/>.</summary>
+    private static int Keep(ReadOnlySpan<Vector3> from, int n, Span<Vector3> to, int axis, float at, float side)
+    {
+        var m = 0;
+        for (var i = 0; i < n; i++)
+        {
+            var (here, next) = (from[i], from[(i + 1) % n]);
+            var (dh, dn) = (((axis == 0 ? here.X : here.Y) - at) * side, ((axis == 0 ? next.X : next.Y) - at) * side);
+            if (dh >= 0f)
+            {
+                to[m++] = here;
+            }
+
+            if ((dh >= 0f) != (dn >= 0f))
+            {
+                to[m++] = here + ((next - here) * (dh / (dh - dn)));
+            }
+        }
+
+        return m;
+    }
+
+    /// <summary>At least <see cref="MinWall"/> thick across and along, 5 cm high, kept inside the mesh's bounds.</summary>
+    private static Extent Thick(Extent w, BoundingBox b)
+    {
+        var (x0, x1) = Widen(w.X0, w.X1, b.Min.X, b.Max.X);
+        var (y0, y1) = Widen(w.Y0, w.Y1, b.Min.Y, b.Max.Y);
+        var (z0, z1) = w.Z1 - w.Z0 >= 5f ? (w.Z0, w.Z1) : (((w.Z0 + w.Z1) * 0.5f) - 2.5f, ((w.Z0 + w.Z1) * 0.5f) + 2.5f);
+        return new Extent(x0, x1, y0, y1, z0, z1);
+
+        static (float, float) Widen(float lo, float hi, float min, float max)
+        {
+            var grow = MathF.Max(0f, MinWall - (hi - lo)) * 0.5f;
+            (lo, hi) = (lo - grow, hi + grow);
+            var shift = lo < min ? min - lo : hi > max ? max - hi : 0f;
+            return max - min >= hi - lo ? (lo + shift, hi + shift) : (lo, hi);
+        }
+    }
+
+    /// <summary>Walls side by side along <paramref name="axis"/> (0 X, 1 Y) with the same other sides (within 5 cm) as one.</summary>
+    private static List<Extent> Join(List<Extent> walls, int axis)
+    {
+        var joined = new List<Extent>();
+        foreach (var line in walls.GroupBy(w => axis == 0 ? (Snap(w.Y0), Snap(w.Y1), Snap(w.Z0), Snap(w.Z1)) : (Snap(w.X0), Snap(w.X1), Snap(w.Z0), Snap(w.Z1))))
+        {
+            Extent? open = null;
+            foreach (var w in line.OrderBy(w => axis == 0 ? w.X0 : w.Y0))
+            {
+                if (open is { } o && (axis == 0 ? w.X0 <= o.X1 + 1f : w.Y0 <= o.Y1 + 1f))
+                {
+                    open = o.Union(w);
+                    continue;
+                }
+
+                if (open is { } done)
+                {
+                    joined.Add(done);
+                }
+
+                open = w;
+            }
+
+            if (open is { } last)
+            {
+                joined.Add(last);
+            }
+        }
+
+        return joined;
+
+        static float Snap(float v) => MathF.Round(v / 5f) * 5f;
     }
 
     /// <summary>
@@ -202,21 +433,7 @@ public static class PieceCollision
         }
 
         stretches.AddRange(open.Select(z => (z, z + Slab)));
-        stretches.Sort();
-        var solid = new List<(float Low, float High)>();
-        foreach (var (low, high) in stretches)
-        {
-            if (solid.Count > 0 && low <= solid[^1].High)
-            {
-                solid[^1] = (solid[^1].Low, MathF.Max(solid[^1].High, high));
-            }
-            else
-            {
-                solid.Add((low, high));
-            }
-        }
-
-        return solid;
+        return Joined(stretches);
     }
 
     private const float Slab = 15f; // cm: a lone surface's thickness

@@ -114,6 +114,25 @@ public sealed class ThumbnailService : IDisposable
     }
 
     /// <summary>
+    /// A picture made from the package <paramref name="packagePath"/> by <paramref name="produce"/> (one of the game's tattoos
+    /// cut out of its atlas), cached under <paramref name="key"/> like the other thumbnails (a game update refreshes it), or
+    /// null when the package is missing or nothing came out.
+    /// </summary>
+    public Task<string?> GetDerivedAsync(AssetCatalog catalog, string packagePath, string key, Func<(byte[] Rgba, int Width, int Height)?> produce,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(catalog);
+        ArgumentException.ThrowIfNullOrEmpty(packagePath);
+        ArgumentNullException.ThrowIfNull(produce);
+        if (!catalog.TryGetPackageFile(packagePath, out var file))
+        {
+            return Task.FromResult<string?>(null);
+        }
+
+        return MakeAsync(CacheFile(packagePath + "#" + key, file.Size), key, ct => DecodeAsync(produce, ct), cancellationToken);
+    }
+
+    /// <summary>
     /// A 3D picture of the Blueprint in <paramref name="packagePath"/> (an item's class: its mesh drawn with its textures), or
     /// null when it draws nothing (a trader's service) or meshes cannot be drawn on this PC.
     /// </summary>

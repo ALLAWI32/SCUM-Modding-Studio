@@ -33,6 +33,8 @@ public sealed partial class CraftablesPageViewModel : PageViewModel, IDisposable
     private CancellationTokenSource? _importCancel;
     private Task<IReadOnlyList<CraftCategory>>? _sections;
     private AssetCatalog? _sectionsOf;
+    private Task<IReadOnlyDictionary<string, string>>? _leaves;
+    private AssetCatalog? _leavesOf;
 
     /// <summary>Creates the page.</summary>
     public CraftablesPageViewModel(AppServices services, Action? openSetup = null)
@@ -53,6 +55,11 @@ public sealed partial class CraftablesPageViewModel : PageViewModel, IDisposable
 
             if (e.NewItems is { } added)
             {
+                foreach (var row in added.OfType<CraftableRowViewModel>())
+                {
+                    row.NameCheck = CheckName;
+                }
+
                 _ = ApplySectionsAsync(added.OfType<CraftableRowViewModel>().ToList());
             }
         };
@@ -118,11 +125,14 @@ public sealed partial class CraftablesPageViewModel : PageViewModel, IDisposable
         .Where(p => PackageMap.Leaf(p).StartsWith("ICO_", StringComparison.OrdinalIgnoreCase))
         .Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).ToList());
 
+    /// <summary>The folders the folder box suggests (<see cref="CraftableNames.SuggestedFolders"/>; any valid one can be typed).</summary>
+    public IReadOnlyList<string> Folders => CraftableNames.SuggestedFolders;
+
     /// <summary>"None" and every station craftable of the project.</summary>
     public IReadOnlyList<string> Stations { get; private set; } = [string.Empty];
 
     /// <summary>The file as the page shows it (tests).</summary>
-    public CraftablesFile File => new() { Items = Items.Select(i => i.ToModel()).ToList() };
+    public CraftablesFile File => new() { Items = Items.Select(i => i.ToModel()).ToList(), RecipeOverrides = RecipeOverrides.Select(r => r.ToModel()).ToList() };
 
     /// <summary>Adds the static mesh or Blueprint at <paramref name="packagePath"/> (the Assets page's "Make craftable").</summary>
     public async Task AddAsync(string packagePath)
@@ -155,7 +165,7 @@ public sealed partial class CraftablesPageViewModel : PageViewModel, IDisposable
 
             Remember();
             var token = CraftablesFile.NewTokenFor(name, Items.Select(i => i.Token));
-            var row = new CraftableRowViewModel(craftable with { Name = name, Token = token }, OnRowChanged, PictureAsync);
+            var row = new CraftableRowViewModel(craftable with { Name = name, Token = token, Folder = CraftableNames.SuggestFolder(craftable), Exported = false }, OnRowChanged, PictureAsync);
             Items.Add(row);
             SelectedItem = row;
             Save();
@@ -176,6 +186,24 @@ public sealed partial class CraftablesPageViewModel : PageViewModel, IDisposable
     {
         var leaf = path[(path.LastIndexOf('/') + 1)..];
         var name = string.Join(' ', leaf.Split('_', StringSplitOptions.RemoveEmptyEntries).Where(w => w is not ("SM" or "BP" or "BPC")));
+        // The game's fridge (defolt_0999: "large refrigerators for storing food") fits in no bag: it is built as the large
+        // cabinet's element spawning a copy of the fridge, whose size the page sets (ItemStorage).
+        if (ItemStorage.IsPlacedContainer(catalog, path) && ElementOf(catalog, ItemStorage.Carrier) is { } carrier && CraftablesPlanner.MeshOf(catalog, path) is { } look)
+        {
+            return new Craftable
+            {
+                Name = name.Length > 0 ? name : leaf,
+                Source = path,
+                Mesh = look,
+                Kind = CraftKind.Element,
+                Material = CraftMaterial.Metal,
+                SizeMeters = 2,
+                Ingredients = RecipeRules.Suggest(CraftMaterial.Metal, 2),
+                Element = new ElementSettings { Template = carrier.Element, Storage = new StorageSettings { Item = path } },
+                Use = CraftUse.Build,
+            };
+        }
+
         if (CraftablesPlanner.IsItem(catalog, path))
         {
             var guess = RecipeRules.GuessMaterial([path]);
@@ -364,7 +392,9 @@ public sealed partial class CraftablesPageViewModel : PageViewModel, IDisposable
                 Material = material,
                 SizeMeters = MathF.Round(MathF.Max(0.1f, model.SizeMeters), 2),
                 Ingredients = RecipeRules.Suggest(material, model.SizeMeters),
+                Exported = false,
             };
+            craftable = craftable with { Folder = CraftableNames.SuggestFolder(craftable) };
             if (other is not null)
             {
                 try
@@ -437,14 +467,30 @@ public sealed partial class CraftablesPageViewModel : PageViewModel, IDisposable
     [RelayCommand(CanExecute = nameof(CanUndo))]
     private void Undo()
     {
+        // An export since the last change (from another page or the CLI) ends the history first: Undo never brings back a
+        // name or folder the pak has no longer.
+        if (_services.Projects.Current is { } project)
+        {
+            try
+            {
+                SyncExported(File.KeepExported(project.DirectoryPath));
+            }
+            catch (IOException ex)
+            {
+                _services.Logger.LogWarning("craftables.json not read: {Message}", ex.Message);
+            }
+        }
+
         if (_undo.Count == 0)
         {
             return;
         }
 
         var selected = SelectedItem?.Name;
+        var stockOpen = IsStockOpen; // an Undo of a game recipe's edit keeps that panel open
         Show(CraftablesFile.Parse(_undo.Pop()));
         SelectedItem = Items.FirstOrDefault(i => i.Name == selected) ?? Items.FirstOrDefault();
+        IsStockOpen = stockOpen;
         CanUndo = _undo.Count > 0;
         Save();
     }
@@ -482,7 +528,10 @@ public sealed partial class CraftablesPageViewModel : PageViewModel, IDisposable
         {
             try
             {
-                File.Save(project.DirectoryPath);
+                // An export marked some exported meanwhile (the file on disk): they stay marked, and lock here too.
+                var file = File.KeepExported(project.DirectoryPath);
+                file.Save(project.DirectoryPath);
+                SyncExported(file);
             }
             catch (IOException ex)
             {
@@ -492,6 +541,68 @@ public sealed partial class CraftablesPageViewModel : PageViewModel, IDisposable
 
         RefreshStations();
         RefreshTokens();
+    }
+
+    /// <inheritdoc />
+    public override void OnNavigatedTo()
+    {
+        base.OnNavigatedTo();
+        if (_services.Projects.Current is { } project && Items.Count > 0)
+        {
+            try
+            {
+                SyncExported(File.KeepExported(project.DirectoryPath));
+            }
+            catch (IOException ex)
+            {
+                _services.Logger.LogWarning("craftables.json not read: {Message}", ex.Message);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Locks the rows <paramref name="file"/> marks exported. Undo cannot step back over an export: an older list would bring
+    /// back a name or folder the pak no longer has, and what players built with it would vanish.
+    /// </summary>
+    private void SyncExported(CraftablesFile file)
+    {
+        var newly = false;
+        for (var i = 0; i < Items.Count && i < file.Items.Count; i++)
+        {
+            if (file.Items[i].Exported == true && !Items[i].IsLocked)
+            {
+                Items[i].SetExported(true);
+                newly = true;
+            }
+        }
+
+        if (newly)
+        {
+            _undo.Clear();
+            CanUndo = false;
+            _lastSaved = File.ToJson();
+        }
+    }
+
+    /// <summary>Why <paramref name="row"/> cannot take the asset name <paramref name="token"/> (<see cref="CraftableNames.Check"/>).</summary>
+    private (CraftNameProblem Problem, string? Detail) CheckName(CraftableRowViewModel row, string token) =>
+        CraftableNames.Check(token, Items.Where(i => !ReferenceEquals(i, row)).Select(i => i.ToModel()).ToList(), GameLeavesNow());
+
+    /// <summary>The game's package names once read (on a worker, the first time a name is checked), or null meanwhile.</summary>
+    private IReadOnlyDictionary<string, string>? GameLeavesNow()
+    {
+        if (_services.Workspace.Catalog is not { } catalog)
+        {
+            return null;
+        }
+
+        if (!ReferenceEquals(_leavesOf, catalog) || _leaves is null)
+        {
+            _leavesOf = catalog;
+            _leaves = Task.Run(() => CraftableNames.GameLeaves(catalog));
+        }
+
+        return _leaves.IsCompletedSuccessfully ? _leaves.Result : null;
     }
 
     /// <summary>Marks the rows the export would leave out for a token another craftable keeps (<see cref="CraftablesPlanner.TokenOwners"/>).</summary>
@@ -540,6 +651,7 @@ public sealed partial class CraftablesPageViewModel : PageViewModel, IDisposable
             Items.Add(new CraftableRowViewModel(craftable, OnRowChanged, PictureAsync) { MayBeExported = true });
         }
 
+        ShowStock(file);
         _loading = false;
         _lastSaved = File.ToJson();
         RefreshStations();
@@ -555,6 +667,8 @@ public sealed partial class CraftablesPageViewModel : PageViewModel, IDisposable
         OnAddQueryChanged(AddQuery);
         Gallery.Load(_services.Workspace.Catalog);
         _ = ApplySectionsAsync(Items.ToList());
+        _ = ApplyStockAsync(RecipeOverrides.ToList());
+        OnStockQueryChanged(StockQuery);
     });
 
     /// <summary>The 3D picture of a craftable's mesh (the Assets page's thumbnails); an imported model's from its own cooked files.</summary>
@@ -606,6 +720,10 @@ public sealed partial class CraftableRowViewModel : ThumbnailItem
         _quiet = true;
         _name = craftable.Name;
         _token = craftable.Token ?? CraftablesFile.LegacyTokenOf(craftable.Name);
+        _assetNameText = _token;
+        _folder = craftable.Folder;
+        _folderText = craftable.Folder ?? string.Empty;
+        _exported = craftable.Exported;
         _kind = craftable.Kind;
         _material = craftable.Material;
         _category = craftable.Category;
@@ -666,6 +784,124 @@ public sealed partial class CraftableRowViewModel : ThumbnailItem
 
     /// <summary>The inline note when <see cref="TokenTakenBy"/> is set, or null.</summary>
     public string? TokenTaken => TokenTakenBy is { } owner ? Loc.F("Craftables.TokenTaken", owner, Token) : null;
+
+    private string _assetNameText;
+    private string? _folder;
+    private string _folderText;
+    private bool? _exported;
+
+    /// <summary>
+    /// Checks a typed asset name against the other craftables and the game (the page sets it, <see cref="CraftableNames.Check"/>);
+    /// without it only the characters and the number rule are checked.
+    /// </summary>
+    internal Func<CraftableRowViewModel, string, (CraftNameProblem Problem, string? Detail)>? NameCheck { get; set; }
+
+    /// <summary>
+    /// The asset name box (HexTer: "customize the names ... before exporting"): a valid, free name becomes <see cref="Token"/>
+    /// at once; another one stays in the box with <see cref="NameProblem"/>. Ignored once <see cref="IsLocked"/>.
+    /// </summary>
+    public string AssetNameText
+    {
+        get => _assetNameText;
+        set
+        {
+            if (value is null || IsLocked || !SetProperty(ref _assetNameText, value))
+            {
+                return;
+            }
+
+            var text = value.Trim();
+            var (problem, detail) = NameCheck?.Invoke(this, text) ?? CraftableNames.Check(text, [], null);
+            NameProblem = ProblemText(problem, detail);
+            if (problem == CraftNameProblem.None && !string.Equals(text, Token, StringComparison.Ordinal))
+            {
+                Token = text;
+                Changed();
+            }
+        }
+    }
+
+    /// <summary>Why the typed asset name is not used, or null.</summary>
+    [ObservableProperty]
+    private string? _nameProblem;
+
+    /// <summary>The folder its files go in (<see cref="Craftable.Folder"/>), or null for beside the game's.</summary>
+    public string? Folder => _folder;
+
+    /// <summary>The folder box: a valid folder (or empty) is used at once; another stays with <see cref="FolderProblem"/>. Ignored once <see cref="IsLocked"/>.</summary>
+    public string FolderText
+    {
+        get => _folderText;
+        set
+        {
+            if (value is null || IsLocked || !SetProperty(ref _folderText, value))
+            {
+                return;
+            }
+
+            var folder = CraftableNames.NormalizeFolder(value);
+            var problem = CraftableNames.CheckFolder(folder);
+            FolderProblem = problem == CraftNameProblem.None ? null : Loc.T("Craftables.FolderProblem");
+            if (problem == CraftNameProblem.None && !string.Equals(folder, _folder, StringComparison.Ordinal))
+            {
+                _folder = folder;
+                OnPropertyChanged(nameof(Folder));
+                OnPropertyChanged(nameof(PathPreview));
+                Changed();
+            }
+        }
+    }
+
+    /// <summary>Why the typed folder is not used, or null.</summary>
+    [ObservableProperty]
+    private string? _folderProblem;
+
+    /// <summary>
+    /// Its asset name and folder are fixed: it was exported, or it comes from a file of a version that did not record exports
+    /// (the game saves what players built by the asset path).
+    /// </summary>
+    public bool IsLocked => _exported != false;
+
+    /// <summary>The name and folder boxes can be edited.</summary>
+    public bool CanRename => !IsLocked;
+
+    /// <summary>"Recipe file: Furniture/CR_SS_Chair".</summary>
+    public string PathPreview => Loc.F("Craftables.Paths", (_folder is null ? string.Empty : _folder + "/") + "CR_" + Token);
+
+    /// <summary>The project file now says it was exported (or not): the boxes lock.</summary>
+    internal void SetExported(bool? exported)
+    {
+        if (_exported == exported)
+        {
+            return;
+        }
+
+        _exported = exported;
+        OnPropertyChanged(nameof(IsLocked));
+        OnPropertyChanged(nameof(CanRename));
+        if (IsLocked)
+        {
+            NameProblem = FolderProblem = null;
+            SetProperty(ref _assetNameText, Token, nameof(AssetNameText));
+            SetProperty(ref _folderText, _folder ?? string.Empty, nameof(FolderText));
+        }
+    }
+
+    partial void OnTokenChanged(string value)
+    {
+        SetProperty(ref _assetNameText, value, nameof(AssetNameText));
+        OnPropertyChanged(nameof(PathPreview));
+    }
+
+    private static string? ProblemText(CraftNameProblem problem, string? detail) => problem switch
+    {
+        CraftNameProblem.None => null,
+        CraftNameProblem.Length => Loc.F("Craftables.NameProblem.Length", CraftableNames.MaxToken),
+        CraftNameProblem.Number => Loc.F("Craftables.NameProblem.Number", detail ?? string.Empty),
+        CraftNameProblem.Craftable => Loc.F("Craftables.NameProblem.Craftable", detail ?? string.Empty),
+        CraftNameProblem.Game => Loc.F("Craftables.NameProblem.Game", detail ?? string.Empty),
+        _ => Loc.T("Craftables.NameProblem.Characters"),
+    };
 
     /// <summary>What it becomes.</summary>
     [ObservableProperty]
@@ -728,7 +964,13 @@ public sealed partial class CraftableRowViewModel : ThumbnailItem
     public string? Icon
     {
         get => _icon;
-        set => SetProperty(ref _icon, string.IsNullOrWhiteSpace(value) ? null : value.Trim());
+        set
+        {
+            if (SetProperty(ref _icon, string.IsNullOrWhiteSpace(value) ? null : value.Trim()))
+            {
+                OnPropertyChanged(nameof(PictureNote));
+            }
+        }
     }
 
     private string? _icon;
@@ -812,6 +1054,8 @@ public sealed partial class CraftableRowViewModel : ThumbnailItem
     {
         Name = Name.Trim(),
         Token = Token,
+        Folder = _folder,
+        Exported = _exported,
         Kind = Kind,
         Material = Material,
         Category = Category,
@@ -829,6 +1073,8 @@ public sealed partial class CraftableRowViewModel : ThumbnailItem
     {
         OnPropertyChanged(nameof(AssetName));
         OnPropertyChanged(nameof(TokenTaken));
+        OnPropertyChanged(nameof(PathPreview));
+        OnPropertyChanged(nameof(PictureNote));
     }
 
     /// <summary>Replaces the ingredient rows.</summary>
@@ -861,6 +1107,7 @@ public sealed partial class CraftableRowViewModel : ThumbnailItem
             CraftKind.Station => CraftablesPlanner.StationRecipe,
             CraftKind.Power => CraftablesPlanner.PowerRecipe,
             CraftKind.Item => _itemTemplate,
+            CraftKind.Element when Element is { } element => element.Family.Recipe, // the game element's own recipe and section
             _ => CraftablesPlanner.FurnitureRecipe,
         };
         var fallback = template is null ? null : CraftCategories.DefaultFor(ToModel(), _categories, template);
@@ -935,10 +1182,51 @@ public sealed partial class IngredientRowViewModel : ObservableObject
         _isTool = ingredient.IsTool;
         _item = ingredient.Item;
         _addTag = ingredient.AddTag;
+        _perLevel = ingredient.Levels is not null;
         _pictures = pictures;
         _changed = changed;
         _remove = remove;
+        Levels = new SkillLevelsViewModel(ingredient.PerLevel, OnLevelsChanged);
     }
+
+    /// <summary>
+    /// The amount at each skill level is the user's (<see cref="Levels"/>); off, the higher levels ask for less, as in the
+    /// game's recipes (<see cref="AutoLevelsText"/>).
+    /// </summary>
+    [ObservableProperty]
+    private bool _perLevel;
+
+    /// <summary>The amounts per skill level while <see cref="PerLevel"/> is on.</summary>
+    public SkillLevelsViewModel Levels { get; }
+
+    /// <summary>"By skill level: 9/9/7/6/5", what the game asks with <see cref="PerLevel"/> off.</summary>
+    public string AutoLevelsText => Loc.F("Craftables.Levels.Auto", LevelAmounts.Auto((int)Math.Clamp(Math.Round(Amount), 1, IngredientPickerViewModel.MaxAmount)));
+
+    // On: the five boxes start from what the game was asked so far. One change, one Undo step.
+    partial void OnPerLevelChanged(bool value)
+    {
+        if (value)
+        {
+            Levels.Set(LevelAmounts.Auto((int)Math.Clamp(Math.Round(Amount), 1, IngredientPickerViewModel.MaxAmount)));
+        }
+
+        _changed();
+    }
+
+    // The no-skill amount is the row's amount too (the list, the picker and an Off switch keep it).
+    private void OnLevelsChanged()
+    {
+        if (PerLevel)
+        {
+            _syncing = true;
+            Amount = Levels.ToModel().NoSkill;
+            _syncing = false;
+        }
+
+        _changed();
+    }
+
+    private bool _syncing;
 
     private string _tag;
 
@@ -963,7 +1251,14 @@ public sealed partial class IngredientRowViewModel : ObservableObject
     [ObservableProperty]
     private bool _isTool;
 
-    partial void OnAmountChanged(decimal value) => _changed();
+    partial void OnAmountChanged(decimal value)
+    {
+        OnPropertyChanged(nameof(AutoLevelsText));
+        if (!_syncing)
+        {
+            _changed();
+        }
+    }
 
     partial void OnIsToolChanged(bool value) => _changed();
 

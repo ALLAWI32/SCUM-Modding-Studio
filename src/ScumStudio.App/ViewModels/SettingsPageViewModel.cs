@@ -202,6 +202,7 @@ public sealed partial class SettingsPageViewModel : PageViewModel, IDisposable
             SelectedLanguage = Loc.Languages.FirstOrDefault(l => l.Code == s.Ui.Language) ?? Loc.Languages[0];
             RenderQuality = s.Ui.RenderQuality;
             ClearGrassUnderNew = s.Ui.ClearGrassUnderNewObjects;
+            TerrainHoles = s.Ui.TerrainHolesExperimental;
             DeleteWithCompanions = s.Ui.DeleteWithCompanions;
             (SpawnModels, AnimateWater, Lighting) = (s.Ui.SpawnModels, s.Ui.AnimateWater, s.Ui.Lighting);
             AntiAliasedFoliage = s.Ui.AntiAliasedFoliage;
@@ -299,6 +300,18 @@ public sealed partial class SettingsPageViewModel : PageViewModel, IDisposable
         if (!_reloading)
         {
             _services.UpdateSettings(s => s with { Ui = s.Ui with { ClearGrassUnderNewObjects = value } });
+        }
+    }
+
+    /// <summary>Experimental: the Map's hole tool (collision only, see <see cref="ScumStudio.Core.Settings.UiPreferences.TerrainHolesExperimental"/>).</summary>
+    [ObservableProperty]
+    private bool _terrainHoles;
+
+    partial void OnTerrainHolesChanged(bool value)
+    {
+        if (!_reloading)
+        {
+            _services.UpdateSettings(s => s with { Ui = s.Ui with { TerrainHolesExperimental = value } });
         }
     }
 

@@ -20,6 +20,7 @@ public static class EditOpRemap
         typeof(BendActorOp), typeof(SwaySegmentOp), typeof(SetSpawnPointsOp), typeof(ReplaceMeshOp), typeof(SetLootOp), typeof(SetClearGrassOp),
         typeof(DeleteComponentsOp), typeof(RestoreComponentsOp), typeof(SetSpawnChoiceOp), typeof(AddSpawnPlaceOp),
         typeof(SetEconomyEntryOp), typeof(SetEconomySettingOp), typeof(SetEconomySectionOp), typeof(ReplaceEconomyOp),
+        typeof(TerrainHoleOp),
     };
 
     /// <summary>
@@ -83,6 +84,7 @@ public static class EditOpRemap
             SetEconomyEntryOp entry => traders.TryGetValue(entry.Trader, out var renamed) ? entry with { Trader = renamed } : entry,
             SetEconomySectionOp section => traders.TryGetValue(section.Trader, out var renamed) ? section with { Trader = renamed } : section,
             SetEconomySettingOp or ReplaceEconomyOp => op, // a share carries the economy as a file of its own, never these
+            TerrainHoleOp hole => hole, // a place on the ground: no names to follow
             _ => throw new NotSupportedException($"Edits of type {op.GetType().Name} cannot be shared by this version."),
         };
     }

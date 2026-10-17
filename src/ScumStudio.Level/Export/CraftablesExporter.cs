@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using ScumStudio.Assets.Catalog;
+using ScumStudio.Assets.Textures;
 using ScumStudio.Formats.Packages;
 using ScumStudio.Level.Import;
 using ScumStudio.Level.Projects;
@@ -17,7 +18,7 @@ namespace ScumStudio.Level.Export;
 /// pak's (when that one wrote one, else the game's stock one) plus the craftables' records: the highest pak's registry is
 /// the one the game reads, so it must keep the project's vehicles and items too.
 /// </summary>
-public static class CraftablesExporter
+public static partial class CraftablesExporter
 {
     /// <summary>Appended to the mod name for the pak's name.</summary>
     public const string Suffix = "Craftables";
@@ -51,7 +52,7 @@ public static class CraftablesExporter
         logger ??= NullLogger.Instance;
         var name = ProjectExporter.SanitizeModName(modName) + Suffix;
         var roleDirectory = Path.Combine(Path.GetFullPath(options.OutputDirectory), ProjectExporter.RoleFolder(role));
-        if (craftables.Items.Count == 0)
+        if (craftables.IsEmpty)
         {
             foreach (var removed in RemoveStale(roleDirectory, modName, options.PakChunkIndex))
             {
@@ -66,7 +67,7 @@ public static class CraftablesExporter
         var projectStaging = Path.Combine(roleDirectory, ProjectExporter.StagingFolderName);
         var projectPak = !options.WritePak || File.Exists(Path.Combine(roleDirectory, ProjectExporter.PakFileName(modName, options.PakChunkIndex)));
         Func<string, CookedPackage?> basePackage = p => projectPak && catalog.TryGetPackageFile(p, out var f) ? StagedPackage(projectStaging, f.Path, p) : null;
-        var (plan, built, imports, importedAssets, warnings) = Prepare(craftables, catalog, baseRegistry, writeRegistry: true, basePackage);
+        var (plan, built, imports, importedAssets, warnings) = Prepare(craftables, catalog, baseRegistry, writeRegistry: true, basePackage, options.ModelPictures ?? NoDrawing);
         var staging = Path.Combine(roleDirectory, StagingFolderName);
         if (Directory.Exists(staging))
         {
@@ -107,6 +108,7 @@ public static class CraftablesExporter
 
         // The server cook's sound events (an imported model's, a clone's) become the server's 12-byte stubs, like the project pak's.
         var stubbed = await ProjectExporter.StubEventsAsync(staging, catalog, options, role, warnings, cancellationToken).ConfigureAwait(false);
+        var validation = ProjectExporter.Validate(staging, catalog, options, null, cancellationToken);
         string? pakPath = null;
         string? sigPath = null;
         if (options.WritePak)
@@ -123,10 +125,27 @@ public static class CraftablesExporter
             {
                 sigPath = SigCopier.Copy(sigSource, pakPath, overwrite: true, logger);
             }
+
+            // The pak has them now: their asset names and folders stay (the game saves what players build by them).
+            if (craftables.ProjectDirectory is { } project)
+            {
+                try
+                {
+                    var marked = CraftablesFile.MarkExported(project, plan.Entries.Select(e => e.Token).OfType<string>());
+                    if (marked.Count > 0)
+                    {
+                        logger.LogInformation("Craftables: {Count} craftable(s) exported for the first time; their asset names and folders are fixed now.", marked.Count);
+                    }
+                }
+                catch (IOException ex)
+                {
+                    warnings.Add($"craftables.json could not record which craftables were exported ({ex.Message}); keep their asset names and folders as they are.");
+                }
+            }
         }
 
-        logger.LogInformation("Craftables: {Count} craftable(s), {Packages} package(s), {Registered} registry record(s).",
-            plan.Entries.Count, assets.Count, built.Registered.Count);
+        logger.LogInformation("Craftables: {Count} craftable(s), {Recipes} game recipe(s) with new amounts, {Packages} package(s), {Registered} registry record(s).",
+            plan.Entries.Count, plan.Request.RecipeAmounts.Count, assets.Count, built.Registered.Count);
         return new ExportResult
         {
             Role = role,
@@ -140,6 +159,7 @@ public static class CraftablesExporter
             AssetValues = built.Applied,
             Warnings = warnings,
             StubbedEvents = stubbed,
+            Validation = validation,
         };
     }
 
@@ -153,7 +173,7 @@ public static class CraftablesExporter
     {
         ArgumentNullException.ThrowIfNull(craftables);
         ArgumentNullException.ThrowIfNull(catalog);
-        if (craftables.Items.Count > 0)
+        if (!craftables.IsEmpty)
         {
             _ = Prepare(craftables, catalog, null, writeRegistry: false);
         }
@@ -163,7 +183,8 @@ public static class CraftablesExporter
 
     // The craftables whose imported model is usable, planned and built; stops before anything is written when nothing would
     // be built or the pak would ship a package the game already has (P0 #1: the Craftables pak only adds).
-    private static Prepared Prepare(CraftablesFile craftables, AssetCatalog catalog, byte[]? baseRegistry, bool writeRegistry, Func<string, CookedPackage?>? basePackage = null)
+    private static Prepared Prepare(CraftablesFile craftables, AssetCatalog catalog, byte[]? baseRegistry, bool writeRegistry, Func<string, CookedPackage?>? basePackage = null,
+        Func<CraftPictureRequest, TextureImage?>? draw = null)
     {
         var warnings = new List<string>();
         var items = new List<Craftable>();
@@ -184,7 +205,12 @@ public static class CraftablesExporter
             items.Add(craftable);
         }
 
-        var plan = CraftablesPlanner.Plan(catalog, items);
+        var plan = CraftablesPlanner.PlanWithStockRecipes(catalog, items, craftables.RecipeOverrides);
+        if (draw is not null)
+        {
+            plan = MakePictures(plan, catalog, craftables.ProjectDirectory, draw, warnings); // a check (no writing) draws nothing
+        }
+
         if (basePackage is not null)
         {
             plan = plan with { Request = plan.Request with { BasePackage = basePackage } };
@@ -205,11 +231,14 @@ public static class CraftablesExporter
             .ToList();
 
         // A package the game already has (a stock table, a stock recipe) stops it here, and the previous pak stays as it was;
-        // only the item setups the user opted in to give a new tag (plan.StockOverrides) may be shipped at their stock path.
+        // only the item setups the user opted in to give a new tag and the game's recipes whose amounts per skill level the
+        // user overrides (plan.StockOverrides) may be shipped at their stock path.
         var stockOverrides = plan.StockOverrides.ToHashSet(StringComparer.OrdinalIgnoreCase);
         foreach (var overridden in plan.StockOverrides)
         {
-            warnings.Add($"The Craftables pak replaces the game's {overridden} (an item given a new tag): export again after every game update.");
+            warnings.Add(plan.Request.RecipeAmounts.ContainsKey(overridden)
+                ? $"The Craftables pak replaces the game's recipe {overridden} (your amounts per skill level): another mod that changes the same recipe conflicts with it (the pak loaded last wins); export again after every game update."
+                : $"The Craftables pak replaces the game's {overridden} (an item given a new tag): export again after every game update.");
         }
 
         var atGamePaths = GamePathsIn(catalog, built.Packages.Select(p => p.PackagePath).Where(p => !stockOverrides.Contains(p)).Concat(importedAssets.Select(a => a.PackagePath)));

@@ -91,6 +91,7 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
         _services.Prefabs.Changed += OnPrefabsChanged;
         RefreshPrefabs();
         SyncPaintPalette();
+        RefreshHoles();
         if (_services.Workspace.Catalog is { } catalog)
         {
             _loadTask = LoadWorldAsync(catalog);
@@ -868,6 +869,7 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
         OnPropertyChanged(nameof(DeleteAllOfMeshTip));
         OnPropertyChanged(nameof(DeleteAllOfClassTip));
         RefreshGrassOption();
+        RefreshGuardsOption();
     }
 
     /// <summary>Re-derives everything the project's edits change in the loaded scene: added actors, hidden ids, moved actors.</summary>
@@ -1999,6 +2001,7 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
     {
         SyncPaintPalette();
         RefreshEdits();
+        RefreshHoles();
     }
 
     private void OnCatalogChanged(object? sender, EventArgs e)
@@ -2243,6 +2246,11 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
         {
             _services.Notifications.Warning(Localization.Loc.T("Map.CannotExportYet"), blocker);
             return;
+        }
+
+        if (TerrainHoleWarning.ExportReminder(_services.UiState.Current, project) is { } holeReminder)
+        {
+            _services.Notifications.Warning(Localization.Loc.T("Map.Hole.Title"), holeReminder);
         }
 
         var (ok, export) = await _services.Operations.RunAsync(Localization.Loc.F("Projects.Exporting", project!.Manifest.Name),

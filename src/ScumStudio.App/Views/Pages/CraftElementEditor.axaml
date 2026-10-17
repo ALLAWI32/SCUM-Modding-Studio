@@ -59,6 +59,23 @@
             </ItemsControl>
             <TextBlock Classes="caption wrap" Text="{Binding InheritedText}" IsVisible="{Binding HasInherited}" ToolTip.Tip="{Tr Craftables.Element.Inherited.Tip}" />
           </StackPanel>
+          <!-- What the item it spawns holds (a chest's size; defolt_0999's large fridge) -->
+          <StackPanel x:Name="CraftStorage" Spacing="4" IsVisible="{Binding HasStorage}">
+            <TextBlock Text="{Tr Craftables.Storage.Title}" Classes="caption" ToolTip.Tip="{Tr Craftables.Storage.Tip}" />
+            <TextBlock x:Name="CraftStorageFridge" Text="{Tr Craftables.Storage.Fridge}" Classes="caption wrap" IsVisible="{Binding IsFridge}" ToolTip.Tip="{Tr Craftables.Storage.Tip}" />
+            <ItemsControl x:Name="CraftStorageValues" ItemsSource="{Binding Storage}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:ElementValueViewModel">
+                  <Grid ColumnDefinitions="220,150,*,Auto" ColumnSpacing="10" Margin="0,2">
+                    <TextBlock Grid.Column="0" Text="{Binding Label}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Tip}" />
+                    <NumericUpDown Grid.Column="1" Value="{Binding Number}" Minimum="0" Maximum="1000000" Increment="1" FormatString="0.###" ToolTip.Tip="{Binding Tip}" />
+                    <TextBlock Grid.Column="2" Text="{Binding StockText}" Classes="caption" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                    <Button Grid.Column="3" Classes="ghost" Content="{Tr Craftables.Element.Reset}" ToolTip.Tip="{Tr Craftables.Element.Reset.Tip}" Command="{Binding ResetCommand}" />
+                  </Grid>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </StackPanel>
         </StackPanel>
       </StackPanel>
     </Border>

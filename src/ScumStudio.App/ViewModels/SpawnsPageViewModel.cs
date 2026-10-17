@@ -972,6 +972,7 @@ public sealed partial class SpawnsPageViewModel : PageViewModel, ISearchablePage
         SpawnPlaceKind.Character => Loc.T("Spawns.Place.Kind.Character"),
         SpawnPlaceKind.TaggedCharacter => Loc.T("Spawns.Place.Kind.TaggedCharacter"),
         SpawnPlaceKind.Zone => Loc.T("Spawns.Place.Kind.Zone"),
+        SpawnPlaceKind.CharacterGroup => Loc.T("Spawns.Place.Kind.CharacterGroup"),
         _ => Loc.T("Spawns.Place.Kind.Animal"),
     };
 

@@ -21,7 +21,7 @@ internal sealed class ItemCommands : ICommandModule
     /// <inheritdoc />
     public Command Build()
     {
-        var item = new Command("item", "Vehicles and weapons: list them, show and change their stored values, clone them under a new name.");
+        var item = new Command("item", "Vehicles, weapons and other items: list them, show and change their stored values, clone them under a new name.");
         item.AddCommand(BuildList());
         item.AddCommand(BuildStats());
         item.AddCommand(BuildSet());
@@ -39,8 +39,8 @@ internal sealed class ItemCommands : ICommandModule
     {
         var source = SourceArgument();
         var aes = AesOption();
-        var kind = new Option<ModdableKind?>(["--kind", "-k"], "Only this kind (Vehicle, Weapon, Magazine, Ammo, Projectile).");
-        var command = new Command("list", "List vehicles, weapons, magazines, ammunition and projectiles as '<Kind>\\t<Category>\\t<Name>\\t<PackagePath>'.") { source, aes, kind };
+        var kind = new Option<ModdableKind?>(["--kind", "-k"], "Only this kind (Vehicle, Weapon, Magazine, Ammo, Projectile, Item = any other inventory item such as Copper_Coins).");
+        var command = new Command("list", "List vehicles, weapons, magazines, ammunition, projectiles and other items as '<Kind>\\t<Category>\\t<Name>\\t<PackagePath>'.") { source, aes, kind };
         command.SetHandler((InvocationContext ctx) =>
         {
             var logger = CliHost.CreateLogger<ItemCommands>();

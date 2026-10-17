@@ -5,6 +5,7 @@ using ScumStudio.Level.Export;
 using ScumStudio.Level.Projects;
 using ScumStudio.Modding.Crafting;
 using ScumStudio.Pak;
+using ScumStudio.Viewport;
 
 namespace ScumStudio.Cli.Commands;
 
@@ -41,7 +42,7 @@ internal sealed partial class ProjectCommands
                 // Export only reads the project: it works while the app has the project open.
                 using var project = Project.OpenReadOnly(parse.GetValueForArgument(dir));
                 var craftables = parse.GetValueForOption(noCraftables) ? new CraftablesFile() : CraftablesFile.Load(project.DirectoryPath);
-                if (project.State.IsEmpty && craftables.Items.Count == 0)
+                if (project.State.IsEmpty && craftables.IsEmpty)
                 {
                     logger.LogError("Nothing to export: the project has no applied edits.");
                     return 2;
@@ -68,7 +69,9 @@ internal sealed partial class ProjectCommands
                 };
                 var aesText = parse.GetValueForOption(aes);
                 var exporter = new ProjectExporter(logger);
+                var mains = new Dictionary<ProjectSourceRole, ExportResult>();
                 BendSupport? meshes = null; // the client's: its answers serve the server export (no render geometry there)
+                CraftIconRenderer? pictures = null; // the same: craftables' pictures drawn from the client's meshes
                 foreach (var (path, role) in new[] { (clientSource, ProjectSourceRole.Client), (server, ProjectSourceRole.Server) })
                 {
                     if (path is null)
@@ -85,9 +88,10 @@ internal sealed partial class ProjectCommands
                     }
 
                     meshes ??= new BendSupport(catalog);
+                    pictures ??= new CraftIconRenderer(catalog, logger);
                     var result = project.State.IsEmpty ? null
                         : await exporter.ExportAsync(project, catalog, options with { BendMeshes = meshes.Describe }, role, null, ctx.GetCancellationToken()).ConfigureAwait(false);
-                    var crafted = await CraftablesExporter.ExportAsync(craftables, options.ModName ?? project.Manifest.Name, catalog, options, role,
+                    var crafted = await CraftablesExporter.ExportAsync(craftables, options.ModName ?? project.Manifest.Name, catalog, options with { ModelPictures = pictures.Render }, role,
                         CraftablesExporter.StagedRegistry(result), logger, ctx.GetCancellationToken()).ConfigureAwait(false);
                     foreach (var exported in new[] { result, crafted }.OfType<ExportResult>())
                     {
@@ -97,9 +101,53 @@ internal sealed partial class ProjectCommands
                             logger.LogWarning("{Warning}", warning);
                         }
                     }
+
+                    if (result is not null)
+                    {
+                        mains[role] = result;
+                    }
                 }
 
+                // The client's and the server's pak must change the same levels the same way.
+                if (mains.TryGetValue(ProjectSourceRole.Client, out var clientMain) && mains.TryGetValue(ProjectSourceRole.Server, out var serverMain))
+                {
+                    foreach (var line in ModPackageValidator.CompareCooks(clientMain, serverMain))
+                    {
+                        logger.LogWarning("Client/server: {Line}", line);
+                    }
+                }
+
+                pictures?.Dispose();
                 return 0;
+            }).ConfigureAwait(false);
+        });
+        return command;
+    }
+
+    private static Command BuildValidate()
+    {
+        var staging = new Argument<string>("staging", "An export's staging folder (<out>/Client/staging or <out>/Server/staging) or an unpacked mod.");
+        var source = new Option<string>(["--source", "-s"], "The game files the mod is for: the Paks folder of the game (client) or of the dedicated server.") { IsRequired = true };
+        var aes = new Option<string?>(["--aes", "-a"], $"AES-256 key (64 hex chars) for encrypted stock paks. Prefer the {AesKeyText.EnvironmentVariable} environment variable.");
+        var command = new Command("validate", "Read every staged package back against the game's own copy and list what could crash the game or the server (the check every export runs before it packs).")
+        {
+            staging, source, aes,
+        };
+        command.SetHandler(async (InvocationContext ctx) =>
+        {
+            var logger = CliHost.CreateLogger<ProjectCommands>();
+            var parse = ctx.ParseResult;
+            ctx.ExitCode = await LevelCliSupport.GuardedAsync(logger, () =>
+            {
+                using var catalog = LevelCliSupport.OpenCatalog(parse.GetValueForOption(source)!, parse.GetValueForOption(aes), logger);
+                var result = ModPackageValidator.Validate(parse.GetValueForArgument(staging), catalog, ctx.GetCancellationToken());
+                foreach (var problem in result.Problems)
+                {
+                    Console.Out.WriteLine(problem);
+                }
+
+                Console.Out.WriteLine($"{result.Summary}; {result.SizeCheckedExports} sizes held to the game's.");
+                return Task.FromResult(result.Passed ? 0 : 3);
             }).ConfigureAwait(false);
         });
         return command;
@@ -108,6 +156,7 @@ internal sealed partial class ProjectCommands
     private static void PrintExport(ExportResult result)
     {
         var o = Console.Out;
+        o.WriteLine($"  {result.Validation?.Summary ?? "Validator: not run"}");
         o.WriteLine($"{result.Role}: {result.Levels.Count} level(s) rewritten, {result.RemovedActorCount} actor(s) removed, {result.PatchedTransformCount} transform(s) written");
         if (result.Assets.Count > 0)
         {

@@ -114,6 +114,7 @@ public abstract partial class ModulePageViewModel
             }
 
             _paintBakes.Clear();
+            ForgetDecalPreview();
         }
 
         _previewBase = model;
@@ -620,6 +621,11 @@ public abstract partial class ModulePageViewModel
     {
         var a = paint.LinearColour;
         Vector4? b = paint.HasSecond ? paint.LinearSecond : null;
+        if (HasDecalsOn(paint.MaterialPath) && LiveDecalBake(paint.MaterialPath, diffuse, mask, a, b) is { } live)
+        {
+            return live; // the decals bake on a worker (ModulePageViewModel.DecalPreview)
+        }
+
         if (_paintBakes.TryGetValue(paint.MaterialPath, out var bake) && bake.A == a && bake.B == b && bake.Image.Width >= diffuse.Width)
         {
             return bake.Image;

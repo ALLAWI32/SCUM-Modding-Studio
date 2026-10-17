@@ -44,7 +44,8 @@ public sealed record SpawnPlacesEditRequest
 /// <param name="Setting">What spawns there (<see cref="AddSpawnPlaceOp.Setting"/>, or the choice set on it later).</param>
 /// <param name="Transform">Where, as the map holds it (a zone's or area's size in the scale, metres).</param>
 /// <param name="Tags">A tagged point's gameplay tags (<see cref="AddSpawnPlaceOp.Tags"/>); null or empty = none.</param>
-public sealed record NewSpawnPlace(string Name, SpawnPlaceKind Kind, string Setting, TransformValue Transform, IReadOnlyList<string>? Tags = null);
+/// <param name="Points">A group's posts in the world (<see cref="AddSpawnPlaceOp.PostsAt"/>); null for other kinds.</param>
+public sealed record NewSpawnPlace(string Name, SpawnPlaceKind Kind, string Setting, TransformValue Transform, IReadOnlyList<string>? Tags = null, IReadOnlyList<FVector>? Points = null);
 
 /// <summary>
 /// What the client export read of the stock places its edits name by number (audit F281): each list's length and where
@@ -90,7 +91,11 @@ public static class SpawnPlacesEditor
         [SpawnPlaceKind.TaggedCharacter] = ["Type", "Transform", "Tags"],
         [SpawnPlaceKind.Zone] = ["_transform", SpawnChoices.ZoneData, "_lpcZoneData", "_zoneActivationRadiusMultiplier", "_LPCZoneActivationRadiusMultiplier", .. ZoneMembers, .. PlaceBound],
         [SpawnPlaceKind.Animal] = ["Transform", "Radius", "PopulationParameters"],
+        [SpawnPlaceKind.CharacterGroup] = ["GroupBounds", "SpawnTransforms", "Type"],
     };
+
+    // A group's box stands this far around its posts, as the island's own groups have it.
+    private const float GroupBoundsPadding = 5f;
 
     private static readonly string[] PopulationMembers = ["Priority", SpawnChoices.Biome, "bEnablePopulationSpawning", "VisitorDeactivationDistance"];
 
@@ -141,7 +146,7 @@ public static class SpawnPlacesEditor
                     added.Add((stock.Kind, stock.Index, transform));
                     break;
                 case AddSpawnPlaceOp place:
-                    created.Add(new NewSpawnPlace(actor.Actor, place.Kind, choice ?? place.Setting, transform, place.Tags));
+                    created.Add(new NewSpawnPlace(actor.Actor, place.Kind, choice ?? place.Setting, transform, place.Tags, place.Kind == SpawnPlaceKind.CharacterGroup ? place.PostsAt(transform) : null));
                     break;
                 default:
                     warnings?.Add($"{actor.Actor}: neither a copy of a spawn place nor a new one; not written.");
@@ -432,6 +437,11 @@ public static class SpawnPlacesEditor
     private static byte[]? Create(Tables tables, byte[] payload, ArrayValue array, NewSpawnPlace place, List<string> warnings)
     {
         var kind = place.Kind;
+        if (kind == SpawnPlaceKind.CharacterGroup)
+        {
+            return CreateGroup(tables, payload, array, place, warnings);
+        }
+
         var whole = array.Items.OfType<StructValue>().Where(i => IsTemplate(kind, i)).ToList();
         var templates = whole.Where(i => UnknownMembers(kind, i).Count == 0).ToList();
         var setting = SpawnPlaces.SettingName(place.Setting);
@@ -540,6 +550,15 @@ public static class SpawnPlacesEditor
     /// <summary>True when <paramref name="item"/> stores every field <see cref="Create"/> writes (no field of a new place is left as the template has it).</summary>
     private static bool IsTemplate(SpawnPlaceKind kind, StructValue item)
     {
+        if (kind == SpawnPlaceKind.CharacterGroup)
+        {
+            return SpawnPlaces.Member(item, "GroupBounds")?.Value is BoxValue && SpawnPlaces.Member(item, "Type")?.Value is EnumValue
+                && SpawnPlaces.Member(item, "SpawnTransforms")?.Value is ArrayValue { InnerTag: not null, Items: [StructValue first, ..] } posts
+                && posts.Items.All(p => p is StructValue)
+                && SpawnPlaces.Member(first, "Rotation")?.Value is QuatValue && SpawnPlaces.Member(first, "Translation")?.Value is VectorValue
+                && SpawnPlaces.Member(first, "Scale3D")?.Value is VectorValue;
+        }
+
         if (SpawnPlaces.Member(item, TransformOf(kind))?.Value is not StructValue t || SpawnPlaces.Member(t, "Rotation")?.Value is not QuatValue
             || SpawnPlaces.Member(t, "Translation")?.Value is not VectorValue || SpawnPlaces.Member(t, "Scale3D")?.Value is not VectorValue)
         {
@@ -682,6 +701,11 @@ public static class SpawnPlacesEditor
     /// </summary>
     private static bool Place(byte[] bytes, SpawnPlaceKind kind, StructValue item, TransformValue value, int shift, string name, List<string> warnings)
     {
+        if (kind == SpawnPlaceKind.CharacterGroup)
+        {
+            return PlaceGroup(bytes, item, value, shift, name, warnings);
+        }
+
         if (SpawnPlaces.Member(item, TransformOf(kind))?.Value is not StructValue t)
         {
             warnings.Add($"{name}: its place is not stored in the game data; not written.");
@@ -754,6 +778,118 @@ public static class SpawnPlacesEditor
             var ey = MathF.Sqrt((a * MathF.Sin(yaw) * a * MathF.Sin(yaw)) + (b * MathF.Cos(yaw) * b * MathF.Cos(yaw)));
             var c = value.Location;
             Floats(bytes, box.Offset + shift, c.X - ex, c.Y - ey, c.Z, c.X + ex, c.Y + ey, c.Z);
+        }
+    }
+
+    /// <summary>
+    /// Moves a group of zombie / NPC points (a stock group moved or copied) to <paramref name="value"/>: the place stands on
+    /// the first post, so every post keeps where it is relative to the first, turned with it, and the group's box follows.
+    /// The bytes keep their size.
+    /// </summary>
+    private static bool PlaceGroup(byte[] bytes, StructValue item, TransformValue value, int shift, string name, List<string> warnings)
+    {
+        var posts = SpawnPlaces.Member(item, "SpawnTransforms")?.Value is ArrayValue a ? a.Items.OfType<StructValue>().ToList() : [];
+        var stored = SpawnPlaces.GroupPosts(item);
+        if (posts.Count == 0 || stored.Count != posts.Count || SpawnPlaces.Member(item, "GroupBounds")?.Value is not BoxValue box)
+        {
+            warnings.Add($"{name}: its posts are not stored in the game data; not written.");
+            return false;
+        }
+
+        var to = value.ToTransform();
+        var turn = to.Rotation * stored[0].Rotation.Inverse();
+        var moved = SpawnPlaces.MovePosts(stored.Select(p => p.Translation).ToList(), stored[0], to);
+        for (var i = 0; i < posts.Count; i++)
+        {
+            var (r, p, s) = (SpawnPlaces.Member(posts[i], "Rotation")?.Value as QuatValue, SpawnPlaces.Member(posts[i], "Translation")?.Value as VectorValue, SpawnPlaces.Member(posts[i], "Scale3D")?.Value as VectorValue);
+            WriteTransform(bytes, new TransformValue(moved[i], (turn * stored[i].Rotation).GetNormalized().Rotator(), stored[i].Scale3D), r, p, s, shift);
+        }
+
+        WriteGroupBounds(bytes, box, moved, shift);
+        return true;
+    }
+
+    /// <summary>
+    /// The bytes of a new group of zombie / NPC points: laid out as a stock group of the same type (else the first whole
+    /// one), its posts replaced by <see cref="NewSpawnPlace.Points"/> (each turned to face the next, the last as the one
+    /// before it), its type and its box (the posts and <see cref="GroupBoundsPadding"/> around them) written. Null, with a
+    /// warning, when no stock group can serve or a value cannot be written.
+    /// </summary>
+    private static byte[]? CreateGroup(Tables tables, byte[] payload, ArrayValue array, NewSpawnPlace place, List<string> warnings)
+    {
+        var kind = SpawnPlaceKind.CharacterGroup;
+        var points = place.Points ?? [];
+        if (points.Count == 0 || points.Count > SpawnPlaces.MaxGroupPosts)
+        {
+            warnings.Add($"{place.Name}: a group needs 1 to {SpawnPlaces.MaxGroupPosts} posts ({points.Count}); not written.");
+            return null;
+        }
+
+        var whole = array.Items.OfType<StructValue>().Where(i => IsTemplate(kind, i)).ToList();
+        var templates = whole.Where(i => UnknownMembers(kind, i).Count == 0).ToList();
+        var template = templates.FirstOrDefault(i => SpawnPlaces.Describe(kind, 0, i)?.Group == place.Setting) ?? templates.FirstOrDefault();
+        if (template is null)
+        {
+            warnings.Add(whole.Count == 0
+                ? $"{place.Name}: no entry of {SpawnPlaces.ArrayOf(kind)} stores a whole group to lay a new one out from; not written."
+                : $"{place.Name}: the entries of {SpawnPlaces.ArrayOf(kind)} hold {string.Join(", ", UnknownMembers(kind, whole[0]))}, which this version does not know; not written.");
+            return null;
+        }
+
+        var bytes = payload.AsSpan(template.Offset, template.Size).ToArray();
+        var shift = -template.Offset;
+        if (!WriteType(tables.Package, bytes, template, place.Setting, shift, place.Name, warnings))
+        {
+            return null;
+        }
+
+        WriteGroupBounds(bytes, (BoxValue)SpawnPlaces.Member(template, "GroupBounds")!.Value, points, shift);
+
+        // The posts: copies of the template's first post, each written; then the array goes in place of the template's.
+        var tag = SpawnPlaces.Member(template, "SpawnTransforms")!;
+        var stored = (ArrayValue)tag.Value;
+        var first = (StructValue)stored.Items[0];
+        var (r, p, s) = ((QuatValue)SpawnPlaces.Member(first, "Rotation")!.Value, (VectorValue)SpawnPlaces.Member(first, "Translation")!.Value, (VectorValue)SpawnPlaces.Member(first, "Scale3D")!.Value);
+        var posts = new List<byte[]>(points.Count);
+        for (var i = 0; i < points.Count; i++)
+        {
+            var post = payload.AsSpan(first.Offset, first.Size).ToArray();
+            var ahead = i + 1 < points.Count ? points[i + 1] - points[i] : i > 0 ? points[i] - points[i - 1] : FVector.Zero;
+            var yaw = ahead.X * ahead.X + ahead.Y * ahead.Y > 1f ? MathF.Atan2(ahead.Y, ahead.X) * 180f / MathF.PI : place.Transform.Rotation.Yaw;
+            WriteTransform(post, new TransformValue(points[i], new FRotator(0f, yaw, 0f), FVector.One), r, p, s, -first.Offset);
+            posts.Add(post);
+        }
+
+        var inner = stored.InnerTag!;
+        var header = payload.AsSpan(inner.Offset, inner.ValueOffset - inner.Offset).ToArray();
+        BinaryPrimitives.WriteInt32LittleEndian(header.AsSpan(inner.SizeFieldOffset - inner.Offset), posts.Sum(b => b.Length));
+        var value = new byte[4 + header.Length + posts.Sum(b => b.Length)];
+        BinaryPrimitives.WriteInt32LittleEndian(value, posts.Count);
+        header.CopyTo(value, 4);
+        var at = 4 + header.Length;
+        foreach (var b in posts)
+        {
+            b.CopyTo(value, at);
+            at += b.Length;
+        }
+
+        var result = new byte[bytes.Length - tag.Size + value.Length];
+        bytes.AsSpan(0, tag.ValueOffset + shift).CopyTo(result);
+        value.CopyTo(result, tag.ValueOffset + shift);
+        bytes.AsSpan(tag.EndOffset + shift).CopyTo(result.AsSpan(tag.ValueOffset + shift + value.Length));
+        BinaryPrimitives.WriteInt32LittleEndian(result.AsSpan(tag.SizeFieldOffset + shift), value.Length);
+        return result;
+    }
+
+    /// <summary>Writes a group's box: around <paramref name="posts"/>, <see cref="GroupBoundsPadding"/> wider each way, valid.</summary>
+    private static void WriteGroupBounds(byte[] bytes, BoxValue box, IReadOnlyList<FVector> posts, int shift)
+    {
+        Floats(bytes, box.Offset + shift,
+            posts.Min(q => q.X) - GroupBoundsPadding, posts.Min(q => q.Y) - GroupBoundsPadding, posts.Min(q => q.Z) - GroupBoundsPadding,
+            posts.Max(q => q.X) + GroupBoundsPadding, posts.Max(q => q.Y) + GroupBoundsPadding, posts.Max(q => q.Z) + GroupBoundsPadding);
+        if (box.Size >= 25)
+        {
+            bytes[box.Offset + shift + 24] = 1;
         }
     }
 

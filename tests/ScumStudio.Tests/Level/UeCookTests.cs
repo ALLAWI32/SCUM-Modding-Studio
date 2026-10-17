@@ -263,8 +263,12 @@ public sealed class UeCookTests
             return;
         }
 
+        // The started process is put in the job right after it starts, so a child it starts in its first milliseconds can
+        // be created before that (under the whole suite's load cmd.exe did, and no ping was ever in the job). The engine
+        // starts its shader workers seconds after it starts; the stand-in waits a second (a first ping) before the child
+        // this test watches.
         var info = new System.Diagnostics.ProcessStartInfo("cmd.exe") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
-        foreach (var argument in new[] { "/c", "ping", "-n", "60", "127.0.0.1" })
+        foreach (var argument in new[] { "/c", "ping", "-n", "2", "127.0.0.1", ">nul", "&", "ping", "-n", "60", "127.0.0.1" })
         {
             info.ArgumentList.Add(argument);
         }

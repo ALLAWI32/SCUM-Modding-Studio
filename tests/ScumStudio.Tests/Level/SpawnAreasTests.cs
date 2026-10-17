@@ -10,6 +10,7 @@ namespace ScumStudio.Tests.Level;
 /// Owner: "a 2D map where I select an area: a whole sector, or any area I draw myself". <see cref="SpawnArea"/> answers
 /// which spawn places an area holds; <see cref="SpawnPlaceIndex"/> answers it for the island's ~30,000 places at once.
 /// </summary>
+[Collection(TimingCollection.Name)]
 public sealed class SpawnAreasTests
 {
     [Fact]

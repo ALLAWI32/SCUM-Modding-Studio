@@ -9,7 +9,7 @@ namespace ScumStudio.Mcp.Studio;
 public sealed partial class StudioTools
 {
     /// <summary>Pages of the app.</summary>
-    public static IReadOnlyList<string> Pages { get; } = ["map", "vehicles", "weapons", "assets", "projects", "settings"];
+    public static IReadOnlyList<string> Pages { get; } = ["map", "vehicles", "weapons", "items", "assets", "projects", "settings"];
 
     private IEnumerable<McpTool> UiTools(IStudioUi ui)
     {

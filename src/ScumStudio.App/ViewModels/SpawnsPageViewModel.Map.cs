@@ -384,7 +384,7 @@ public sealed partial class SpawnsPageViewModel
         bool Shown(SpawnPlaceKind kind) => Tab switch
         {
             SpawnTab.Vehicles => kind == SpawnPlaceKind.Vehicle,
-            SpawnTab.Zombies or SpawnTab.Npcs => kind is SpawnPlaceKind.Zone or SpawnPlaceKind.Character or SpawnPlaceKind.TaggedCharacter,
+            SpawnTab.Zombies or SpawnTab.Npcs => kind is SpawnPlaceKind.Zone or SpawnPlaceKind.Character or SpawnPlaceKind.TaggedCharacter or SpawnPlaceKind.CharacterGroup,
             SpawnTab.Animals => kind == SpawnPlaceKind.Animal,
             _ => false,
         };

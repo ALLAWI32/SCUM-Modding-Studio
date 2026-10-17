@@ -1390,7 +1390,9 @@ public sealed partial class LevelViewport : OpenGlControlBase
 
             BuildGizmoOverlay(_renderer, preview?.Root ?? SelectedRootWorld);
             DrawShapeHandles(_renderer);
-            if (BrushMode && _brushPointGl is { } brushAt)
+            SyncHoles();
+            DrawGroundOutlines(_renderer.Overlay);
+            if (BrushMode && !HoleMode && _brushPointGl is { } brushAt)
             {
                 // Over the ground, not a flat disc cut by every slope; about a point every half metre on big circles.
                 var radius = (float)BrushRadius * 100f;
@@ -1709,6 +1711,12 @@ public sealed partial class LevelViewport : OpenGlControlBase
     protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
     {
         base.OnPropertyChanged(change);
+        if (change.Property == GroundOutlinesProperty || change.Property == TerrainHolesProperty || change.Property == HoleModeProperty)
+        {
+            RequestNextFrameRendering(); // the hole's outline moved, or a hole was cut or filled
+            return;
+        }
+
         if (change.Property == BrushModeProperty || change.Property == BrushRadiusProperty || change.Property == OrientationProperty)
         {
             if (!BrushMode)
@@ -2012,6 +2020,11 @@ public sealed partial class LevelViewport : OpenGlControlBase
             return;
         }
 
+        if (TryHoleWheel(notches))
+        {
+            return; // the hole tool: the wheel sizes the hole
+        }
+
         // Zoom: fly towards the point under the cursor, half a second of flight per notch.
         var (_, direction) = ScreenRay(e.GetPosition(this));
         _camera.Position += direction * (notches * MathF.Max(_camera.MoveSpeed * 0.5f, 50f));
@@ -2255,6 +2268,7 @@ public sealed partial class LevelViewport : OpenGlControlBase
         }
 
         _pendingBrush = null;
+        SyncHoles();
         var (w, h) = PixelSize();
         var (origin, direction) = _camera.ScreenRay(brush.X, brush.Y, Math.Max(1, w), Math.Max(1, h));
         var centre = BrushCentre(origin, direction, pick);

@@ -47,6 +47,7 @@
                             ToolTip.Tip="{Tr Craftables.Gallery.Tip}" />
             </StackPanel>
           </Border>
+          <ToggleButton x:Name="CraftStockTab" IsChecked="{Binding IsStockOpen}" Content="{Tr Craftables.Stock}" ToolTip.Tip="{Tr Craftables.Stock.Tip}" />
           <Button x:Name="CraftUndoButton" Classes="ghost" Command="{Binding UndoCommand}" Content="{Tr Craftables.Undo}" ToolTip.Tip="{Tr Craftables.Undo.Tip}" />
         </StackPanel>
       </Grid>
@@ -198,7 +199,28 @@
                   <StackPanel Grid.Column="1" Spacing="6">
                     <TextBlock Text="{Tr Craftables.Name}" Classes="caption" />
                     <TextBox x:Name="CraftNameBox" Text="{Binding Name}" ToolTip.Tip="{Tr Craftables.Name.Tip}" />
-                    <TextBlock x:Name="CraftAssetName" Text="{Binding AssetName}" Classes="caption mono" TextTrimming="CharacterEllipsis" />
+                    <!-- HexTer: own asset names and folders, chosen until the first export (then the game saves built objects by them) -->
+                    <WrapPanel x:Name="CraftAssetPanel" Orientation="Horizontal" ItemSpacing="8" LineSpacing="6">
+                      <StackPanel Spacing="2">
+                        <TextBlock Text="{Tr Craftables.AssetNameLabel}" Classes="caption" />
+                        <TextBox x:Name="CraftAssetNameBox" MinWidth="220" Classes="mono" Text="{Binding AssetNameText}" IsReadOnly="{Binding IsLocked}"
+                                 ToolTip.Tip="{Tr Craftables.AssetName.Tip}" />
+                      </StackPanel>
+                      <StackPanel Spacing="2">
+                        <TextBlock Text="{Tr Craftables.Folder}" Classes="caption" />
+                        <AutoCompleteBox x:Name="CraftFolderBox" MinWidth="180" Text="{Binding FolderText, Mode=TwoWay}" FilterMode="StartsWith" MinimumPrefixLength="0"
+                                         IsEnabled="{Binding CanRename}" Watermark="{Tr Craftables.Folder.None}" ToolTip.Tip="{Tr Craftables.Folder.Tip}"
+                                         ItemsSource="{Binding $parent[UserControl].((vm:CraftablesPageViewModel)DataContext).Folders}" />
+                      </StackPanel>
+                      <Border x:Name="CraftLocked" Classes="badge" VerticalAlignment="Bottom" IsVisible="{Binding IsLocked}" ToolTip.Tip="{Tr Craftables.Locked.Tip}">
+                        <TextBlock Text="{Tr Craftables.Locked}" />
+                      </Border>
+                    </WrapPanel>
+                    <TextBlock x:Name="CraftNameProblem" Text="{Binding NameProblem}" Classes="warn caption wrap"
+                               IsVisible="{Binding NameProblem, Converter={x:Static ObjectConverters.IsNotNull}}" />
+                    <TextBlock x:Name="CraftFolderProblem" Text="{Binding FolderProblem}" Classes="warn caption wrap"
+                               IsVisible="{Binding FolderProblem, Converter={x:Static ObjectConverters.IsNotNull}}" />
+                    <TextBlock x:Name="CraftAssetName" Text="{Binding PathPreview}" Classes="caption mono" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Tr Craftables.AssetName.Tip}" />
                     <TextBlock x:Name="CraftTokenTaken" Text="{Binding TokenTaken}" Classes="warn caption wrap"
                                IsVisible="{Binding TokenTaken, Converter={x:Static ObjectConverters.IsNotNull}}" />
                     <TextBlock Text="{Binding Source}" Classes="caption mono" TextTrimming="CharacterEllipsis" />
@@ -247,7 +269,15 @@
                                            ItemsSource="{Binding $parent[UserControl].((vm:CraftablesPageViewModel)DataContext).Pictures}" />
                           <Button x:Name="CraftPictureReset" Classes="plain" Content="{Tr Craftables.Picture.Reset}" Command="{Binding ResetIconCommand}"
                                   ToolTip.Tip="{Tr Craftables.Picture.Reset.Tip}" />
+                          <!-- Jenni and the owner: "a bed must show a bed": drawn from its 3D model, or a picture of the user's. -->
+                          <Button x:Name="CraftPictureModel" Classes="plain" Content="{Tr Craftables.Picture.Model}" Command="{Binding UseModelPictureCommand}"
+                                  ToolTip.Tip="{Tr Craftables.Picture.Model.Tip}" />
+                          <Button x:Name="CraftPictureImport" Classes="plain" Content="{Tr Craftables.Picture.Import}"
+                                  Command="{Binding $parent[UserControl].((vm:CraftablesPageViewModel)DataContext).ImportPictureCommand}" CommandParameter="{Binding}"
+                                  ToolTip.Tip="{Tr Craftables.Picture.Import.Tip}" />
                         </StackPanel>
+                        <TextBlock x:Name="CraftPictureNote" Classes="caption" Text="{Binding PictureNote}" IsVisible="{Binding PictureNote, Converter={x:Static ObjectConverters.IsNotNull}}"
+                                   TextWrapping="Wrap" MaxWidth="460" />
                       </StackPanel>
                       <StackPanel Spacing="2">
                         <TextBlock Text="{Tr Craftables.MadeIn}" Classes="caption" />
@@ -310,11 +340,13 @@
                             Command="{Binding $parent[UserControl].((vm:CraftablesPageViewModel)DataContext).PickIngredientCommand}" />
                   </StackPanel>
                 </DockPanel>
-                <!-- Each ingredient as its 3D picture, how the game knows it (badge), amount, tool, Change and Remove. -->
+                <TextBlock x:Name="CraftLevelsNote" Text="{Tr Craftables.Levels.Note}" Classes="caption wrap" />
+                <!-- Each ingredient as its 3D picture, how the game knows it (badge), amount, tool, Change and Remove; per level below. -->
                 <ItemsControl x:Name="CraftIngredients" ItemsSource="{Binding Ingredients}">
                   <ItemsControl.ItemTemplate>
                     <DataTemplate x:DataType="vm:IngredientRowViewModel">
-                      <Grid ColumnDefinitions="Auto,*,110,Auto,Auto,Auto" ColumnSpacing="8" Margin="0,3">
+                      <StackPanel Spacing="2" Margin="0,3">
+                      <Grid ColumnDefinitions="Auto,*,110,Auto,Auto,Auto,Auto" ColumnSpacing="8">
                         <Border Grid.Column="0" Classes="craftThumb">
                           <Panel DataContext="{Binding Picture}" x:DataType="vm:IngredientTileViewModel">
                             <c:GlyphIcon Kind="{Binding IconKey}" IconSize="22" HorizontalAlignment="Center" VerticalAlignment="Center"
@@ -330,12 +362,20 @@
                             <TextBlock Text="{Binding Detail}" Classes="caption mono" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
                           </StackPanel>
                         </StackPanel>
-                        <NumericUpDown Grid.Column="2" Value="{Binding Amount}" Minimum="1" Maximum="9999" Increment="1" FormatString="0" VerticalAlignment="Center" ToolTip.Tip="{Tr Craftables.Amount.Tip}" />
+                        <NumericUpDown Grid.Column="2" Value="{Binding Amount}" Minimum="1" Maximum="9999" Increment="1" FormatString="0" VerticalAlignment="Center" ToolTip.Tip="{Tr Craftables.Amount.Tip}"
+                                       IsVisible="{Binding !PerLevel}" />
                         <CheckBox Grid.Column="3" IsChecked="{Binding IsTool}" Content="{Tr Craftables.Tool}" ToolTip.Tip="{Tr Craftables.Tool.Tip}" />
-                        <Button Grid.Column="4" Classes="ghost" Content="{Tr Craftables.Ingredient.Change}" ToolTip.Tip="{Tr Craftables.Ingredient.Change.Tip}"
+                        <CheckBox x:Name="CraftPerLevel" Grid.Column="4" IsChecked="{Binding PerLevel}" Content="{Tr Craftables.Levels.PerLevel}" ToolTip.Tip="{Tr Craftables.Levels.PerLevel.Tip}" />
+                        <Button Grid.Column="5" Classes="ghost" Content="{Tr Craftables.Ingredient.Change}" ToolTip.Tip="{Tr Craftables.Ingredient.Change.Tip}"
                                 Command="{Binding $parent[UserControl].((vm:CraftablesPageViewModel)DataContext).ChangeIngredientCommand}" CommandParameter="{Binding}" />
-                        <Button Grid.Column="5" Classes="ghost" Content="{Tr Craftables.RemoveIngredient}" Command="{Binding RemoveCommand}" ToolTip.Tip="{Tr Craftables.RemoveIngredient.Tip}" />
+                        <Button Grid.Column="6" Classes="ghost" Content="{Tr Craftables.RemoveIngredient}" Command="{Binding RemoveCommand}" ToolTip.Tip="{Tr Craftables.RemoveIngredient.Tip}" />
                       </Grid>
+                      <Panel Margin="64,0,0,0" IsVisible="{Binding PerLevel}">
+                        <p:SkillLevelsEditor DataContext="{Binding Levels}" />
+                      </Panel>
+                      <TextBlock x:Name="CraftAutoLevels" Text="{Binding AutoLevelsText}" Classes="caption" Margin="64,0,0,0" IsVisible="{Binding !PerLevel}"
+                                 ToolTip.Tip="{Tr Craftables.Levels.Auto.Tip}" />
+                      </StackPanel>
                     </DataTemplate>
                   </ItemsControl.ItemTemplate>
                 </ItemsControl>
@@ -346,6 +386,76 @@
             </ScrollViewer>
 
             <p:CraftIngredientPicker x:Name="CraftIngredientPicker" DataContext="{Binding Picker}" />
+
+            <!-- The game's own recipes with the user's amounts per skill level: an explicit override, shipped at the game's path. -->
+            <Border x:Name="CraftStockPanel" Classes="dialog" Margin="6" IsVisible="{Binding IsStockOpen}">
+              <DockPanel Margin="12">
+                <DockPanel DockPanel.Dock="Top" Margin="2,0,0,8">
+                  <Button x:Name="CraftStockClose" DockPanel.Dock="Right" Classes="ghost" VerticalAlignment="Top" Content="{Tr Craftables.Stock.Close}"
+                          ToolTip.Tip="{Tr Craftables.Stock.Close.Tip}" Command="{Binding CloseStockCommand}" />
+                  <StackPanel Spacing="3">
+                    <TextBlock Text="{Tr Craftables.Stock.Title}" Classes="h3" />
+                    <TextBlock Text="{Tr Craftables.Stock.Hint}" Classes="caption wrap" />
+                    <TextBlock x:Name="CraftStockWarning" Text="{Tr Craftables.Stock.Warning}" Classes="warn caption wrap" />
+                  </StackPanel>
+                </DockPanel>
+                <StackPanel DockPanel.Dock="Top" Spacing="6" Margin="0,0,0,8">
+                  <TextBox x:Name="CraftStockSearch" Classes="search" Text="{Binding StockQuery}" Watermark="{Tr Craftables.Stock.Search}" ToolTip.Tip="{Tr Craftables.Stock.Search.Tip}" />
+                  <ListBox x:Name="CraftStockResults" Classes="plain" ItemsSource="{Binding StockResults}" MaxHeight="160" IsVisible="{Binding HasStockResults}">
+                    <ListBox.ItemTemplate>
+                      <DataTemplate x:DataType="vm:StockRecipeChoice">
+                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
+                          <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                            <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" />
+                            <TextBlock Text="{Binding Folder}" Classes="caption" TextTrimming="CharacterEllipsis" />
+                          </StackPanel>
+                          <Button Grid.Column="1" Classes="ghost" Content="{Tr Craftables.Stock.Add}" ToolTip.Tip="{Tr Craftables.Stock.Add.Tip}"
+                                  Command="{Binding $parent[UserControl].((vm:CraftablesPageViewModel)DataContext).AddStockRecipeCommand}" CommandParameter="{Binding}" />
+                        </Grid>
+                      </DataTemplate>
+                    </ListBox.ItemTemplate>
+                  </ListBox>
+                  <TextBlock Text="{Tr Craftables.Stock.None}" Classes="muted" IsVisible="{Binding HasNoRecipeOverrides}" />
+                </StackPanel>
+                <ScrollViewer x:Name="CraftStockScroll" HorizontalScrollBarVisibility="Disabled">
+                  <ItemsControl x:Name="CraftStockRecipes" ItemsSource="{Binding RecipeOverrides}">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="vm:StockRecipeRowViewModel">
+                        <Border Classes="card" Padding="10" Margin="0,0,0,8">
+                          <StackPanel Spacing="6">
+                            <DockPanel>
+                              <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="6">
+                                <Button x:Name="CraftStockReset" Classes="ghost" Content="{Tr Craftables.Stock.Reset}" ToolTip.Tip="{Tr Craftables.Stock.Reset.Tip}" Command="{Binding ResetToGameCommand}" />
+                                <Button x:Name="CraftStockRemove" Classes="ghost" Content="{Tr Craftables.Stock.Remove}" ToolTip.Tip="{Tr Craftables.Stock.Remove.Tip}" Command="{Binding RemoveCommand}" />
+                              </StackPanel>
+                              <StackPanel Orientation="Horizontal" Spacing="8">
+                                <TextBlock Text="{Binding Name}" FontWeight="SemiBold" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Recipe}" />
+                                <Border Classes="chip" VerticalAlignment="Center" ToolTip.Tip="{Tr Craftables.Stock.Skill.Tip}"><TextBlock Text="{Binding SkillText}" /></Border>
+                              </StackPanel>
+                            </DockPanel>
+                            <TextBlock Text="{Binding Problem}" Classes="warn caption wrap" IsVisible="{Binding HasProblem}" />
+                            <ItemsControl ItemsSource="{Binding Slots}">
+                              <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:StockSlotRowViewModel">
+                                  <StackPanel Spacing="2" Margin="0,3">
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                      <TextBlock Text="{Binding Title}" Classes="mono" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                                      <Border Classes="chip" IsVisible="{Binding IsTool}" ToolTip.Tip="{Tr Craftables.Tool.Tip}"><TextBlock Text="{Tr Craftables.Tool}" /></Border>
+                                      <TextBlock Text="{Binding GameText}" Classes="caption" VerticalAlignment="Center" ToolTip.Tip="{Tr Craftables.Stock.Game.Tip}" />
+                                    </StackPanel>
+                                    <p:SkillLevelsEditor DataContext="{Binding Levels}" />
+                                  </StackPanel>
+                                </DataTemplate>
+                              </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                          </StackPanel>
+                        </Border>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                </ScrollViewer>
+              </DockPanel>
+            </Border>
           </Panel>
         </Border>
       </Grid>

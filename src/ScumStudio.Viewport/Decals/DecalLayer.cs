@@ -66,6 +66,12 @@ public sealed record DecalLayer
     /// <summary>A mirrored copy on the other side of the vehicle (across its Y = 0 plane).</summary>
     public bool Mirror { get; init; }
 
+    /// <summary>Not drawn and not baked, but kept in the list (the layer list's eye).</summary>
+    public bool Hidden { get; init; }
+
+    /// <summary>Cannot be picked, dragged, nudged or turned in the 3D view (the layer list's lock).</summary>
+    public bool Locked { get; init; }
+
     /// <summary>0 = invisible, 1 = solid.</summary>
     public float Opacity { get; init; } = 1f;
 

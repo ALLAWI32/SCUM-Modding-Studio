@@ -54,7 +54,12 @@ public sealed partial class ModuleItemViewModel : ThumbnailItem
     public string Detail => $"{KindLabel(Asset.Kind)} · {Asset.Category}" + (CloneOf is null ? string.Empty : Localization.Loc.F("Module.CloneOf", ShortName(CloneOf)));
 
     /// <summary>Icon resource key.</summary>
-    public string IconKey => Asset.Kind == ModdableKind.Vehicle ? "Icon.Vehicle" : "Icon.Weapon";
+    public string IconKey => Asset.Kind switch
+    {
+        ModdableKind.Vehicle => "Icon.Vehicle",
+        ModdableKind.Item => "Icon.Basket",
+        _ => "Icon.Weapon",
+    };
 
     /// <summary>Number of edited values in this asset's packages.</summary>
     [ObservableProperty]
@@ -84,6 +89,7 @@ public sealed partial class ModuleItemViewModel : ThumbnailItem
         ModdableKind.Magazine => Localization.Loc.T("Module.Kind.Magazine"),
         ModdableKind.Ammo => Localization.Loc.T("Module.Kind.Ammo"),
         ModdableKind.Projectile => Localization.Loc.T("Module.Kind.Projectile"),
+        ModdableKind.Item => Localization.Loc.T("Module.Kind.Item"),
         _ => kind.ToString(),
     };
 

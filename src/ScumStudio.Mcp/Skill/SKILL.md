@@ -63,8 +63,10 @@ designer sitting next to the owner: small steps, look at the result, explain wha
   parent (e.g. RPK-74 inherits from AK47) or on the projectile/ammo (`BP_WeaponBullet_*`, `Cal_*`). Damage of a round
   lives on the projectile; which projectile a round fires lives on the ammo (`Cal_*.ProjectileClass`).
 - `clone_item` makes a new item/vehicle under a new name with an in-game `caption`; the export registers it so
-  `#SpawnItem <Name>` / `#SpawnVehicle BPC_<Name>` work in game. `remove_item_clone` undoes it.
-- `show_item` opens it on the Vehicles/Weapons page so the user can see the values.
+  `#SpawnItem <Name>` / `#SpawnVehicle BPC_<Name>` work in game. `remove_item_clone` undoes it. Any inventory item can
+  be cloned (kind `Item`: `Copper_Coins`, `Painkillers_01`, `Nails` …); its stack size or uses is the `_ES`
+  `MaxQuantity` (`StackableEntityComponentSetup_0` / `DiscreteUsageItemEntityComponentSetup_0`) when the item has one.
+- `show_item` opens it on the Vehicles, Weapons or Items page so the user can see the values.
 
 ## Export
 

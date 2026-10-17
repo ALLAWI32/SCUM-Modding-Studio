@@ -24,6 +24,13 @@ public enum SpawnPlaceKind
 
     /// <summary>A hunting area (<c>HuntingBiomes</c>): a circle where animals of its biome live.</summary>
     Animal,
+
+    /// <summary>
+    /// A group of zombie / NPC points (<c>EncounterGroupedCharacterSpawnPoints</c>: a box and the posts in it): where an
+    /// encounter that spawns a group (<c>_isGroupSpawn</c>, as the armed NPC encounters do) puts its characters together.
+    /// The place stands on its first post; <see cref="SpawnPlace.Points"/> holds them all.
+    /// </summary>
+    CharacterGroup,
 }
 
 /// <summary>
@@ -43,6 +50,9 @@ public sealed record SpawnPlace(SpawnPlaceKind Kind, int Index, FTransform Trans
     /// <summary>The actor name of a place the project added (a copy or a new place); null for a stock place.</summary>
     public string? Name { get; init; }
 
+    /// <summary>A <see cref="SpawnPlaceKind.CharacterGroup"/>'s posts (world space, centimetres; the first is where it stands); empty for other kinds.</summary>
+    public IReadOnlyList<FVector> Points { get; init; } = [];
+
     /// <summary>The name of the place's actor in the map's document (<c>VehicleSpawn_00123</c>, <c>NewVehicleSpawn_0001</c>).</summary>
     public string ActorName => Name ?? SpawnPlaces.ActorName(Kind, Index);
 }
@@ -59,6 +69,9 @@ public static class SpawnPlaces
     /// <summary>The asset that holds the spawn places, and the "level" path of their document.</summary>
     public const string StaticDataPath = "/Game/ConZ_Files/Maps/The_Island/The_Island_LevelStaticData";
 
+    /// <summary>The most posts a new group of zombie / NPC points takes (the island's own groups hold 2 to 19).</summary>
+    public const int MaxGroupPosts = 24;
+
     /// <summary>Synthetic class names of the place actors (kept by <see cref="KindOfClass"/>).</summary>
     public static string ClassOf(SpawnPlaceKind kind) => kind switch
     {
@@ -66,6 +79,7 @@ public static class SpawnPlaces
         SpawnPlaceKind.Character => "CharacterSpawnPlace",
         SpawnPlaceKind.TaggedCharacter => "TaggedCharacterSpawnPlace",
         SpawnPlaceKind.Zone => "ThreatZonePlace",
+        SpawnPlaceKind.CharacterGroup => "CharacterGroupPlace",
         _ => "HuntingAreaPlace",
     };
 
@@ -77,6 +91,7 @@ public static class SpawnPlaces
         "TaggedCharacterSpawnPlace" => SpawnPlaceKind.TaggedCharacter,
         "ThreatZonePlace" => SpawnPlaceKind.Zone,
         "HuntingAreaPlace" => SpawnPlaceKind.Animal,
+        "CharacterGroupPlace" => SpawnPlaceKind.CharacterGroup,
         _ => null,
     };
 
@@ -87,6 +102,7 @@ public static class SpawnPlaces
         SpawnPlaceKind.Character => "EncounterLegacyCharacterSpawnPoints",
         SpawnPlaceKind.TaggedCharacter => "EncounterTaggedCharacterSpawnPoints",
         SpawnPlaceKind.Zone => "StaticZoneDescriptions",
+        SpawnPlaceKind.CharacterGroup => "EncounterGroupedCharacterSpawnPoints",
         _ => "HuntingBiomes",
     };
 
@@ -100,6 +116,7 @@ public static class SpawnPlaces
         SpawnPlaceKind.Character => "ZombieSpawn_",
         SpawnPlaceKind.TaggedCharacter => "TaggedSpawn_",
         SpawnPlaceKind.Zone => "ThreatZone_",
+        SpawnPlaceKind.CharacterGroup => "NpcGroup_",
         _ => "HuntingArea_",
     } + index.ToString("00000", CultureInfo.InvariantCulture);
 
@@ -194,6 +211,11 @@ public static class SpawnPlaces
             case SpawnPlaceKind.Zone:
                 return TransformOf(item, "_transform") is { } zt
                     ? new SpawnPlace(kind, index, zt, ImportName(Member(item, "_zoneData")?.Value), Float(item, "_semiXAxisSize"), Float(item, "_semiYAxisSize"))
+                    : null;
+            case SpawnPlaceKind.CharacterGroup:
+                var posts = GroupPosts(item);
+                return posts.Count > 0
+                    ? new SpawnPlace(kind, index, posts[0], Member(item, "Type")?.Value is EnumValue g ? g.Value[(g.Value.LastIndexOf(':') + 1)..] : string.Empty) { Points = posts.Select(p => p.Translation).ToList() }
                     : null;
             default:
                 var biome = Member(item, "PopulationParameters")?.Value is StructValue p ? ImportName(Member(p, "BiomeData")?.Value) : string.Empty;
@@ -308,7 +330,7 @@ public static class SpawnPlaces
             }
 
             var edited = state.GetTransformOverride(actor) is { } value
-                ? At(place.Kind, place.Group, value, place.Transform.Scale3D) with { Index = place.Index }
+                ? At(place.Kind, place.Group, value, place.Transform.Scale3D) with { Index = place.Index, Points = MovePosts(place.Points, place.Transform, value.ToTransform()) }
                 : place;
             result.Add(SpawnChoices.PropertyOf(place.Kind) is { } property && state.GetSpawnChoice(actor, property) is { } choice
                 ? edited with { Group = SettingName(choice) }
@@ -327,10 +349,10 @@ public static class SpawnPlaces
                     var group = choice ?? (SpawnChoices.PropertyOf(source.Kind) is { } property && !state.IsDeleted(stockActor)
                         ? state.GetSpawnChoice(stockActor, property)
                         : null);
-                    copies.Add(At(source.Kind, group ?? original.Group, transform, original.Transform.Scale3D) with { Name = actor.Actor });
+                    copies.Add(At(source.Kind, group ?? original.Group, transform, original.Transform.Scale3D) with { Name = actor.Actor, Points = MovePosts(original.Points, original.Transform, transform.ToTransform()) });
                     break;
                 case Editing.AddSpawnPlaceOp place:
-                    created.Add(At(place.Kind, choice ?? place.Setting, transform) with { Name = actor.Actor });
+                    created.Add(At(place.Kind, choice ?? place.Setting, transform) with { Name = actor.Actor, Points = place.PostsAt(transform) });
                     break;
             }
         }
@@ -360,6 +382,16 @@ public static class SpawnPlaces
             : new SpawnPlace(kind, -1, transform, SettingName(setting), sizeX, sizeY);
     }
 
+    /// <summary>
+    /// A group's posts (<paramref name="points"/>, world) after the group moved from where it stood (<paramref name="from"/>,
+    /// its first post) to <paramref name="to"/>: each keeps its place relative to the first, turned with it (scale ignored).
+    /// </summary>
+    public static IReadOnlyList<FVector> MovePosts(IReadOnlyList<FVector> points, FTransform from, FTransform to)
+    {
+        ArgumentNullException.ThrowIfNull(points);
+        return points.Select(p => to.TransformPositionNoScale(from.Rotation.Inverse().RotateVector(p - from.Translation))).ToList();
+    }
+
     /// <summary>The asset name a setting stands for: <c>MTZ_Village</c> for itself or for its package path (<c>/Game/…/MTZ_Village</c>, <c>….MTZ_Village</c>).</summary>
     public static string SettingName(string setting)
     {
@@ -368,13 +400,14 @@ public static class SpawnPlaces
         return leaf[(leaf.IndexOf('.') + 1)..];
     }
 
-    private static FTransform? TransformOf(StructValue item, string name)
-    {
-        if (Member(item, name)?.Value is not StructValue t)
-        {
-            return null;
-        }
+    /// <summary>The posts of a group of zombie / NPC points (its <c>SpawnTransforms</c>), in stored order.</summary>
+    internal static List<FTransform> GroupPosts(StructValue item) =>
+        Member(item, "SpawnTransforms")?.Value is ArrayValue posts ? posts.Items.OfType<StructValue>().Select(ToTransform).ToList() : [];
 
+    private static FTransform? TransformOf(StructValue item, string name) => Member(item, name)?.Value is StructValue t ? ToTransform(t) : null;
+
+    private static FTransform ToTransform(StructValue t)
+    {
         // Normalized: the island data stores some turns as not-quite-unit quaternions, and their angles came out a little off,
         // so every copy of a tilted zombie place stood a bit more crooked (Discord report).
         var q = Member(t, "Rotation")?.Value is QuatValue r ? new FQuat(r.X, r.Y, r.Z, r.W).GetNormalized() : FQuat.Identity;

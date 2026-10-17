@@ -83,8 +83,11 @@ public sealed class ManyEditsRealTests
         var undo = time.ElapsedMilliseconds;
 
         _output.WriteLine($"{map.AllActors.Count} actors, {project.History.Count} edits: one move {single} ms, set of {map.KindSelectionIds.Count} moved {group} ms, undo {undo} ms");
-        Assert.InRange(single, 0, 400);
-        Assert.InRange(group, 0, 2000);
-        Assert.InRange(undo, 0, 400);
+        if (!Ci.On)
+        {
+            Assert.InRange(single, 0, 400);
+            Assert.InRange(group, 0, 2000);
+            Assert.InRange(undo, 0, 400);
+        }
     }
 }

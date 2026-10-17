@@ -12,7 +12,7 @@ public sealed record PackagePair(string Old, string New);
 /// the pristine ones (see <c>ScumStudio.Modding.Cloning</c>); the exporter builds them and registers them in
 /// <c>AssetRegistry.bin</c>. Its inverse is <see cref="RemoveAssetCloneOp"/>.
 /// </summary>
-/// <param name="Kind">What was cloned: <c>vehicle</c>, <c>weapon</c>, <c>magazine</c>, <c>ammo</c> or <c>projectile</c>.</param>
+/// <param name="Kind">What was cloned: <c>vehicle</c>, <c>weapon</c>, <c>magazine</c>, <c>ammo</c>, <c>projectile</c> or <c>item</c> (any other inventory item).</param>
 /// <param name="Template">The stock primary package.</param>
 /// <param name="NewPrimary">The new primary package.</param>
 /// <param name="Packages">Every cloned package, the primary first.</param>

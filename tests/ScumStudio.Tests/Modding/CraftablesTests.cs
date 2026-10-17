@@ -183,8 +183,10 @@ public sealed class CraftablesTests
             Assert.Equal("MyModCraftables", result!.ModName);
             Assert.Equal("pakchunk901-MyModCraftables_P.pak", Path.GetFileName(result.PakPath));
             Assert.True(File.Exists(result.PakPath) && File.Exists(result.SigPath));
-            Assert.All(result.Warnings, w => Assert.True(w.Contains("not exported", StringComparison.Ordinal), w)); // only the two native-only settings
-            Assert.Equal(2, result.Warnings.Count);
+            // No renderer here: a mesh craftable keeps its template's picture and says so (CraftablesExporter.MakePictures).
+            var warnings = result.Warnings.Where(w => !w.Contains("cannot draw 3D models", StringComparison.Ordinal)).ToList();
+            Assert.All(warnings, w => Assert.True(w.Contains("not exported", StringComparison.Ordinal), w)); // only the two native-only settings
+            Assert.Equal(2, warnings.Count);
 
             CookedPackage Staged(string package)
             {
@@ -523,7 +525,7 @@ public sealed class CraftablesTests
                     new Craftable { Name = "Crate", Source = "y.obj", Mesh = Import("SS_Kept"), Imported = "imports/SS_Kept", Ingredients = [new("CI_Plank", 2)] },
                 ],
             };
-            var result = await CraftablesExporter.ExportAsync(craftables, "MyMod", catalog, new ExportOptions { OutputDirectory = Path.Combine(dir, "out"), WritePak = false }, ProjectSourceRole.Client);
+            var result = await CraftablesExporter.ExportAsync(craftables, "MyMod", catalog, new ExportOptions { OutputDirectory = Path.Combine(dir, "out"), WritePak = false, Validate = false }, ProjectSourceRole.Client); // the imports' stand-in files are no packages to read back
             Assert.NotNull(result);
             Assert.Contains(result!.Warnings, w => w.StartsWith("Oak-Table: left out", StringComparison.Ordinal));
             var imports = Path.Combine(result.StagingDirectory, "SCUM", "Content", "ScumStudio", "Imports");

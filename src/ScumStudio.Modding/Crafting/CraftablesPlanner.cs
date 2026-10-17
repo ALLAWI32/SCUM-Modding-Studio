@@ -17,7 +17,11 @@ namespace ScumStudio.Modding.Crafting;
 /// <param name="Item">The item a station or power object spawns, or null.</param>
 /// <param name="Tag">A station's ingredient tag (<c>CI_SS_*</c>), or null.</param>
 /// <param name="ItemRecipe">A second recipe that crafts it into the bag (<see cref="CraftUse.Both"/>), or null.</param>
-public sealed record CraftablePackages(string Name, string Recipe, string Product, string? Item, string? Tag, string? ItemRecipe = null);
+public sealed record CraftablePackages(string Name, string Recipe, string Product, string? Item, string? Tag, string? ItemRecipe = null)
+{
+    /// <summary>The craftable's asset name (<see cref="Craftable.Token"/>): the export marks it exported (<see cref="CraftablesFile.MarkExported"/>).</summary>
+    public string? Token { get; init; }
+}
 
 /// <summary>
 /// A craftable the export can neither ship nor leave out: a Craftables pak without it would remove what players built with
@@ -51,6 +55,12 @@ public sealed record CraftablesPlan(AssetModRequest Request, IReadOnlyList<Craft
 {
     /// <summary>The stock packages the plan changes in place, each one the user opted in to (an item's entity setup that gets a new tag).</summary>
     public IReadOnlyList<string> StockOverrides { get; init; } = [];
+
+    /// <summary>
+    /// The pictures the export makes (a craftable without a picture of its own, one drawn from its model or a picture file):
+    /// the export draws or reads each into <see cref="AssetModRequest.Pictures"/>, or drops it (<see cref="CraftPictures.Without"/>).
+    /// </summary>
+    public IReadOnlyList<CraftPicture> Pictures { get; init; } = [];
 }
 
 /// <summary>
@@ -160,7 +170,9 @@ public static partial class CraftablesPlanner
         var sections = new Dictionary<string, CraftCategory>(StringComparer.OrdinalIgnoreCase);
         var skinless = new List<string>();
         var tokens = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var newLeaves = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase); // package name -> the craftable that has it
         var pickedItems = new PickedItems(catalog);
+        var pictures = new List<CraftPicture>();
 
         // Stations first, each after the station it needs: a recipe asks for a station's tag only when that station is
         // really built (name -> its tag).
@@ -172,6 +184,12 @@ public static partial class CraftablesPlanner
             if (!CraftablesFile.IsValidToken(token) || !tokens.Add(token))
             {
                 warnings.Add($"{craftable.Name}: left out (its asset name {token} is not valid or another craftable has it).");
+                continue;
+            }
+
+            if (CraftableNames.CheckFolder(craftable.Folder) != CraftNameProblem.None)
+            {
+                LeaveOut(craftable, $"its folder '{craftable.Folder}' is not valid", "give it a folder of letters, digits and '_' (sub-folders with '/'), or none", warnings);
                 continue;
             }
 
@@ -235,7 +253,18 @@ public static partial class CraftablesPlanner
 
             try
             {
-                var (plan, packages) = PlanOne(catalog, craftable, token, warnings);
+                var (plan, packages) = PlanOne(catalog, craftable, token, pictures, warnings);
+                if (plan.Packages.Select(p => PackageMap.Leaf(p.Value)).FirstOrDefault(l => newLeaves.ContainsKey(l)) is { } shared)
+                {
+                    LeaveOut(craftable, $"its package {shared} has the name of one of {newLeaves[shared]}", "give it another asset name", warnings);
+                    continue;
+                }
+
+                foreach (var leaf in plan.Packages.Select(p => PackageMap.Leaf(p.Value)))
+                {
+                    newLeaves[leaf] = craftable.Name;
+                }
+
                 clones.Add(plan);
                 entries.Add(packages);
                 if (packages.Tag is { } tag)
@@ -278,7 +307,7 @@ public static partial class CraftablesPlanner
         }
 
         var request = new AssetModRequest(clones, edits) { Ingredients = ingredients, RecipeCategories = sections, SkinlessRecipes = skinless };
-        return pickedItems.Finish(request, entries, warnings);
+        return pickedItems.Finish(request, entries, warnings) with { Pictures = pictures };
     }
 
     /// <summary>
@@ -381,11 +410,11 @@ public static partial class CraftablesPlanner
         return order;
     }
 
-    private static (ClonePlan Plan, CraftablePackages Packages) PlanOne(AssetCatalog catalog, Craftable craftable, string token, List<string> warnings)
+    private static (ClonePlan Plan, CraftablePackages Packages) PlanOne(AssetCatalog catalog, Craftable craftable, string token, List<CraftPicture> pictures, List<string> warnings)
     {
         var packages = new List<KeyValuePair<string, string>>();
         var redirects = new List<KeyValuePair<string, string>>();
-        void Add(string template, string leaf) => packages.Add(new(PackageMap.Normalize(template), PackageMap.Folder(PackageMap.Normalize(template)) + "/" + leaf));
+        void Add(string template, string leaf) => packages.Add(new(PackageMap.Normalize(template), InFolder(template, craftable.Folder, leaf)));
 
         CraftablePackages result;
         switch (craftable.Kind)
@@ -395,7 +424,7 @@ public static partial class CraftablesPlanner
                 Add(StationElement, "BP_" + token);
                 Add(StationItem, token);
                 Add(StationItem + "_ES", token + "_ES");
-                Add(StationTag, "CI_" + token);
+                packages.Add(new(PackageMap.Normalize(StationTag), PackageMap.Folder(StationTag) + "/CI_" + token)); // tags stay in the tag folder (RecipeIngredients.TagPath)
                 result = new CraftablePackages(craftable.Name, packages[0].Value, packages[1].Value, packages[2].Value, packages[4].Value);
                 break;
             case CraftKind.Item:
@@ -444,16 +473,25 @@ public static partial class CraftablesPlanner
             }
         }
 
-        // The recipe shows the craftable's picture, not its template's.
-        AddIconRedirect(catalog, craftable, packages.First(p => string.Equals(p.Value, result.Recipe, StringComparison.OrdinalIgnoreCase)).Key, redirects, warnings);
+        // The recipe shows the craftable's picture, not its template's (one drawn from its model when it has none).
+        var recipeTemplate = packages.First(p => string.Equals(p.Value, result.Recipe, StringComparison.OrdinalIgnoreCase)).Key;
+        var picture = AddIconRedirect(catalog, craftable, ShownIcon(catalog, recipeTemplate, packages, result), result.Recipe, token, redirects, warnings);
 
         // A path the source already has is never shipped over, nor is the craftable silently left out (a pak without it
         // would remove what players built): the export stops and names the pak.
-        foreach (var (_, newPath) in packages)
+        foreach (var newPath in packages.Select(p => p.Value).Append(picture?.Package).OfType<string>())
         {
             if (catalog.PackageExists(newPath))
             {
                 throw new CraftableConflictException(craftable.Name, newPath, catalog.ContainerOf(newPath));
+            }
+
+            // The asset manager knows a primary asset by its last name only: the same name in another folder is the same asset.
+            if (CraftableNames.GameLeaves(catalog).TryGetValue(PackageMap.Leaf(newPath), out var other))
+            {
+                throw new CraftableExportException(craftable.Name, craftable.IsLocked
+                    ? $"{craftable.Name}: {other} has the name of its {PackageMap.Leaf(newPath)} (in {catalog.ContainerOf(other) ?? "the game files"}). Two assets of one name clash in the game, and this craftable's name stays (it was exported): take that pak out of what the studio reads as the game, then export again."
+                    : $"{craftable.Name}: {other} has the name of its {PackageMap.Leaf(newPath)} (in {catalog.ContainerOf(other) ?? "the game files"}). Two assets of one name clash in the game: give the craftable another asset name, then export again.");
             }
         }
 
@@ -462,7 +500,30 @@ public static partial class CraftablesPlanner
             warnings.Add($"{craftable.Name}: keeps the stock look (the template shows no static mesh import).");
         }
 
-        return (new ClonePlan(packages[0].Key, result.Product, packages) { Redirects = redirects }, result);
+        if (picture is not null)
+        {
+            pictures.Add(picture with { Recipe = result.Recipe });
+        }
+
+        return (new ClonePlan(packages[0].Key, result.Product, packages) { Redirects = redirects }, result with { Token = token });
+    }
+
+    /// <summary>
+    /// The new package <paramref name="leaf"/> of a copy of <paramref name="template"/>: in the template's folder, or in
+    /// <paramref name="folder"/> inside it (<see cref="Craftable.Folder"/>; the game scans its recipe and element folders with
+    /// their sub-folders, as its own <c>Placeables/AsianDecorDLC</c> and <c>BaseElements/AsianDecorPack</c> show).
+    /// </summary>
+    internal static string InFolder(string template, string? folder, string leaf) =>
+        PackageMap.Folder(PackageMap.Normalize(template)) + (folder is null ? string.Empty : "/" + folder) + "/" + leaf;
+
+    /// <summary>
+    /// The family source of an element craftable: its <see cref="ElementSettings.Template"/> when it spawns another container
+    /// item (the fridge, whose <see cref="Craftable.Source"/> is the fridge item), else its source.
+    /// </summary>
+    public static string ElementSource(Craftable craftable)
+    {
+        ArgumentNullException.ThrowIfNull(craftable);
+        return craftable.Element is { Storage.Item: { Length: > 0 }, Template: { Length: > 0 } template } ? template : craftable.Source;
     }
 
     private static void AddEdits(AssetCatalog catalog, Craftable craftable, ClonePlan plan, CraftablePackages packages, Dictionary<string, IReadOnlyList<TunableEdit>> edits)

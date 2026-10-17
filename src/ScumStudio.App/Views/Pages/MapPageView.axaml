@@ -5,6 +5,7 @@
              xmlns:conv="using:ScumStudio.App.Converters"
              xmlns:loc="using:ScumStudio.App.Localization"
              xmlns:cs="using:ScumStudio.Core.Settings"
+             xmlns:spawns="using:ScumStudio.Level.Spawns"
              x:Class="ScumStudio.App.Views.Pages.MapPageView"
              x:DataType="vm:MapPageViewModel">
   <UserControl.DataTemplates>
@@ -376,6 +377,16 @@
               <Button.Flyout>
                 <Flyout Placement="BottomEdgeAlignedLeft">
                   <StackPanel x:Name="LandscapePanel" Spacing="10" Width="420">
+                    <!-- Owner 2026-10-16: an opening in the ground for a bunker. Experimental (Settings): the export opens the
+                         collision only; the game still draws the ground over the hole. -->
+                    <StackPanel Spacing="6" IsVisible="{Binding HolesEnabled}">
+                      <TextBlock Text="{Tr Map.Hole.Title}" Classes="h3" />
+                      <TextBlock Text="{Tr Map.Hole.Caption}" Classes="caption wrap" />
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <ToggleButton x:Name="HoleToolButton" Classes="ghost" Padding="8,4" IsChecked="{Binding HoleTool}" Content="{Tr Map.Hole.Tool}" ToolTip.Tip="{Tr Map.Hole.Tool.Tip}" />
+                        <TextBlock Text="{Binding HoleCountText}" Classes="caption" VerticalAlignment="Center" />
+                      </StackPanel>
+                    </StackPanel>
                     <StackPanel Spacing="4" IsVisible="False">
                       <TextBlock Text="{Tr Map.Looks.Title}" Classes="h3" />
                       <TextBlock Text="{Tr Map.Looks.Caption}" Classes="caption wrap" />
@@ -886,7 +897,8 @@
       <Border Grid.Row="0" Grid.Column="2" Classes="panel" x:Name="Viewport">
         <Panel x:Name="ViewportContent">
           <c:ViewportGrid Background="{DynamicResource ViewportBrush}" AxisXBrush="{DynamicResource AxisXBrush}" AxisYBrush="{DynamicResource AxisYBrush}" IsVisible="{Binding !HasView}" />
-          <c:LevelViewport x:Name="Viewport3d" Scene="{Binding PreparedScene}" PickParts="{Binding PickParts}" BrushMode="{Binding BrushSelect}" BrushRadius="{Binding BrushRadius}" BrushSpots="{Binding PaintSpots}" BrushOnGround="{Binding BrushOnGround}" SelectedId="{Binding SelectedActorId, Mode=TwoWay}" SelectedInstance="{Binding SelectedInstanceKey, Mode=TwoWay}" SelectionHoldUntil="{Binding SelectionHoldUntil}" Backdrop="{Binding WorldBackdrop}" ShowBackdrop="{Binding !Isolate}" KeepCamera="{Binding IsWorldMode}" Quality="{Binding RenderQuality}" TimeOfDay="{Binding TimeOfDay}" Lighting="{Binding Lighting}" AnimateWater="{Binding AnimateWater}" KindIds="{Binding HighlightIds}" KindInstances="{Binding KindSelectionInstances}" InstanceTransforms="{Binding InstanceTransforms}"
+          <c:LevelViewport x:Name="Viewport3d" Scene="{Binding PreparedScene}" PickParts="{Binding PickParts}" BrushMode="{Binding ViewportBrushMode}" BrushRadius="{Binding BrushRadius}"
+                           HoleMode="{Binding HoleTool}" GroundOutlines="{Binding HoleOutlines}" TerrainHoles="{Binding CutHoles}" BrushSpots="{Binding PaintSpots}" BrushOnGround="{Binding BrushOnGround}" SelectedId="{Binding SelectedActorId, Mode=TwoWay}" SelectedInstance="{Binding SelectedInstanceKey, Mode=TwoWay}" SelectionHoldUntil="{Binding SelectionHoldUntil}" Backdrop="{Binding WorldBackdrop}" ShowBackdrop="{Binding !Isolate}" KeepCamera="{Binding IsWorldMode}" Quality="{Binding RenderQuality}" TimeOfDay="{Binding TimeOfDay}" Lighting="{Binding Lighting}" AnimateWater="{Binding AnimateWater}" KindIds="{Binding HighlightIds}" KindInstances="{Binding KindSelectionInstances}" InstanceTransforms="{Binding InstanceTransforms}"
                            HiddenIds="{Binding HiddenActorIds}" HiddenInstances="{Binding HiddenInstanceKeys}" HiddenPinKinds="{Binding HiddenPinKinds}" PinOverrides="{Binding PinOverrides}"
                            ActorTransforms="{Binding ActorTransforms}" Clones="{Binding Clones}" Orientation="{Binding Orientation}" CanScale="{Binding GizmoCanScale}"
                            SelectedRootWorld="{Binding SelectedRootWorld}" TranslationSnap="{Binding TranslationSnap}" RotationSnap="{Binding RotationSnap}"
@@ -1036,6 +1048,61 @@
               </StackPanel>
             </Border>
           </Panel>
+          <!-- The hole tool's options while it is on: square or circle, size (the wheel too), turn, cut (Delete) and fill back in. -->
+          <Border Classes="overlayCard" x:Name="HoleBar" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="10" Padding="10,6"
+                  IsVisible="{Binding HoleTool}">
+            <WrapPanel ItemSpacing="10" LineSpacing="6" MaxWidth="760">
+              <TextBlock Text="{Tr Map.Hole.Title}" FontWeight="SemiBold" VerticalAlignment="Center" />
+              <Border Classes="segmented" VerticalAlignment="Center">
+                <StackPanel Orientation="Horizontal">
+                  <ToggleButton x:Name="HoleSquareButton" IsChecked="{Binding !HoleCircle}" Content="{Tr Map.Hole.Square}" ToolTip.Tip="{Tr Map.Hole.Square.Tip}" />
+                  <ToggleButton x:Name="HoleCircleButton" IsChecked="{Binding HoleCircle}" Content="{Tr Map.Hole.Circle}" ToolTip.Tip="{Tr Map.Hole.Circle.Tip}" />
+                </StackPanel>
+              </Border>
+              <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                <TextBlock Text="{Tr Map.Hole.Size}" Classes="caption" VerticalAlignment="Center" />
+                <Slider x:Name="HoleSizeSlider" Width="90" Minimum="1.5" Maximum="75" SmallChange="1.5" LargeChange="4.5" TickFrequency="1.5" IsSnapToTickEnabled="True"
+                        Value="{Binding HoleSize}" VerticalAlignment="Center" ToolTip.Tip="{Tr Map.Hole.Size.Tip}" />
+                <TextBlock Text="{Binding HoleSizeText}" Classes="caption mono" VerticalAlignment="Center" MinWidth="44" />
+              </StackPanel>
+              <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center" IsVisible="{Binding !HoleCircle}">
+                <TextBlock Text="{Tr Map.Hole.Turn}" Classes="caption" VerticalAlignment="Center" />
+                <Slider x:Name="HoleTurnSlider" Width="80" Minimum="0" Maximum="90" SmallChange="5" LargeChange="15" Value="{Binding HoleYaw}" VerticalAlignment="Center" ToolTip.Tip="{Tr Map.Hole.Turn.Tip}" />
+              </StackPanel>
+              <Button x:Name="HoleCutButton" Classes="accent" Padding="8,4" Content="{Tr Map.Hole.Cut}" Command="{Binding CutHoleCommand}" ToolTip.Tip="{Tr Map.Hole.Cut.Tip}" />
+              <Button x:Name="HoleFillButton" Classes="ghost" Padding="8,4" Content="{Tr Map.Hole.Fill}" Command="{Binding FillLastHoleCommand}" ToolTip.Tip="{Tr Map.Hole.Fill.Tip}" />
+              <TextBlock Text="{Tr Map.Hole.Hint}" Classes="caption wrap" MaxWidth="360" VerticalAlignment="Center" />
+              <!-- Before the cut: will the game draw this hole (green) or only open its collision (amber)? -->
+              <StackPanel x:Name="HolePlacePanel" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center" IsVisible="{Binding HolePlaceText, Converter={x:Static ObjectConverters.IsNotNull}}"
+                          Background="Transparent" ToolTip.Tip="{Tr Map.Hole.Place.Tip}">
+                <Ellipse Width="10" Height="10" Fill="{DynamicResource SuccessBrush}" VerticalAlignment="Center" IsVisible="{Binding HolePlaceVisible}" />
+                <Ellipse Width="10" Height="10" Fill="{DynamicResource WarningBrush}" VerticalAlignment="Center" IsVisible="{Binding HolePlaceCollisionOnly}" />
+                <TextBlock Text="{Binding HolePlaceText}" Classes="caption wrap" MaxWidth="320" VerticalAlignment="Center" />
+              </StackPanel>
+            </WrapPanel>
+          </Border>
+          <!-- The hole tool's warning list (owner, 2026-10-16): at its first use in each project, until "Do not show again". -->
+          <Border Classes="overlayCard" x:Name="HoleWarningCard" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="10" Padding="16,12" MaxWidth="560"
+                  IsVisible="{Binding HoleWarningOpen}">
+            <StackPanel Spacing="8">
+              <TextBlock Text="{Tr Map.Hole.Warn.Title}" Classes="h3" />
+              <TextBlock Text="{Tr Map.Hole.Warn.Intro}" Classes="caption wrap" />
+              <ItemsControl ItemsSource="{Binding HoleWarnings}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="x:String">
+                    <Grid ColumnDefinitions="Auto,*" Margin="0,2">
+                      <TextBlock Text="!" FontWeight="Bold" Foreground="{DynamicResource WarningBrush}" Margin="2,0,8,0" />
+                      <TextBlock Grid.Column="1" Text="{Binding}" TextWrapping="Wrap" />
+                    </Grid>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+              <StackPanel Orientation="Horizontal" Spacing="10" HorizontalAlignment="Right">
+                <CheckBox x:Name="HoleWarningDontShowBox" IsChecked="{Binding HoleWarningDontShow}" Content="{Tr Map.Hole.Warn.DontShow}" ToolTip.Tip="{Tr Map.Hole.Warn.DontShow.Tip}" VerticalAlignment="Center" />
+                <Button x:Name="HoleWarningAcceptButton" Classes="accent" Padding="10,4" Content="{Tr Map.Hole.Warn.Accept}" Command="{Binding AcceptHoleWarningCommand}" ToolTip.Tip="{Tr Map.Hole.Warn.Accept.Tip}" />
+              </StackPanel>
+            </StackPanel>
+          </Border>
           <!-- The brush's options right under the toolbar while the brush is on (owner: "under Brush its options should show"):
                Select or Plant, the circle's size, and for planting the palette and a random spacing range. -->
           <Border Classes="overlayCard" x:Name="BrushBar" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="10" Padding="10,6"
@@ -1299,6 +1366,46 @@
                       </Grid>
                     </StackPanel>
                   </Expander>
+                </StackPanel>
+                <!-- A sentry robot spawner: replace it with NPC guards at posts along its route (NPCs cannot follow a route) -->
+                <StackPanel x:Name="GuardsPanel" Spacing="4" IsVisible="{Binding HasGuardsOption}">
+                  <Separator Margin="0,4" />
+                  <TextBlock Text="{Tr Map.Guards.Title}" Classes="h3" />
+                  <TextBlock Text="{Tr Map.Guards.Hint}" Classes="caption" TextWrapping="Wrap" />
+                  <Grid ColumnDefinitions="92,*" RowDefinitions="Auto,Auto" ColumnSpacing="8" RowSpacing="4">
+                    <TextBlock Grid.Row="0" Grid.Column="0" Text="{Tr Map.Guards.Type}" Classes="caption" VerticalAlignment="Center" />
+                    <ComboBox Grid.Row="0" Grid.Column="1" x:Name="GuardTypeBox" ItemsSource="{Binding GuardTypes}" SelectedItem="{Binding SelectedGuardType}"
+                              HorizontalAlignment="Stretch" IsEnabled="{Binding !IsLoadingGuardTypes}" PlaceholderText="{Tr Map.Guards.Loading}" ToolTip.Tip="{Tr Map.Guards.Type.Tip}">
+                      <ComboBox.ItemTemplate>
+                        <DataTemplate x:DataType="spawns:NpcGuardType">
+                          <StackPanel Spacing="1">
+                            <TextBlock Text="{Binding Name}" FontSize="12" />
+                            <TextBlock Text="{Binding CharactersText}" Classes="caption" TextWrapping="Wrap" />
+                          </StackPanel>
+                        </DataTemplate>
+                      </ComboBox.ItemTemplate>
+                    </ComboBox>
+                    <TextBlock Grid.Row="1" Grid.Column="0" Text="{Tr Map.Guards.Posts}" Classes="caption" VerticalAlignment="Center" />
+                    <ComboBox Grid.Row="1" Grid.Column="1" x:Name="GuardPostsBox" ItemsSource="{Binding GuardPostChoices}" SelectedItem="{Binding GuardPosts}"
+                              HorizontalAlignment="Stretch" ToolTip.Tip="{Tr Map.Guards.Posts.Tip}" />
+                  </Grid>
+                  <CheckBox x:Name="GuardsWholePlaceBox" Content="{Tr Map.Guards.WholePlace}" IsChecked="{Binding GuardsWholePlace}" ToolTip.Tip="{Tr Map.Guards.WholePlace.Tip}" />
+                  <Border Classes="card" Padding="8" ToolTip.Tip="{Tr Map.Guards.Warnings.Tip}">
+                    <StackPanel Spacing="3">
+                      <TextBlock Text="{Tr Map.Guards.Warnings}" FontWeight="SemiBold" FontSize="12" />
+                      <TextBlock Text="{Tr Map.Guards.Warn.Removed}" Classes="caption" TextWrapping="Wrap" />
+                      <TextBlock Text="{Tr Map.Guards.Warn.NoRoute}" Classes="caption" TextWrapping="Wrap" />
+                      <TextBlock Text="{Tr Map.Guards.Warn.Zone}" Classes="caption" TextWrapping="Wrap" />
+                      <TextBlock Text="{Tr Map.Guards.Warn.Count}" Classes="caption" TextWrapping="Wrap" />
+                      <TextBlock Text="{Tr Map.Guards.Warn.Game}" Classes="caption" TextWrapping="Wrap" />
+                      <TextBlock Text="{Tr Map.Guards.Warn.Export}" Classes="caption" TextWrapping="Wrap" />
+                    </StackPanel>
+                  </Border>
+                  <TextBlock Text="{Binding GuardTargetsText}" Classes="caption" TextWrapping="Wrap" />
+                  <Button Classes="small accent" x:Name="ReplaceSentriesButton" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                          Command="{Binding ReplaceSentriesCommand}" ToolTip.Tip="{Tr Map.Guards.Replace.Tip}">
+                    <TextBlock Text="{Tr Map.Guards.Replace}" />
+                  </Button>
                 </StackPanel>
                 <!-- What can spawn at the selection: loot presets with their groups and items, or a vehicle group's vehicles -->
                 <StackPanel x:Name="SpawnInfoPanel" Spacing="2" IsVisible="{Binding HasSpawnInfo}">

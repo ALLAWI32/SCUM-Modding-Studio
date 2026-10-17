@@ -374,6 +374,7 @@ internal sealed partial class ProjectCommands : ICommandModule
         project.AddCommand(BuildUndoRedo(undo: false));
         project.AddCommand(BuildApply());
         project.AddCommand(BuildExport());
+        project.AddCommand(BuildValidate());
         return project;
     }
 

@@ -77,10 +77,13 @@ public sealed class PartsStudio(CloneAssetOp clone, Func<string, CookedPackage?>
     public string? CloneOf(string stockAttachment) =>
         Clone.Packages.FirstOrDefault(p => string.Equals(p.Old, stockAttachment, StringComparison.OrdinalIgnoreCase))?.New;
 
-    /// <summary>The part drawn from <paramref name="stockAttachment"/>, or null when the clone has no copy of it.</summary>
+    /// <summary>
+    /// The part drawn from <paramref name="stockAttachment"/> (or a part "Add part…" bolted on, by its own package), or null
+    /// when the clone has no copy of it.
+    /// </summary>
     public StudioPart? Select(string stockAttachment)
     {
-        if (CloneOf(stockAttachment) is not { } attachment || read(attachment) is not { } part)
+        if ((CloneOf(stockAttachment) ?? (IsAdded(stockAttachment) ? stockAttachment : null)) is not { } attachment || read(attachment) is not { } part)
         {
             return null;
         }
@@ -88,8 +91,47 @@ public sealed class PartsStudio(CloneAssetOp clone, Func<string, CookedPackage?>
         var cdo = Defaults(part);
         var socket = Current(attachment, cdo, VehicleAttachmentEdits.SocketPath, VehicleAttachmentEdits.ParentSocketOf(part) ?? string.Empty);
         var mesh = Current(attachment, cdo, VehicleAttachmentEdits.MeshPath, VehicleAttachmentEdits.MeshOf(part) ?? string.Empty);
-        var game = GameSocket(socket);
+        var game = GameSocket(socket) ?? AddedSocket(socket);
         return new StudioPart(attachment, VehicleParts.Label(VehicleAttachmentEdits.ClassPath(attachment)), socket, game, game is null || Mesh is null ? game : Placed(game), mesh.Length > 0 ? mesh : null);
+    }
+
+    /// <summary>The parts "Add part…" bolted onto this clone (each a renamed copy of its roof rack), where the project has them now.</summary>
+    public IReadOnlyList<StudioPart> AddedParts() =>
+        state.AssetClones.Where(c => c.Kind == VehicleAttachmentEdits.PartKind && IsAdded(c.NewPrimary))
+            .Select(c => Select(c.NewPrimary))
+            .OfType<StudioPart>()
+            .ToList();
+
+    /// <summary>True for a part package "Add part…" made for this clone (<c>…/BPC_&lt;clone&gt;_CustomA</c>).</summary>
+    public bool IsAdded(string package)
+    {
+        var token = PackageMap.Leaf(Clone.NewPrimary)["BPC_".Length..];
+        return PackageMap.Leaf(package).StartsWith("BPC_" + token + "_Custom", StringComparison.OrdinalIgnoreCase)
+               && state.AssetClones.Any(c => c.Kind == VehicleAttachmentEdits.PartKind && string.Equals(c.NewPrimary, package, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// True when <paramref name="part"/> no longer spawns with the clone: every cloned spawn preset that had it in a slot has
+    /// that slot emptied (<see cref="Remove"/>). The 3D view hides it.
+    /// </summary>
+    public bool IsRemoved(StudioPart part)
+    {
+        ArgumentNullException.ThrowIfNull(part);
+        var cls = VehicleAttachmentEdits.ClassPath(part.Attachment);
+        var had = false;
+        foreach (var (path, preset) in Presets())
+        {
+            foreach (var slot in VehicleParts.Read(preset, _ => null).Where(s => string.Equals(s.Value, cls, StringComparison.OrdinalIgnoreCase)))
+            {
+                had = true;
+                if (string.Equals(state.GetAssetValue(path, slot.Export, slot.Path)?.Current ?? slot.Value, cls, StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+            }
+        }
+
+        return had;
     }
 
     /// <summary>The step that puts <paramref name="part"/>'s socket at a new place (socket space: cm, degrees, scale).</summary>
@@ -123,24 +165,47 @@ public sealed class PartsStudio(CloneAssetOp clone, Func<string, CookedPackage?>
     public BatchOp? Hide(StudioPart part, bool hidden)
     {
         var place = part.Place ?? part.Game ?? throw new PartRefusedException("Studio.Parts.WheelNote", $"{part.Label} hangs on a bone.");
-        return Move(part, place.Location, place.Rotation, hidden ? new Vector3(0.001f) : part.Game?.Scale ?? Vector3.One);
+        return Move(part, place.Location, place.Rotation, hidden ? new Vector3(0.001f) : part.Game?.Scale is { X: > 0.001f } scale ? scale : Vector3.One);
     }
 
     /// <summary>The step that puts the part back where the game has it (its socket overrides removed).</summary>
     public BatchOp? Reset(StudioPart part)
     {
-        var mesh = Editable(part);
-        var key = MeshKey(mesh);
-        var ops = state.GetAssetValues(mesh)
-            .Where(v => VehicleSockets.Parse(v.Path)?.Socket == part.Socket)
-            .Select(v => (EditOp)new SetAssetValueOp(mesh, v.Export, v.Path, v.ValueKind, v.Current, v.Base))
-            .ToList();
-        return ops.Count == 0 || key.Length == 0 ? null : new BatchOp($"Reset {part.Label}", ops);
+        ArgumentNullException.ThrowIfNull(part);
+        var cls = VehicleAttachmentEdits.ClassPath(part.Attachment);
+        var ops = new List<EditOp>();
+        foreach (var (path, _) in Presets())
+        {
+            // A part taken off the spawn comes back too (the slots Remove emptied).
+            ops.AddRange(state.GetAssetValues(path)
+                .Where(v => v.Current.Length == 0 && string.Equals(v.Base, cls, StringComparison.OrdinalIgnoreCase))
+                .Select(v => (EditOp)new SetAssetValueOp(path, v.Export, v.Path, v.ValueKind, v.Current, v.Base)));
+        }
+
+        var mesh = ops.Count > 0 && (part.IsWheel || Mesh is null) ? null : Editable(part);
+        var key = mesh is null ? string.Empty : MeshKey(mesh);
+        if (mesh is not null && key.Length > 0)
+        {
+            ops.AddRange(state.GetAssetValues(mesh)
+                .Where(v => VehicleSockets.Parse(v.Path)?.Socket == part.Socket)
+                .Select(v => (EditOp)new SetAssetValueOp(mesh, v.Export, v.Path, v.ValueKind, v.Current, v.Base)));
+        }
+
+        return ops.Count == 0 ? null : new BatchOp($"Reset {part.Label}", ops);
     }
 
-    /// <summary>The step that spawns the clone without the part: its slot is emptied in every cloned spawn preset.</summary>
+    /// <summary>
+    /// The step that spawns the clone without the part: its slot is emptied in every cloned spawn preset. A part "Add part…"
+    /// bolted on is taken off whole instead (its copy, its socket, its slot and its preset entries), as if never added.
+    /// </summary>
     public BatchOp? Remove(StudioPart part)
     {
+        ArgumentNullException.ThrowIfNull(part);
+        if (IsAdded(part.Attachment))
+        {
+            return RemoveAdded(part);
+        }
+
         Editable(part, needsMesh: false);
         var cls = VehicleAttachmentEdits.ClassPath(part.Attachment);
         var ops = new List<EditOp>();
@@ -157,6 +222,56 @@ public sealed class PartsStudio(CloneAssetOp clone, Func<string, CookedPackage?>
         }
 
         return ops.Count == 0 ? null : new BatchOp($"Remove {part.Label}", ops);
+    }
+
+    /// <summary>The step that takes an added part off: every value of the add set back, then its copy removed.</summary>
+    private BatchOp RemoveAdded(StudioPart part)
+    {
+        var cls = VehicleAttachmentEdits.ClassPath(part.Attachment);
+        var ops = new List<EditOp>();
+        void Back(AssetValueOverride v) => ops.Add(new SetAssetValueOp(v.Package, v.Export, v.Path, v.ValueKind, v.Current, v.Base));
+        foreach (var v in state.GetAssetValues(part.Attachment))
+        {
+            Back(v);
+        }
+
+        if (Mesh is { } mesh)
+        {
+            foreach (var v in state.GetAssetValues(mesh).Where(v => VehicleSockets.Parse(v.Path)?.Socket == part.Socket))
+            {
+                Back(v);
+            }
+        }
+
+        foreach (var package in Clone.Packages.Select(p => p.New))
+        {
+            foreach (var v in state.GetAssetValues(package).Where(v => v.Current.StartsWith(cls, StringComparison.OrdinalIgnoreCase)))
+            {
+                Back(v); // the holder's new slot ("<class>|<donor slot>") and the presets' Children entries
+            }
+        }
+
+        var copy = state.AssetClones.First(c => string.Equals(c.NewPrimary, part.Attachment, StringComparison.OrdinalIgnoreCase));
+        ops.Add(new RemoveAssetCloneOp(copy.NewPrimary, copy));
+        return new BatchOp($"Remove {part.Label}", ops);
+    }
+
+    /// <summary>The socket of a part "Add part…" bolted on: the clone mesh's own, as the project has it (null for any other).</summary>
+    private VehicleSocket? AddedSocket(string socket)
+    {
+        if (Mesh is not { } mesh || MeshKey(mesh) is not { Length: > 0 } key
+            || state.GetAssetValue(mesh, key, VehicleSockets.Path(socket, VehicleSockets.Location))?.Current is not { Length: > 0 } location)
+        {
+            return null;
+        }
+
+        Vector3 Get(string member, Vector3 fallback) =>
+            state.GetAssetValue(mesh, key, VehicleSockets.Path(socket, member))?.Current is { Length: > 0 } v && TunableValue.ParseFloats(v, 3) is var f
+                ? new Vector3(f[0], f[1], f[2])
+                : fallback;
+        var at = TunableValue.ParseFloats(location, 3);
+        return new VehicleSocket(socket, state.GetAssetValue(mesh, key, VehicleSockets.Path(socket, VehicleSockets.Bone))?.Current ?? "Root",
+            new Vector3(at[0], at[1], at[2]), Get(VehicleSockets.Rotation, Vector3.Zero), Get(VehicleSockets.Scale, Vector3.One), OnMesh: true);
     }
 
     /// <summary>The step that shows another model of the game for the part (same kind of model: static or skeletal).</summary>

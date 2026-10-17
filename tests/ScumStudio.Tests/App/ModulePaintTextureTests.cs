@@ -29,11 +29,11 @@ public sealed class ModulePaintTextureTests(ITestOutputHelper output)
     [Fact]
     public void TintGainReadsTheDecodedPixels()
     {
-        // A dark gun texture (sRGB 40) is lifted to the 6× cap, also when the 3D view holds it compressed.
+        // A dark gun texture (sRGB 40) is lifted to the cap (3×, as the game lifts its MP5; 6× was far too bright: owner, r37), also when the 3D view holds it compressed.
         var model = Gun(Compressed());
         var pixels = new Dictionary<string, TextureImage>(StringComparer.OrdinalIgnoreCase);
         Assert.NotNull(ModulePageViewModel.RgbaOf(model, Texture, pixels, _ => Solid(40), MaxSize));
-        Assert.Equal(6f, ModulePageViewModel.TintGain(model, Material, pixels));
+        Assert.Equal(ModulePageViewModel.MaxTintGain, ModulePageViewModel.TintGain(model, Material, pixels));
     }
 
     [Fact]

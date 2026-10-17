@@ -903,7 +903,7 @@
                            ActorTransforms="{Binding ActorTransforms}" Clones="{Binding Clones}" Orientation="{Binding Orientation}" CanScale="{Binding GizmoCanScale}"
                            SelectedRootWorld="{Binding SelectedRootWorld}" TranslationSnap="{Binding TranslationSnap}" RotationSnap="{Binding RotationSnap}"
                            NearClip="{Binding NearClip}"
-                           AntiAliasedFoliage="{Binding AntiAliasedFoliage}"
+                           AntiAliasedFoliage="{Binding AntiAliasedFoliage}" SmoothCamera="{Binding SmoothCamera}" SteadyFoliage="{Binding SteadyFoliage}"
                            RenderDistance="{Binding RenderDistance}" SectorSizeCm="{Binding SectorSizeCm}" Smooth="{Binding SmoothFrames}"
                            ExtraMeshes="{Binding ExtraMeshes}" ReplacedMeshes="{Binding ReplacedMeshes}" PartMeshes="{Binding PartMeshes}" Bends="{Binding Bends}" SegmentBends="{Binding SegmentBends}" ShapeHandles="{Binding ShapeHandles}" ScaleHandles="{Binding ScaleHandles}" LegHandle="{Binding LegHandle}" GroupWorlds="{Binding GroupWorlds}" IsVisible="{Binding HasView}" />
           <!-- gizmo drag: the live value next to the cursor -->
@@ -1479,6 +1479,14 @@
               </Button>
             </Grid>
           </Border>
+          <!-- Owner 2026-10-17: the Map page's changes as a mod of their own (Export mod in the header builds the whole project) -->
+          <Button DockPanel.Dock="Bottom" x:Name="PageExportButton" Classes="ghost" Margin="8,4,8,8" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                  Command="{Binding MapExport.ExportCommand}" IsVisible="{Binding Session.HasProject}" ToolTip.Tip="{Tr Export.Module.MapOnly.Tip}">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <c:GlyphIcon Kind="Icon.Download" IconSize="14" />
+              <TextBlock Text="{Tr Export.Module.MapOnly}" />
+            </StackPanel>
+          </Button>
           <Panel>
             <StackPanel IsVisible="{Binding !Session.HasProject}" Margin="16" Spacing="8" VerticalAlignment="Center">
               <TextBlock Text="{Tr History.NoProject}" Classes="h3" HorizontalAlignment="Center" />

@@ -79,6 +79,14 @@ public sealed partial class MapPageViewModel
     [ObservableProperty]
     private bool _antiAliasedFoliage = true;
 
+    /// <summary>Steady camera steps and smoothed mouse turns in the 3D view (Settings).</summary>
+    [ObservableProperty]
+    private bool _smoothCamera = true;
+
+    /// <summary>Trees and bushes steadied over frames while the 3D view moves (Settings).</summary>
+    [ObservableProperty]
+    private bool _steadyFoliage = true;
+
     /// <summary>The pins are made again with their new look: the levels shown are prepared once more (a level whose pins changed is rebuilt).</summary>
     partial void OnSpawnModelsShownChanged(bool value)
     {
@@ -140,6 +148,7 @@ public sealed partial class MapPageViewModel
             RenderQuality = ui.RenderQuality;
             (AnimateWater, Lighting) = (ui.AnimateWater, ui.Lighting);
             AntiAliasedFoliage = ui.AntiAliasedFoliage;
+            (SmoothCamera, SteadyFoliage) = (ui.SmoothCamera, ui.SteadyFoliage);
             (RenderDistance, SmoothFrames) = (ui.RenderDistanceSectors, ui.SmoothFrames);
             SpawnModelsShown = ui.SpawnModels;
             NearClip = ui.NearClipCentimetres;

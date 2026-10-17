@@ -209,6 +209,7 @@ public sealed partial class SpawnsPageViewModel : PageViewModel, ISearchablePage
     public override void OnLanguageChanged()
     {
         base.OnLanguageChanged();
+        Point?.OnLanguageChanged();
         if (HasPending)
         {
             return; // unsaved edits stay; the texts follow on the next load

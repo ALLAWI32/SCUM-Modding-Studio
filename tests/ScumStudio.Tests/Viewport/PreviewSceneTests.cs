@@ -25,7 +25,7 @@ public sealed class PreviewSceneTests(ITestOutputHelper output)
     private const int Height = 240;
 
     [GlFact]
-    public void ScaleFigureIsOneUnpickableNodeThatCountsInTheBounds()
+    public void ScaleFigureIsTheGamesCharacterUnpickableAndCountedInTheBounds()
     {
         using var gl = GlHarness.Create(64, 64);
         using var scene = PreviewScene.Upload(gl.Renderer, Cube(100f));
@@ -33,12 +33,24 @@ public sealed class PreviewSceneTests(ITestOutputHelper output)
         var before = scene.Bounds;
         Assert.Equal(100f, before.Size.Y, 2);
 
+        // No character loaded (no game files yet): no figure at all, never a stand-in of boxes.
+        scene.FigureOf = () => null;
         scene.ShowScale = true;
+        Assert.Equal(parts, Drawn(scene));
+        Assert.False(scene.FigureShown);
+
+        // The character arrives: the scene says so, and the next ShowScale stands it there, textured.
+        var character = ScaleFigure.Stand(ScaleFigureTests.Character(178f));
+        scene.FigureOf = () => character;
+        Assert.True(scene.FigureStale);
+        scene.ShowScale = true;
+        Assert.False(scene.FigureStale);
         var added = Assert.Single(Drawn(scene).Except(parts));
         Assert.Equal(0u, added.SelectableId);
+        Assert.NotNull(gl.Renderer.Meshes[added.Mesh!.Id].Texture);
         Assert.Equal(before, scene.ModelBounds);
         Assert.Equal(before.Min.Y, scene.Bounds.Min.Y, 3); // it stands on the model's ground
-        Assert.InRange(scene.Bounds.Size.Y, 179.5f, 180.5f);
+        Assert.InRange(scene.Bounds.Size.Y, 177.5f, 178.5f);
         Assert.Single(scene.Model.Parts);
 
         scene.ShowScale = false;
@@ -47,6 +59,7 @@ public sealed class PreviewSceneTests(ITestOutputHelper output)
 
         // A 3 cm item gets none: next to a person it would be a speck.
         using var small = PreviewScene.Upload(gl.Renderer, Cube(3f));
+        small.FigureOf = () => character;
         small.ShowScale = true;
         Assert.Single(Drawn(small));
     }

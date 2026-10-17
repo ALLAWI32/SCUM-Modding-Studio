@@ -22,6 +22,14 @@ public partial class ModulePageView : UserControl
         // The Vehicles studio: the 3D view's surface clicks (decals, a new part), gizmo drags and part picks go to the page.
         ItemPreview.SurfacePointer += (_, e) => _viewModel?.OnStudioSurface(e.PartIndex, new System.Numerics.Vector3(e.Origin.X, e.Origin.Y, e.Origin.Z),
             new System.Numerics.Vector3(e.Direction.X, e.Direction.Y, e.Direction.Z), e.IsDrag, e.IsRelease, e.IsCancel);
+        // A design dragged from the Decals library and let go over the car: armed here, then placed by the drop's click.
+        ItemPreview.SurfaceDrop += (_, e) =>
+        {
+            if (e.Data.Get(ScumStudio.App.Controls.MeshPreview.DecalDragFormat) is DecalDesignItem design && _viewModel is { } page)
+            {
+                page.ArmDecalCommand.Execute(design);
+            }
+        };
         ItemPreview.PartGizmo += (_, e) => _viewModel?.OnStudioGizmo(e.PartIndex, e.Start, e.Transform, e.Committed);
         // Decals like the game's tattoos: Ctrl/Shift+wheel and the keys size, turn and move the selected decal.
         ItemPreview.SurfaceInput += (_, e) => e.Handled = _viewModel is { } page

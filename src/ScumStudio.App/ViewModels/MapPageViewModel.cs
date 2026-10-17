@@ -76,6 +76,7 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
         _renderQuality = ui.RenderQuality;
         (_spawnModelsShown, _animateWater, _lighting) = (ui.SpawnModels, ui.AnimateWater, ui.Lighting);
         _antiAliasedFoliage = ui.AntiAliasedFoliage;
+        (_smoothCamera, _steadyFoliage) = (ui.SmoothCamera, ui.SteadyFoliage);
         (_renderDistance, _smoothFrames) = (ui.RenderDistanceSectors, ui.SmoothFrames);
         _showSpawns = services.UiState.Current.ShowSpawnPoints;
         _timeOfDay = Math.Clamp(services.UiState.Current.TimeOfDay, 0, 24);

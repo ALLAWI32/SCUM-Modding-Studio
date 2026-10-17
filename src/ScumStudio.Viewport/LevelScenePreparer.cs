@@ -553,8 +553,9 @@ public sealed class LevelScenePreparer
             var id = SelectableIdOf(documentIndex, actor, options.DocumentIdShift);
             foreach (var component in actor.Components)
             {
-                // Hidden-in-game components (e.g. EnvironmentDescription helper meshes) are never drawn.
-                if (component.StaticMeshPath is null || component.IsInstanced || !component.IsVisible || IsHelperMesh(actor, component))
+                // Hidden-in-game components (e.g. EnvironmentDescription helper meshes) are never drawn, nor is any component
+                // of an actor hidden in the game (B_4's white walls of engine cubes: the actor's bHidden, not the mesh's).
+                if (component.StaticMeshPath is null || component.IsInstanced || !component.IsVisible || actor.HiddenInGame || IsHelperMesh(actor, component))
                 {
                     continue;
                 }
@@ -567,7 +568,7 @@ public sealed class LevelScenePreparer
             }
 
             placements.AddRange(PinPlacements(actor, id, documentIndex, options.DocumentIdShift, models));
-            if (!options.IncludeInstances)
+            if (!options.IncludeInstances || actor.HiddenInGame)
             {
                 continue;
             }
@@ -1309,7 +1310,7 @@ public sealed class LevelScenePreparer
             {
                 if (materials.TryGetValue(material, out var look))
                 {
-                    if (look.Texture is { } kept && !textures.ContainsKey(kept))
+                    if (look.Texture is { } kept && !textures.ContainsKey(kept) && !TrailLook.IsKey(kept))
                     {
                         Warm(TextureAhead(kept));
                     }
@@ -1514,6 +1515,21 @@ public sealed class LevelScenePreparer
 
                         // Opaque only: a masked or translucent material's alpha is its coverage, not its roughness.
                         range = clip == 0f && !material.IsTranslucent && material.RoughnessRange is { } r ? r : Vector2.Zero;
+
+                        if (material.OnlyIntoLandscape)
+                        {
+                            // A gravel road or dirt runway piece: the game draws it only into the landscape texture, its colour
+                            // over the ground by its mask (soft wheel tracks). Drawn see-through with that coverage in the
+                            // texture's alpha, not as a brown sheet the ground's edge cuts through.
+                            var covered = TrailLook.Key(path, material);
+                            if (!textures.ContainsKey(covered))
+                            {
+                                textures[covered] = TrailLook.Compose(_catalog, covered, maxSize);
+                            }
+
+                            (texturePath, normalPath, range, clip) = (covered, null, Vector2.Zero, 0f);
+                            tint = TrailLook.Tint(material);
+                        }
                     }
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
@@ -1530,7 +1546,7 @@ public sealed class LevelScenePreparer
                 // streamed in again drew white (owner: "no textures, like San Andreas"). Decode it again.
                 try
                 {
-                    textures[kept] = Decode(kept, maxSize, prefetch);
+                    textures[kept] = TrailLook.IsKey(kept) ? TrailLook.Compose(_catalog, kept, maxSize) : Decode(kept, maxSize, prefetch);
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {

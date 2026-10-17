@@ -244,6 +244,11 @@ included in this repository.</sub>
 - **Server**: zombie and horde multipliers, most zombies at once, zombie health and speed, sentries on or off and their
   health, drones, dropships, animals. Written into the server's `ServerSettings.ini` (a backup is kept); restart the
   server to use them.
+- **Select point** on the island map: click one vehicle point, zombie / NPC point, threat zone or hunting area to see
+  where it is and what it spawns; drag it (it lands on the terrain), nudge it with the arrow keys (1 m, Shift 10 m,
+  Ctrl 10 cm), turn it with Q / E, type exact coordinates, change what it spawns or delete it, each one undo step.
+  **Show on the Map** opens it on the Map page, selected. The map zooms in to 2 cm a pixel with a metre grid, a scale
+  bar and the cursor's coordinates.
 - **Save changes** records vehicle and zone values in the project (they go into the mod with **Export mod**) and writes
   the server settings; **Discard** puts the sliders back.
 

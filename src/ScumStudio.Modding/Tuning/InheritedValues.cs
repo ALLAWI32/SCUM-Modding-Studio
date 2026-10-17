@@ -24,6 +24,33 @@ public static class InheritedValues
         ("/Script/SCUM.ItemEntitySetup", "MaxHealth", TunableKind.Float),
     ];
 
+    /// <summary>
+    /// Base element values a craftable's clone may get without its template storing them (the Craftables export only; the
+    /// value pages do not list them), each with the type the game files prove (SCUM 1.3.3, 333 base elements): 31 store
+    /// <c>_canBePlacedWithoutFlag</c> true (BoolProperty, so the C++ default is false: a flag is needed), 71
+    /// <c>_mustBePlacedUpright</c> true, 65 <c>_placementHeightType</c> <c>HighestPointHeight</c> (EnumProperty; none stores
+    /// another value). The improvised chair stores none of them.
+    /// </summary>
+    public static IReadOnlyList<(string Class, string Name, TunableKind Kind)> ElementNative { get; } =
+    [
+        .. new[] { "/Script/SCUM.BaseBuildingComponent", "/Script/SCUM.BaseBuildingItemComponent" }.SelectMany(c => new[]
+        {
+            (c, "_canBePlacedWithoutFlag", TunableKind.Bool),
+            (c, "_mustBePlacedUpright", TunableKind.Bool),
+            (c, "_placementHeightType", TunableKind.Enum),
+        }),
+    ];
+
+    /// <summary>
+    /// Values of a placed thing's recipe (a data asset of the native <c>PlaceableCraftingRecipe</c>, SDK build 149664) a copy
+    /// of the chair's recipe may get without storing them (the Craftables export only): <c>PlacementLocationOffset</c>, a
+    /// Vector struct that 2 recipes of the game store (the Woodland pack's curtains: -5, 0, 20 and 0, 0, -30).
+    /// </summary>
+    public static IReadOnlyList<(string Class, string Name, TunableKind Kind)> RecipeNative { get; } =
+    [
+        ("/Script/SCUM.PlaceableCraftingRecipe", "PlacementLocationOffset", TunableKind.Vector),
+    ];
+
     /// <summary>The tag type written for each kind; other kinds are not offered.</summary>
     private static readonly Dictionary<TunableKind, string> TagTypes = new()
     {
@@ -31,6 +58,8 @@ public static class InheritedValues
         [TunableKind.Double] = "DoubleProperty",
         [TunableKind.Int] = "IntProperty",
         [TunableKind.Bool] = "BoolProperty",
+        [TunableKind.Enum] = "EnumProperty",
+        [TunableKind.Vector] = "StructProperty",
     };
 
     /// <summary>
@@ -41,13 +70,17 @@ public static class InheritedValues
     /// </summary>
     /// <param name="package">A Blueprint package (an item, its entity setup, a clone of either).</param>
     /// <param name="readPackage">Reads a parent package by its package path, or returns null when it cannot.</param>
-    public static IReadOnlyList<Tunable> Read(CookedPackage package, Func<string, CookedPackage?> readPackage)
+    /// <param name="elementValues">
+    /// Also the <see cref="ElementNative"/> values, and for a recipe (a data asset, no Blueprint class) the
+    /// <see cref="RecipeNative"/> ones (the Craftables export writes them).
+    /// </param>
+    public static IReadOnlyList<Tunable> Read(CookedPackage package, Func<string, CookedPackage?> readPackage, bool elementValues = false)
     {
         ArgumentNullException.ThrowIfNull(package);
         ArgumentNullException.ThrowIfNull(readPackage);
         if (FindClass(package) is not { } own)
         {
-            return [];
+            return elementValues ? DataAssetValues(package) : [];
         }
 
         var keys = TunableReader.ExportKeys(package);
@@ -69,7 +102,7 @@ public static class InheritedValues
         {
             if (super.StartsWith("/Script/", StringComparison.Ordinal))
             {
-                result.AddRange(Native.Where(n => n.Class == super && seen.Add(n.Name)).Select(n => Make(n.Name, n.Kind, string.Empty, super)));
+                result.AddRange(Native.Concat(elementValues ? ElementNative : []).Where(n => n.Class == super && seen.Add(n.Name)).Select(n => Make(n.Name, n.Kind, string.Empty, super)));
                 break;
             }
 
@@ -126,7 +159,7 @@ public static class InheritedValues
         foreach (var group in values.GroupBy(v => v.Value.Export, StringComparer.Ordinal))
         {
             var exportIndex = Array.IndexOf(keys, group.Key);
-            if (exportIndex < 0 || !group.Key.StartsWith("Default__", StringComparison.Ordinal))
+            if (exportIndex < 0 || !(group.Key.StartsWith("Default__", StringComparison.Ordinal) || group.All(v => IsDataAssetValue(package, exportIndex, v.Value))))
             {
                 throw new InvalidOperationException($"{package.BasePath}: '{group.Key}' is not this package's class defaults.");
             }
@@ -151,7 +184,7 @@ public static class InheritedValues
                     throw new InvalidOperationException($"{package.BasePath}: '{value.Path}' is stored already; change it as a stored value.");
                 }
 
-                tags.AddRange(Tag(Name(value.Path), Name(type), value.Kind, text));
+                tags.AddRange(Tag(Name(value.Path), Name(type), value.Kind, text, Name));
             }
 
             var payload = payloads[exportIndex];
@@ -180,6 +213,41 @@ public static class InheritedValues
 
         return bytes;
     }
+
+    /// <summary>
+    /// The <see cref="RecipeNative"/> values a data asset's top-level export of that class does not store (value empty: the
+    /// C++ default, not in the files).
+    /// </summary>
+    private static IReadOnlyList<Tunable> DataAssetValues(CookedPackage package)
+    {
+        var keys = TunableReader.ExportKeys(package);
+        var result = new List<Tunable>();
+        for (var i = 0; i < package.Exports.Count; i++)
+        {
+            var cls = package.Exports[i].OuterIndex == 0 ? package.GetFullPath(package.Exports[i].ClassIndex) : string.Empty;
+            var natives = RecipeNative.Where(n => n.Class == cls).ToList();
+            if (natives.Count == 0)
+            {
+                continue;
+            }
+
+            var stored = new HashSet<string>(StoredNames(package, i), StringComparer.OrdinalIgnoreCase);
+            result.AddRange(natives.Where(n => !stored.Contains(n.Name)).Select(n => new Tunable(keys[i], n.Name, n.Kind, string.Empty)
+            {
+                Name = n.Name,
+                ExportClass = package.GetExportClassName(i),
+                Group = TunableReader.FriendlyExport(keys[i]),
+                InheritedFrom = cls,
+            }));
+        }
+
+        return result;
+    }
+
+    /// <summary>A <see cref="RecipeNative"/> value of the top-level data asset export <paramref name="exportIndex"/>.</summary>
+    private static bool IsDataAssetValue(CookedPackage package, int exportIndex, Tunable value) =>
+        package.Exports[exportIndex].OuterIndex == 0 && value.InheritedFrom == package.GetFullPath(package.Exports[exportIndex].ClassIndex)
+        && RecipeNative.Any(n => n.Class == value.InheritedFrom && n.Name == value.Path && n.Kind == value.Kind);
 
     /// <summary>The package's Blueprint class export and its CDO (<c>Default__X_C</c>), or null.</summary>
     private static (int Class, int Cdo)? FindClass(CookedPackage package, string? className = null)
@@ -230,15 +298,49 @@ public static class InheritedValues
         var v => v.ToString() ?? string.Empty,
     };
 
-    /// <summary>One FPropertyTag and its value (UE 4.27: name, type, size, array index, [bool], no property guid, value).</summary>
-    private static byte[] Tag(FNameRef name, FNameRef type, TunableKind kind, string text)
+    /// <summary>
+    /// One FPropertyTag and its value (UE 4.27: name, type, size, array index, [bool | enum name | struct name + zero struct
+    /// guid], no property guid, value). An enum's text is <c>EnumName::Value</c>
+    /// (<c>EConZPlacementHeightType::HighestPointHeight</c>), its value that FName; a Vector is "x, y, z" (3 floats).
+    /// </summary>
+    private static byte[] Tag(FNameRef name, FNameRef type, TunableKind kind, string text, Func<string, FNameRef> nameOf)
     {
         byte[] value;
         byte? flag = null;
+        FNameRef? enumName = null;
+        FNameRef? structName = null;
         try
         {
             switch (kind)
             {
+                case TunableKind.Vector:
+                    var xyz = TunableValue.ParseFloats(text, 3);
+                    if (!xyz.All(float.IsFinite))
+                    {
+                        throw new FormatException("a vector needs three finite numbers");
+                    }
+
+                    structName = nameOf("Vector");
+                    value = new byte[12];
+                    for (var i = 0; i < 3; i++)
+                    {
+                        BinaryPrimitives.WriteSingleLittleEndian(value.AsSpan(i * 4), xyz[i]);
+                    }
+
+                    break;
+                case TunableKind.Enum:
+                    var separator = text.IndexOf("::", StringComparison.Ordinal);
+                    if (separator <= 0 || separator + 2 >= text.Length || text.Trim() != text)
+                    {
+                        throw new FormatException("an enum value is written as EnumName::Value");
+                    }
+
+                    enumName = nameOf(text[..separator]);
+                    var entry = nameOf(text);
+                    value = new byte[8];
+                    BinaryPrimitives.WriteInt32LittleEndian(value, entry.Index);
+                    BinaryPrimitives.WriteInt32LittleEndian(value.AsSpan(4), entry.Number);
+                    break;
                 case TunableKind.Float:
                     value = new byte[4];
                     BinaryPrimitives.WriteSingleLittleEndian(value, TunableValue.ParseFloat(text));
@@ -262,7 +364,7 @@ public static class InheritedValues
             throw new InvalidOperationException($"'{text}' is not a value of {kind}: {ex.Message}", ex);
         }
 
-        var tag = new byte[16 + 8 + (flag is null ? 0 : 1) + 1 + value.Length];
+        var tag = new byte[16 + 8 + (flag is null ? 0 : 1) + (enumName is null ? 0 : 8) + (structName is null ? 0 : 8 + 16) + 1 + value.Length];
         var span = tag.AsSpan();
         BinaryPrimitives.WriteInt32LittleEndian(span, name.Index);
         BinaryPrimitives.WriteInt32LittleEndian(span[4..], name.Number);
@@ -274,6 +376,20 @@ public static class InheritedValues
         if (flag is { } b)
         {
             tag[at++] = b;
+        }
+
+        if (enumName is { } enumType)
+        {
+            BinaryPrimitives.WriteInt32LittleEndian(span[at..], enumType.Index);
+            BinaryPrimitives.WriteInt32LittleEndian(span[(at + 4)..], enumType.Number);
+            at += 8;
+        }
+
+        if (structName is { } structType)
+        {
+            BinaryPrimitives.WriteInt32LittleEndian(span[at..], structType.Index);
+            BinaryPrimitives.WriteInt32LittleEndian(span[(at + 4)..], structType.Number);
+            at += 8 + 16; // the struct guid stays zero, as the cooker writes it
         }
 
         tag[at++] = 0; // no property guid

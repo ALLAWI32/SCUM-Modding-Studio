@@ -110,6 +110,9 @@
           <CheckBox x:Name="AnimateWaterBox" IsChecked="{Binding AnimateWater}" Content="{Tr Settings.AnimateWater}" ToolTip.Tip="{Tr Settings.AnimateWater.Tip}" />
           <CheckBox x:Name="LightingBox" IsChecked="{Binding Lighting}" Content="{Tr Settings.Lighting}" ToolTip.Tip="{Tr Settings.Lighting.Tip}" />
           <CheckBox x:Name="AntiAliasedFoliageBox" IsChecked="{Binding AntiAliasedFoliage}" Content="{Tr Settings.AntiAliasedFoliage}" ToolTip.Tip="{Tr Settings.AntiAliasedFoliage.Tip}" />
+          <!-- r37 motion: steady trees in motion and smooth camera steps, like the game -->
+          <CheckBox x:Name="SteadyFoliageBox" IsChecked="{Binding SteadyFoliage}" Content="{Tr Settings.SteadyFoliage}" ToolTip.Tip="{Tr Settings.SteadyFoliage.Tip}" />
+          <CheckBox x:Name="SmoothCameraBox" IsChecked="{Binding SmoothCamera}" Content="{Tr Settings.SmoothCamera}" ToolTip.Tip="{Tr Settings.SmoothCamera.Tip}" />
           <!-- Smooth like the game (perf): far view in sectors and the adaptive 60 fps switch, next to the other graphics options -->
           <StackPanel>
             <TextBlock Text="{Tr Settings.RenderDistance}" Classes="label" />

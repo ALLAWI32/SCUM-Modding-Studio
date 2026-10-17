@@ -154,13 +154,44 @@ public static class FarModelsScene
             throw new ArgumentException("A terrain-only scene is expected.", nameof(terrain));
         }
 
+        // A landscape tile's far model is that tile's ground (opaque, one blurred island-wide texture) with its distant
+        // forest on it (masked cards). The backdrop draws the tile's ground already: only the forest is kept. Both grounds
+        // drawn, each poked through the other, and the terrain's roads showed as pale broken dashes from high up.
+        var tiles = terrain.Terrain.Select(t => t.LevelName).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var meshes = far.Meshes;
         var placements = new List<ScenePlacement>(far.Placements.Count);
-        foreach (var p in far.Placements)
+        foreach (var model in far.Placements)
         {
+            var p = model;
+            if (LevelOf(p.Actor) is { } level && tiles.Contains(level[(level.LastIndexOf('/') + 1)..]) && far.Meshes.TryGetValue(p.MeshPath, out var asset))
+            {
+                var key = p.MeshPath + GroundlessSuffix;
+                if (!meshes.ContainsKey(key))
+                {
+                    var forest = WithoutGround(asset, key);
+                    if (forest is null)
+                    {
+                        continue; // only ground: the backdrop's terrain is all of it
+                    }
+
+                    if (ReferenceEquals(forest, asset))
+                    {
+                        placements.Add(p with { SelectableId = 0, CullDistance = 0f }); // no ground of its own
+                        continue;
+                    }
+
+                    var copy = ReferenceEquals(meshes, far.Meshes) ? new Dictionary<string, PreparedMeshAsset>(far.Meshes, StringComparer.OrdinalIgnoreCase) : (Dictionary<string, PreparedMeshAsset>)meshes;
+                    copy[key] = forest;
+                    meshes = copy;
+                }
+
+                p = p with { MeshPath = key };
+            }
+
             placements.Add(p.SelectableId == 0 && p.CullDistance == 0f ? p : p with { SelectableId = 0, CullDistance = 0f });
         }
 
-        return new PreparedLevelScene(far.Documents, placements, far.Meshes, far.Textures, far.MissingMeshes, terrain.Terrain,
+        return new PreparedLevelScene(far.Documents, placements, meshes, far.Textures, far.MissingMeshes, terrain.Terrain,
             [.. terrain.Warnings, .. far.Warnings], terrain.Elapsed + far.Elapsed)
         {
             Slots = far.Slots,
@@ -173,6 +204,51 @@ public static class FarModelsScene
             LayerTextures = terrain.LayerTextures,
             MissingLayerTextures = terrain.MissingLayerTextures,
             TerrainBakeTime = terrain.TerrainBakeTime,
+        };
+    }
+
+    /// <summary>Suffix of the mesh key of a landscape tile's far model without its ground (<see cref="WithoutGround"/>).</summary>
+    public const string GroundlessSuffix = "#forest";
+
+    /// <summary>
+    /// <paramref name="asset"/> (a landscape tile's far model) without its opaque sections, its ground, under
+    /// <paramref name="key"/>: the masked and see-through ones (the distant forest's cards) stay. Null when it is all ground,
+    /// <paramref name="asset"/> itself when it has no opaque section.
+    /// </summary>
+    internal static PreparedMeshAsset? WithoutGround(PreparedMeshAsset asset, string key)
+    {
+        ArgumentNullException.ThrowIfNull(asset);
+        bool Ground(string material) => !asset.MaterialAlphaCutoffs.ContainsKey(material) && !(asset.MaterialTints.TryGetValue(material, out var tint) && tint.W < 1f);
+        if (!asset.Lods.Any(l => l.Sections.Any(s => Ground(s.MaterialName))))
+        {
+            return asset;
+        }
+
+        var lods = new List<ScumStudio.Core.Geometry.MeshData>();
+        foreach (var lod in asset.Lods)
+        {
+            var indices = new List<uint>(lod.Indices.Length);
+            var sections = new List<ScumStudio.Core.Geometry.MeshSection>();
+            foreach (var section in lod.Sections.Where(s => !Ground(s.MaterialName)))
+            {
+                sections.Add(section with { FirstIndex = indices.Count });
+                indices.AddRange(new ArraySegment<uint>(lod.Indices, section.FirstIndex, section.IndexCount));
+            }
+
+            if (sections.Count == 0)
+            {
+                break; // a coarser LOD with only ground: the forest ends with the LOD before it
+            }
+
+            lods.Add(lod with { Indices = [.. indices], Sections = [.. sections] });
+        }
+
+        return lods.Count == 0 ? null : asset with
+        {
+            MeshPath = key,
+            Mesh = lods[0],
+            Lods = lods,
+            LodScreenSizes = [.. asset.LodScreenSizes.Take(lods.Count)],
         };
     }
 

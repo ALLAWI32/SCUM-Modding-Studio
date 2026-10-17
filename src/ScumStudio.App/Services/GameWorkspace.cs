@@ -5,6 +5,7 @@ using ScumStudio.Assets.Catalog;
 using ScumStudio.Core.Abstractions;
 using ScumStudio.Core.Security;
 using ScumStudio.Core.Settings;
+using ScumStudio.Viewport;
 
 namespace ScumStudio.App.Services;
 
@@ -35,6 +36,9 @@ public sealed partial class GameWorkspace : ObservableObject, IDisposable
     private readonly IUiDispatcher _dispatcher;
     private readonly ILogger _logger;
     private readonly SemaphoreSlim _gate = new(1, 1);
+
+    /// <summary>The imported mods the open game paks were read with (set only when the paks opened).</summary>
+    private IReadOnlyList<string> _catalogMods = [];
 
     /// <summary>Creates the workspace (nothing is opened until <see cref="ConnectAsync"/>).</summary>
     public GameWorkspace(SettingsStore settings, ProtectedKeyStore keys, IUiDispatcher dispatcher, ILogger logger)
@@ -103,8 +107,10 @@ public sealed partial class GameWorkspace : ObservableObject, IDisposable
         OwnModNames = ownModNames.ToList();
 
         // A new name re-opens the paks only when it changes which paks of the source are read; the same source is opened.
+        // The open game files must read these mods: a re-read that failed or was cancelled left the earlier ones open.
         if (Catalog is not null && !IsLoose && SourcePath is { } paks
-            && (modsChanged || Level.Export.OwnPaks.ChangesSkips(paks, oldNames, OwnModNames)))
+            && (modsChanged || !ModFolders.Where(Directory.Exists).SequenceEqual(_catalogMods, StringComparer.OrdinalIgnoreCase)
+                || Level.Export.OwnPaks.ChangesSkips(paks, oldNames, OwnModNames)))
         {
             await OpenAsync(paks, loose: false, progress, cancellationToken).ConfigureAwait(false);
         }
@@ -238,6 +244,7 @@ public sealed partial class GameWorkspace : ObservableObject, IDisposable
             AesKey = key, Logger = _logger, LooseOverlays = mods, PakFileFilter = Level.Export.OwnPaks.Filter(OwnModNames, skipped),
         });
         SkippedOwnPaks = skipped;
+        _catalogMods = mods;
         if (skipped.Count > 0)
         {
             _logger.LogWarning("Not read as game files (the studio's own exported paks): {Paks}.", string.Join(", ", skipped));
@@ -267,6 +274,16 @@ public sealed partial class GameWorkspace : ObservableObject, IDisposable
 
             if (!ReferenceEquals(old, catalog))
             {
+                // The game's prisoner stands beside vehicles and weapons in the 3D previews (read once per catalog, on a worker).
+                if (catalog is null)
+                {
+                    ScaleFigure.Forget();
+                }
+                else
+                {
+                    _ = ScaleFigure.LoadAsync(catalog, _logger);
+                }
+
                 CatalogChanged?.Invoke(this, EventArgs.Empty);
                 old?.Dispose();
             }

@@ -148,6 +148,8 @@ public sealed class StreamingBenchRealTests(ITestOutputHelper output)
         context.Gl.Finish();
 
         var frames = new List<double>();
+        var motion = new FrameClock(); // r37: the step LevelViewport moves the camera by (Smooth camera), against the raw interval
+        var (rawSteps, smoothSteps) = (new List<double>(), new List<double>());
         var slow = new List<string>();
         var gpu = new List<(int Meshes, long MeshBytes, int Textures, long TextureBytes)>(); // alive after each streaming step (debug run)
         var steps = new List<string>();
@@ -163,6 +165,13 @@ public sealed class StreamingBenchRealTests(ITestOutputHelper output)
         while (true)
         {
             var frameStart = clock.Elapsed.TotalSeconds;
+            var cameraStep = motion.Step(frameStart);
+            if (motion.LastInterval > 0)
+            {
+                rawSteps.Add(motion.LastInterval);
+                smoothSteps.Add(cameraStep);
+            }
+
             var at = PointAt(path, legs, flown);
             var ahead = PointAt(path, legs, MathF.Min(length, flown + 1_000f)) - at;
             var ground = backdropScene.HeightField?.SampleHeight(at.X, at.Y) ?? 0f;
@@ -255,6 +264,11 @@ public sealed class StreamingBenchRealTests(ITestOutputHelper output)
             output.WriteLine(string.Create(CultureInfo.InvariantCulture, $"peak working set {process.PeakWorkingSet64 >> 20} MB, GC pauses {GC.GetTotalPauseDuration().TotalMilliseconds:0} ms in all, {GC.CollectionCount(0)}/{GC.CollectionCount(1)}/{GC.CollectionCount(2)} collections (gen0/1/2)"));
         }
 
+        var frameMean = frames.Average();
+        var frameSpread = Math.Sqrt(frames.Sum(f => (f - frameMean) * (f - frameMean)) / frames.Count);
+        output.WriteLine(string.Create(CultureInfo.InvariantCulture,
+            $"frame time {frameMean:0.0} ms, standard deviation {frameSpread:0.0} ms; camera step per frame (r37 Smooth camera): raw interval spread {Spread(rawSteps):P1}, FrameClock {Spread(smoothSteps):P1}"));
+        Assert.True(Spread(smoothSteps) <= Spread(rawSteps), "the smoothed camera steps vary more than the frame times");
         output.WriteLine("Streaming steps:");
         steps.ForEach(output.WriteLine);
         output.WriteLine("Frames over 50 ms:");
@@ -293,6 +307,18 @@ public sealed class StreamingBenchRealTests(ITestOutputHelper output)
     /// <summary>NVX_gpu_memory_info's free video memory in MB, or -1 on a driver without it.</summary>
     private static long FreeVideoMemoryMb(Silk.NET.OpenGL.GL gl) =>
         GlInfo.HasExtension(gl, "GL_NVX_gpu_memory_info") ? gl.GetInteger((Silk.NET.OpenGL.GetPName)0x9049) / 1024 : -1; // CURRENT_AVAILABLE_VIDMEM_NVX, KB
+
+    /// <summary>Standard deviation over mean (0 for fewer than two values).</summary>
+    private static double Spread(List<double> values)
+    {
+        if (values.Count < 2)
+        {
+            return 0;
+        }
+
+        var mean = values.Average();
+        return Math.Sqrt(values.Sum(v => (v - mean) * (v - mean)) / values.Count) / mean;
+    }
 
     private static double Percentile(List<double> sorted, double p) => sorted[Math.Clamp((int)Math.Ceiling(p * sorted.Count) - 1, 0, sorted.Count - 1)];
 

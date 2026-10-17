@@ -79,6 +79,36 @@ public sealed record CraftIngredient(string Tag, int Amount, bool IsTool = false
 /// <param name="DayOnly">Solar: works only by day. Not a value of the game's data (kept, reported at export).</param>
 public sealed record PowerSettings(float RadiusMeters = 10, float Output = 500, float FuelPerMinute = 0.13889f, bool DayOnly = false);
 
+/// <summary>
+/// The horizontal axis of the game's placement a <see cref="InFrontSettings"/> offset follows. The data suggests +X is
+/// straight ahead of the player (the DLC curtains' <c>PlacementLocationOffset</c> -5 X pulls them off the wall towards him);
+/// only the game can confirm it, so the others stay one click away.
+/// </summary>
+public enum InFrontAxis
+{
+    /// <summary>+X: expected straight ahead of the player.</summary>
+    PlusX,
+
+    /// <summary>-X.</summary>
+    MinusX,
+
+    /// <summary>+Y.</summary>
+    PlusY,
+
+    /// <summary>-Y.</summary>
+    MinusY,
+}
+
+/// <summary>
+/// "Place in front" (experimental, owner 2026-10-17: a 15 m cabin appears around him): its recipe's
+/// <c>PlacementLocationOffset</c> moves the point the game places it at, so the placement ghost and the element built from it
+/// move together, everything of the element with them (it is one mesh component; its snap markers, ladder and collision are
+/// its own). See <see cref="CraftablesPlanner.InFrontMeters"/>.
+/// </summary>
+/// <param name="Meters">The distance; null = automatic from its size (<see cref="CraftablesPlanner.AutoInFrontMeters"/>).</param>
+/// <param name="Axis">The direction (<see cref="InFrontAxis.PlusX"/> unless a game test shows another).</param>
+public sealed record InFrontSettings(float? Meters = null, InFrontAxis Axis = InFrontAxis.PlusX);
+
 /// <summary>A craftable of the project (one entry of <c>craftables.json</c>).</summary>
 public sealed record Craftable
 {
@@ -142,6 +172,26 @@ public sealed record Craftable
 
     /// <summary>Power settings (used when <see cref="Kind"/> is <see cref="CraftKind.Power"/>).</summary>
     public PowerSettings Power { get; init; } = new();
+
+    /// <summary>
+    /// Building it needs a flag area (base territory): true writes its element's <c>_canBePlacedWithoutFlag</c> false, false
+    /// writes it true; null keeps the game's (its C++ default is false: the cabins, the chair and the workbench need a flag).
+    /// For what is built (furniture, a station, an element: every level of it).
+    /// </summary>
+    public bool? NeedsFlag { get; init; }
+
+    /// <summary>
+    /// What a repair costs, in percent of the game's (null = 100): one use of a repair tool restores the element's
+    /// <c>_repairableParams.HealthRepairedPerUse</c> × 100 / this, so 200 takes twice the uses (and what the tool uses up per
+    /// use) for the same damage and 50 half. Each level keeps its own game value as the base.
+    /// </summary>
+    public float? RepairCostPercent { get; init; }
+
+    /// <summary>
+    /// Placed in front of the player instead of centred on the point he aims at (experimental), or null for the game's
+    /// placement. For what is built (furniture, a station, an element: its recipe).
+    /// </summary>
+    public InFrontSettings? InFront { get; init; }
 
     /// <summary>
     /// The folder its new packages go in, inside each template's folder (HexTer: "organize things neatly"): <c>Furniture</c>

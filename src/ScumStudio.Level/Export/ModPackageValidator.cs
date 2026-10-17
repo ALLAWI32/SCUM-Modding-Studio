@@ -36,15 +36,47 @@ public sealed record ValidationResult
     /// <summary>Everything that would make the game load, play or tear down the mod differently from its own data; empty when it passed.</summary>
     public IReadOnlyList<string> Problems { get; init; } = [];
 
+    /// <summary>
+    /// What was found that does not stop the export: an imported mod's own references to what this game no longer has (a mod
+    /// made for another version of SCUM; the game reads null there, as it does with that mod installed on its own).
+    /// </summary>
+    public IReadOnlyList<string> Notes { get; init; } = [];
+
     /// <summary>How long the check took.</summary>
     public TimeSpan Elapsed { get; init; }
 
     /// <summary>True when nothing was found.</summary>
     public bool Passed => Problems.Count == 0;
 
+    /// <summary>
+    /// The other paks of the same project this mod refers to (a Map pak placing a clone of the Vehicles pak, a Craftables pak
+    /// whose registry keeps the project pak's records): they must be installed with it.
+    /// </summary>
+    public IReadOnlyList<string> Needs { get; init; } = [];
+
     /// <summary>The export summary's line: <c>Validator: N packages checked, 0 problems</c>.</summary>
     public string Summary => string.Create(CultureInfo.InvariantCulture,
         $"Validator: {Packages} packages checked, {Problems.Count} problems ({Exports} objects, {Elapsed.TotalSeconds:0.0} s)");
+}
+
+/// <summary>What else <see cref="ModPackageValidator"/> knows about the packages it checks.</summary>
+public sealed record ValidationOptions
+{
+    /// <summary>
+    /// The client's game files when the server's pak is checked (null otherwise). A dedicated server cook leaves out what
+    /// only players' games draw or play (post process, materials, particles): an import of a package the client has is not a
+    /// hole in the server pak (the server's own packages get null there too), and what the client's copy of the same package
+    /// imports counts as the game's own.
+    /// </summary>
+    public AssetCatalog? Client { get; init; }
+
+    /// <summary>
+    /// Package path → imported mod (its folder name) for the packages the export carried as that mod made them
+    /// (<see cref="Projects.ProjectMods.CarryInto(IReadOnlyList{string}, string, string, IDictionary{string, string}?)"/>).
+    /// Their imports are the mod author's, not the export's: one this game no longer has is a note naming the mod, unless an
+    /// object of the package is built from it (its class, template or outer), which still stops the export.
+    /// </summary>
+    public IReadOnlyDictionary<string, string> Carried { get; init; } = new Dictionary<string, string>();
 }
 
 /// <summary>The validator found problems: the export stops and writes no pak (owner 2026-10-16: "everything safe, 100%").</summary>
@@ -89,7 +121,8 @@ public sealed class ModValidationException : InvalidOperationException
 /// actors of that level, once each.</item>
 /// <item>No two exports with one outer and one name; no outer or <c>AttachParent</c> loop; no component attached into
 /// another actor unless it is that actor's root (or the game does the same).</item>
-/// <item>Every new import must exist in the game or the mod; new GUIDs that must be unique in a level (<c>LightGuid</c>,
+/// <item>Every new import must exist in the game or the mod (checking the server's pak, a client-only asset is no hole; an
+/// imported mod's own outdated reference is a note naming the mod); new GUIDs that must be unique in a level (<c>LightGuid</c>,
 /// <c>MapBuildDataId</c>) must be; a Wwise event must be the same cook's as the game's copy (a dedicated server holds stubs);
 /// every new <c>AssetRegistry.bin</c> record must name a package the game or the mod has.</item>
 /// </list>
@@ -102,10 +135,24 @@ public static class ModPackageValidator
     private const string InertClass = "/Script/CoreUObject.Object";
     private const int MaxProblemsPerPackage = 40;
 
-    /// <summary>Checks every package under <paramref name="stagingDirectory"/> against <paramref name="game"/> (the cook's game files).</summary>
-    public static ValidationResult Validate(string stagingDirectory, AssetCatalog game, CancellationToken cancellationToken = default)
+    /// <summary>
+    /// Checks every package under <paramref name="stagingDirectory"/> against <paramref name="game"/> (the cook's game files).
+    /// <paramref name="elsewhere"/> names the pak of the same project that ships a package this one does not (null: none); a
+    /// reference to such a package is no problem, and <see cref="ValidationResult.Needs"/> lists those paks.
+    /// </summary>
+    public static ValidationResult Validate(string stagingDirectory, AssetCatalog game, CancellationToken cancellationToken = default, Func<string, string?>? elsewhere = null) =>
+        Validate(stagingDirectory, game, null, cancellationToken, elsewhere);
+
+    /// <summary>
+    /// Checks every package under <paramref name="stagingDirectory"/> against <paramref name="game"/> (the cook's game files),
+    /// with what <paramref name="options"/> says about the server role and the imported mods' packages.
+    /// <paramref name="elsewhere"/> names the pak of the same project that ships a package this one does not (null: none); a
+    /// reference to such a package is no problem, and <see cref="ValidationResult.Needs"/> lists those paks.
+    /// </summary>
+    public static ValidationResult Validate(string stagingDirectory, AssetCatalog game, ValidationOptions? options, CancellationToken cancellationToken = default, Func<string, string?>? elsewhere = null)
     {
         ArgumentNullException.ThrowIfNull(game);
+        options ??= new ValidationOptions();
         var clock = Stopwatch.StartNew();
         var root = Path.GetFullPath(stagingDirectory);
         var files = Directory.Exists(root)
@@ -117,8 +164,9 @@ public static class ModPackageValidator
             staged[AssetPaths.ToPackagePath(Path.GetRelativePath(root, file).Replace('\\', '/'), game.ProjectName)] = file;
         }
 
-        var context = new Context(game, staged);
+        var context = new Context(game, staged) { Elsewhere = elsewhere, Client = options.Client, Carried = options.Carried };
         var problems = new ConcurrentBag<(string Package, string Problem)>();
+        var notes = new ConcurrentBag<string>();
         var exports = 0;
         var sized = 0;
 
@@ -129,7 +177,13 @@ public static class ModPackageValidator
             Parallel.ForEach(phase, new ParallelOptions { MaxDegreeOfParallelism = Math.Clamp(Environment.ProcessorCount / 2, 1, 6), CancellationToken = cancellationToken }, entry =>
             {
                 var found = new List<string>();
-                var (count, checkedSize) = CheckPackage(context, entry.Key, entry.Value, found);
+                var noted = new List<string>();
+                var (count, checkedSize) = CheckPackage(context, entry.Key, entry.Value, found, noted);
+                foreach (var note in noted)
+                {
+                    notes.Add(note);
+                }
+
                 Interlocked.Add(ref exports, count);
                 Interlocked.Add(ref sized, checkedSize);
                 foreach (var problem in found.Take(MaxProblemsPerPackage))
@@ -144,7 +198,7 @@ public static class ModPackageValidator
             });
         }
 
-        foreach (var problem in CheckRegistry(root, game, staged))
+        foreach (var problem in CheckRegistry(root, context))
         {
             problems.Add((AssetModBuilder.AssetRegistryPath, problem));
         }
@@ -154,7 +208,9 @@ public static class ModPackageValidator
             Packages = staged.Count,
             Exports = exports,
             SizeCheckedExports = sized,
+            Needs = context.Needed.Keys.Order(StringComparer.OrdinalIgnoreCase).ToList(),
             Problems = problems.OrderBy(p => p.Package, StringComparer.OrdinalIgnoreCase).ThenBy(p => p.Problem, StringComparer.Ordinal).Select(p => p.Problem).ToList(),
+            Notes = notes.Order(StringComparer.Ordinal).ToList(),
             Elapsed = clock.Elapsed,
         };
     }
@@ -226,6 +282,24 @@ public static class ModPackageValidator
 
         public IReadOnlyDictionary<string, string> Staged { get; } = staged;
 
+        /// <summary>The pak of the same project that ships a package the mod does not, or null (see <see cref="Validate"/>).</summary>
+        public Func<string, string?>? Elsewhere { get; init; }
+
+        /// <summary>The other paks referred to (the keys).</summary>
+        public ConcurrentDictionary<string, byte> Needed { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>True when another pak of the project ships <paramref name="package"/> (and it is noted as needed).</summary>
+        public bool ShipsElsewhere(string package)
+        {
+            if (Elsewhere?.Invoke(package) is not { } pak)
+            {
+                return false;
+            }
+
+            Needed.TryAdd(pak, 0);
+            return true;
+        }
+
         /// <summary>Class path → (exports of the game's packages read exactly, read with bytes left or failing).</summary>
         public ConcurrentDictionary<string, (int Exact, int Inexact)> ClassReads { get; } = new(StringComparer.OrdinalIgnoreCase);
 
@@ -234,6 +308,12 @@ public static class ModPackageValidator
 
         /// <summary>Package path → its exports' paths (outer chain inside the package), for import checks.</summary>
         public ConcurrentDictionary<string, HashSet<string>?> ExportPaths { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>The client's game files when the server's pak is checked (<see cref="ValidationOptions.Client"/>).</summary>
+        public AssetCatalog? Client { get; init; }
+
+        /// <summary>Packages carried from imported mods as their authors made them (<see cref="ValidationOptions.Carried"/>).</summary>
+        public IReadOnlyDictionary<string, string> Carried { get; init; } = new Dictionary<string, string>();
     }
 
     /// <summary>One package read back: tables, objects and the references they hold.</summary>
@@ -303,7 +383,7 @@ public static class ModPackageValidator
     /// <summary>One object reference an export holds.</summary>
     private readonly record struct Reference(int Export, string Property, int Index);
 
-    private static (int Exports, int Sized) CheckPackage(Context context, string path, string file, List<string> problems)
+    private static (int Exports, int Sized) CheckPackage(Context context, string path, string file, List<string> problems, List<string> notes)
     {
         View mod;
         try
@@ -355,7 +435,7 @@ public static class ModPackageValidator
         CheckReferences(mod, modRefs, stock, stockRefs, stockIndex, problems);
         CheckLevel(mod, stock, stockIndex, problems);
         CheckAttachment(mod, modRefs, stock, stockRefs, stockIndex, problems);
-        CheckImports(context, mod, stock, problems);
+        CheckImports(context, mod, stock, problems, notes);
         CheckGuids(mod, stock, stockIndex, problems);
 
         // The cook check holds an event to the game's own copy only: an imported mod's file (a loose overlay or a mod pak) is
@@ -796,6 +876,14 @@ public static class ModPackageValidator
                 continue;
             }
 
+            // The level's actor list is a set to the game (CheckLevel checks it as one) except its first place, the
+            // WorldSettings. A deleted actor leaves the list and a copy is appended, so with as many copies as deletions
+            // each later actor sits one place earlier without anything pointing elsewhere.
+            if (r.Export == mod.Level && r.Property.StartsWith("Actors[", StringComparison.Ordinal) && r.Property != "Actors[0]")
+            {
+                continue;
+            }
+
             var now = mod.PathOf(r.Index);
             var then = stock!.PathOf(was);
             if (string.Equals(now, then, StringComparison.OrdinalIgnoreCase))
@@ -963,38 +1051,111 @@ public static class ModPackageValidator
         }
     }
 
-    /// <summary>Every import the game does not already make in its own copy of the package must exist in the game or the mod.</summary>
-    private static void CheckImports(Context context, View mod, View? stock, List<string> problems)
+    /// <summary>
+    /// Every import the game does not already make in its own copy of the package (or, checking the server's pak, the client's
+    /// copy) must exist in the game or the mod; checking the server's pak, a package only the client has is a client-only
+    /// asset the dedicated server cook leaves out. A package carried from an imported mod is held to itself: what it imports
+    /// that this game no longer has is a note naming the mod, unless one of its objects is built from it.
+    /// </summary>
+    private static void CheckImports(Context context, View mod, View? stock, List<string> problems, List<string> notes)
     {
-        var known = stock is null ? new HashSet<string>(StringComparer.OrdinalIgnoreCase) : new HashSet<string>(stock.ImportPaths, StringComparer.OrdinalIgnoreCase);
+        context.Carried.TryGetValue(mod.Path, out var carriedFrom);
+        var known = stock is null || carriedFrom is not null ? new HashSet<string>(StringComparer.OrdinalIgnoreCase) : new HashSet<string>(stock.ImportPaths, StringComparer.OrdinalIgnoreCase);
+        var clientKnown = carriedFrom is null && context.Client is { } client
+            ? new HashSet<string>(ImportsOf(client, mod.Path), StringComparer.OrdinalIgnoreCase)
+            : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        // What an object is built from (class, template, outer) must be there on either side: the server gets no object there.
+        var built = BuiltFrom(mod.Package);
+        var noted = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var p = mod.Package;
         for (var i = 0; i < p.ImportMap.Length; i++)
         {
             var path = mod.ImportPaths[i];
-            if (known.Contains(path) || path.StartsWith("/Script/", StringComparison.OrdinalIgnoreCase))
+            if (known.Contains(path) || path.StartsWith("/Script/", StringComparison.OrdinalIgnoreCase) || (clientKnown.Contains(path) && !built.Contains(i)))
             {
                 continue;
             }
 
             var dot = path.IndexOf('.');
             var package = dot < 0 ? path : path[..dot];
+            string missing;
             if (!context.Staged.ContainsKey(package) && !context.Game.PackageExists(package))
             {
-                problems.Add($"{mod.Path}: imports {path}, but neither the game nor the mod has the package {package} (the game would get null there).");
-                continue;
+                if (context.ShipsElsewhere(package))
+                {
+                    continue; // another pak of the project ships it (its own check reads its objects)
+                }
+
+                if (context.Client?.PackageExists(package) == true && !built.Contains(i))
+                {
+                    continue; // a client-only asset: the dedicated server cook leaves it out
+                }
+
+                missing = $"neither the game nor the mod has the package {package}";
+            }
+            else
+            {
+                var objects = dot < 0 ? null : context.ExportPaths.GetOrAdd(package, key => ExportsOf(context, key));
+                var inner = dot < 0 ? string.Empty : path[(dot + 1)..].Replace(':', '.');
+                if (objects is null || objects.Contains(inner))
+                {
+                    continue;
+                }
+
+                missing = $"{package} has no object {inner}";
             }
 
-            if (dot < 0)
+            if (carriedFrom is not null && !built.Contains(i))
             {
-                continue;
+                if (noted.Add(package)) // the package and its object: one note
+                {
+                    notes.Add($"{mod.Path} (from the imported mod {carriedFrom}) imports {path}, but {missing}: the game gets null there. "
+                              + "The mod was made for another version of SCUM; ask its author for an update.");
+                }
+            }
+            else
+            {
+                problems.Add($"{mod.Path}: imports {path}, but {missing} (the game would get null there).");
+            }
+        }
+    }
+
+    /// <summary>Imports an export of <paramref name="package"/> is built from (class, template, super, outer), with their outer chains.</summary>
+    private static HashSet<int> BuiltFrom(Package package)
+    {
+        var built = new HashSet<int>();
+        foreach (var export in package.ExportMap)
+        {
+            foreach (var index in new[] { export.ClassIndex, export.TemplateIndex, export.SuperIndex, export.OuterIndex })
+            {
+                for (int i = index is { IsImport: true } import ? -import.Index - 1 : -1, guard = 0; i >= 0 && i < package.ImportMap.Length && guard < 64 && built.Add(i); guard++)
+                {
+                    var outer = package.ImportMap[i].OuterIndex?.Index ?? 0;
+                    i = outer < 0 ? -outer - 1 : -1;
+                }
+            }
+        }
+
+        return built;
+    }
+
+    /// <summary>The import paths of <paramref name="package"/> in <paramref name="catalog"/> (header only); empty when it has none or it cannot be read.</summary>
+    private static IEnumerable<string> ImportsOf(AssetCatalog catalog, string package)
+    {
+        try
+        {
+            if (!catalog.TryGetPackageFile(package, out var file))
+            {
+                return [];
             }
 
-            var objects = context.ExportPaths.GetOrAdd(package, key => ExportsOf(context, key));
-            var inner = path[(dot + 1)..].Replace(':', '.');
-            if (objects is not null && !objects.Contains(inner))
-            {
-                problems.Add($"{mod.Path}: imports {path}, but {package} has no object {inner} (the game would get null there).");
-            }
+            var header = new Package(file.CreateReader(), null, (Lazy<FArchive?>?)null, null, catalog.Provider, true);
+            return Enumerable.Range(0, header.ImportMap.Length).Select(i => ImportPath(header, i)).ToList();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException and not OutOfMemoryException)
+        {
+            return [];
         }
     }
 
@@ -1120,8 +1281,10 @@ public static class ModPackageValidator
     private static bool IsZero(FGuid guid) => guid.A == 0 && guid.B == 0 && guid.C == 0 && guid.D == 0;
 
     /// <summary>New registry records (the game's registry has every other) must name a package the game or the mod has.</summary>
-    private static IEnumerable<string> CheckRegistry(string root, AssetCatalog game, IReadOnlyDictionary<string, string> staged)
+    private static IEnumerable<string> CheckRegistry(string root, Context context)
     {
+        var game = context.Game;
+        var staged = context.Staged;
         var path = Path.Combine([root, .. AssetModBuilder.AssetRegistryPath.Split('/')]);
         if (!File.Exists(path))
         {
@@ -1162,7 +1325,7 @@ public static class ModPackageValidator
 
         foreach (var asset in registry.Assets)
         {
-            if (!stock.Contains(asset.ObjectPath) && !staged.ContainsKey(asset.PackageName) && !game.PackageExists(asset.PackageName))
+            if (!stock.Contains(asset.ObjectPath) && !staged.ContainsKey(asset.PackageName) && !game.PackageExists(asset.PackageName) && !context.ShipsElsewhere(asset.PackageName))
             {
                 yield return $"{AssetModBuilder.AssetRegistryPath}: the record {asset.ObjectPath} ({asset.AssetClass}) names {asset.PackageName}, which neither the game nor the mod has.";
             }

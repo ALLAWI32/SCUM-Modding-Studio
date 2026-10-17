@@ -31,7 +31,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IDisposable
             new NavItemViewModel("vehicles", "Vehicles", "Icon.Vehicle", null, () => Track(new VehiclesPageViewModel(services, OpenSetup))),
             new NavItemViewModel("weapons", "Weapons", "Icon.Weapon", null, () => Track(new WeaponsPageViewModel(services, OpenSetup))),
             new NavItemViewModel("items", "Items", "Icon.Basket", null, () => Track(new ItemsPageViewModel(services, OpenSetup))),
-            new NavItemViewModel("spawns", "Spawns", "Icon.Pin", null, () => Track(new SpawnsPageViewModel(services, OpenSetup))),
+            new NavItemViewModel("spawns", "Spawns", "Icon.Pin", null, () => Track(CreateSpawns(services))),
             new NavItemViewModel("economy", "Economy", "Icon.Coins", null, () => Track(CreateEconomy(services))),
             new NavItemViewModel("craftables", "Craftables", "Icon.Cube3d", null, () => Track(new CraftablesPageViewModel(services, OpenSetup))),
             new NavItemViewModel("assets", "Assets", "Icon.Assets", null, () => Track(new AssetsPageViewModel(services, OpenSetup, PlaceInMap, MakeCraftable))),
@@ -198,6 +198,23 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IDisposable
         var economy = new EconomyPageViewModel(services, OpenSetup);
         economy.SetTraderPlacer(PlaceTrader);
         return economy;
+    }
+
+    /// <summary>The Spawns page, wired to show a spawn place on the Map ("Show on the Map").</summary>
+    private SpawnsPageViewModel CreateSpawns(AppServices services)
+    {
+        var spawns = new SpawnsPageViewModel(services, OpenSetup);
+        spawns.SetMapOpener(ShowSpawnOnMap);
+        return spawns;
+    }
+
+    /// <summary>Switches to the Map page with the camera on <paramref name="place"/> and the place selected (<paramref name="home"/>: where the Map's places hold it).</summary>
+    public void ShowSpawnOnMap(Level.Spawns.SpawnPlace place, Core.Mathematics.FVector home)
+    {
+        if (NavigateTo("map") is MapPageViewModel map)
+        {
+            map.ShowSpawnPlace(place, home);
+        }
     }
 
     /// <summary>Switches to the Map page and places a trader of <paramref name="type"/> where its camera aims.</summary>

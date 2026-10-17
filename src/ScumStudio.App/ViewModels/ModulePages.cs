@@ -67,6 +67,31 @@ public sealed class WeaponsPageViewModel : ModulePageViewModel
     /// <inheritdoc />
     protected override IReadOnlySet<string> KeyStats => KeyNames;
 
+    /// <summary>
+    /// Owner: "the page opens on the dildo; make the AKM the default and the top, firearms first, sorted sensibly". Guns by
+    /// family (assault rifles first, the AKM and AK-47 at their top), then melee and spare parts; a clone right after its gun.
+    /// </summary>
+    protected override IEnumerable<ModuleItemViewModel> Order(IEnumerable<ModuleItemViewModel> items) =>
+        items.Select(i => (Item: i, Rank: WeaponFamilies.Rank(TemplateLeaf(i), i.Asset.Category)))
+            .OrderBy(e => e.Item.Asset.Kind)
+            .ThenBy(e => e.Item.Asset.Kind == ModdableKind.Weapon ? e.Rank.Family : WeaponFamily.Other)
+            .ThenBy(e => e.Item.Asset.Kind == ModdableKind.Weapon ? e.Rank.Order : 0)
+            .ThenBy(e => e.Item.Asset.Kind == ModdableKind.Weapon ? string.Empty : e.Item.Asset.Category, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(e => TemplateLeaf(e.Item), StringComparer.OrdinalIgnoreCase)
+            .ThenBy(e => e.Item.IsClone)
+            .ThenBy(e => e.Item.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(e => e.Item);
+
+    /// <summary>A weapon's family ("Assault rifle") under its name; other kinds keep their folder.</summary>
+    protected override string? GroupLabel(ModuleItemViewModel item) => item.Asset.Kind == ModdableKind.Weapon
+        ? Localization.Loc.T(FamilyKey(WeaponFamilies.FamilyOf(TemplateLeaf(item), item.Asset.Category)))
+        : null;
+
+    private static string TemplateLeaf(ModuleItemViewModel item) => ModuleItemViewModel.ShortName(item.CloneOf ?? item.PackagePath);
+
+    /// <summary>The string key of a family's name (<c>Weapons.Family.AssaultRifle</c>).</summary>
+    internal static string FamilyKey(WeaponFamily family) => "Weapons.Family." + family;
+
     /// <inheritdoc />
     protected override IReadOnlyList<ModuleFilter> BuildFilters(IReadOnlyList<ModuleItemViewModel> items)
     {

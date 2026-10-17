@@ -102,8 +102,8 @@ public sealed class FitToGroundRealTests
     /// <summary>
     /// Owner: "Fit to ground must put the object on whatever is directly under it: the ground, or a roof, a floor, a road,
     /// a rock". A crate 3 m over a farmhouse roof lands on the roof (not on the terrain under the house), a barrel over a
-    /// road piece on the road, a copy over open ground on the terrain, and a multi-selection member by member; a 20-object
-    /// group fits well under a second.
+    /// gravel road on the ground the game draws there (the road is painted into it), a copy over open ground on the terrain,
+    /// and a multi-selection member by member; a 20-object group fits well under a second.
     /// </summary>
     [Fact]
     public async Task ThingsLandOnTheRoofOrRoadUnderThem()
@@ -147,20 +147,24 @@ public sealed class FitToGroundRealTests
         Assert.InRange(bottom.Z - roof.Top(bottom.X, bottom.Y)!.Value, -5f, 5f);
         Assert.True(bottom.Z > Terrain(bottom.X, bottom.Y) + 200f);
 
-        // A road piece (a bent spline mesh of the landscape tile): where it lies highest over the terrain.
-        var roads = scene.Placements.Where(p => p.Component?.SplineMesh is not null && p.MeshPath.Contains("/Road/", StringComparison.OrdinalIgnoreCase))
+        // A road piece (a bent spline mesh of the landscape tile) where it lies highest over the terrain. The farm's roads are
+        // gravel roads (M_DirtRoad_Master), which the game does not draw as a mesh: it paints them into the ground texture
+        // (placed as a mesh of their own they show pink). The Map draws them see-through since r37, and the barrel stands on
+        // the ground the game draws there, not on the piece 30 cm above it (3.4.0 set it there, floating in the game).
+        var roads = scene.Placements.Where(p => p.Component?.SplineMesh is not null && p.MeshPath.Contains("/Road/", StringComparison.OrdinalIgnoreCase)
+                                                && !p.MeshPath.Contains("Border", StringComparison.OrdinalIgnoreCase))
             .Select(p => (Placement: p, Surface: new Surface(scene, [p]))).ToList();
-        var road = roads.Where(r => !r.Placement.MeshPath.Contains("Border", StringComparison.OrdinalIgnoreCase)).Take(80)
+        Assert.All(roads, r => Assert.Null(ScumStudio.Viewport.MeshSurface.Of(scene.Meshes[r.Placement.MeshPath]))); // painted: nothing stands on them
+        var road = roads.Take(80)
             .SelectMany(r => Spots(r.Surface.Box, 50f).Select(s => (s.X, s.Y, Z: r.Surface.Flat(s.X, s.Y, 40f))))
             .Where(c => c.Z is not null)
             .MaxBy(c => c.Z!.Value - Terrain(c.X, c.Y));
-        var under = new Surface(scene, roads.Where(r => r.Surface.Box.Contains(r.Surface.Box.Center with { X = road.X, Y = road.Y })).Select(r => r.Placement)); // every piece there (crossings)
         var barrel = Add(Barrel, new FVector(road.X, road.Y, road.Z!.Value + 300f - barrelBox.Min.Z));
         map.FitToGroundCommand.Execute(null);
         bottom = Bottom(barrel, barrelBox);
-        _output.WriteLine($"barrel over the road: bottom {bottom.Z:0.0} cm, road {under.Top(bottom.X, bottom.Y):0.0} cm, terrain {Terrain(bottom.X, bottom.Y):0.0} cm");
-        Assert.InRange(bottom.Z - under.Top(bottom.X, bottom.Y)!.Value, -3f, 3f);
-        Assert.True(under.Top(bottom.X, bottom.Y)!.Value > Terrain(bottom.X, bottom.Y) + 1f, "the road must lie above the terrain there to tell them apart");
+        _output.WriteLine($"barrel over the gravel road: bottom {bottom.Z:0.0} cm, road piece {road.Z:0.0} cm, terrain {Terrain(bottom.X, bottom.Y):0.0} cm");
+        Assert.True(road.Z!.Value > Terrain(road.X, road.Y) + 10f, "the road piece must lie above the terrain there to tell them apart");
+        Assert.InRange(bottom.Z - Terrain(bottom.X, bottom.Y), -3f, 3f);
 
         // A copy of a farm prop, lifted 3 m over open ground (no plant there, nothing else within 2 m): it lands on the terrain.
         var boxes = scene.Placements.Where(p => !p.MeshPath.StartsWith('#') && scene.Meshes.ContainsKey(p.MeshPath)) // not the spawn pins and rings

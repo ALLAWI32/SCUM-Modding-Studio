@@ -34,10 +34,13 @@ public static class MeshExtractor
     /// <summary>Extracts LOD <paramref name="lod"/> of a static or skeletal mesh.</summary>
     /// <exception cref="NotSupportedException"><paramref name="mesh"/> is neither a static nor a skeletal mesh.</exception>
     /// <exception cref="InvalidDataException">The LOD does not exist or neither it nor a later LOD has render data.</exception>
-    public static MeshData Extract(UObject mesh, int lod = 0) => mesh switch
+    /// <param name="mesh">The static or skeletal mesh.</param>
+    /// <param name="lod">The LOD (the next one with render data when it is stripped).</param>
+    /// <param name="extraUvs">Also keep the UV channels after the first in <see cref="MeshData.ExtraUvs"/>.</param>
+    public static MeshData Extract(UObject mesh, int lod = 0, bool extraUvs = false) => mesh switch
     {
-        UStaticMesh sm => ExtractStaticMesh(sm, lod),
-        USkeletalMesh sk => ExtractSkeletalMesh(sk, lod),
+        UStaticMesh sm => ExtractStaticMesh(sm, lod, extraUvs),
+        USkeletalMesh sk => ExtractSkeletalMesh(sk, lod, extraUvs),
         _ => throw new NotSupportedException($"{mesh.Name} is a {mesh.ExportType}, not a StaticMesh or SkeletalMesh."),
     };
 
@@ -100,8 +103,8 @@ public static class MeshExtractor
         _ => throw new NotSupportedException($"{mesh.Name} is a {mesh.ExportType}, not a StaticMesh or SkeletalMesh."),
     };
 
-    /// <summary>Extracts one LOD of a static mesh.</summary>
-    public static MeshData ExtractStaticMesh(UStaticMesh mesh, int lod = 0)
+    /// <summary>Extracts one LOD of a static mesh (<paramref name="extraUvs"/>: with its UV channels after the first).</summary>
+    public static MeshData ExtractStaticMesh(UStaticMesh mesh, int lod = 0, bool extraUvs = false)
     {
         ArgumentNullException.ThrowIfNull(mesh);
         var lods = mesh.RenderData?.LODs ?? throw new InvalidDataException($"{mesh.Name} has no render data.");
@@ -116,11 +119,12 @@ public static class MeshExtractor
         var convertedIndex = lods.Take(lod).Count(l => !l.SkipLod);
         var src = converted.LODs[convertedIndex];
         var slots = StaticSlots(mesh);
-        return Build(mesh.Name, src.Verts, src.NumVerts, src.Indices.Value, src.Sections.Value, slots);
+        var data = Build(mesh.Name, src.Verts, src.NumVerts, src.Indices.Value, src.Sections.Value, slots);
+        return extraUvs ? data with { ExtraUvs = ExtraUvs(src, src.NumVerts) } : data;
     }
 
-    /// <summary>Extracts one LOD of a skeletal mesh (bind pose).</summary>
-    public static MeshData ExtractSkeletalMesh(USkeletalMesh mesh, int lod = 0)
+    /// <summary>Extracts one LOD of a skeletal mesh (bind pose; <paramref name="extraUvs"/>: with its UV channels after the first).</summary>
+    public static MeshData ExtractSkeletalMesh(USkeletalMesh mesh, int lod = 0, bool extraUvs = false)
     {
         ArgumentNullException.ThrowIfNull(mesh);
         var lods = mesh.LODModels ?? throw new InvalidDataException($"{mesh.Name} has no LOD models.");
@@ -134,7 +138,32 @@ public static class MeshExtractor
         var convertedIndex = lods.Take(lod).Count(l => !l.SkipLod);
         var src = converted.LODs[convertedIndex];
         var slots = SkeletalSlots(mesh);
-        return Build(mesh.Name, src.Verts, src.NumVerts, src.Indices.Value, src.Sections.Value, slots);
+        var data = Build(mesh.Name, src.Verts, src.NumVerts, src.Indices.Value, src.Sections.Value, slots);
+        return extraUvs ? data with { ExtraUvs = ExtraUvs(src, src.NumVerts) } : data;
+    }
+
+    /// <summary>The converted LOD's UV channels after the first, in its vertex order (<see cref="MeshData.ExtraUvs"/>).</summary>
+    private static float[][] ExtraUvs(CBaseMeshLod lod, int vertexCount)
+    {
+        if (lod.NumTexCoords <= 1 || lod.ExtraUV?.Value is not { } extra)
+        {
+            return [];
+        }
+
+        var channels = new List<float[]>();
+        for (var c = 0; c < lod.NumTexCoords - 1 && c < extra.Length && extra[c] is { } src && src.Length >= vertexCount; c++)
+        {
+            var uv = new float[vertexCount * 2];
+            for (var i = 0; i < vertexCount; i++)
+            {
+                uv[i * 2] = src[i].U;
+                uv[(i * 2) + 1] = src[i].V;
+            }
+
+            channels.Add(uv);
+        }
+
+        return [.. channels];
     }
 
     /// <summary>

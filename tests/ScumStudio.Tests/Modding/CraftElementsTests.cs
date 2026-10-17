@@ -202,9 +202,9 @@ public sealed class CraftElementsTests
         Assert.Null(ElementFamilies.WhyNot(game.Catalog, Bed));
         Assert.Contains("DLC", ElementFamilies.WhyNot(game.Catalog, Dlc), StringComparison.Ordinal);
         Assert.Contains("modular", ElementFamilies.WhyNot(game.Catalog, Wall), StringComparison.Ordinal);
-        Assert.Contains("no placeable recipe", ElementFamilies.WhyNot(game.Catalog, Lonely), StringComparison.Ordinal);
+        Assert.Null(ElementFamilies.WhyNot(game.Catalog, Lonely)); // no recipe of its own: it borrows the chair's (CraftBuildPlaceTests)
         Assert.Contains("not a base element", ElementFamilies.WhyNot(game.Catalog, Meshes + "SM_Statue"), StringComparison.Ordinal);
-        Assert.All(new[] { Dlc, Wall, Lonely }, s => Assert.Null(ElementFamilies.Of(game.Catalog, s)));
+        Assert.All(new[] { Dlc, Wall }, s => Assert.Null(ElementFamilies.Of(game.Catalog, s)));
 
         // Planned anyway, each is left out with its reason; a source that now shows another element is left out too.
         var plan = CraftablesPlanner.Plan(game.Catalog, [Element("Wall", Wall, Meshes + "SM_Wall_Wood"), Element("Moved", ChestMesh)]);

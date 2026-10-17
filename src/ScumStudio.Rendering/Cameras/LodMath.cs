@@ -55,8 +55,9 @@ public static class LodMath
     /// <param name="lodScreenSizes">LOD thresholds of the mesh (<see cref="ChooseLod"/>); one entry = always LOD 0.</param>
     /// <param name="objectDistance">Cap on the draw distance of clusters that have one (<see cref="RenderSettings.ObjectDrawDistance"/>); 0 = none.</param>
     /// <param name="lodBias">Multiplier on the projected size used to pick the LOD (<see cref="RenderSettings.LodBias"/>).</param>
+    /// <param name="previousLod">The LOD the cluster was drawn at in the last frame (-1: not drawn), held near a threshold (<see cref="ChooseLodSteady"/>).</param>
     public static int Classify(in InstanceCluster cluster, Frustum? frustum, Vector3 eye, float tanHalfFovY, float minScreenSize, float distanceScale,
-        ReadOnlySpan<float> lodScreenSizes, float objectDistance = 0f, float lodBias = 1f)
+        ReadOnlySpan<float> lodScreenSizes, float objectDistance = 0f, float lodBias = 1f, int previousLod = -1)
     {
         if (frustum is { } f && !f.Intersects(cluster.Bounds))
         {
@@ -76,6 +77,31 @@ public static class LodMath
             return -1;
         }
 
-        return lodScreenSizes.Length > 1 ? ChooseLod(lodScreenSizes, size * lodBias) : 0;
+        return lodScreenSizes.Length > 1 ? ChooseLodSteady(lodScreenSizes, size * lodBias, previousLod) : 0;
+    }
+
+    /// <summary>
+    /// How far (a share of the projected size) past a LOD threshold the size must go before a cluster drawn at another LOD
+    /// switches (<see cref="ChooseLodSteady"/>).
+    /// </summary>
+    public const float LodHysteresis = 0.1f;
+
+    /// <summary>
+    /// <see cref="ChooseLod"/> that keeps <paramref name="previousLod"/> (the LOD the cluster was drawn at in the last frame,
+    /// -1 when it was not drawn) while the size stays within <see cref="LodHysteresis"/> of the threshold between them
+    /// (owner: trees "flicker" in motion; a camera hovering, or sliding sideways past a forest, at a threshold swapped a whole
+    /// cluster's LOD, or its impostor card, back and forth every few frames). A size well past the threshold switches as before.
+    /// </summary>
+    public static int ChooseLodSteady(ReadOnlySpan<float> lodScreenSizes, float screenSize, int previousLod)
+    {
+        var lod = ChooseLod(lodScreenSizes, screenSize);
+        if (previousLod < 0 || previousLod == lod || previousLod >= lodScreenSizes.Length)
+        {
+            return lod;
+        }
+
+        var finest = ChooseLod(lodScreenSizes, screenSize * (1f + LodHysteresis));
+        var coarsest = ChooseLod(lodScreenSizes, screenSize * (1f - LodHysteresis));
+        return previousLod >= finest && previousLod <= coarsest ? previousLod : lod;
     }
 }

@@ -91,6 +91,9 @@ public sealed partial class PaintMaterialViewModel : ObservableObject
     /// <summary>Highest brightness: a colour stored at four times what was picked.</summary>
     public const double MaxBrightness = 4;
 
+    /// <summary>How strongly a weapon tint replaces the gun's own colour when it is first painted (owner: "far too bright and saturated").</summary>
+    public const double DefaultStrength = 0.7;
+
     private readonly float _tintGain;
     private readonly double _stockRoughness;
     private bool _committedPlain;
@@ -100,6 +103,7 @@ public sealed partial class PaintMaterialViewModel : ObservableObject
     private double? _committedMetal;
     private double? _committedCoat;
     private double _committedRoughness;
+    private double _committedStrength = DefaultStrength;
     private bool _committedPainted;
     private bool _quiet;
 
@@ -146,6 +150,12 @@ public sealed partial class PaintMaterialViewModel : ObservableObject
 
     /// <summary>Readable name ("Outer", "Body Outside A").</summary>
     public string Name { get; }
+
+    /// <summary>The part of a gun this material paints ("Magazine", "Gun body"), or null (vehicles: <see cref="Name"/> says it).</summary>
+    public string? PartLabel { get; init; }
+
+    /// <summary>The row's title: the gun part with its material's name, or the material's name.</summary>
+    public string Title => PartLabel is { } part ? $"{part} · {Name}" : Name;
 
     /// <summary>The main colour parameter.</summary>
     public PaintValue ColourValue { get; private set; }
@@ -197,6 +207,9 @@ public sealed partial class PaintMaterialViewModel : ObservableObject
 
     /// <summary>A roughness slider is offered (car paint).</summary>
     public bool HasRoughness => RoughnessValue is not null;
+
+    /// <summary>The strength slider is offered (a weapon's tint: how far its colour goes from the gun's own towards the one picked).</summary>
+    public bool HasStrength => IsTint;
 
     /// <summary>Brightness and saturation are offered (not on a weapon's tint, which is lifted over its texture already).</summary>
     public bool HasTone => !IsTint;
@@ -250,6 +263,11 @@ public sealed partial class PaintMaterialViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(IsPending), nameof(SaturationText))]
     private double _saturation = 1;
 
+    /// <summary>A weapon tint's strength, 0 (the gun as the game has it) .. 1 (the colour picked, lifted over the texture).</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsPending), nameof(StrengthText))]
+    private double _strength = 1;
+
     /// <summary>False while an added paint is left as the game has it (no paint of its own); always true otherwise.</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsPending))]
@@ -275,11 +293,14 @@ public sealed partial class PaintMaterialViewModel : ObservableObject
     /// <summary>"100 %".</summary>
     public string SaturationText => Percent(Saturation);
 
+    /// <summary>"70 %".</summary>
+    public string StrengthText => Percent(Strength);
+
     /// <summary>Changed since the last apply.</summary>
     public bool IsPending => Changes().Any();
 
     /// <summary>The main colour as the 3D view draws it and the game stores it (linear RGBA, brightness and saturation applied).</summary>
-    public System.Numerics.Vector4 LinearColour => Toned(Colour) * new System.Numerics.Vector4(Gain, Gain, Gain, 1f);
+    public System.Numerics.Vector4 LinearColour => IsTint ? TintOf(Colour, Strength) : Toned(Colour) * new System.Numerics.Vector4(Gain, Gain, Gain, 1f);
 
     /// <summary>The second colour as stored (linear RGBA, brightness and saturation applied).</summary>
     public System.Numerics.Vector4 LinearSecond => Toned(Second);
@@ -308,6 +329,8 @@ public sealed partial class PaintMaterialViewModel : ObservableObject
     partial void OnBrightnessChanged(double value) => Touched();
 
     partial void OnSaturationChanged(double value) => Touched();
+
+    partial void OnStrengthChanged(double value) => Touched();
 
     partial void OnPaintedChanged(bool value) => Changed?.Invoke(this, EventArgs.Empty);
 
@@ -365,12 +388,12 @@ public sealed partial class PaintMaterialViewModel : ObservableObject
         Set(source.Colour, HasSecond && source.HasSecond ? source.Second : Second, HasMetal && source.HasMetal ? source.Metal : Metal,
             HasClearCoat && source.HasClearCoat ? source.ClearCoat : ClearCoat, painted: true, HasPlain && source.HasPlain ? source.Plain : Plain,
             HasRoughness && source.HasRoughness ? source.Roughness : Roughness, HasTone && source.HasTone ? source.Brightness : Brightness,
-            HasTone && source.HasTone ? source.Saturation : Saturation);
+            HasTone && source.HasTone ? source.Saturation : Saturation, HasStrength && source.HasStrength ? source.Strength : null);
     }
 
     /// <summary>Back to the last applied paint.</summary>
     public void Reset() => Set(_committedColour, _committedSecond ?? default, _committedMetal ?? 0, _committedCoat ?? 0, _committedPainted, _committedPlain,
-        _committedRoughness, _committedBrightness);
+        _committedRoughness, _committedBrightness, strength: _committedStrength);
 
     /// <summary>
     /// Takes what the project now has applied as the starting point (a Redo or an Undo landed): a paint changed since its
@@ -400,7 +423,8 @@ public sealed partial class PaintMaterialViewModel : ObservableObject
     }
 
     /// <summary>Sets every value at once (an undo step, Original, Reset).</summary>
-    public void Set(Color colour, Color second, double metal, double clearCoat, bool painted, bool plain, double? roughness = null, double brightness = 1, double saturation = 1)
+    public void Set(Color colour, Color second, double metal, double clearCoat, bool painted, bool plain, double? roughness = null, double brightness = 1, double saturation = 1,
+        double? strength = null)
     {
         _quiet = true;
         try
@@ -412,6 +436,7 @@ public sealed partial class PaintMaterialViewModel : ObservableObject
             Roughness = roughness ?? Roughness;
             Brightness = Math.Clamp(brightness, 0, MaxBrightness);
             Saturation = Math.Clamp(saturation, 0, 2);
+            Strength = Math.Clamp(strength ?? Strength, 0, 1);
             Plain = HasPlain && plain;
             Painted = painted;
         }
@@ -436,7 +461,8 @@ public sealed partial class PaintMaterialViewModel : ObservableObject
         var metalChanged = MetalValue is not null && Math.Abs(Metal - (_committedMetal ?? 0)) > 0.005;
         var coatChanged = ClearCoatValue is not null && Math.Abs(ClearCoat - (_committedCoat ?? 0)) > 0.005;
         var roughChanged = RoughnessValue is not null && Math.Abs(Roughness - _committedRoughness) > 0.005;
-        var toneChanged = Math.Abs(Brightness - _committedBrightness) > 0.005 || Math.Abs(Saturation - 1) > 0.005;
+        var toneChanged = Math.Abs(Brightness - _committedBrightness) > 0.005 || Math.Abs(Saturation - 1) > 0.005
+            || (IsTint && Math.Abs(Strength - _committedStrength) > 0.005);
         if (IsAdded)
         {
             if (!Painted)
@@ -452,7 +478,7 @@ public sealed partial class PaintMaterialViewModel : ObservableObject
             var repainted = !_committedPainted;
             if (repainted || Colour != _committedColour || Plain != _committedPlain || toneChanged)
             {
-                var text = LinearText(Toned(Colour), null, Gain);
+                var text = IsTint ? LinearText(LinearColour, null) : LinearText(Toned(Colour), null, Gain);
                 Diff(ColourValue, text);
                 Diff(SecondValue, text);
             }
@@ -561,9 +587,17 @@ public sealed partial class PaintMaterialViewModel : ObservableObject
     private void Commit()
     {
         _committedPainted = !IsAdded || ColourValue.Committed != ColourValue.Tunable.Value;
-        _committedPlain = _committedPainted ? DiffuseValue?.Committed == FlatDiffuse : HasPlain;
+        // A gun is tinted over its own print by default; the even (flat white) coat only when asked for (owner: too bright).
+        _committedPlain = _committedPainted ? DiffuseValue?.Committed == FlatDiffuse : HasPlain && !IsTint;
         _committedBrightness = _committedPainted && !IsTint ? BrightnessOf(ColourValue.Committed) : 1;
         _committedColour = _committedPainted ? ToSrgb(ColourValue.Committed, GainFor(_committedPlain) * (float)_committedBrightness) : Colors.White;
+        // A tint's strength is not stored: the one shown is kept when it is what was applied, else the stored tint is the colour at full strength.
+        _committedStrength = !IsTint ? 1 : !_committedPainted ? DefaultStrength
+            : Colour != default && LinearText(TintOf(Colour, Strength, GainFor(_committedPlain)), null) == ColourValue.Committed ? Strength : 1;
+        if (IsTint && _committedPainted && Math.Abs(_committedStrength - 1) > 0.0001)
+        {
+            _committedColour = Colour;
+        }
         _committedSecond = SecondValue is null || IsAdded ? null : ToSrgb(SecondValue.Committed, (float)_committedBrightness);
         _committedMetal = Committed(MetalValue);
         _committedCoat = Committed(ClearCoatValue);
@@ -571,6 +605,16 @@ public sealed partial class PaintMaterialViewModel : ObservableObject
     }
 
     private System.Numerics.Vector4 Toned(Color c) => HasTone ? Tone(c, Brightness, Saturation) : ToLinear(c);
+
+    private System.Numerics.Vector4 TintOf(Color c, double strength) => TintOf(c, strength, Gain);
+
+    /// <summary>A weapon tint as stored: white (the gun's own colour) moved towards <paramref name="c"/> lifted by <paramref name="gain"/>, by <paramref name="strength"/>.</summary>
+    private static System.Numerics.Vector4 TintOf(Color c, double strength, float gain)
+    {
+        var full = ToLinear(c) * gain;
+        var s = (float)Math.Clamp(strength, 0, 1);
+        return new(1f + ((full.X - 1f) * s), 1f + ((full.Y - 1f) * s), 1f + ((full.Z - 1f) * s), 1f);
+    }
 
     private static string LinearText(System.Numerics.Vector4 l, string? committed, float gain = 1f)
     {

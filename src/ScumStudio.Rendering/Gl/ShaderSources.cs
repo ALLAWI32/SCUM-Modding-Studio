@@ -36,6 +36,8 @@ internal static class ShaderSources
         flat out vec2 vSurface;
         flat out float vSide;
         flat out float vCard;
+        out vec2 vUv2;
+        flat out float vCardMix;
 
         // The eye in homogeneous world coordinates: the point uViewProj maps to x = y = w = 0 (the 4D cross product of its
         // rows x, y and w). The shadow and ID passes set no camera position; for the sun's orthographic view w is 0 and xyz
@@ -61,6 +63,8 @@ internal static class ShaderSources
             vSide = sign(det); // a mirrored instance turns its triangles' winding around
             vCard = 0.0;
             vUv = aUv;
+            vUv2 = aUv;
+            vCardMix = 0.0;
             if (aNormal.z > 1.5 && uBillboard == 0)
             {
                 // An impostor card (GpuMesh.SetImpostor): aPosition is the bounds centre, aNormal.xy the corner times the half
@@ -78,9 +82,16 @@ internal static class ShaderSources
                 vec3 x = normalize(iModel[0].xyz);
                 vec3 z = normalize(iModel[2].xyz);
                 float views = floor(aNormal.z + 0.5);
-                float cell = mod(floor(atan(dot(h, z), dot(h, x)) / (6.2831853 / views) + 0.5), views);
+                float heading = atan(dot(h, z), dot(h, x)) / (6.2831853 / views);
+                float nearest = floor(heading + 0.5);
+                float cell = mod(nearest, views);
                 float u = det < 0.0 ? 1.0 - aUv.x : aUv.x; // a mirrored instance shows the picture mirrored
                 vUv = vec2((cell + u) / views, aUv.y);
+                // Steady in motion: the colour pass blends in the next picture toward the eye's heading (half and half where
+                // the nearest one changes), so a far tree turns smoothly instead of snapping to another picture as the camera
+                // passes; the ID and shadow passes keep the nearest one.
+                vUv2 = vec2((mod(nearest + (heading >= nearest ? 1.0 : -1.0), views) + u) / views, aUv.y);
+                vCardMix = heading - nearest; // signed: the next picture (+) or the one before (-)
                 float tilt = max(asin(clamp(dot(normalize(toEye), up), -1.0, 1.0)) - 0.87, 0.0);
                 vec3 right = cross(up, h);
                 vec3 cardUp = up * cos(tilt) - h * sin(tilt);
@@ -127,6 +138,8 @@ internal static class ShaderSources
         flat in vec2 vSurface;
         flat in float vSide;
         flat in float vCard;
+        in vec2 vUv2;
+        flat in float vCardMix;
 
         uniform sampler2D uTexture;
         uniform sampler2D uNormalMap;
@@ -169,6 +182,9 @@ internal static class ShaderSources
         uniform sampler2D uLayerNhr2;
         uniform sampler2D uLayerNhr3;
         uniform vec4 uLayerHasNhr;
+        uniform sampler2D uLayer4;
+        uniform float uLayerTiling4;
+        uniform vec3 uLayerMean4;
 
         layout(location = 0) out vec4 oColor;
         """ + "\n" + Atmosphere + "\n" + Masked + "\n" + """
@@ -247,6 +263,29 @@ internal static class ShaderSources
             if (uHasTexture != 0)
             {
                 vec4 texel = texture(uTexture, vUv);
+                vec4 other = texel; // an impostor's next picture and its share (anti-aliased: blended by coverage below)
+                float otherShare = 0.0;
+                if (vCardMix != 0.0)
+                {
+                    // An impostor between two of its pictures: blended where coverage carries the alpha (anti-aliased
+                    // foliage); cut by one sample, each pixel shows one picture, the next one in a share of the pixels
+                    // that grows with the turn (an ordered 4 x 4 dither, as UE's dithered LOD transitions).
+                    vec4 next = texture(uTexture, vUv2);
+                    if (uAlphaToCoverage != 0)
+                    {
+                        other = next;
+                        otherShare = abs(vCardMix);
+                    }
+                    else
+                    {
+                        const float bayer[16] = float[16](0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
+                        ivec2 cell = ivec2(gl_FragCoord.xy) & 3;
+                        // The same pixels show the later picture on both sides of the switch: no swap where the nearest changes.
+                        float d = (bayer[cell.y * 4 + cell.x] + 0.5) / 16.0;
+                        texel = (vCardMix > 0.0 ? d < vCardMix : d >= 1.0 + vCardMix) ? next : texel;
+                    }
+                }
+
                 albedo = vTint * vec4(min(uSectionTint.rgb * texel.rgb, vec3(1.0)), uSectionTint.a * texel.a); // UE clamps base colour to 1
                 paintMask = texel.a; // shiny paint: the texture's alpha says where the paint is
                 // Masked material: leaves and grass are cut out of their cards, or covered by share with alpha to coverage.
@@ -257,6 +296,17 @@ internal static class ShaderSources
                     if (uAlphaToCoverage != 0)
                     {
                         coverage = maskedCoverage(albedo.a, masked, lod);
+                        if (otherShare > 0.0)
+                        {
+                            // Each picture covers its own share of the samples, weighted by the turn; the colour follows.
+                            float alphaB = vTint.a * uSectionTint.a * other.a;
+                            float a = coverage * (1.0 - otherShare);
+                            float b = maskedCoverage(alphaB, maskedAlpha(alphaB, lod), lod) * otherShare;
+                            vec3 colourB = vTint.rgb * min(uSectionTint.rgb * other.rgb, vec3(1.0));
+                            albedo.rgb = (albedo.rgb * a + colourB * b) / max(a + b, 1e-4);
+                            coverage = a + b;
+                        }
+
                         if (coverage <= 0.0)
                         {
                             discard;
@@ -314,12 +364,27 @@ internal static class ShaderSources
                             bump += w.w * uLayerHasNhr.w * (texture(uLayerNhr3, t).rg * 2.0 - 1.0);
                         }
 
+                        // Where the four layers cover little of the ground (a fifth layer is painted there), their grain
+                        // fades out with their share: it no longer stops at a ragged, dark-rimmed line around the patch.
+                        // The rest of the ground takes the grain of the layer with the largest patch left (no relief of
+                        // its own), so a patch of it is no flat smudge (B_4 airfield's dry grass, r37 verifier).
                         float covered = dot(w, vec4(1.0));
+                        float grained = covered;
+                        if (uLayerTiling4 > 0.0)
+                        {
+                            float rest = clamp(1.0 - covered, 0.0, 1.0);
+                            vec2 t = ue * uLayerTiling4;
+                            detail += rest * texture(uLayer4, t).rgb * Macro(texture(uLayer4, t.yx * macro).rgb, uLayerMean4);
+                            mean += rest * uLayerMean4;
+                            grained += rest;
+                        }
+
                         if (dot(mean, vec3(1.0)) > 0.01)
                         {
+                            float share = fade * smoothstep(0.1, 0.6, covered);
                             vec3 ratio = clamp(detail / max(mean, vec3(0.01)), 0.3, 2.6);
-                            albedo.rgb *= mix(vec3(1.0), ratio, fade);
-                            groundBump = bump / max(covered, 1e-3) * fade;
+                            albedo.rgb *= mix(vec3(1.0), ratio, fade * smoothstep(0.1, 0.6, grained));
+                            groundBump = bump / max(covered, 1e-3) * share;
                         }
                     }
                 }

@@ -50,11 +50,12 @@ public static partial class CraftablesExporter
         ArgumentNullException.ThrowIfNull(catalog);
         ArgumentNullException.ThrowIfNull(options);
         logger ??= NullLogger.Instance;
-        var name = ProjectExporter.SanitizeModName(modName) + Suffix;
+        var module = options.Module == ExportModule.Craftables; // the Craftables page's own mod (ModuleExport)
+        var name = module ? ModuleExport.ModName(modName, ExportModule.Craftables) : ProjectExporter.SanitizeModName(modName) + Suffix;
         var roleDirectory = Path.Combine(Path.GetFullPath(options.OutputDirectory), ProjectExporter.RoleFolder(role));
         if (craftables.IsEmpty)
         {
-            foreach (var removed in RemoveStale(roleDirectory, modName, options.PakChunkIndex))
+            foreach (var removed in module ? RemoveStaleModule(roleDirectory, modName, options.PakChunkIndex) : RemoveStale(roleDirectory, modName, options.PakChunkIndex))
             {
                 logger.LogInformation("Craftables: removed {File} (the project has no craftables now).", removed);
             }
@@ -64,11 +65,17 @@ public static partial class CraftablesExporter
 
         // A stock package the plan overrides (an item's setup given a new tag) is built on the project pak's staged copy, so
         // that pak's edits of it (Module page) are not hidden by this higher pak; only while that pak is there.
+        // As the Craftables page's own pak (review 3.5.0) it loads above the other page paks: it builds on the staged copy of the
+        // highest of them that ships the package (the Weapons page's weight of the gun given a tag), only while that pak is there.
         var projectStaging = Path.Combine(roleDirectory, ProjectExporter.StagingFolderName);
-        var projectPak = !options.WritePak || File.Exists(Path.Combine(roleDirectory, ProjectExporter.PakFileName(modName, options.PakChunkIndex)));
-        Func<string, CookedPackage?> basePackage = p => projectPak && catalog.TryGetPackageFile(p, out var f) ? StagedPackage(projectStaging, f.Path, p) : null;
+        var projectPak = !module && (!options.WritePak || File.Exists(Path.Combine(roleDirectory, ProjectExporter.PakFileName(modName, options.PakChunkIndex))));
+        var below = module
+            ? ModuleExport.PakModules.Where(m => m != ExportModule.Craftables && (!options.WritePak || File.Exists(Path.Combine(roleDirectory, ModuleExport.PakFileName(modName, m, options.PakChunkIndex)))))
+                .OrderByDescending(m => ModuleExport.ChunkOf(m, options.PakChunkIndex)).Select(m => Path.Combine(roleDirectory, ModuleExport.StagingFolder(m))).ToList()
+            : projectPak ? [projectStaging] : [];
+        Func<string, CookedPackage?> basePackage = p => catalog.TryGetPackageFile(p, out var f) ? below.Select(s => StagedPackage(s, f.Path, p)).FirstOrDefault(s => s is not null) : null;
         var (plan, built, imports, importedAssets, warnings) = Prepare(craftables, catalog, baseRegistry, writeRegistry: true, basePackage, options.ModelPictures ?? NoDrawing);
-        var staging = Path.Combine(roleDirectory, StagingFolderName);
+        var staging = Path.Combine(roleDirectory, module ? ModuleExport.StagingFolder(ExportModule.Craftables) : StagingFolderName);
         if (Directory.Exists(staging))
         {
             Directory.Delete(staging, recursive: true);
@@ -113,7 +120,7 @@ public static partial class CraftablesExporter
         string? sigPath = null;
         if (options.WritePak)
         {
-            pakPath = Path.Combine(roleDirectory, PakFileName(modName, options.PakChunkIndex));
+            pakPath = Path.Combine(roleDirectory, module ? ModuleExport.PakFileName(modName, ExportModule.Craftables, options.PakChunkIndex) : PakFileName(modName, options.PakChunkIndex));
             var writer = new PakWriter(new PakWriterOptions { Compression = options.Compression, IncludeAssetRegistry = built.AssetRegistry is not null }, logger);
             await writer.WriteFromDirectoryAsync(staging, pakPath, null, cancellationToken).ConfigureAwait(false);
             var sigSource = options.StockSigPath ?? ProjectExporter.FindStockSig(catalog);
@@ -311,6 +318,27 @@ public static partial class CraftablesExporter
         var removed = new[] { pak, SigCopier.GetSigPath(pak) }.Where(File.Exists).ToList();
         removed.ForEach(File.Delete);
         return removed;
+    }
+
+    /// <summary>Deletes the Craftables page's own pak (and its .sig) of <paramref name="modName"/> from <paramref name="directory"/> (<see cref="ModuleExport"/>).</summary>
+    public static IReadOnlyList<string> RemoveStaleModule(string directory, string modName, int pakChunkIndex)
+    {
+        var pak = Path.Combine(directory, ModuleExport.PakFileName(modName, ExportModule.Craftables, pakChunkIndex));
+        var removed = new[] { pak, SigCopier.GetSigPath(pak) }.Where(File.Exists).ToList();
+        removed.ForEach(File.Delete);
+        return removed;
+    }
+
+    /// <summary>
+    /// The packages the project's own pak of the same export (<paramref name="main"/>) ships, named by that pak
+    /// (<see cref="ExportOptions.Elsewhere"/>): the Craftables pak's registry keeps that pak's records (its clones), and the
+    /// package check must find their packages there, not report them missing.
+    /// </summary>
+    public static Func<string, string?> ProjectPakPackages(ExportResult main, AssetCatalog catalog)
+    {
+        ArgumentNullException.ThrowIfNull(main);
+        ArgumentNullException.ThrowIfNull(catalog);
+        return ModuleExport.ShippedBy(main.StagingDirectory, catalog.ProjectName, Path.GetFileName(main.PakPath) ?? main.ModName);
     }
 
     /// <summary>The registry the project's own pak staged in <paramref name="result"/>, or null.</summary>

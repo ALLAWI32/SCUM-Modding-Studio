@@ -59,6 +59,7 @@ public sealed partial class SpawnMap
     private byte[] _layers = [];
     private int[] _ids = [];
     private int[] _ellipses = [];
+    private Dictionary<int, int> _indexOfId = [];
 
     /// <summary>How many single places the last frame drew as glyphs or counted (after layers and the view were applied).</summary>
     public int VisibleMarkerCount => _visibleCount;
@@ -73,11 +74,13 @@ public sealed partial class SpawnMap
         var count = markers?.Count ?? 0;
         (_u, _v, _reach, _layers, _ids) = (new float[count], new float[count], new float[count], new byte[count], new int[count]);
         var ellipses = new List<int>();
+        var indexOfId = new Dictionary<int, int>(count);
         for (var i = 0; i < count; i++)
         {
             var marker = markers![i];
             var (u, v) = IslandMap.ToMap(marker.X, marker.Y);
             (_u[i], _v[i], _layers[i], _ids[i]) = ((float)u, (float)v, (byte)marker.Layer, marker.Id);
+            indexOfId.TryAdd(marker.Id, i);
             if (marker.RadiusX > 0 && marker.RadiusY > 0)
             {
                 _reach[i] = MathF.Max(marker.RadiusX, marker.RadiusY) / IslandMap.SizeCm;
@@ -86,6 +89,7 @@ public sealed partial class SpawnMap
         }
 
         _ellipses = [.. ellipses];
+        _indexOfId = indexOfId;
     }
 
     private void DrawZones(DrawingContext context, Rect bounds)

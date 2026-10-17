@@ -126,7 +126,7 @@ public abstract partial class ModulePageViewModel : PageViewModel, ISearchablePa
     /// <summary>New name for a clone.</summary>
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(CreateCloneCommand))]
-    [NotifyPropertyChangedFor(nameof(CloneNameError))]
+    [NotifyPropertyChangedFor(nameof(CloneNameError), nameof(CloneNameNote), nameof(EffectiveCloneName))]
     private string _cloneName = string.Empty;
 
     /// <summary>In-game display name for the clone (written to its entity setup's Caption), optional.</summary>
@@ -195,7 +195,13 @@ public abstract partial class ModulePageViewModel : PageViewModel, ISearchablePa
         : SelectedItem.Asset.Kind == ModdableKind.Vehicle ? "#SpawnVehicle " + SelectedItem.Name : "#SpawnItem " + SelectedItem.Name;
 
     /// <summary>Why <see cref="CloneName"/> cannot be used, or null.</summary>
-    public string? CloneNameError => string.IsNullOrWhiteSpace(CloneName) ? null : CloneFamilyPlanner.IsValidName(CloneName.Trim()) ? null : Loc.T("Module.CloneNameInvalid");
+    public string? CloneNameError => string.IsNullOrWhiteSpace(CloneName) ? null : CloneFamilyPlanner.IsValidName(EffectiveCloneName) ? null : Loc.T("Module.CloneNameInvalid");
+
+    /// <summary>The name the clone gets: <see cref="CloneName"/> with a trailing <c>_&lt;number&gt;</c> made <c>_v&lt;number&gt;</c> (the FName rule).</summary>
+    public string EffectiveCloneName => CloneFamilyPlanner.SafeName(CloneName.Trim());
+
+    /// <summary>Says the clone is saved under another name than typed (<c>Rager_1</c> → <c>Rager_v1</c>), or null.</summary>
+    public string? CloneNameNote => CloneNameError is null && CloneName.Trim() is { Length: > 0 } typed && typed != EffectiveCloneName ? Loc.F("Module.CloneNameSaved", EffectiveCloneName, typed) : null;
 
     /// <summary>Completes when the current list load finished (tests).</summary>
     public Task LoadCompletion => _loadTask;
@@ -395,7 +401,7 @@ public abstract partial class ModulePageViewModel : PageViewModel, ISearchablePa
         }
     }
 
-    private bool CanCreateClone() => SelectedItem is not null && CloneFamilyPlanner.IsValidName(CloneName.Trim());
+    private bool CanCreateClone() => SelectedItem is not null && CloneFamilyPlanner.IsValidName(EffectiveCloneName);
 
     /// <summary>Clones the selected asset under <see cref="CloneName"/> (journal: <see cref="CloneAssetOp"/>) and selects the clone.</summary>
     [RelayCommand(CanExecute = nameof(CanCreateClone))]
@@ -421,7 +427,7 @@ public abstract partial class ModulePageViewModel : PageViewModel, ISearchablePa
             return;
         }
 
-        var name = CloneName.Trim();
+        var name = EffectiveCloneName;
         ClonePlan plan;
         try
         {
@@ -540,10 +546,14 @@ public abstract partial class ModulePageViewModel : PageViewModel, ISearchablePa
         Groups = [];
         Preview = null;
         _previewBase = null;
+        ForgetAddedParts();
+        _replacedShown = [];
+        _replacedLoads++;
         Paints = [];
         ClearArmour();
         OnPropertyChanged(nameof(PaintNote));
         PreviewText = string.Empty;
+        SuggestCloneName(value);
         UpdateClonePreview();
         if (value is not null && _catalog is { } catalog)
         {
@@ -569,16 +579,20 @@ public abstract partial class ModulePageViewModel : PageViewModel, ISearchablePa
             var loader = new MeshPreviewLoader(catalog, _services.Logger) { TextureSize = AssetsPageViewModel.MeshPreviewTextureSize, ForGpu = true };
             var model = PreviewLoaderOverride is { } load
                 ? await load(template, addOn).ConfigureAwait(true)
-                : await Task.Run(() => loader.LoadBlueprint(template, addOn)).ConfigureAwait(true);
+                : await Task.Run(() => IsWeaponModule ? WeaponModel(catalog, item, loader.LoadBlueprint(template, addOn)) : loader.LoadBlueprint(template, addOn)).ConfigureAwait(true);
             if (!ReferenceEquals(SelectedItem, item) || cancellationToken.IsCancellationRequested)
             {
                 return;
             }
 
-            Preview = model;
+            NoteMagazine(model);
+            _previewLoaded = model;
+            Preview = model is null ? null : WithAddedParts(model);
             if (model is not null)
             {
                 _ = LoadPaintsAsync(catalog, item, model);
+                _ = RefreshStudioPartsAsync();
+                _ = RefreshTexturesAsync();
             }
 
             PreviewText = model is null
@@ -670,6 +684,8 @@ public abstract partial class ModulePageViewModel : PageViewModel, ISearchablePa
 
         RefreshCommitted();
         ReloadPaints();
+        _ = RefreshStudioPartsAsync(); // a part moved, removed or added (or an undo of it) shows in the 3D view
+        _ = RefreshTexturesAsync(); // a picture put in a texture slot (or taken out by Ctrl+Z) shows on the car
     });
 
     private async Task LoadAsync(AssetCatalog catalog)
@@ -720,9 +736,14 @@ public abstract partial class ModulePageViewModel : PageViewModel, ISearchablePa
             }
         }
 
-        items = items.OrderBy(i => i.Asset.Kind).ThenBy(i => i.Asset.Category, StringComparer.OrdinalIgnoreCase).ThenBy(i => i.Name, StringComparer.OrdinalIgnoreCase).ToList();
+        foreach (var item in items)
+        {
+            item.Group = () => GroupLabel(item);
+        }
+
+        items = Order(items).ToList();
         AllItems = items;
-        _knownClones = _services.Projects.Current?.State.AssetClones.Select(c => c.NewPrimary).OrderBy(p => p, StringComparer.OrdinalIgnoreCase).ToList() ?? [];
+        _knownClones = ListedClones();
         UpdateEditCounts();
         var filters = BuildFilters(items);
         var previous = SelectedFilter?.Label;
@@ -734,13 +755,25 @@ public abstract partial class ModulePageViewModel : PageViewModel, ISearchablePa
         return _partTask;
     }
 
+    /// <summary>The list order (the first entry is selected when the page opens): by kind, folder and name.</summary>
+    protected virtual IEnumerable<ModuleItemViewModel> Order(IEnumerable<ModuleItemViewModel> items) =>
+        items.OrderBy(i => i.Asset.Kind).ThenBy(i => i.Asset.Category, StringComparer.OrdinalIgnoreCase).ThenBy(i => i.Name, StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The readable group an entry's second line names instead of its folder, or null.</summary>
+    protected virtual string? GroupLabel(ModuleItemViewModel item) => null;
+
     private IReadOnlyList<string> _knownClones = [];
 
-    private bool ClonesChanged()
-    {
-        var now = _services.Projects.Current?.State.AssetClones.Select(c => c.NewPrimary).OrderBy(p => p, StringComparer.OrdinalIgnoreCase).ToList() ?? [];
-        return !now.SequenceEqual(_knownClones, StringComparer.OrdinalIgnoreCase);
-    }
+    private bool ClonesChanged() => !ListedClones().SequenceEqual(_knownClones, StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The clones this page lists (its kinds only): a part "Add part…" bolts on is a clone too, but adding one must not
+    /// rebuild the list and reload the vehicle (the Parts tab shows it in place).
+    /// </summary>
+    private List<string> ListedClones() =>
+        _services.Projects.Current?.State.AssetClones
+            .Where(c => ModdableAssets.Classify(c.Template) is { } t && _kinds.Contains(t.Kind))
+            .Select(c => c.NewPrimary).OrderBy(p => p, StringComparer.OrdinalIgnoreCase).ToList() ?? [];
 
     private static string ListSubtitle(IReadOnlyList<ModuleItemViewModel> items) =>
         Loc.F("Module.Subtitle", items.Count(i => !i.IsClone)) + (items.Any(i => i.IsClone) ? Loc.F("Module.Subtitle.Clones", items.Count(i => i.IsClone)) : string.Empty);
@@ -765,6 +798,9 @@ public abstract partial class ModulePageViewModel : PageViewModel, ISearchablePa
         }
 
         OnPropertyChanged(nameof(CloneNameError));
+        OnPropertyChanged(nameof(PaintListNote)); // review 3.5.0: the paint texts stayed in the old language
+        OnPropertyChanged(nameof(PaintTogetherText));
+        OnPropertyChanged(nameof(PaintTogetherTip));
         UpdateClonePreview();
         UpdateSummary();
     }
@@ -809,6 +845,8 @@ public abstract partial class ModulePageViewModel : PageViewModel, ISearchablePa
 
     private void UpdateClonePreview()
     {
+        OnPropertyChanged(nameof(CloneSpawnText));
+        OnPropertyChanged(nameof(CloneOfText));
         var item = SelectedItem;
         if (item is null)
         {
@@ -822,7 +860,7 @@ public abstract partial class ModulePageViewModel : PageViewModel, ISearchablePa
             return;
         }
 
-        var name = CloneName.Trim();
+        var name = EffectiveCloneName;
         if (!CloneFamilyPlanner.IsValidName(name))
         {
             ClonePreview = item.Asset.Kind == ModdableKind.Vehicle

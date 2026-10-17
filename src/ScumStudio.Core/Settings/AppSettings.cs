@@ -238,6 +238,18 @@ public sealed record UiPreferences
     public bool AntiAliasedFoliage { get; init; } = true;
 
     /// <summary>
+    /// Smooth camera on the Map (owner: "camera motion is not smooth like the game"): each frame moves the camera by the
+    /// average frame time and turns it by the mouse moves eased over about two frames. Off: the raw frame time and moves.
+    /// </summary>
+    public bool SmoothCamera { get; init; } = true;
+
+    /// <summary>
+    /// Steady trees and bushes while the Map's camera moves (owner: foliage "shimmers" in motion): each frame is blended
+    /// with the last one where the camera saw it, as the game's temporal anti-aliasing does; a view at rest is drawn as is.
+    /// </summary>
+    public bool SteadyFoliage { get; init; } = true;
+
+    /// <summary>
     /// How close to the camera the Map still draws, in centimetres (Settings › Near clip, Ctrl+Shift+N on the Map; F15,
     /// seviscache: "the camera clips the mesh" in tight rooms). 1 to 100; 10 by default.
     /// </summary>

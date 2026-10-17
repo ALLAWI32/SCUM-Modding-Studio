@@ -34,6 +34,12 @@ public static partial class CraftablesPlanner
             Add(family.Levels[n].Element, n == 0 ? "BP_" + token : $"BP_{token}_L{n}");
         }
 
+        // An element the game ships without a recipe (its cabins): the copied furniture recipe makes the element's clone.
+        if (family.BorrowsRecipe && ProductPackage(catalog, family.Recipe) is { } made && !packages.Any(p => string.Equals(p.Key, made, StringComparison.OrdinalIgnoreCase)))
+        {
+            redirects.Add(new(made, packages[1].Value));
+        }
+
         // A chest, lamp or fridge spawns its item: the clone spawns a renamed copy (its entity setup is its twin).
         string? item = null;
         if (craftable.Element?.Storage?.Item is { Length: > 0 } spawned)
@@ -135,6 +141,11 @@ public static partial class CraftablesPlanner
 
             foreach (var (key, value) in n < settings.Count ? settings[n] : new Dictionary<string, string>())
             {
+                if (key == "_canBePlacedWithoutFlag" && craftable.NeedsFlag is not null)
+                {
+                    continue; // the craftable's "Needs a flag" (AddBuildingEdits) sets every level
+                }
+
                 if (level.Values.FirstOrDefault(v => v.Path == key) is not { } stock)
                 {
                     warnings.Add($"{craftable.Name}: {key} of level {n} inherits the game's value; not written (the element does not store it).");

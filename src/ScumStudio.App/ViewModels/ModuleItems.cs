@@ -50,8 +50,11 @@ public sealed partial class ModuleItemViewModel : ThumbnailItem
     /// <summary>Package path.</summary>
     public string PackagePath => Asset.PackagePath;
 
-    /// <summary>"Weapon · Ranged_Weapons".</summary>
-    public string Detail => $"{KindLabel(Asset.Kind)} · {Asset.Category}" + (CloneOf is null ? string.Empty : Localization.Loc.F("Module.CloneOf", ShortName(CloneOf)));
+    /// <summary>"Weapon · Ranged_Weapons" ("Weapon · Assault rifle" where the page names the group, <see cref="Group"/>).</summary>
+    public string Detail => $"{KindLabel(Asset.Kind)} · {Group?.Invoke() ?? Asset.Category}" + (CloneOf is null ? string.Empty : Localization.Loc.F("Module.CloneOf", ShortName(CloneOf)));
+
+    /// <summary>The readable group the page sorts this entry under (a weapon's family), in the current language; null shows the folder.</summary>
+    public Func<string?>? Group { get; set; }
 
     /// <summary>Icon resource key.</summary>
     public string IconKey => Asset.Kind switch

@@ -70,12 +70,15 @@ internal sealed partial class RenderCommands
         var lodBias = new Option<float>("--lod-bias", () => 1f, "Multiplier on the projected size used to pick a mesh LOD (the Map's qualities: Performance 0.6, Balanced 0.8, High 1, Ultra 1.25).");
         var objectDistance = new Option<float>("--object-distance", () => 0f, "Do not draw the levels' objects farther than this many cm (0 = as far as the game draws them; Performance 30000, Balanced 60000, High 150000).");
         var samples = new Option<int>("--samples", () => 1, "Samples per pixel (the Map view draws with 4: anti-aliased edges and foliage).");
+        var temporal = new Option<bool>("--temporal", "Steady the --frames as the Map's Steady foliage switch does (each frame blended with the last one where the camera saw it).");
+        var framesOut = new Option<string?>("--frames-out", "Save every --frames frame as a PNG into this folder and print how much the frames flicker (FrameFlicker).");
+        var orbitStep = new Option<float>("--orbit-step", () => 0.5f, "Degrees the camera orbits per --frames frame (0.02 is a slow pan).");
         var glDebug = new Option<bool>("--gl-debug",
             $"Draw on a debug context and print every message the graphics driver sends (errors and undefined behaviour first); exit code {DriverProblemsExitCode} when it reports a problem. For graphics-card crash reports.");
         var command = new Command("level", "Render whole cooked sublevels (all placed static meshes, plus terrain for landscape tiles) to PNG.")
         {
             source, sublevel, aes, output, size, yaw, pitch, dist, lod, lods, viewDistance, cullPixels, noTexture, textureSize, noInstances, noLandscape, landscapeStep, filter, noGrid, frames,
-            ground, sea, noSea, groundTexture, target, island, spawnPlaces, noShadows, hour, around, radius, farModels, renderDistance, sectorSize, lodBias, objectDistance, samples, glDebug,
+            ground, sea, noSea, groundTexture, target, island, spawnPlaces, noShadows, hour, around, radius, farModels, renderDistance, sectorSize, lodBias, objectDistance, samples, glDebug, temporal, framesOut, orbitStep,
         };
         command.SetHandler(async (InvocationContext ctx) =>
         {
@@ -240,7 +243,8 @@ internal sealed partial class RenderCommands
 
                 var frame = RenderPreparedScene(context, prepared, width, height, parse.GetValueForOption(yaw), parse.GetValueForOption(pitch),
                     parse.GetValueForOption(dist), !parse.GetValueForOption(noGrid), orbitTarget, Math.Max(0, parse.GetValueForOption(frames)), culling, backdrop, backdropDistance,
-                    Math.Max(1, parse.GetValueForOption(samples)), parse.GetValueForOption(glDebug));
+                    Math.Max(1, parse.GetValueForOption(samples)), parse.GetValueForOption(glDebug),
+                    parse.GetValueForOption(temporal), parse.GetValueForOption(framesOut), parse.GetValueForOption(orbitStep));
                 frame.Report.InsertRange(Math.Min(2, frame.Report.Count), backdropLines);
 
                 var outFile = parse.GetValueForOption(output)!;
@@ -286,7 +290,7 @@ internal sealed partial class RenderCommands
     internal static (byte[] Rgba, List<string> Report, int DriverProblems) RenderPreparedScene(
         OffscreenGlContext context, PreparedLevelScene prepared, int width, int height, float yaw, float pitch, float? distance, bool showGrid,
         Vector3? orbitTargetUe = null, int extraFrames = 0, RenderSettings? culling = null, PreparedLevelScene? backdrop = null, float backdropDistance = 0f,
-        int samples = 1, bool driverMessages = false)
+        int samples = 1, bool driverMessages = false, bool temporal = false, string? framesOut = null, float orbitStep = 0.5f)
     {
         using (context)
         {
@@ -386,22 +390,39 @@ internal sealed partial class RenderCommands
             {
                 var cpu = new double[extraFrames];
                 var total = new double[extraFrames];
+                using var stabilizer = temporal ? new TemporalStabilizer(renderer) : null;
+                var shots = new List<byte[]>();
                 var gen = new[] { GC.CollectionCount(0), GC.CollectionCount(1), GC.CollectionCount(2) };
                 var paused = GC.GetTotalPauseDuration();
                 var allocated = GC.GetAllocatedBytesForCurrentThread();
                 for (var i = 0; i < extraFrames; i++)
                 {
-                    camera.Orbit(centre, yaw + ((i + 1) * 0.5f), pitch, dist);
+                    camera.Orbit(centre, yaw + ((i + 1) * orbitStep), pitch, dist);
                     clock.Restart();
                     stats = Draw();
+                    stabilizer?.Apply(target, camera);
                     cpu[i] = clock.Elapsed.TotalMilliseconds;
                     context.Gl.Finish();
                     total[i] = clock.Elapsed.TotalMilliseconds;
+                    if (framesOut is not null)
+                    {
+                        shots.Add(target.ReadColorRgba());
+                    }
                 }
 
                 var perFrame = (GC.GetAllocatedBytesForCurrentThread() - allocated) / (double)extraFrames;
                 report.Add(Invariant($"frames: {extraFrames} extra (orbiting): CPU avg {cpu.Average():0.00} ms, p95 {Percentile95(cpu):0.00} ms; with glFinish avg {total.Average():0.00} ms, p95 {Percentile95(total):0.00} ms; last frame {stats.Batches} draws, {stats.Instances} drawn, {stats.Culled} culled, {stats.Triangles:N0} triangles"));
                 report.Add(Invariant($"smoothness: {total.Count(t => t > 33.3)} frame(s) over 33 ms, {total.Count(t => t > 50.0)} over 50 ms, worst {total.Max():0.0} ms; {perFrame / (1024.0 * 1024.0):0.000} MB allocated per frame; GC gen0 {GC.CollectionCount(0) - gen[0]}, gen1 {GC.CollectionCount(1) - gen[1]}, gen2 {GC.CollectionCount(2) - gen[2]}, paused {(GC.GetTotalPauseDuration() - paused).TotalMilliseconds:0.0} ms"));
+                if (framesOut is not null)
+                {
+                    Directory.CreateDirectory(framesOut);
+                    for (var i = 0; i < shots.Count; i++)
+                    {
+                        ImageExport.SavePngAsync(shots[i], width, height, Path.Combine(framesOut, Invariant($"frame-{i:000}.png"))).GetAwaiter().GetResult();
+                    }
+
+                    report.Add(Invariant($"flicker: {FrameFlicker.Measure(shots, width, height):0.00000} over {shots.Count} frames ({(temporal ? "steadied" : "plain")}, {target.Samples} sample(s), {orbitStep:0.###} degrees a frame); frames in {framesOut}"));
+                }
             }
 
             report.Add(Invariant($"target: {target.Samples} sample(s) a pixel"));

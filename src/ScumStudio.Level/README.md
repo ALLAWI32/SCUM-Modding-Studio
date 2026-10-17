@@ -29,7 +29,8 @@ walks the Blueprint class chain (class export `SuperIndex`), each class's `Simpl
 flattened as `ChildActorComponent/Component`, depth ≤ `MaxChildActorDepth`). Synthesized components have negative
 synthetic export indices, `IsSynthesized = true`, `TemplatePath`, `"synthesized": true` in `ToJson()`, and cannot be
 edited. Component classes are recognised by their class chain (`IsStaticMeshComponent` covers SCUM's
-`InteriorStaticMeshComponent`); `IsVisible` reflects `bVisible`/`bHiddenInGame`. Blueprint classes missing from the source
+`InteriorStaticMeshComponent`); `IsVisible` reflects `bVisible`/`bHiddenInGame`, and an actor's `HiddenInGame` its
+`bHidden` (*Actor Hidden In Game*: the game draws none of its components). Blueprint classes missing from the source
 are listed in one warning per level.
 
 ## Journal format

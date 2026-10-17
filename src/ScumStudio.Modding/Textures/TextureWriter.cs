@@ -69,6 +69,11 @@ public static class TextureWriter
             throw new InvalidOperationException($"{templatePackage}: {ex.Message}", ex);
         }
 
+        if (texture.Platforms.Count == 0)
+        {
+            return Pixelless(template, templatePackage, newPackage, renamed, width, height);
+        }
+
         if (texture.Platforms.Count != 1)
         {
             throw new InvalidOperationException($"{templatePackage} has {texture.Platforms.Count} platform formats; one was expected.");
@@ -115,8 +120,52 @@ public static class TextureWriter
     public static TextureWriteResult Write(CookedPackage template, string templateObjectPath, string newPackagePath, TextureImage picture)
     {
         ArgumentNullException.ThrowIfNull(picture);
+        if (IsPixelless(template))
+        {
+            return Write(template, templateObjectPath, newPackagePath, [], ImageFiles.MinSize, ImageFiles.MinSize); // nothing to fit: see Pixelless
+        }
+
         var (width, height) = Size(template);
         return Write(template, templateObjectPath, newPackagePath, ImageFiles.Fit(picture, width, height), width, height);
+    }
+
+    /// <summary>
+    /// True for a texture cooked without pixels: a dedicated server's cook keeps every texture's settings but no platform data
+    /// (the server never draws). <see cref="Write(CookedPackage, string, string, byte[], int, int, byte[])"/> writes such a
+    /// template as it is under the new name.
+    /// </summary>
+    public static bool IsPixelless(CookedPackage template)
+    {
+        ArgumentNullException.ThrowIfNull(template);
+        var index = CookedTexture2D.FindExport(template);
+        try
+        {
+            return index >= 0 && CookedTexture2D.Read(template, index).Platforms.Count == 0;
+        }
+        catch (FormatException)
+        {
+            return false; // unreadable: Write says why
+        }
+    }
+
+    /// <summary>
+    /// The texture a dedicated server's cook makes of a new picture: its template (a server's copy, with no pixels) under the
+    /// new name, payload for payload. Review 3.5.0 (report "ServerMods", the server pak of two cars with stickers): writing
+    /// pixels into it failed ("0 platform formats"), the sticker textures were left out, and the server pak was refused for
+    /// the cloned materials that import them.
+    /// </summary>
+    private static TextureWriteResult Pixelless(CookedPackage template, string templatePackage, string newPackage, bool renamed, int width, int height)
+    {
+        var input = renamed ? RenamedTables(template, templatePackage, newPackage) : PackageWriter.ToBuildInput(template, useStoredNameHashes: true);
+        var payloads = Enumerable.Range(0, template.Exports.Count).Select(template.GetExportData).ToArray();
+        var bytes = PackageWriter.Build(input with { ExportData = payloads });
+        var index = CookedTexture2D.FindExport(template);
+        if (CookedTexture2D.Read(CookedPackage.Parse(bytes.UAsset, bytes.UExp, null, newPackage), index).Platforms.Count != 0)
+        {
+            throw new InvalidOperationException($"{newPackage}: the written texture does not read back (platform data).");
+        }
+
+        return new TextureWriteResult(bytes, null, string.Empty, width, height, 0);
     }
 
     /// <summary>The size of a texture package's top mip.</summary>

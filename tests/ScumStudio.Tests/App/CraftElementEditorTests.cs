@@ -172,6 +172,9 @@ public sealed class CraftElementEditorTests
             Assert.True(HeadlessUi.PumpUntil(() => row.ElementNote is not null, TimeSpan.FromSeconds(30)));
             row.SetFamily(BedFamily(), null);
             HeadlessUi.Pump();
+            Assert.False(HeadlessUi.FindNamed<Expander>(window, "CraftMoreOptions")!.IsExpanded); // the element's values are folded away (owner 2026-10-17)
+            HeadlessUi.FindNamed<Expander>(window, "CraftMoreOptions")!.IsExpanded = true;
+            HeadlessUi.Pump();
             Assert.True(HeadlessUi.FindNamed<Border>(window, "CraftElementRespawn")!.IsEffectivelyVisible);
             Assert.Equal(2, HeadlessUi.FindNamed<ItemsControl>(window, "CraftElementValues")!.ItemCount);
             Assert.False(HeadlessUi.FindNamed<ToggleButton>(window, "CraftUseBoth")!.IsEffectivelyEnabled);

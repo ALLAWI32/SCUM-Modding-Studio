@@ -29,7 +29,7 @@ public abstract partial class ModulePageViewModel
     private const float DecalStartWidth = 40f;
 
     /// <summary>Pixels across a design is drawn at for the bakes.</summary>
-    private const int DecalRasterSize = 512;
+    private const int DecalRasterSize = 1024;
 
     private readonly Stack<DecalSet> _decalHistory = new();
     private readonly Dictionary<string, DecalRaster> _decalRasters = new(StringComparer.Ordinal);
@@ -90,8 +90,9 @@ public abstract partial class ModulePageViewModel
     /// <summary>The designs of <see cref="DecalCategory"/> (all: the game's tattoos after the library).</summary>
     public IReadOnlyList<DecalDesignItem> DecalDesigns => DecalCategory.Key switch
     {
-        "" => [.. AllDecalDesigns, .. GameTattooItems],
+        "" => [.. AllDecalDesigns, .. GameTattooItems, .. StickerItems],
         GameTattoos.Category => GameTattooItems,
+        "Stickers" => StickerItems,
         var key => [.. AllDecalDesigns.Where(d => d.Design.Category == key)],
     };
 
@@ -138,17 +139,18 @@ public abstract partial class ModulePageViewModel
         }
 
         var part = target.Model.Parts[found.PartIndex];
-        if (ArmedDecal is null && _armedSticker is null)
+        var sticker = ArmedDecal?.StickerFile ?? (ArmedDecal is null ? _armedSticker : null);
+        if (ArmedDecal is null && sticker is null)
         {
             return SelectDecalAt(part, found.Hit);
         }
 
-        var design = ArmedDecal is { } armed ? DesignFor(armed) : SvgSticker(_armedSticker!);
-        var aspect = design?.Aspect ?? StickerAspect(_armedSticker!);
+        var design = sticker is null ? DesignFor(ArmedDecal!) : SvgSticker(sticker);
+        var aspect = design?.Aspect ?? StickerAspect(sticker!);
         var layer = new DecalLayer
         {
-            DesignId = ArmedDecal is null ? null : design!.Id,
-            StickerFile = ArmedDecal is null ? _armedSticker : null,
+            DesignId = sticker is null ? design!.Id : null,
+            StickerFile = sticker,
             PartKey = DecalPartKey(part.Attachment),
             MaterialPath = part.Material,
             Position = found.Hit.Position,
@@ -183,10 +185,10 @@ public abstract partial class ModulePageViewModel
         _decalDragStart ??= _decals;
         var moved = false;
         if (MeshRay.Hit(target.Model, ray with { PartIndex = -1 }) is { } found
-            && string.Equals(target.Model.Parts[found.PartIndex].Material, layer.MaterialPath, StringComparison.OrdinalIgnoreCase))
+            && (layer.Wrap || string.Equals(target.Model.Parts[found.PartIndex].Material, layer.MaterialPath, StringComparison.OrdinalIgnoreCase)))
         {
             var part = target.Model.Parts[found.PartIndex];
-            var next = layer with { PartKey = DecalPartKey(part.Attachment), Position = found.Hit.Position, Normal = found.Hit.Normal, Up = UpOn(part.Transform, found.Hit.Normal) };
+            var next = layer with { PartKey = DecalPartKey(part.Attachment), MaterialPath = part.Material, Position = found.Hit.Position, Normal = found.Hit.Normal, Up = UpOn(part.Transform, found.Hit.Normal) };
             _decals = _decals with { Layers = [.. _decals.Layers.Select(l => l.Id == layer.Id ? next : l)] };
             SelectedDecal.Show(next);
             ShowDecalPosition(SelectedDecal);
@@ -241,7 +243,9 @@ public abstract partial class ModulePageViewModel
         }
 
         await EnsureGameTattoosOfAsync(_decals).ConfigureAwait(true);
-        var jobs = _decals.Layers.Select(l => l.MaterialPath).Distinct(StringComparer.OrdinalIgnoreCase)
+        var jobs = _decals.Layers.Select(l => l.MaterialPath)
+            .Concat(_decals.Layers.Any(l => l.Wrap) ? target.Model.Parts.Select(p => p.Material).Where(m => m.Length > 0) : [])
+            .Distinct(StringComparer.OrdinalIgnoreCase)
             .Select(m => (Material: m, Stamps: DecalStamps(target.Model, m), Textures: textures(m)))
             .Where(j => j.Stamps.Count > 0 && j.Textures is not null).ToList();
         return await Task.Run(() => jobs.Select(j => (j.Material, DecalBaker.Bake(j.Textures!.Value.Diffuse, j.Textures.Value.Mask,
@@ -360,7 +364,27 @@ public abstract partial class ModulePageViewModel
 
     /// <summary>True when the clone has a decal on <paramref name="materialPath"/> (the 3D view bakes that material even unpainted).</summary>
     private bool HasDecalsOn(string materialPath) =>
-        _decals.Layers.Count > 0 && _decals.Layers.Any(l => string.Equals(l.MaterialPath, materialPath, StringComparison.OrdinalIgnoreCase));
+        _decals.Layers.Count > 0 && (_decals.Layers.Any(l => string.Equals(l.MaterialPath, materialPath, StringComparison.OrdinalIgnoreCase)) || WrapReaches(materialPath));
+
+    private readonly Dictionary<string, (int Version, bool Reaches)> _wrapReach = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>A decal stuck to the surface on another material reaches <paramref name="materialPath"/> (worked out once per decal change).</summary>
+    private bool WrapReaches(string materialPath)
+    {
+        if (!_decals.Layers.Any(l => l.Wrap && !l.Hidden) || DecalTarget() is not { } target)
+        {
+            return false;
+        }
+
+        if (_wrapReach.TryGetValue(materialPath, out var known) && known.Version == _decalVersion)
+        {
+            return known.Reaches;
+        }
+
+        var reaches = DecalStamps(target.Model, materialPath).Count > 0;
+        _wrapReach[materialPath] = (_decalVersion, reaches);
+        return reaches;
+    }
 
     /// <summary>The colour texture slot a decal is baked into.</summary>
     internal const string DecalDiffuse = "Diffuse Map";
@@ -470,11 +494,15 @@ public abstract partial class ModulePageViewModel
             if ((IsSvg(relative) ? SvgSticker(relative) is null : Sticker(relative) is null))
             {
                 File.Delete(copy);
+                _services.Notifications.Error(Loc.T("Studio.Decals.AddSticker"), Loc.F("Studio.Decals.StickerUnreadable", Path.GetFileName(file)));
                 return false;
             }
 
-            ArmedDecal = null;
-            _armedSticker = relative;
+            _armedSticker = null;
+            RefreshStickerItems();
+            ArmedDecal = StickerItems.FirstOrDefault(s => s.StickerFile == relative);
+            _armedSticker = ArmedDecal is null ? relative : null;
+            _services.Notifications.Success(Loc.T("Studio.Decals.AddSticker"), Loc.T("Studio.Decals.StickerReady"));
             return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -649,11 +677,20 @@ public abstract partial class ModulePageViewModel
     private List<DecalStamp> DecalStamps(PreviewModel model, string material)
     {
         var stamps = new List<DecalStamp>();
-        foreach (var layer in _decals.Ordered.Where(l => !l.Hidden && string.Equals(l.MaterialPath, material, StringComparison.OrdinalIgnoreCase)))
+        List<PreviewPart>? wearing = null;
+        foreach (var layer in _decals.Ordered.Where(l => !l.Hidden && (l.Wrap || string.Equals(l.MaterialPath, material, StringComparison.OrdinalIgnoreCase))))
         {
-            if (DecalPicture(layer) is { } image && DecalPart(model, layer) is { } part)
+            if (DecalPicture(layer) is not { } image || DecalPart(model, layer) is not { } part)
             {
-                stamps.AddRange(DecalBaker.Stamps(layer, image, part.Transform));
+                continue;
+            }
+
+            var own = DecalBaker.Stamps(layer, image, part.Transform);
+            // A decal stuck to the surface gives its piece to every material it reaches, not only the one it was put on.
+            if (string.Equals(layer.MaterialPath, material, StringComparison.OrdinalIgnoreCase)
+                || DecalBaker.Touches(wearing ??= [.. model.Parts.Where(p => string.Equals(p.Material, material, StringComparison.OrdinalIgnoreCase))], own))
+            {
+                stamps.AddRange(own);
             }
         }
 

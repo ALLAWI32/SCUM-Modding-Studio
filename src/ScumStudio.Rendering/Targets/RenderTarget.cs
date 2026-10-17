@@ -162,6 +162,26 @@ public sealed class RenderTarget : IDisposable
         }
     }
 
+    /// <summary>
+    /// Resolves the scenes drawn so far into the colour texture without drawing the pending overlay, which stays pending
+    /// (drawn over what <see cref="TemporalStabilizer"/> writes back); returns that texture.
+    /// </summary>
+    internal uint ResolveSceneOnly()
+    {
+        var overlay = _pendingOverlay;
+        _pendingOverlay = null;
+        try
+        {
+            Resolve();
+        }
+        finally
+        {
+            _pendingOverlay = overlay;
+        }
+
+        return _colorTexture;
+    }
+
     /// <summary>Binds the ID framebuffer and sets the viewport to the full target.</summary>
     public void BindPick()
     {

@@ -42,8 +42,9 @@ public sealed class GraphicsSettingsTests
     public void AFailedFrameDropsThe32FeaturesFirstAndOnlyForGraphicsErrors()
     {
         var gl = new InvalidOperationException("OpenGL error after rendering the scene: InvalidOperation");
-        Assert.Equal(new[] { GraphicsFeature.Multisampling, GraphicsFeature.AlphaToCoverage }, GraphicsStatus.FeaturesToDrop(gl, 1));
-        Assert.Equal(new[] { GraphicsFeature.Multisampling, GraphicsFeature.AlphaToCoverage, GraphicsFeature.CompressedTextures },
+        // r37: the temporal pass (steady foliage) is new too, so it goes with the 3.2 features.
+        Assert.Equal(new[] { GraphicsFeature.Multisampling, GraphicsFeature.AlphaToCoverage, GraphicsFeature.TemporalStabilization }, GraphicsStatus.FeaturesToDrop(gl, 1));
+        Assert.Equal(new[] { GraphicsFeature.Multisampling, GraphicsFeature.AlphaToCoverage, GraphicsFeature.TemporalStabilization, GraphicsFeature.CompressedTextures },
             GraphicsStatus.FeaturesToDrop(gl, 2));
         Assert.Empty(GraphicsStatus.FeaturesToDrop(new KeyNotFoundException("a clone's id"), 3));
     }

@@ -13,5 +13,11 @@ namespace ScumStudio.Rendering.Resources;
 /// <param name="InvTilingCm">1 / each layer's repeat size in cm (0 = unused).</param>
 /// <param name="Means">Each layer texture's average linear colour.</param>
 /// <param name="Normals">Each layer's NHR texture (linear: normal X, Y, height, roughness), null entries without one.</param>
+/// <param name="Rest">
+/// The diffuse texture of a fifth layer (the largest patch the four leave), whose grain the rest of the ground takes (one
+/// minus the four weights); null without one: the grain then fades out where the four cover little.
+/// </param>
+/// <param name="RestInvTilingCm">1 / <paramref name="Rest"/>'s repeat size in cm.</param>
+/// <param name="RestMean"><paramref name="Rest"/>'s average linear colour.</param>
 public sealed record TerrainDetailTextures(GpuTexture Weights, IReadOnlyList<GpuTexture?> Layers, Vector4 InvTilingCm, IReadOnlyList<Vector3> Means,
-    IReadOnlyList<GpuTexture?>? Normals = null);
+    IReadOnlyList<GpuTexture?>? Normals = null, GpuTexture? Rest = null, float RestInvTilingCm = 0f, Vector3 RestMean = default);

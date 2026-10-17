@@ -76,9 +76,10 @@ public static class ModExportService
         }
 
         // The client's game files were opened before this export's mod name was known: they leave out the same own paks
-        // as the server's (re-opened only when that name changes which paks are read).
+        // as the server's (re-opened only when that name changes which paks are read). They read the imported mods this
+        // export carries (the report "ServerMods": game files that had not read them held a mod's BP_Prisoner to the game's).
         var ownNames = OwnPaks.ProjectNames(request.Project.Manifest.Name, request.ModName);
-        await services.Workspace.UseModsAsync(services.Workspace.ModFolders, ownNames, progress, cancellationToken).ConfigureAwait(false);
+        await services.Workspace.UseModsAsync(ProjectMods.Folders(request.Project.DirectoryPath), ownNames, progress, cancellationToken).ConfigureAwait(false);
         var catalog = services.Workspace.Catalog!;
         var craftables = request.IncludeCraftables ? CraftablesFile.Load(request.Project.DirectoryPath) : new CraftablesFile();
         var modName = request.ModName ?? request.Project.Manifest.Name;
@@ -161,7 +162,9 @@ public static class ModExportService
                 progress.Report(Localization.Loc.T("Export.Craftables"), 0, 0);
             }
 
-            if (await CraftablesExporter.ExportAsync(craftables, modName, source, roleOptions, role, CraftablesExporter.StagedRegistry(main),
+            // Its registry keeps the project pak's records: the package check finds their packages in that pak.
+            var craftOptions = main is null ? roleOptions : roleOptions with { Elsewhere = CraftablesExporter.ProjectPakPackages(main, source) };
+            if (await CraftablesExporter.ExportAsync(craftables, modName, source, craftOptions, role, CraftablesExporter.StagedRegistry(main),
                     services.Logger, cancellationToken).ConfigureAwait(false) is { } crafted)
             {
                 results.Add(crafted);
@@ -178,67 +181,7 @@ public static class ModExportService
 
         if (request.IncludeServer)
         {
-            // The client pak is written by now: a server problem is reported, it never turns the export into a failure.
-            var configured = services.Settings.Load().ServerPaksFolder;
-            var serverFolder = ResolveServerPaks(configured);
-            if (serverFolder is null)
-            {
-                services.Notifications.Warning(Localization.Loc.T("Export.ServerSkipped"), string.IsNullOrWhiteSpace(configured)
-                    ? Localization.Loc.T("Export.NoServerFolder")
-                    : Localization.Loc.F("Export.ServerNoCook", configured));
-            }
-            else
-            {
-                if (!string.Equals(Path.GetFullPath(serverFolder), Path.GetFullPath(configured!), StringComparison.OrdinalIgnoreCase))
-                {
-                    // Settings pointed at the server's mods folder: use the game paks next to it from now on, and keep the
-                    // mods folder as the place the server pak is copied to.
-                    services.UpdateSettings(s => s with
-                    {
-                        ServerPaksFolder = serverFolder,
-                        ServerModsOutputFolder = string.IsNullOrWhiteSpace(s.ServerModsOutputFolder) ? configured : s.ServerModsOutputFolder,
-                    });
-                    services.Notifications.Info(Localization.Loc.T("Export.ServerFolderFixed"), Localization.Loc.F("Export.ServerFolderFixedDetail", serverFolder, configured));
-                }
-
-                try
-                {
-                    progress.Report(Localization.Loc.T("Export.OpeningServer"), 0, 0);
-                    services.Keys.TryGet(out var key);
-                    using var server = AssetCatalog.OpenPaks(serverFolder, new AssetCatalogOptions
-                    {
-                        AesKey = key, Logger = services.Logger, LooseOverlays = options.Mods,
-                        PakFileFilter = OwnPaks.Filter(ownNames),
-                    });
-                    progress.Report(Localization.Loc.T("Export.ServerPak"), 0, 0);
-
-                    // Sound events of imported mods and clones become the stock server's 12-byte stubs (D12), read from the
-                    // server's own game paks, never the mods over them.
-                    var stubKey = key;
-                    var serverOptions = options with { ServerEventStubs = () => ServerEventStubs.FromServerPaks(serverFolder, stubKey, services.Logger) };
-                    await ExportRole(server, ProjectSourceRole.Server, serverOptions).ConfigureAwait(false);
-
-                    // The two cooks must change the same levels the same way (and carry the same clones): what one side
-                    // lacks is listed with the server's warnings.
-                    var mains = results.Where(r => string.Equals(Path.GetFileName(r.StagingDirectory), ProjectExporter.StagingFolderName, StringComparison.OrdinalIgnoreCase)).ToList();
-                    if (mains.FirstOrDefault(r => r.Role == ProjectSourceRole.Client) is { } clientMain && mains.FirstOrDefault(r => r.Role == ProjectSourceRole.Server) is { } serverMain
-                        && ModPackageValidator.CompareCooks(clientMain, serverMain) is { Count: > 0 } parity)
-                    {
-                        results[results.IndexOf(serverMain)] = serverMain with { Warnings = [.. serverMain.Warnings, .. parity] };
-                    }
-                }
-                catch (ServerEventStubException ex)
-                {
-                    services.Logger.LogWarning("The server pak was refused: {Message}", ex.Message);
-                    services.Notifications.Warning(Localization.Loc.T("Export.ServerSkipped"),
-                        Localization.Loc.F("Export.ServerNoStub", ex.Events, ex.FirstEvent ?? string.Empty, ex.Reason));
-                }
-                catch (Exception ex) when (ex is InvalidOperationException or IOException or InvalidDataException)
-                {
-                    services.Logger.LogWarning("The server pak was not built: {Message}", ex.Message);
-                    services.Notifications.Warning(Localization.Loc.T("Export.ServerSkipped"), ex.Message);
-                }
-            }
+            await ExportServerAsync(services, options, ownNames, progress, ExportRole, results, ProjectExporter.StagingFolderName, catalog).ConfigureAwait(false);
         }
 
         // A server pak an earlier export left beside this new client pak no longer matches it (D12, D13): it goes.
@@ -254,6 +197,13 @@ public static class ModExportService
             services.Notifications.Warning(Localization.Loc.T("Export.ParityTitle"), problem);
         }
 
+        // An imported mod's own references to what this game no longer has (report "ServerMods": a BP_Prisoner from before
+        // a game update): the pak is written, the mod is named.
+        foreach (var note in results.SelectMany(r => r.Validation?.Notes ?? []).Distinct(StringComparer.Ordinal).Take(4))
+        {
+            services.Notifications.Warning(Localization.Loc.T("Export.ModOutdated"), note);
+        }
+
         if (results.Sum(r => r.RemovedItemSpawners.Count) is > 0 and var gone)
         {
             services.Notifications.Warning(Localization.Loc.T("Map.ItemSpawner.Title"), Localization.Loc.F("Export.ItemSpawnersRemoved", gone,
@@ -262,6 +212,350 @@ public static class ModExportService
 
         services.Logger.LogInformation("Exported {Name}: {Count} pak(s) to {Folder}.", results[0].ModName, results.Count, request.OutputFolder);
         return results;
+    }
+
+    /// <summary>
+    /// The server cook of an export: opens the server's game paks from the settings (with the stored key, never shown) and runs
+    /// <paramref name="exportRole"/> on them. The client paks are written by now: a server problem is a warning, never a
+    /// failure. The cooks of the pak staged in <paramref name="mainStaging"/> are compared (levels, clones). The server's game files
+    /// read <paramref name="overlays"/> (null: the mods the pak carries), as the client's read the project's imported mods.
+    /// </summary>
+    private static async Task ExportServerAsync(AppServices services, ExportOptions options, IReadOnlyList<string> ownNames, IProgressSink progress,
+        Func<AssetCatalog, ProjectSourceRole, ExportOptions, Task> exportRole, List<ExportResult> results, string mainStaging, AssetCatalog clientCatalog,
+        IReadOnlyList<string>? overlays = null)
+    {
+        var configured = services.Settings.Load().ServerPaksFolder;
+        var serverFolder = ResolveServerPaks(configured);
+        if (serverFolder is null)
+        {
+            services.Notifications.Warning(Localization.Loc.T("Export.ServerSkipped"), string.IsNullOrWhiteSpace(configured)
+                ? Localization.Loc.T("Export.NoServerFolder")
+                : Localization.Loc.F("Export.ServerNoCook", configured));
+            return;
+        }
+
+        if (!string.Equals(Path.GetFullPath(serverFolder), Path.GetFullPath(configured!), StringComparison.OrdinalIgnoreCase))
+        {
+            // Settings pointed at the server's mods folder: use the game paks next to it from now on, and keep the
+            // mods folder as the place the server pak is copied to.
+            services.UpdateSettings(s => s with
+            {
+                ServerPaksFolder = serverFolder,
+                ServerModsOutputFolder = string.IsNullOrWhiteSpace(s.ServerModsOutputFolder) ? configured : s.ServerModsOutputFolder,
+            });
+            services.Notifications.Info(Localization.Loc.T("Export.ServerFolderFixed"), Localization.Loc.F("Export.ServerFolderFixedDetail", serverFolder, configured));
+        }
+
+        try
+        {
+            progress.Report(Localization.Loc.T("Export.OpeningServer"), 0, 0);
+            services.Keys.TryGet(out var key);
+            using var server = AssetCatalog.OpenPaks(serverFolder, new AssetCatalogOptions
+            {
+                AesKey = key, Logger = services.Logger, LooseOverlays = overlays ?? options.Mods,
+                PakFileFilter = OwnPaks.Filter(ownNames),
+            });
+            progress.Report(Localization.Loc.T("Export.ServerPak"), 0, 0);
+
+            // Sound events of imported mods and clones become the stock server's 12-byte stubs (D12), read from the
+            // server's own game paks, never the mods over them.
+            var stubKey = key;
+            var serverOptions = options with { ServerEventStubs = () => ServerEventStubs.FromServerPaks(serverFolder, stubKey, services.Logger), ClientCatalog = clientCatalog };
+            await exportRole(server, ProjectSourceRole.Server, serverOptions).ConfigureAwait(false);
+
+            // The two cooks must change the same levels the same way (and carry the same clones): what one side
+            // lacks is listed with the server's warnings.
+            var mains = results.Where(r => string.Equals(Path.GetFileName(r.StagingDirectory), mainStaging, StringComparison.OrdinalIgnoreCase)).ToList();
+            if (mains.FirstOrDefault(r => r.Role == ProjectSourceRole.Client) is { } clientMain && mains.FirstOrDefault(r => r.Role == ProjectSourceRole.Server) is { } serverMain
+                && ModPackageValidator.CompareCooks(clientMain, serverMain) is { Count: > 0 } parity)
+            {
+                results[results.IndexOf(serverMain)] = serverMain with { Warnings = [.. serverMain.Warnings, .. parity] };
+            }
+        }
+        catch (ServerEventStubException ex)
+        {
+            services.Logger.LogWarning("The server pak was refused: {Message}", ex.Message);
+            services.Notifications.Warning(Localization.Loc.T("Export.ServerSkipped"),
+                Localization.Loc.F("Export.ServerNoStub", ex.Events, ex.FirstEvent ?? string.Empty, ex.Reason));
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or IOException or InvalidDataException)
+        {
+            services.Logger.LogWarning("The server pak was not built: {Message}", ex.Message);
+            services.Notifications.Warning(Localization.Loc.T("Export.ServerSkipped"), ex.Message);
+        }
+    }
+
+    /// <summary>Why the page <paramref name="module"/> cannot be exported as its own mod right now, or null when it can.</summary>
+    public static string? ModuleBlocker(AppServices services, Project? project, ExportModule module)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        if (project is null)
+        {
+            return Localization.Loc.T("Export.OpenProjectFirst");
+        }
+
+        if (!ModuleExport.HasChanges(project, module))
+        {
+            return Localization.Loc.F("Export.Module.Nothing", ModuleLabel(module));
+        }
+
+        return module != ExportModule.Economy && services.Workspace.Catalog is null ? Localization.Loc.T("Export.ConnectFirst") : null;
+    }
+
+    /// <summary>The page's name in the UI language.</summary>
+    public static string ModuleLabel(ExportModule module) => Localization.Loc.T(module switch
+    {
+        ExportModule.Map => "Export.Module.Map",
+        ExportModule.Spawns => "Export.Module.Spawns",
+        ExportModule.Vehicles => "Export.Module.Vehicles",
+        ExportModule.Weapons => "Export.Module.Weapons",
+        ExportModule.Items => "Export.Module.Items",
+        ExportModule.Craftables => "Export.Module.Craftables",
+        _ => "Export.Module.Economy",
+    });
+
+    /// <summary>
+    /// Exports one page's changes as a mod of its own (<see cref="ModuleExport"/>): its pak for the client and, when the server
+    /// Paks folder holds the stock server cook, for the server (each with a copied stock .sig), then the Registry pak of every
+    /// page pak in the output folder. The Economy page writes its <c>EconomyOverride.json</c> (a server file, no pak). Every
+    /// pak passes the package check first. Returns one result per pak written.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">Nothing to export for the page, no catalog, or the package check refused the client pak.</exception>
+    public static async Task<IReadOnlyList<ExportResult>> ExportModuleAsync(
+        AppServices services, Project project, ExportModule module, string outputFolder, bool includeServer, IProgressSink progress, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(project);
+        ArgumentNullException.ThrowIfNull(progress);
+        if (ModuleBlocker(services, project, module) is { } blocker)
+        {
+            throw new InvalidOperationException(blocker);
+        }
+
+        if (module == ExportModule.Economy)
+        {
+            var request = new ModExportRequest(project, outputFolder, null, includeServer);
+            if (ExportEconomyOnly(services, request, out var unreadable) is { } written)
+            {
+                services.Notifications.Success(Localization.Loc.T("Economy.Exported"), Localization.Loc.F("Economy.ExportedDetail", written));
+                return [];
+            }
+
+            throw new InvalidOperationException(unreadable ?? Localization.Loc.F("Export.Module.Nothing", ModuleLabel(module)));
+        }
+
+        var modName = project.Manifest.Name;
+        var ownNames = OwnPaks.ProjectNames(modName);
+        await services.Workspace.UseModsAsync(services.Workspace.ModFolders, ownNames, progress, cancellationToken).ConfigureAwait(false);
+        var catalog = services.Workspace.Catalog!;
+        var state = ModuleExport.StateOf(project.State, module);
+        var options = new ExportOptions
+        {
+            OutputDirectory = outputFolder,
+            Module = module,
+            ProjectDirectory = project.DirectoryPath,
+            BendMeshes = new BendSupport(catalog).Describe,
+            Mods = module == ExportModule.Map ? ProjectMods.Folders(project.DirectoryPath) : [], // imported mods are the map's
+            LeaveOutEconomy = true, // the Economy page exports it
+            Elsewhere = ModuleExport.Elsewhere(project.State, module, modName, ProjectExporter.DefaultPakChunkIndex),
+        };
+        if (module == ExportModule.Map)
+        {
+            var (straight, _) = CollisionDoctor.Check(project, CollisionDoctor.GameLogs(services.Settings.Load().ServerPaksFolder));
+            options = options with { StraightPieces = straight };
+        }
+
+        var craftables = module == ExportModule.Craftables ? CraftablesFile.Load(project.DirectoryPath) : new CraftablesFile();
+        using var pictures = new CraftIconRenderer(catalog, services.Logger);
+        options = options with { ModelPictures = pictures.Render };
+        var exporter = new ProjectExporter(services.Logger);
+        var results = new List<ExportResult>(4);
+        var stale = new List<string>();
+
+        async Task ExportRole(AssetCatalog source, ProjectSourceRole role, ExportOptions roleOptions)
+        {
+            try
+            {
+                if (module == ExportModule.Craftables)
+                {
+                    if (await CraftablesExporter.ExportAsync(craftables, modName, source, roleOptions, role, null, services.Logger, cancellationToken).ConfigureAwait(false) is { } crafted)
+                    {
+                        results.Add(crafted);
+                    }
+                }
+                else
+                {
+                    results.Add(await exporter.ExportAsync(state, modName, source, roleOptions, role, new StepProgress(progress), cancellationToken).ConfigureAwait(false));
+                }
+            }
+            catch (Exception ex) when (role == ProjectSourceRole.Server && ex is InvalidOperationException or IOException or InvalidDataException)
+            {
+                // The client's page pak is new: the server's from an earlier export no longer matches it (D12, D13; review 3.5.0).
+                // It goes, and the server's Registry pak is written again without it, before the problem is reported.
+                stale.AddRange(RemoveModulePak(Path.Combine(Path.GetFullPath(outputFolder), ProjectExporter.RoleFolder(role)), modName, module));
+                if (await ModuleExport.WriteRegistryPakAsync(modName, source, roleOptions, role, services.Logger, cancellationToken, project.State).ConfigureAwait(false) is { } kept)
+                {
+                    results.Add(kept);
+                }
+
+                throw;
+            }
+
+            // The game reads one registry: the Registry pak above every page pak in the folder keeps each one's records (and the
+            // traders' table with every page pak's rows).
+            if (await ModuleExport.WriteRegistryPakAsync(modName, source, roleOptions, role, services.Logger, cancellationToken, project.State).ConfigureAwait(false) is { } registry)
+            {
+                results.Add(registry);
+            }
+        }
+
+        progress.Report(Localization.Loc.F("Export.Module.Client", ModuleLabel(module)), 0, 0);
+        await ExportRole(catalog, ProjectSourceRole.Client, options).ConfigureAwait(false);
+        if (includeServer)
+        {
+            // The server reads the project's imported mods like the client's game files do (review 3.5.0: a page's edit of a
+            // package a mod changes was built on the mod's copy for the client and the game's for the server); only the Map's
+            // pak carries them.
+            await ExportServerAsync(services, options, ownNames, progress, ExportRole, results, ModuleExport.StagingFolder(module), catalog,
+                ProjectMods.Folders(project.DirectoryPath)).ConfigureAwait(false);
+        }
+
+        // Without a server cook this time, the server's page pak from an earlier export no longer matches the new client one.
+        if (!results.Any(r => r.Role == ProjectSourceRole.Server))
+        {
+            var serverFolder = Path.Combine(Path.GetFullPath(outputFolder), ProjectExporter.RoleFolder(ProjectSourceRole.Server));
+            if (RemoveModulePak(serverFolder, modName, module) is { Count: > 0 } removed)
+            {
+                stale.AddRange(removed);
+
+                // The server's Registry pak holds that pak's records: it goes too when no other page pak is left beside it.
+                if (!ModuleExport.PakModules.Any(m => File.Exists(Path.Combine(serverFolder, ModuleExport.PakFileName(modName, m, ProjectExporter.DefaultPakChunkIndex)))))
+                {
+                    var registry = Path.Combine(serverFolder, ModuleExport.RegistryPakFileName(modName, ProjectExporter.DefaultPakChunkIndex));
+                    foreach (var file in new[] { registry, ScumStudio.Pak.Writing.SigCopier.GetSigPath(registry) }.Where(File.Exists))
+                    {
+                        File.Delete(file);
+                        stale.Add(file);
+                    }
+                }
+            }
+        }
+
+        if (stale.Count > 0)
+        {
+            services.Logger.LogInformation("Removed {Count} old server file(s): {Files}", stale.Count, string.Join(", ", stale));
+            services.Notifications.Warning(Localization.Loc.T("Export.ServerSkipped"), Localization.Loc.F("Export.StaleServerPak", string.Join(", ", stale.Select(Path.GetFileName))));
+        }
+
+        foreach (var problem in ParityProblems(results))
+        {
+            services.Notifications.Warning(Localization.Loc.T("Export.ParityTitle"), problem);
+        }
+
+        var clientFolder = Path.Combine(Path.GetFullPath(outputFolder), ProjectExporter.ClientFolderName);
+        foreach (var (above, abovePak, count, example) in ModuleExport.HiddenBy(clientFolder, modName, module, catalog.ProjectName))
+        {
+            services.Notifications.Warning(Localization.Loc.T("Export.Module.HiddenTitle"),
+                Localization.Loc.F("Export.Module.Hidden", abovePak, count, example, ModuleLabel(above), ModuleExport.PakFileName(modName, module, ProjectExporter.DefaultPakChunkIndex)));
+        }
+
+        services.Logger.LogInformation("Exported the {Module} page of {Name}: {Count} pak(s) to {Folder}.", module, modName, results.Count, outputFolder);
+        return results;
+    }
+
+    /// <summary>Deletes the page's pak (and its .sig) in <paramref name="roleDirectory"/>; returns the deleted files.</summary>
+    private static List<string> RemoveModulePak(string roleDirectory, string modName, ExportModule module)
+    {
+        var pak = Path.Combine(roleDirectory, ModuleExport.PakFileName(modName, module, ProjectExporter.DefaultPakChunkIndex));
+        var removed = new List<string>();
+        foreach (var file in new[] { pak, ScumStudio.Pak.Writing.SigCopier.GetSigPath(pak) }.Where(File.Exists))
+        {
+            File.Delete(file);
+            removed.Add(file);
+        }
+
+        return removed;
+    }
+
+    /// <summary>
+    /// One click on a page's Export button: <see cref="ExportModuleAsync"/> into the export folder of the Settings (or
+    /// <paramref name="defaultFolder"/>), the server paks too when the server Paks folder holds the stock server cook, and the
+    /// server paks (pak + sig) copied into the server mods folder of the Settings. Returns the results and the files copied.
+    /// </summary>
+    public static async Task<(IReadOnlyList<ExportResult> Results, IReadOnlyList<string> Installed)> QuickExportModuleAsync(
+        AppServices services, Project project, ExportModule module, string defaultFolder, IProgressSink progress, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        var settings = services.Settings.Load();
+        var folder = Path.GetFullPath(string.IsNullOrWhiteSpace(settings.ClientModsOutputFolder) ? defaultFolder : settings.ClientModsOutputFolder);
+        var results = await ExportModuleAsync(services, project, module, folder, ResolveServerPaks(settings.ServerPaksFolder) is not null, progress, cancellationToken).ConfigureAwait(false);
+        var installed = new List<string>();
+        var target = services.Settings.Load().ServerModsOutputFolder;
+        foreach (var result in results.Where(r => r.Role == ProjectSourceRole.Server && r.PakPath is not null))
+        {
+            if (string.IsNullOrWhiteSpace(target))
+            {
+                break;
+            }
+
+            Directory.CreateDirectory(target);
+            foreach (var file in new[] { result.PakPath, result.SigPath }.OfType<string>())
+            {
+                var copy = Path.Combine(target, Path.GetFileName(file));
+                if (!string.Equals(Path.GetFullPath(copy), Path.GetFullPath(file), StringComparison.OrdinalIgnoreCase))
+                {
+                    File.Copy(file, copy, overwrite: true);
+                }
+
+                installed.Add(copy);
+            }
+        }
+
+        if (installed.Count > 0)
+        {
+            WarnRemoved(services, RemoveOtherInstallMode(target!, project.Manifest.Name, ProjectExporter.DefaultPakChunkIndex, pagesInstalled: true));
+        }
+
+        return (results, installed);
+    }
+
+    /// <summary>
+    /// Deletes from the server's mods folder <paramref name="folder"/> the paks (and their .sig) of the other way of installing
+    /// the same project: the whole project's pak and its Craftables pak once page paks are copied there, the page paks and
+    /// the Registry pak once the whole project's paks are. The two must never be installed together (review 3.5.0: the
+    /// Registry pak loads above the whole project's paks and its list of assets left out their craftables and clones, and old
+    /// page paks hid newer copies). Returns the deleted files.
+    /// </summary>
+    public static IReadOnlyList<string> RemoveOtherInstallMode(string folder, string modName, int pakChunkIndex, bool pagesInstalled)
+    {
+        if (string.IsNullOrWhiteSpace(folder) || !Directory.Exists(folder))
+        {
+            return [];
+        }
+
+        IEnumerable<string> names = pagesInstalled
+            ? [ProjectExporter.PakFileName(modName, pakChunkIndex), CraftablesExporter.PakFileName(modName, pakChunkIndex)]
+            : [.. ModuleExport.PakModules.Select(m => ModuleExport.PakFileName(modName, m, pakChunkIndex)), ModuleExport.RegistryPakFileName(modName, pakChunkIndex)];
+        var removed = new List<string>();
+        foreach (var pak in names.Select(n => Path.Combine(folder, n)))
+        {
+            foreach (var file in new[] { pak, ScumStudio.Pak.Writing.SigCopier.GetSigPath(pak) }.Where(File.Exists))
+            {
+                File.Delete(file);
+                removed.Add(file);
+            }
+        }
+
+        return removed;
+    }
+
+    private static void WarnRemoved(AppServices services, IReadOnlyList<string> removed)
+    {
+        if (removed.Count > 0)
+        {
+            services.Logger.LogInformation("Removed {Count} file(s) of the other install mode from the server's mods folder: {Files}", removed.Count, string.Join(", ", removed));
+            services.Notifications.Warning(Localization.Loc.T("Export.ParityTitle"), Localization.Loc.F("Export.OtherModeRemoved", string.Join(", ", removed.Select(Path.GetFileName))));
+        }
     }
 
     /// <summary>
@@ -453,6 +747,11 @@ public static class ModExportService
         if (results.Count > 0 && !results.Any(r => r.Role == ProjectSourceRole.Server) && File.Exists(oldServerPak))
         {
             services.Notifications.Warning(Localization.Loc.T("Export.ParityTitle"), Localization.Loc.F("Export.StaleServerCopy", oldServerPak));
+        }
+
+        if (installed.Count > 0)
+        {
+            WarnRemoved(services, RemoveOtherInstallMode(serverMods!, project.Manifest.Name, request.PakChunkIndex, pagesInstalled: false));
         }
 
         return (results, installed);

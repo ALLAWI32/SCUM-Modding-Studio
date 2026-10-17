@@ -290,7 +290,6 @@ public sealed partial class LevelViewport : OpenGlControlBase
     private Point _pressPointer;
     private bool _looking;
     private bool _panning;
-    private double _lastFrameSeconds;
     private bool _forward, _backward, _left, _right, _up, _down, _fast;
     private Vector3 _velocity;
     private bool _drone;
@@ -361,6 +360,7 @@ public sealed partial class LevelViewport : OpenGlControlBase
         RenderDistanceProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.RequestNextFrameRendering());
         SectorSizeCmProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.RequestNextFrameRendering());
         SmoothProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.RequestNextFrameRendering());
+        SteadyFoliageProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.RequestNextFrameRendering());
         ScaleHandlesProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.RequestNextFrameRendering());
         LegHandleProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.RequestNextFrameRendering());
         SelectedRootWorldProperty.Changed.AddClassHandler<LevelViewport>((c, _) => c.RequestNextFrameRendering());
@@ -1032,11 +1032,11 @@ public sealed partial class LevelViewport : OpenGlControlBase
             GpuName = _renderer.Info.Renderer;
             ReportGlStart();
             _target = _renderer.CreateTarget(Math.Max(1, PixelSize().W), Math.Max(1, PixelSize().H), TargetSamples);
+            _ = EnsureStabilizer(); // its shaders compile now, not on the first move (a refusal only turns Steady foliage off)
             _sceneDirty = _pendingScene is not null;
             _backdropDirty = Backdrop is not null;
             RequestNextFrameRendering(); // requests made before the context existed were dropped
             _clock.Restart();
-            _lastFrameSeconds = 0;
             IsGlReady = true;
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
@@ -1058,6 +1058,7 @@ public sealed partial class LevelViewport : OpenGlControlBase
         _stagedScene = null;
         _gpuTimer?.Dispose();
         _gpuTimer = null;
+        ReleaseMotion();
         _target?.Dispose();
         _target = null;
         _renderer?.Dispose();
@@ -1080,6 +1081,9 @@ public sealed partial class LevelViewport : OpenGlControlBase
             return;
         }
 
+        // The frame's time, taken before any of its work: the staging below takes longer in some frames than in others, and
+        // a clock read after it moved the camera by uneven steps between frames the screen shows evenly (LevelViewport.Motion.cs).
+        var frameStart = _clock.Elapsed.TotalSeconds;
         _target.Resize(w, h, Math.Min(TargetSamples, _renderer.Info.MaxSamples));
         _budget.Enabled = Smooth;
         var detailSettings = _budget.Apply(DetailSettings(_renderer));
@@ -1416,11 +1420,10 @@ public sealed partial class LevelViewport : OpenGlControlBase
             }
         }
 
-        // Camera motion: time-based so the speed does not depend on the frame rate.
+        // Camera motion: time-based so the speed does not depend on the frame rate; steady steps with Smooth camera.
         var now = _clock.Elapsed.TotalSeconds;
-        var interval = now - _lastFrameSeconds;
-        var dt = (float)Math.Clamp(interval, 0.0, 0.1);
-        _lastFrameSeconds = now;
+        var dt = StepCamera(frameStart);
+        var interval = _frameClock.LastInterval;
         ReleaseLostKeys();
         // Smooth start and stop: the velocity eases towards what the keys ask for (about 0.1 s), like the in-game drone.
         var f = (_forward ? 1f : 0f) - (_backward ? 1f : 0f);
@@ -1531,6 +1534,7 @@ public sealed partial class LevelViewport : OpenGlControlBase
             farStats = null;
         }
 
+        var settling = SteadyFrame(); // foliage steadied over frames while the camera moves (LevelViewport.Motion.cs)
         _gpuTimer?.End();
         var renderMs = Stopwatch.GetElapsedTime(renderStart).TotalMilliseconds;
         _cpuMs = _cpuMs <= 0 ? renderMs : (_cpuMs * 0.9) + (renderMs * 0.1);
@@ -1587,7 +1591,10 @@ public sealed partial class LevelViewport : OpenGlControlBase
             _frameMs = _frameMs <= 0 ? frameMs : (_frameMs * 0.9) + (frameMs * 0.1);
         }
 
+        // A turn still being eased in, or a steadied picture still fading to the newest frame, keeps the frames coming too.
+        var continuous = moving || _looking || _panning || _look.Settling || settling;
         _wasContinuous = moving || _looking || _panning;
+        PaceFrames(continuous);
 
         if (now - _lastInfoSeconds > 0.25)
         {
@@ -1601,7 +1608,7 @@ public sealed partial class LevelViewport : OpenGlControlBase
             }
         }
 
-        if (moving || _looking || _panning)
+        if (continuous)
         {
             RequestNextFrameRendering();
         }
@@ -1864,7 +1871,7 @@ public sealed partial class LevelViewport : OpenGlControlBase
 
         if (_drone || _looking)
         {
-            _camera.Rotate((float)delta.X, (float)delta.Y);
+            _look.Add((float)delta.X, (float)delta.Y); // turned once per frame (LookSmoother), not per mouse report
             RequestNextFrameRendering();
             e.Handled = true;
             return;

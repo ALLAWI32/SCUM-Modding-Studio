@@ -1,3 +1,4 @@
+using ScumStudio.Assets.Landscape;
 using ScumStudio.Assets.Textures;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
@@ -1461,6 +1462,129 @@ public static class LevelSceneUploader
         return PreparedMesh.FromLods(asset.Lods, asset.LodScreenSizes.ToArray(), MeshSpace.Unreal, 1f);
     }
 
+    /// <summary>
+    /// The paint layers of a component in the order its four close-up slots take them: by the weight they have on the ground
+    /// above <paramref name="seaLevelCm"/> (all of it when none is above), largest first. By coverage of the whole component,
+    /// a coast tile's seabed (85% of it, under water) took a slot and the dry grass and sand painted in the outpost's gravel
+    /// got none: those patches were drawn flat, without the ground's grain, cut out of it with a dark ragged edge (owner,
+    /// 3.4.0: "brown wrinkled puddles").
+    /// With more than four such layers (<paramref name="drawable"/>: the ones a slot can draw) the slots go to the four that
+    /// leave the least dry ground without grain, the shader's fade (<see cref="GrainShare"/> of the share the slots cover)
+    /// summed over the ground: a layer mixed into one that holds a slot adds little, a patch where nothing else is painted
+    /// adds all of it. By weight alone the B_4 airfield's dry grass (93% where it is painted, 0.8% of its component) came
+    /// fifth behind beach sand mixed into the beach gravel, and stayed a flat brown smudge with no grain (r37 verifier).
+    /// The fifth layer is picked the same way: the rest of the ground takes its grain (<c>TerrainDetailTextures.Rest</c>).
+    /// </summary>
+    internal static List<LandscapeLayerWeights> DetailLayers(LandscapeComponentLayers layers, LandscapeSurface? surface, float seaLevelCm,
+        Func<LandscapeLayerWeights, bool>? drawable = null)
+    {
+        ArgumentNullException.ThrowIfNull(layers);
+        var n = layers.SampleCount;
+        var usable = layers.Layers.Where(l => l.Weights.Length == n * n).ToList();
+        var dry = new bool[n * n];
+        var anyDry = false;
+        if (surface is not null && surface.SampleCount == n)
+        {
+            for (var y = 0; y < n; y++)
+            {
+                for (var x = 0; x < n; x++)
+                {
+                    anyDry |= dry[(y * n) + x] = surface.SampleHeight(x, y) >= seaLevelCm;
+                }
+            }
+        }
+
+        var byWeight = usable.Select(l =>
+        {
+            long sum = 0;
+            for (var i = 0; i < l.Weights.Length; i++)
+            {
+                sum += !anyDry || dry[i] ? l.Weights[i] : 0;
+            }
+
+            return (Layer: l, Sum: sum);
+        }).OrderByDescending(x => x.Sum).ToList();
+        var candidates = byWeight.Where(x => x.Sum > 0 && (drawable?.Invoke(x.Layer) ?? true)).Select(x => x.Layer).ToList();
+        if (candidates.Count <= DetailSlots)
+        {
+            return [.. byWeight.Select(x => x.Layer)];
+        }
+
+        // Greedy, slot by slot: the layer that adds the most grain to the ground the slots taken so far leave. Every third
+        // sample of a full component (3 m apart) is plenty to compare patches (and a ninth of the work on the render thread).
+        var step = n > 64 ? 3 : 1;
+        var samples = new List<int>();
+        for (var y = 0; y < n; y += step)
+        {
+            for (var x = 0; x < n; x += step)
+            {
+                if (!anyDry || dry[(y * n) + x])
+                {
+                    samples.Add((y * n) + x);
+                }
+            }
+        }
+
+        // One pick more than the slots: the fifth is the layer whose grain the rest of the ground takes (the largest patch left).
+        // Ground already covered to full grain (GrainShare 1 from 0.6 on) gains nothing more and leaves the count.
+        var covered = new int[samples.Count];
+        var open = Enumerable.Range(0, samples.Count).ToList();
+        var chosen = new List<LandscapeLayerWeights>(DetailSlots + 1);
+        for (var slot = 0; slot < Math.Min(candidates.Count, DetailSlots + 1); slot++)
+        {
+            LandscapeLayerWeights? best = null;
+            var bestGain = -1.0;
+            foreach (var layer in candidates.Where(c => !chosen.Contains(c)))
+            {
+                var gain = 0.0;
+                foreach (var s in open)
+                {
+                    var w = layer.Weights[samples[s]];
+                    if (w > 0)
+                    {
+                        gain += ShareOf(covered[s] + w) - ShareOf(covered[s]);
+                    }
+                }
+
+                if (gain > bestGain + 1e-6)
+                {
+                    (best, bestGain) = (layer, gain);
+                }
+            }
+
+            chosen.Add(best!);
+            foreach (var s in open)
+            {
+                covered[s] += best!.Weights[samples[s]];
+            }
+
+            open.RemoveAll(s => covered[s] >= FullGrainBytes);
+        }
+
+        return [.. chosen, .. byWeight.Select(x => x.Layer).Where(l => !chosen.Contains(l))];
+    }
+
+    /// <summary>Number of paint layers a terrain component draws with their own texture up close (the shader's four slots).</summary>
+    internal const int DetailSlots = 4;
+
+    /// <summary>
+    /// How much of a layer's grain the terrain shader keeps where its slots cover <paramref name="covered"/> (0..1) of the
+    /// ground: <c>smoothstep(0.1, 0.6, covered)</c>, as <c>ShaderSources</c> fades it.
+    /// </summary>
+    internal static float GrainShare(float covered)
+    {
+        var t = Math.Clamp((covered - 0.1f) / 0.5f, 0f, 1f);
+        return t * t * (3f - (2f * t));
+    }
+
+    // GrainShare of a sum of byte weights (0..4 x 255), looked up.
+    private static readonly float[] Shares = [.. Enumerable.Range(0, (DetailSlots * 255) + 1).Select(i => GrainShare(i / 255f))];
+
+    private static float ShareOf(int coveredBytes) => Shares[Math.Min(coveredBytes, Shares.Length - 1)];
+
+    // The byte weight from which GrainShare is 1 (0.6 of 255, rounded up).
+    private const int FullGrainBytes = 154;
+
     // Average linear colour of a layer texture the preparer built no mip chain for (none today; computed once per decoded image).
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<TextureImage, StrongBox<Vector3>> LayerMeans = new();
 
@@ -1477,13 +1601,13 @@ public static class LevelSceneUploader
         }
 
         var n = layers.SampleCount;
-        var top = layers.Layers
-            .Where(l => l.Weights.Length == n * n)
+        bool Drawable(LandscapeLayerWeights l) => catalog.Resolve(l.Name) is { DiffuseTexture: { } path, TilingCm: > 0f } && images.Images.ContainsKey(path);
+        var ordered = DetailLayers(layers, terrain.Surface, prepared.SeaLevelCm ?? 0f, Drawable)
+            .Where(Drawable)
             .Select(l => (Layer: l, Style: catalog.Resolve(l.Name)))
-            .Where(x => x.Style.DiffuseTexture is { } path && x.Style.TilingCm > 0f && images.Images.ContainsKey(path))
-            .OrderByDescending(x => x.Layer.Coverage)
-            .Take(4)
+            .Take(DetailSlots + 1)
             .ToList();
+        var top = ordered.Take(DetailSlots).ToList();
         if (top.Count == 0)
         {
             return null;
@@ -1504,9 +1628,8 @@ public static class LevelSceneUploader
         var normals = new GpuTexture?[4];
         var means = new Vector3[4];
         var tiling = new float[4];
-        for (var k = 0; k < top.Count; k++)
+        GpuTexture Diffuse(string path)
         {
-            var path = top[k].Style.DiffuseTexture!;
             var image = images.Images[path];
             GpuTexture? layer;
             if (cache is not null)
@@ -1520,7 +1643,17 @@ public static class LevelSceneUploader
                 layerTextures[path] = layer;
             }
 
-            gpu[k] = layer;
+            return layer;
+        }
+
+        // The 1×1 mip the preparer's worker built for the bake: worked out here texel by texel, it held the render thread
+        // some 20 ms per new layer as the ground streamed in.
+        Vector3 Mean(string path) => images.Find(path)?.Mean ?? LayerMeans.GetValue(images.Images[path], i => new StrongBox<Vector3>(new LinearMipChain(i).Mean)).Value;
+
+        for (var k = 0; k < top.Count; k++)
+        {
+            var path = top[k].Style.DiffuseTexture!;
+            gpu[k] = Diffuse(path);
             if (top[k].Style.NhrTexture is { } nhrPath && images.Images.TryGetValue(nhrPath, out var nhrImage))
             {
                 if (cache is not null)
@@ -1535,13 +1668,14 @@ public static class LevelSceneUploader
                 }
             }
 
-            // The 1×1 mip the preparer's worker built for the bake: worked out here texel by texel, it held the render thread
-            // some 20 ms per new layer as the ground streamed in.
-            means[k] = images.Find(path)?.Mean ?? LayerMeans.GetValue(image, i => new StrongBox<Vector3>(new LinearMipChain(i).Mean)).Value;
+            means[k] = Mean(path);
             tiling[k] = 1f / top[k].Style.TilingCm;
         }
 
-        return new TerrainDetailTextures(weightTexture, gpu, new Vector4(tiling[0], tiling[1], tiling[2], tiling[3]), means, normals);
+        // A fifth layer: the rest of the ground takes its grain (the largest patch the four leave, see DetailLayers).
+        var rest = ordered.Count > DetailSlots ? ordered[DetailSlots].Style : null;
+        return new TerrainDetailTextures(weightTexture, gpu, new Vector4(tiling[0], tiling[1], tiling[2], tiling[3]), means, normals,
+            rest is null ? null : Diffuse(rest.DiffuseTexture!), rest is null ? 0f : 1f / rest.TilingCm, rest is null ? default : Mean(rest.DiffuseTexture!));
     }
 
     /// <summary>Uploads a baked terrain texture (sRGB, mipmapped, clamp-to-edge so components meet without seams).</summary>

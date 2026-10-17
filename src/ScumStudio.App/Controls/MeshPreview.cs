@@ -149,6 +149,13 @@ public sealed class MeshPreview : OpenGlControlBase
     public static readonly StyledProperty<bool> ShowScaleProperty =
         AvaloniaProperty.Register<MeshPreview, bool>(nameof(ShowScale), true);
 
+    /// <summary>
+    /// The game's prisoner (<see cref="ScaleFigure"/>) stands beside the model while <see cref="ShowScale"/> is on; off hides
+    /// him and keeps the grid (the "Person" toggle of the Vehicles and Weapons 3D tabs).
+    /// </summary>
+    public static readonly StyledProperty<bool> ShowFigureProperty =
+        AvaloniaProperty.Register<MeshPreview, bool>(nameof(ShowFigure), true);
+
     /// <summary>Studio light or the island's sun.</summary>
     public static readonly StyledProperty<PreviewLight> LightProperty =
         AvaloniaProperty.Register<MeshPreview, PreviewLight>(nameof(Light));
@@ -258,6 +265,7 @@ public sealed class MeshPreview : OpenGlControlBase
     static MeshPreview()
     {
         FocusableProperty.OverrideDefaultValue<MeshPreview>(true);
+        DragDrop.AllowDropProperty.OverrideDefaultValue<MeshPreview>(true);
         ToolProperty.Changed.AddClassHandler<MeshPreview>((c, _) => c.OnToolChanged());
         GizmoModeProperty.Changed.AddClassHandler<MeshPreview>((c, _) => c.RequestNextFrameRendering());
         SelectedPartIndexProperty.Changed.AddClassHandler<MeshPreview>((c, e) =>
@@ -280,12 +288,20 @@ public sealed class MeshPreview : OpenGlControlBase
         });
         ShowGridProperty.Changed.AddClassHandler<MeshPreview>((c, _) => c.RequestNextFrameRendering());
         ShowScaleProperty.Changed.AddClassHandler<MeshPreview>((c, _) => c.RequestNextFrameRendering());
+        ShowFigureProperty.Changed.AddClassHandler<MeshPreview>((c, _) => c.RequestNextFrameRendering());
         LightProperty.Changed.AddClassHandler<MeshPreview>((c, _) => c.RequestNextFrameRendering());
         HighlightAttachmentProperty.Changed.AddClassHandler<MeshPreview>((c, _) =>
         {
             c._highlightDirty = true;
             c.RequestNextFrameRendering();
         });
+    }
+
+    /// <summary>Creates the view; it takes decal designs dragged from the Decals library.</summary>
+    public MeshPreview()
+    {
+        AddHandler(DragDrop.DragOverEvent, (_, e) => OnDecalDragOver(e));
+        AddHandler(DragDrop.DropEvent, (_, e) => OnDecalDrop(e, e.GetPosition(this)));
     }
 
     /// <inheritdoc cref="ModelProperty" />
@@ -308,6 +324,16 @@ public sealed class MeshPreview : OpenGlControlBase
         get => GetValue(ShowScaleProperty);
         set => SetValue(ShowScaleProperty, value);
     }
+
+    /// <inheritdoc cref="ShowFigureProperty" />
+    public bool ShowFigure
+    {
+        get => GetValue(ShowFigureProperty);
+        set => SetValue(ShowFigureProperty, value);
+    }
+
+    /// <summary>The scene's figure switch: the scale on and the person not hidden.</summary>
+    private bool FigureWanted => ShowScale && ShowFigure;
 
     /// <inheritdoc cref="LightProperty" />
     public PreviewLight Light
@@ -438,6 +464,8 @@ public sealed class MeshPreview : OpenGlControlBase
             _renderer = new SceneRenderer(_context, GraphicsStatus.Fallbacks);
             _target = _renderer.CreateTarget(Math.Max(1, PixelSize().W), Math.Max(1, PixelSize().H));
             _modelDirty = Model is not null;
+            ScaleFigure.CharacterChanged -= OnFigureChanged;
+            ScaleFigure.CharacterChanged += OnFigureChanged; // the game's prisoner arrives a moment after the catalog opens
             IsGlReady = true;
             GraphicsStatus.Started("3D preview", _renderer.Info, _renderer.CreationErrors.Select(e => e.ToString()).ToList());
         }
@@ -480,9 +508,13 @@ public sealed class MeshPreview : OpenGlControlBase
 
     private int _failedFrames; // frames in a row that threw (logged in full the first few times)
 
+    /// <summary>The scale figure was loaded (or forgotten) on a worker: the next frame stands it beside the model.</summary>
+    private void OnFigureChanged(object? sender, EventArgs e) => Dispatcher.UIThread.Post(RequestNextFrameRendering);
+
     /// <inheritdoc />
     protected override void OnOpenGlDeinit(GlInterface gl)
     {
+        ScaleFigure.CharacterChanged -= OnFigureChanged;
         ClearScene();
         _target?.Dispose();
         _target = null;
@@ -546,9 +578,9 @@ public sealed class MeshPreview : OpenGlControlBase
             SelectPart(_scene?.PartNode(request));
         }
 
-        if (_scene is { } extras && (extras.ShowScale != ShowScale || extras.Ground != (Light == PreviewLight.Sun)))
+        if (_scene is { } extras && (extras.ShowScale != FigureWanted || extras.FigureStale || extras.Ground != (Light == PreviewLight.Sun)))
         {
-            extras.ShowScale = ShowScale;
+            extras.ShowScale = FigureWanted;
             extras.Ground = Light == PreviewLight.Sun;
             _bounds = extras.Bounds; // the camera stays; a double click frames the person too
         }
@@ -688,6 +720,41 @@ public sealed class MeshPreview : OpenGlControlBase
         {
             e.Pointer.Capture(this);
         }
+    }
+
+    /// <summary>The drag-and-drop format of a decal design dragged from the Decals library (its <c>DecalDesignItem</c>).</summary>
+    public const string DecalDragFormat = "ScumStudio.DecalDesign";
+
+    /// <summary>
+    /// Raised when a decal design is dropped on the view (owner: "press and hold on a sticker and drop it where I let go"),
+    /// before the drop point goes to <see cref="SurfacePointer"/> as a click there (a press and its release): the page arms
+    /// the design here, the click puts it on the car.
+    /// </summary>
+    public event EventHandler<DragEventArgs>? SurfaceDrop;
+
+    /// <summary>The clicks a drop queued that the next frame picks (tests).</summary>
+    internal int PendingSurfaceCount => _pendingSurface.Count;
+
+    /// <summary>A decal design over the view: copy it, on the surface tool only.</summary>
+    internal void OnDecalDragOver(DragEventArgs e)
+    {
+        e.DragEffects = e.Data.Contains(DecalDragFormat) && Tool == PreviewTool.Surface ? DragDropEffects.Copy : DragDropEffects.None;
+        e.Handled = true;
+    }
+
+    /// <summary>A decal design dropped at <paramref name="position"/>: the page arms it, then a click there places it.</summary>
+    internal void OnDecalDrop(DragEventArgs e, Point position)
+    {
+        if (!e.Data.Contains(DecalDragFormat) || Tool != PreviewTool.Surface)
+        {
+            return;
+        }
+
+        SurfaceDrop?.Invoke(this, e);
+        QueueSurface(position, drag: false, release: false);
+        QueueSurface(position, drag: false, release: true);
+        Focus();
+        e.Handled = true;
     }
 
     /// <summary>A surface pick for the next frame (a drag step replaces the one still waiting; the press and the release are kept).</summary>
@@ -1148,7 +1215,7 @@ public sealed class MeshPreview : OpenGlControlBase
         }
 
         _scene = PreviewScene.UploadStaged(_renderer, model);
-        _scene.ShowScale = ShowScale;
+        _scene.ShowScale = FigureWanted;
         _scene.Ground = Light == PreviewLight.Sun;
         _bounds = _scene.Bounds;
         var textured = model.Parts.Count(p => p.TexturePath is not null);

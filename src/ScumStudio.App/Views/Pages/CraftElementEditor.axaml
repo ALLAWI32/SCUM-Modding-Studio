@@ -4,18 +4,7 @@
              x:Class="ScumStudio.App.Views.Pages.CraftElementEditor"
              x:DataType="vm:CraftableRowViewModel">
   <StackPanel Spacing="10">
-    <!-- Use: placed in the world, crafted into the bag, or both -->
-    <StackPanel Orientation="Horizontal" Spacing="10">
-      <TextBlock Text="{Tr Craftables.Use}" Classes="caption" VerticalAlignment="Center" ToolTip.Tip="{Tr Craftables.Use.Tip}" />
-      <Border Classes="segmented" VerticalAlignment="Center">
-        <StackPanel Orientation="Horizontal">
-          <ToggleButton x:Name="CraftUseBuild" IsChecked="{Binding IsBuild}" IsEnabled="{Binding CanBuild}" Content="{Tr Craftables.Use.Build}" ToolTip.Tip="{Tr Craftables.Use.Build.Tip}" />
-          <ToggleButton x:Name="CraftUseCraft" IsChecked="{Binding IsCraft}" IsEnabled="{Binding CanCraft}" Content="{Tr Craftables.Use.Craft}" ToolTip.Tip="{Tr Craftables.Use.Craft.Tip}" />
-          <ToggleButton x:Name="CraftUseBoth" IsChecked="{Binding IsBoth}" IsEnabled="{Binding CanBoth}" Content="{Tr Craftables.Use.Both}" ToolTip.Tip="{Tr Craftables.Use.Both.Tip}" />
-        </StackPanel>
-      </Border>
-    </StackPanel>
-    <TextBlock x:Name="CraftKindWarning" Text="{Binding KindWarning}" Classes="warn wrap" IsVisible="{Binding KindWarning, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+    <!-- Where it shows up (Build / Craft / Both), the kind warning and how a built craftable is placed (like the game's, a flag, repair cost, place in front) are step 2 of the Craftables page; this is under More options. -->
 
     <!-- "Like the game's bed": the game's levels and the values each one stores, with Reset -->
     <Border Classes="card" Padding="12" IsVisible="{Binding IsElement}">

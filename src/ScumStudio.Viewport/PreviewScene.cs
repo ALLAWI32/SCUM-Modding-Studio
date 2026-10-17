@@ -13,10 +13,7 @@ namespace ScumStudio.Viewport;
 /// <summary>A <see cref="PreviewModel"/> living on the GPU: its scene graph and GL-space bounds (render thread, GL context current).</summary>
 public sealed class PreviewScene : IDisposable
 {
-    /// <summary>The scale figure: a flat mid grey that reads on the studio backdrop and on the sunlit floor.</summary>
-    private static readonly Vector4 FigureTint = new(0.45f, 0.45f, 0.43f, 1f);
-
-    /// <summary>The floor under a sunlit preview: a neutral grey a little darker than the figure.</summary>
+    /// <summary>The floor under a sunlit preview: a neutral grey.</summary>
     private static readonly Vector4 GroundTint = new(0.3f, 0.3f, 0.28f, 1f);
 
     private readonly SceneRenderer _renderer;
@@ -24,9 +21,10 @@ public sealed class PreviewScene : IDisposable
     private readonly List<(SceneNode Node, MeshHandle Handle)> _parts = [];
     private readonly Dictionary<string, (TextureImage Image, GpuTexture Texture)> _textures = new(StringComparer.OrdinalIgnoreCase);
     private readonly Queue<(string Path, TextureImage Image)> _staged = new();
-    private MeshHandle? _figureMesh;
+    private readonly List<SceneNode> _figure = [];
+    private readonly List<GpuTexture> _figureTextures = [];
+    private PreviewModel? _figureModel;
     private MeshHandle? _groundMesh;
-    private SceneNode? _figure;
     private SceneNode? _ground;
     private bool _showScale;
 
@@ -82,12 +80,25 @@ public sealed class PreviewScene : IDisposable
     public BoundingBox ModelBounds { get; private set; } = BoundingBox.Empty;
 
     /// <summary>GL-space bounds of every part, and of the scale figure while it stands there (what the camera frames).</summary>
-    public BoundingBox Bounds => _figure is { } figure ? ModelBounds.Union(LevelSceneUploader.TransformBounds(figure.Mesh!.Bounds, figure.LocalTransform)) : ModelBounds;
+    public BoundingBox Bounds => _figure.Aggregate(ModelBounds, (b, n) => b.Union(LevelSceneUploader.TransformBounds(n.Mesh!.Bounds, n.LocalTransform)));
+
+    /// <summary>The scale figure stands beside the model now.</summary>
+    public bool FigureShown => _figure.Count > 0;
 
     /// <summary>
-    /// Stands <see cref="ScaleFigure"/> (a 1.8 m person) beside the model on its ground, facing <see cref="DefaultViewYaw"/>:
-    /// one node that is not a part (not pickable, not in <see cref="Model"/>) but counts in <see cref="Bounds"/>. A model
-    /// under <see cref="ScaleFigure.MinModelSize"/> gets none.
+    /// <see cref="ShowScale"/> is on but the figure drawn is not <see cref="ScaleFigure.Character"/> (it arrived, or went,
+    /// after the scene was built): set <see cref="ShowScale"/> again to bring it up to date.
+    /// </summary>
+    public bool FigureStale => _showScale && !ReferenceEquals(_figureModel, Wanted(true) ? FigureOf() : null);
+
+    /// <summary>Where the figure comes from: <see cref="ScaleFigure.Character"/> (tests stand their own beside a model).</summary>
+    internal Func<PreviewModel?> FigureOf { get; set; } = () => ScaleFigure.Character;
+
+    /// <summary>
+    /// Stands <see cref="ScaleFigure"/> (the game's prisoner, 1.8 m) beside the model on its ground, facing
+    /// <see cref="DefaultViewYaw"/>: nodes that are not parts (not pickable, not in <see cref="Model"/>) but count in
+    /// <see cref="Bounds"/>. A model under <see cref="ScaleFigure.MinModelSize"/> gets none, and so does every model while
+    /// the figure is not loaded (<see cref="ScaleFigure.Character"/> null): never a stand-in.
     /// </summary>
     public bool ShowScale
     {
@@ -95,24 +106,79 @@ public sealed class PreviewScene : IDisposable
         set
         {
             _showScale = value;
-            var size = ModelBounds.Size;
-            var wanted = value && !ModelBounds.IsEmpty && MathF.Max(size.X, MathF.Max(size.Y, size.Z)) >= ScaleFigure.MinModelSize;
-            if (wanted == _figure is not null)
+            var figure = Wanted(value) ? FigureOf() : null;
+            if (ReferenceEquals(figure, _figureModel))
             {
                 return;
             }
 
-            if (_figure is { } old)
+            RemoveFigure();
+            if (figure is null)
             {
-                Scene.Root.Remove(old);
-                _figure = null;
                 return;
             }
 
-            _figureMesh ??= Extra(PreparedMesh.From(ScaleFigure.Mesh, MeshSpace.Unreal, 1f));
-            _figure = Scene.Add(_figureMesh, ScaleFigure.Placement(ModelBounds, DefaultViewYaw), 0, nameof(ScaleFigure));
-            _figure.Tint = FigureTint;
+            _figureModel = figure;
+            var at = ScaleFigure.Placement(ModelBounds, DefaultViewYaw);
+            var uploaded = new Dictionary<string, GpuTexture>(StringComparer.OrdinalIgnoreCase);
+            GpuTexture? Texture(string? path)
+            {
+                if (path is null || !figure.Textures.TryGetValue(path, out var image))
+                {
+                    return null;
+                }
+
+                if (!uploaded.TryGetValue(path, out var texture))
+                {
+                    uploaded[path] = texture = TextureUpload.Create(_renderer, image);
+                    _figureTextures.Add(texture);
+                }
+
+                return texture;
+            }
+
+            foreach (var part in figure.Parts)
+            {
+                var texture = Texture(part.TexturePath);
+                var handle = _renderer.AddMesh(PreparedMesh.From(part.Mesh, MeshSpace.Unreal, 1f), texture);
+                var gpu = _renderer.Meshes[handle.Id];
+                gpu.NormalMap = texture is null ? null : Texture(part.NormalPath);
+                gpu.Roughness = part.Roughness;
+                _handles.Add(handle);
+                var node = Scene.Add(handle, UeToGl.ModelMatrix(part.Transform) * at, 0, nameof(ScaleFigure));
+                node.Tint = part.Tint ?? Vector4.One;
+                _figure.Add(node);
+            }
         }
+    }
+
+    /// <summary>A figure belongs beside the model: asked for, and the model is large enough to need one.</summary>
+    private bool Wanted(bool asked)
+    {
+        var size = ModelBounds.Size;
+        return asked && !ModelBounds.IsEmpty && MathF.Max(size.X, MathF.Max(size.Y, size.Z)) >= ScaleFigure.MinModelSize;
+    }
+
+    /// <summary>Takes the figure's nodes, meshes and textures off the scene.</summary>
+    private void RemoveFigure()
+    {
+        foreach (var node in _figure)
+        {
+            Scene.Root.Remove(node);
+            if (node.Mesh is { } mesh && _handles.Remove(mesh))
+            {
+                _renderer.RemoveMesh(mesh);
+            }
+        }
+
+        foreach (var texture in _figureTextures)
+        {
+            texture.Dispose();
+        }
+
+        _figure.Clear();
+        _figureTextures.Clear();
+        _figureModel = null;
     }
 
     /// <summary>
@@ -361,7 +427,9 @@ public sealed class PreviewScene : IDisposable
         var count = 0;
         for (var i = 0; i < _parts.Count; i++)
         {
-            var on = attachment.Length > 0 && Model.Parts[i].Attachment.Length > 0 && string.Equals(PartKey(Model.Parts[i].Attachment), PartKey(attachment), StringComparison.OrdinalIgnoreCase);
+            // A material object path (a gun part's paint row) selects the parts drawn with it.
+            var on = attachment.Length > 0 && ((Model.Parts[i].Attachment.Length > 0 && string.Equals(PartKey(Model.Parts[i].Attachment), PartKey(attachment), StringComparison.OrdinalIgnoreCase))
+                                               || string.Equals(Model.Parts[i].Material, attachment, StringComparison.OrdinalIgnoreCase));
             _parts[i].Node.Selected = on;
             count += on ? 1 : 0;
         }
@@ -392,15 +460,23 @@ public sealed class PreviewScene : IDisposable
             texture.Dispose();
         }
 
+        foreach (var texture in _figureTextures)
+        {
+            texture.Dispose();
+        }
+
         _handles.Clear();
         _parts.Clear();
         _textures.Clear();
         _staged.Clear();
-        _figure = _ground = null;
-        _figureMesh = _groundMesh = null;
+        _figure.Clear();
+        _figureTextures.Clear();
+        _figureModel = null;
+        _ground = null;
+        _groundMesh = null;
     }
 
-    /// <summary>Uploads a mesh of the scene's own (the scale figure, the floor): untextured, released with the scene.</summary>
+    /// <summary>Uploads a mesh of the scene's own (the floor): untextured, released with the scene.</summary>
     private MeshHandle Extra(PreparedMesh mesh)
     {
         var handle = _renderer.AddMesh(mesh);

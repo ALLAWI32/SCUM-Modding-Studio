@@ -27,9 +27,11 @@ public static class TextureDecoder
     public static TextureInfo Describe(UTexture2D texture)
     {
         ArgumentNullException.ThrowIfNull(texture);
-        var mips = texture.PlatformData.Mips
-            .Select((m, i) => new TextureMipInfo(i, m.SizeX, m.SizeY, m.BulkData?.Data is { Length: > 0 }))
-            .ToList();
+        var mips = VirtualTextureMips.IsVirtual(texture)
+            ? VirtualTextureMips.Mips(texture.PlatformData.VTData!).Select(m => new TextureMipInfo(m.Index, m.Width, m.Height, true)).ToList()
+            : texture.PlatformData.Mips
+                .Select((m, i) => new TextureMipInfo(i, m.SizeX, m.SizeY, m.BulkData?.Data is { Length: > 0 }))
+                .ToList();
         var first = mips.FirstOrDefault();
         return new TextureInfo(texture.Name, first?.Width ?? texture.PlatformData.SizeX, first?.Height ?? texture.PlatformData.SizeY,
             texture.Format.ToString(), texture.CompressionSettings.ToString(), texture.SRGB, mips);
@@ -44,6 +46,13 @@ public static class TextureDecoder
     public static TextureImage Decode(UTexture2D texture, int maxSize = 0)
     {
         ArgumentNullException.ThrowIfNull(texture);
+        if (VirtualTextureMips.IsVirtual(texture))
+        {
+            var chain = DecodeVirtual(texture, maxSize, gpu: false, out var vtFormat, out var vtMip, out var vtFull);
+            return new TextureImage(texture.Name, vtMip.Width, vtMip.Height, DecodeRaw(chain[0], vtFormat, vtMip.Width, vtMip.Height, texture.IsNormalMap),
+                vtFormat.ToString(), vtMip.Index, vtFull.Width, vtFull.Height, texture.SRGB, texture.IsNormalMap);
+        }
+
         var mips = texture.PlatformData.Mips;
         var index = SelectMip(mips, maxSize);
         if (index < 0)
@@ -66,7 +75,14 @@ public static class TextureDecoder
     public static TextureImage DecodeForGpu(UTexture2D texture, int maxSize = 0)
     {
         ArgumentNullException.ThrowIfNull(texture);
-        if (texture.Format is not (EPixelFormat.PF_DXT1 or EPixelFormat.PF_DXT3 or EPixelFormat.PF_DXT5 or EPixelFormat.PF_BC5 or EPixelFormat.PF_BC7))
+        if (VirtualTextureMips.IsVirtual(texture) && texture.PlatformData.VTData!.LayerTypes is [EPixelFormat.PF_DXT1 or EPixelFormat.PF_DXT3 or EPixelFormat.PF_DXT5 or EPixelFormat.PF_BC5 or EPixelFormat.PF_BC7, ..])
+        {
+            var chain = DecodeVirtual(texture, maxSize, gpu: true, out var vtFormat, out var vtMip, out var vtFull);
+            return new TextureImage(texture.Name, vtMip.Width, vtMip.Height, [], vtFormat.ToString(), vtMip.Index, vtFull.Width, vtFull.Height,
+                texture.SRGB, texture.IsNormalMap) { CompressedMips = chain };
+        }
+
+        if (VirtualTextureMips.IsVirtual(texture) || texture.Format is not (EPixelFormat.PF_DXT1 or EPixelFormat.PF_DXT3 or EPixelFormat.PF_DXT5 or EPixelFormat.PF_BC5 or EPixelFormat.PF_BC7))
         {
             return Decode(texture, maxSize);
         }
@@ -114,6 +130,34 @@ public static class TextureDecoder
         }
 
         return smallest;
+    }
+
+    /// <summary>
+    /// A streaming virtual texture's mip as <see cref="SelectMip(IReadOnlyList{ValueTuple{int, int, bool}}, int)"/> picks it
+    /// (<see cref="VirtualTextureMips"/>), put together from its tiles in the cooked format; with <paramref name="gpu"/> also
+    /// the smaller mips that follow it, for an upload with a mip chain.
+    /// </summary>
+    private static List<byte[]> DecodeVirtual(UTexture2D texture, int maxSize, bool gpu, out EPixelFormat format,
+        out (int Index, int Width, int Height) mip, out (int Width, int Height) full)
+    {
+        var vt = texture.PlatformData.VTData!;
+        var mips = VirtualTextureMips.Mips(vt);
+        var index = SelectMip(mips.Select(m => (m.Width, m.Height, true)).ToList(), maxSize);
+        if (index < 0)
+        {
+            throw new InvalidDataException($"{texture.Name} is a virtual texture without tiles.");
+        }
+
+        mip = mips[index];
+        full = ((int)vt.Width, (int)vt.Height);
+        format = default;
+        var chain = new List<byte[]>();
+        for (var i = index; i < (gpu ? mips.Count : index + 1); i++)
+        {
+            chain.Add(VirtualTextureMips.Assemble(vt, mips[i].Index, out format));
+        }
+
+        return chain;
     }
 
     private static int SelectMip(FTexture2DMipMap[] mips, int maxSize) =>

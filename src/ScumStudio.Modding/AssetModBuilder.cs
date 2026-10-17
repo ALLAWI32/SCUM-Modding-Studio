@@ -43,6 +43,14 @@ public sealed partial record AssetModRequest(IReadOnlyList<ClonePlan> Clones, IR
     public bool SellClones { get; init; } = true;
 
     /// <summary>
+    /// Clones other paks of the same project ship (each page as its own mod): they get their row in the stock
+    /// <c>Table_TradeableDesc</c> this build writes, as if built here, but none of their packages is built. The Registry pak
+    /// loads above every page pak and carries that table with every page pak's clones (review 3.5.0: the highest page pak's
+    /// copy hid the others' rows).
+    /// </summary>
+    public IReadOnlyList<ClonePlan> SoldElsewhere { get; init; } = [];
+
+    /// <summary>
     /// True (the default) when the clones are registered. False builds the packages only, without reading or writing a
     /// registry: a check of what would ship, before anything is written.
     /// </summary>
@@ -52,7 +60,7 @@ public sealed partial record AssetModRequest(IReadOnlyList<ClonePlan> Clones, IR
     public string? FileRoot { get; init; }
 
     /// <summary>True when nothing is requested.</summary>
-    public bool IsEmpty => Clones.Count == 0 && Edits.Count == 0 && Replacements.Count == 0 && DataAssets.Count == 0;
+    public bool IsEmpty => Clones.Count == 0 && Edits.Count == 0 && Replacements.Count == 0 && DataAssets.Count == 0 && SoldElsewhere.Count == 0;
 }
 
 /// <summary>
@@ -235,7 +243,7 @@ public static partial class AssetModBuilder
 
         if (request.SellClones)
         {
-            AddTradeRows(catalog, cloned, built, warnings);
+            AddTradeRows(catalog, [.. cloned, .. request.SoldElsewhere], built, warnings);
         }
 
         // New traders' personalities and new outposts' descriptions: a renamed copy with its own id (and trader name).
@@ -665,7 +673,7 @@ public static partial class AssetModBuilder
             {
                 return null;
             }
-        }).ToDictionary(t => t.Key, StringComparer.Ordinal);
+        }, elementValues: true).ToDictionary(t => t.Key, StringComparer.Ordinal);
         return missing
             .Where(e => inherited.ContainsKey(e.Export + "|" + e.Path))
             .Select(e => (e, inherited[e.Export + "|" + e.Path]))

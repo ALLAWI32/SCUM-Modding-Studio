@@ -211,6 +211,13 @@
               <TextBlock Text="{Tr Spawns.Apply}" />
             </StackPanel>
           </Button>
+          <!-- Owner 2026-10-17: each page as its own mod (this page's saved changes only) -->
+          <Button x:Name="PageExportButton" Command="{Binding PageExport.ExportCommand}" ToolTip.Tip="{Tr Export.Module.Button.Tip}">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <c:GlyphIcon Kind="Icon.Download" IconSize="14" />
+              <TextBlock Text="{Tr Export.Module.Button}" />
+            </StackPanel>
+          </Button>
         </StackPanel>
       </Grid>
     </Border>
@@ -259,6 +266,12 @@
             <WrapPanel DockPanel.Dock="Top" Margin="8,8,8,4" ItemSpacing="6" LineSpacing="6">
               <Border Classes="segmented">
                 <StackPanel Orientation="Horizontal">
+                  <ToggleButton x:Name="SelectTool" IsChecked="{Binding IsSelectTool}" ToolTip.Tip="{Tr Spawns.Map.Tool.Select.Tip}">
+                    <StackPanel Orientation="Horizontal" Spacing="5">
+                      <c:GlyphIcon Kind="Icon.Cursor" IconSize="12" />
+                      <TextBlock Text="{Tr Spawns.Map.Tool.Select}" />
+                    </StackPanel>
+                  </ToggleButton>
                   <ToggleButton IsChecked="{Binding IsPanTool}" Content="{Tr Spawns.Map.Tool.Pan}" ToolTip.Tip="{Tr Spawns.Map.Tool.Pan.Tip}" />
                   <ToggleButton IsChecked="{Binding IsSectorTool}" Content="{Tr Spawns.Map.Tool.Sector}" ToolTip.Tip="{Tr Spawns.Map.Tool.Sector.Tip}" />
                   <ToggleButton IsChecked="{Binding IsRectangleTool}" Content="{Tr Spawns.Map.Tool.Rectangle}" ToolTip.Tip="{Tr Spawns.Map.Tool.Rectangle.Tip}" />
@@ -276,14 +289,93 @@
               <Button Classes="ghost" Content="{Tr Spawns.Map.Picture.Clear}" Command="{Binding ClearPictureCommand}" IsVisible="{Binding HasImportedPicture}" ToolTip.Tip="{Tr Spawns.Map.Picture.Clear.Tip}" />
             </WrapPanel>
             <TextBlock DockPanel.Dock="Bottom" Text="{Binding MapSourceText}" Classes="caption" Margin="10,2,10,6" TextTrimming="CharacterEllipsis" />
-            <c:SpawnMap x:Name="SpawnMap" Picture="{Binding MapPicture}" Markers="{Binding Markers}" ShownLayers="{Binding ShownLayers}" Tool="{Binding MapTool}"
-                        Area="{Binding Area, Mode=TwoWay}" HighlightedIds="{Binding Highlighted}" PlaceCommand="{Binding PlaceAtCommand}" ToolTip.Tip="{Tr Spawns.Map.Tip}" />
+            <Panel>
+              <c:SpawnMap x:Name="SpawnMap" Picture="{Binding MapPicture}" Markers="{Binding Markers}" ShownLayers="{Binding ShownLayers}" Tool="{Binding MapTool}"
+                          Area="{Binding Area, Mode=TwoWay}" HighlightedIds="{Binding Highlighted}" PlaceCommand="{Binding PlaceAtCommand}"
+                          SelectedId="{Binding SelectedMarkerId, Mode=TwoWay}" MoveCommand="{Binding MovePlaceCommand}" TurnCommand="{Binding TurnPlaceCommand}"
+                          DeleteCommand="{Binding DeletePlaceCommand}" ToolTip.Tip="{Tr Spawns.Map.Tip}" />
+              <!-- The world point under the mouse (owner: "show coordinates"). -->
+              <Border Classes="badge" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="10" IsHitTestVisible="False"
+                      IsVisible="{Binding #SpawnMap.CursorText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                <TextBlock x:Name="CursorText" Text="{Binding #SpawnMap.CursorText}" FontFamily="{DynamicResource MonoFontFamily}" FontSize="11" />
+              </Border>
+            </Panel>
           </DockPanel>
         </Border>
 
         <Border Grid.Column="1" Classes="panel">
           <ScrollViewer HorizontalScrollBarVisibility="Disabled">
             <StackPanel Margin="14,12,14,16" Spacing="10">
+
+              <!-- The picked place (owner: "full control of each spawn place"): where it is, what it spawns, move, turn, remove, Map page. -->
+              <Border x:Name="PointCard" Classes="card" IsVisible="{Binding HasPoint}">
+                <StackPanel Spacing="8">
+                  <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
+                    <Border Classes="iconTile" Width="34" Height="34">
+                      <c:GlyphIcon Kind="{Binding Point.IconKey, FallbackValue='Icon.Pin'}" IconSize="16" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                      <TextBlock Text="{Binding Point.KindText, FallbackValue=''}" Classes="h2" />
+                      <SelectableTextBlock x:Name="PointName" Text="{Binding Point.Name, FallbackValue=''}" Classes="caption" ToolTip.Tip="{Tr Spawns.Point.Name.Tip}" />
+                    </StackPanel>
+                    <Button x:Name="ShowOnMapButton" Grid.Column="2" Classes="accent small" Command="{Binding ShowOnMapCommand}" VerticalAlignment="Center" ToolTip.Tip="{Tr Spawns.Point.ShowOnMap.Tip}">
+                      <StackPanel Orientation="Horizontal" Spacing="5">
+                        <c:GlyphIcon Kind="Icon.Map" IconSize="12" />
+                        <TextBlock Text="{Tr Spawns.Point.ShowOnMap}" />
+                      </StackPanel>
+                    </Button>
+                  </Grid>
+                  <SelectableTextBlock x:Name="PointWhere" Text="{Binding Point.CoordinatesText, FallbackValue=''}" Classes="caption" FontFamily="{DynamicResource MonoFontFamily}" />
+                  <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8" IsVisible="{Binding Point.HasChoices, FallbackValue=False}">
+                    <TextBlock Text="{Tr Spawns.Point.Spawns}" VerticalAlignment="Center" />
+                    <ComboBox x:Name="PointSetting" Grid.Column="1" ItemsSource="{Binding Point.Choices, FallbackValue={x:Null}}" SelectedItem="{Binding Point.Setting, FallbackValue={x:Null}}"
+                              HorizontalAlignment="Stretch" ToolTip.Tip="{Tr Spawns.Point.Spawns.Tip}" />
+                  </Grid>
+                  <TextBlock Classes="caption wrap" Text="{Tr Spawns.Point.FromZone}" IsVisible="{Binding Point.SpawnsFromZone, FallbackValue=False}" />
+                  <Grid ColumnDefinitions="*,*,*,*" RowDefinitions="Auto,Auto" ColumnSpacing="6" RowSpacing="2">
+                    <TextBlock Text="{Tr Spawns.Point.X}" Classes="caption" />
+                    <TextBlock Grid.Column="1" Text="{Tr Spawns.Point.Y}" Classes="caption" />
+                    <TextBlock Grid.Column="2" Text="{Tr Spawns.Point.Z}" Classes="caption" />
+                    <TextBlock Grid.Column="3" Text="{Tr Spawns.Point.Yaw}" Classes="caption" />
+                    <TextBox x:Name="PointX" Grid.Row="1" Text="{Binding Point.XText, FallbackValue=''}" FontFamily="{DynamicResource MonoFontFamily}" ToolTip.Tip="{Tr Spawns.Point.X.Tip}">
+                      <TextBox.KeyBindings>
+                        <KeyBinding Gesture="Enter" Command="{Binding ApplyPointCommand}" />
+                      </TextBox.KeyBindings>
+                    </TextBox>
+                    <TextBox x:Name="PointY" Grid.Row="1" Grid.Column="1" Text="{Binding Point.YText, FallbackValue=''}" FontFamily="{DynamicResource MonoFontFamily}" ToolTip.Tip="{Tr Spawns.Point.Y.Tip}">
+                      <TextBox.KeyBindings>
+                        <KeyBinding Gesture="Enter" Command="{Binding ApplyPointCommand}" />
+                      </TextBox.KeyBindings>
+                    </TextBox>
+                    <TextBox x:Name="PointZ" Grid.Row="1" Grid.Column="2" Text="{Binding Point.ZText, FallbackValue=''}" FontFamily="{DynamicResource MonoFontFamily}" ToolTip.Tip="{Tr Spawns.Point.Z.Tip}">
+                      <TextBox.KeyBindings>
+                        <KeyBinding Gesture="Enter" Command="{Binding ApplyPointCommand}" />
+                      </TextBox.KeyBindings>
+                    </TextBox>
+                    <TextBox x:Name="PointYaw" Grid.Row="1" Grid.Column="3" Text="{Binding Point.YawText, FallbackValue=''}" FontFamily="{DynamicResource MonoFontFamily}" ToolTip.Tip="{Tr Spawns.Point.Yaw.Tip}">
+                      <TextBox.KeyBindings>
+                        <KeyBinding Gesture="Enter" Command="{Binding ApplyPointCommand}" />
+                      </TextBox.KeyBindings>
+                    </TextBox>
+                  </Grid>
+                  <TextBlock Classes="warn caption wrap" Text="{Binding Point.Error, FallbackValue=''}" IsVisible="{Binding Point.HasError, FallbackValue=False}" />
+                  <WrapPanel ItemSpacing="6" LineSpacing="6">
+                    <Button x:Name="ApplyPointButton" Classes="ghost small" Content="{Tr Spawns.Point.Apply}" Command="{Binding ApplyPointCommand}" ToolTip.Tip="{Tr Spawns.Point.Apply.Tip}" />
+                    <Button x:Name="GroundPointButton" Classes="ghost small" Content="{Tr Spawns.Point.Ground}" Command="{Binding GroundPointCommand}"
+                            IsVisible="{Binding !Point.IsIndoor, FallbackValue=False}" ToolTip.Tip="{Tr Spawns.Point.Ground.Tip}" />
+                    <Button x:Name="ZoomPointButton" Classes="ghost small" Content="{Tr Spawns.Point.Zoom}" Command="{Binding ZoomToPointCommand}" ToolTip.Tip="{Tr Spawns.Point.Zoom.Tip}" />
+                    <Button x:Name="DeletePointButton" Classes="ghost small" Command="{Binding DeletePointCommand}" ToolTip.Tip="{Tr Spawns.Point.Delete.Tip}">
+                      <StackPanel Orientation="Horizontal" Spacing="5">
+                        <c:GlyphIcon Kind="Icon.Trash" IconSize="12" />
+                        <TextBlock Text="{Tr Spawns.Point.Delete}" />
+                      </StackPanel>
+                    </Button>
+                  </WrapPanel>
+                  <CheckBox x:Name="SnapToGround" Content="{Tr Spawns.Point.Snap}" IsChecked="{Binding SnapToGround}" ToolTip.Tip="{Tr Spawns.Point.Snap.Tip}" />
+                  <TextBlock Classes="caption wrap" Text="{Tr Spawns.Point.Indoor}" IsVisible="{Binding Point.IsIndoor, FallbackValue=False}" />
+                  <TextBlock Classes="caption wrap" Text="{Tr Spawns.Point.Keys}" />
+                </StackPanel>
+              </Border>
 
               <!-- The area: its places of the category, picked to change, remove or give their own settings. -->
               <Border Classes="card">

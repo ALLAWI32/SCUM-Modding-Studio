@@ -126,8 +126,8 @@ public static class GraphicsStatus
         var graphics = error.Message.Contains("OpenGL", StringComparison.Ordinal)
                        || (error.StackTrace ?? string.Empty).Contains("ScumStudio.Rendering.", StringComparison.Ordinal);
         return !graphics ? []
-            : failures >= 2 ? [GraphicsFeature.Multisampling, GraphicsFeature.AlphaToCoverage, GraphicsFeature.CompressedTextures]
-            : [GraphicsFeature.Multisampling, GraphicsFeature.AlphaToCoverage];
+            : failures >= 2 ? [GraphicsFeature.Multisampling, GraphicsFeature.AlphaToCoverage, GraphicsFeature.TemporalStabilization, GraphicsFeature.CompressedTextures]
+            : [GraphicsFeature.Multisampling, GraphicsFeature.AlphaToCoverage, GraphicsFeature.TemporalStabilization];
     }
 
     /// <summary>
@@ -149,6 +149,7 @@ public static class GraphicsStatus
         GraphicsFeature.Multisampling => Localization.Loc.T("Settings.Graphics.Feature.Multisampling"),
         GraphicsFeature.AlphaToCoverage => Localization.Loc.T("Settings.Graphics.Feature.AlphaToCoverage"),
         GraphicsFeature.CompressedTextures => Localization.Loc.T("Settings.Graphics.Feature.CompressedTextures"),
+        GraphicsFeature.TemporalStabilization => Localization.Loc.T("Settings.Graphics.Feature.TemporalStabilization"),
         _ => feature.ToString(),
     };
 

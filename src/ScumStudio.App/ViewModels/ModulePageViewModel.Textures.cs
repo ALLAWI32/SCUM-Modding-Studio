@@ -4,6 +4,7 @@ using CUE4Parse.UE4.Assets.Exports.Material;
 using CUE4Parse.UE4.Assets.Exports.Texture;
 using Microsoft.Extensions.Logging;
 using ScumStudio.App.Localization;
+using ScumStudio.App.Services;
 using ScumStudio.Assets.Catalog;
 using ScumStudio.Assets.Materials;
 using ScumStudio.Assets.Textures;
@@ -166,6 +167,157 @@ public abstract partial class ModulePageViewModel
             material, export, parameter, string.Empty, slot.Width, slot.Height);
     }
 
+    /// <summary>Largest side of a slot's picture in the Textures panel.</summary>
+    private const int SlotPictureSize = 128;
+
+    /// <summary>The parts of the vehicle that wear the material whose textures are listed ("Body, Door FrontLeft …").</summary>
+    [ObservableProperty]
+    private string _textureMaterialParts = string.Empty;
+
+    /// <summary>The pictures replaced on the selected clone, as the 3D view shows them: (material, stock texture) → picture.</summary>
+    private Dictionary<(string Material, string Texture), TextureImage> _replacedShown = [];
+
+    /// <summary>Pictures of the project read once each (file → image).</summary>
+    private readonly Dictionary<string, TextureImage> _replacedFiles = new(StringComparer.OrdinalIgnoreCase);
+
+    private int _replacedLoads;
+
+    /// <summary>The names of the preview parts drawn with <paramref name="materialPath"/>, joined for the panel.</summary>
+    private string PartsWearing(string materialPath)
+    {
+        var names = (Preview?.Parts ?? []).Where(p => string.Equals(p.Material, materialPath, StringComparison.OrdinalIgnoreCase))
+            .Select(p => p.Attachment.Length > 0 ? VehicleParts.Label(p.Attachment + "." + p.Attachment[(p.Attachment.LastIndexOf('/') + 1)..] + "_C") : Loc.T("Studio.Textures.Body"))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        return names.Count == 0 ? string.Empty : Loc.F("Studio.Textures.WornBy", string.Join(", ", names.Take(8)) + (names.Count > 8 ? " …" : string.Empty));
+    }
+
+    /// <summary>The slot's picture at most <see cref="SlotPictureSize"/> px: the project's picture when replaced, else the game's texture.</summary>
+    private static TextureImage? SlotPicture(AssetCatalog catalog, string? projectDirectory, TextureSlotViewModel slot)
+    {
+        try
+        {
+            if (slot.ReplacedFile is { } file && projectDirectory is not null)
+            {
+                var image = ProjectTextures.Load(projectDirectory, file);
+                var (rgba, w, h) = ThumbnailService.Shrink(image.Rgba, image.Width, image.Height, SlotPictureSize);
+                return image with { Rgba = rgba, Width = w, Height = h, CompressedMips = null };
+            }
+
+            var game = TextureDecoder.Decode(catalog.LoadObject<UTexture2D>(slot.TexturePath), SlotPictureSize);
+            var (r, gw, gh) = ThumbnailService.Shrink(game.Rgba, game.Width, game.Height, SlotPictureSize);
+            var opaque = r.ToArray();
+            for (var i = 3; i < opaque.Length; i += 4)
+            {
+                opaque[i] = 255; // a mask or roughness map keeps data in alpha: show its colour
+            }
+
+            return game with { Rgba = opaque, Width = gw, Height = gh, CompressedMips = null };
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or InvalidDataException or IOException or NotSupportedException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// After a step, an undo or a redo: the Textures panel and the 3D view show the clone's pictures as the project has them
+    /// now (a replaced texture appears on the car at once; Ctrl+Z takes it off again).
+    /// </summary>
+    internal Task RefreshTexturesAsync()
+    {
+        _ = LoadTextureSlotsAsync(TextureMaterial);
+        return ReplacedTexturesCompletion = ShowReplacedTexturesAsync();
+    }
+
+    /// <summary>Completes when the 3D view's replaced pictures are read (tests).</summary>
+    internal Task ReplacedTexturesCompletion { get; private set; } = Task.CompletedTask;
+
+    /// <summary>The pictures replaced on the selected clone's materials (its own copies), read from the project: (material, stock texture) → picture.</summary>
+    private async Task ShowReplacedTexturesAsync()
+    {
+        var load = ++_replacedLoads;
+        var project = _services.Projects.Current;
+        var clone = SelectedItem is { IsClone: true } item ? project?.State.FindCloneOf(item.PackagePath) : null;
+        var wanted = new List<(string Material, string Texture, string File)>();
+        if (project is not null && clone is not null)
+        {
+            foreach (var pair in clone.Packages)
+            {
+                foreach (var value in project.State.GetAssetValues(pair.New).Where(v => v.Path.StartsWith("TextureParameterValues", StringComparison.Ordinal)))
+                {
+                    var now = value.Current;
+                    var dot = now.LastIndexOf('.');
+                    var pixels = dot > 0 ? project.State.GetAssetValue(now[..dot], now[(dot + 1)..], TextureWrites.PixelsPath)?.Current : null;
+                    if (TextureWrites.Parse(pixels) is { } written && value.Base.Length > 0)
+                    {
+                        var leaf = pair.Old[(pair.Old.LastIndexOf('/') + 1)..];
+                        wanted.Add((pair.Old + "." + leaf, value.Base, written.File));
+                    }
+                }
+            }
+        }
+
+        var directory = project?.DirectoryPath;
+        var missing = wanted.Select(w => w.File).Distinct(StringComparer.OrdinalIgnoreCase).Where(f => !_replacedFiles.ContainsKey(f)).ToList();
+        if (missing.Count > 0 && directory is not null)
+        {
+            var read = await Task.Run(() => missing.Select(f =>
+            {
+                try
+                {
+                    return (File: f, Image: (TextureImage?)ProjectTextures.Load(directory, f));
+                }
+                catch (Exception ex) when (ex is FileNotFoundException or InvalidDataException or IOException or UnauthorizedAccessException)
+                {
+                    return (File: f, Image: null);
+                }
+            }).ToList()).ConfigureAwait(true);
+            foreach (var (file, image) in read.Where(r => r.Image is not null))
+            {
+                _replacedFiles[file] = image!;
+            }
+        }
+
+        if (load != _replacedLoads)
+        {
+            return;
+        }
+
+        var shown = wanted.Where(w => _replacedFiles.ContainsKey(w.File))
+            .GroupBy(w => (w.Material, w.Texture))
+            .ToDictionary(g => g.Key, g => _replacedFiles[g.Last().File]);
+        if (shown.Count == _replacedShown.Count && shown.All(s => _replacedShown.TryGetValue(s.Key, out var was) && ReferenceEquals(was, s.Value)))
+        {
+            return;
+        }
+
+        foreach (var material in shown.Keys.Concat(_replacedShown.Keys).Select(k => k.Material).Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            _paintBakes.Remove(material); // painted again over the new picture
+        }
+
+        _replacedShown = shown;
+        if (_previewBase is not null)
+        {
+            Repaint();
+        }
+    }
+
+    /// <summary>
+    /// The picture the 3D view draws for <paramref name="texture"/> on a part of <paramref name="material"/>: the user's
+    /// replacement, or null for the game's. A material with decals shows its colour and mask from the game's textures (the
+    /// decals bake over them live; "Apply decals" writes those two slots).
+    /// </summary>
+    private TextureImage? ReplacedFor(string material, string? texture) =>
+        texture is not null && _replacedShown.TryGetValue((material, texture), out var image) && !(HasDecalsOn(material) && IsDecalSlot(material, texture)) ? image : null;
+
+    /// <summary>The material's colour or colour-mask texture (the slots Apply decals writes).</summary>
+    private bool IsDecalSlot(string material, string texture) =>
+        _paintPixels.ContainsKey(texture) || (_paintMasks.TryGetValue(material, out var mask) && string.Equals(mask.Name, PathLeaf(texture), StringComparison.OrdinalIgnoreCase));
+
+    private static string PathLeaf(string objectPath) => objectPath[(objectPath.LastIndexOf('.') + 1)..];
+
     private async Task LoadTextureSlotsAsync(PaintMaterialViewModel? paint)
     {
         var load = ++_textureLoads;
@@ -184,12 +336,21 @@ public abstract partial class ModulePageViewModel
             }
 
             var state = _services.Projects.Current?.State;
-            TextureSlots = slots.Select(s =>
+            var list = slots.Select(s =>
             {
                 var replaced = state?.GetAssetValue(paint.ColourValue.Package, paint.ColourValue.Tunable.Export, MaterialParameters.PathOf("TextureParameterValues", s.Parameter))?.Current;
                 var pixels = replaced is null ? null : state!.GetAssetValue(replaced[..replaced.LastIndexOf('.')], replaced[(replaced.LastIndexOf('.') + 1)..], TextureWrites.PixelsPath)?.Current;
                 return new TextureSlotViewModel(s, TextureWrites.Parse(pixels)?.File, ReplaceSlotAsync, SaveSlotPngAsync, ResetSlotAsync);
             }).ToList();
+            TextureSlots = list;
+            TextureMaterialParts = PartsWearing(paint.MaterialPath);
+
+            // A small picture of what each slot shows now (the user's picture, or the game's texture).
+            var directory = _services.Projects.Current?.DirectoryPath;
+            foreach (var slot in list)
+            {
+                slot.Picture = await Task.Run(() => SlotPicture(catalog, directory, slot)).ConfigureAwait(true);
+            }
         }
         catch (Exception ex) when (ex is FileNotFoundException or FormatException or InvalidDataException or IOException or InvalidOperationException)
         {
@@ -294,8 +455,13 @@ public sealed record TextureReplacePlan(string TexturePackage, string TextureLea
     string MaterialExport, string Parameter, string File, int Width, int Height);
 
 /// <summary>A texture slot as the Textures panel shows it.</summary>
-public sealed class TextureSlotViewModel
+public sealed partial class TextureSlotViewModel : ObservableObject
 {
+    /// <summary>A small picture of what the slot shows now (the user's picture or the game's texture), null until read.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasPicture))]
+    private TextureImage? _picture;
+
     /// <summary>Creates a slot; the actions are the page's.</summary>
     public TextureSlotViewModel(TextureSlot slot, string? replacedFile, Func<TextureSlotViewModel, Task> replace, Func<TextureSlotViewModel, Task> save,
         Func<TextureSlotViewModel, Task> reset)
@@ -314,6 +480,12 @@ public sealed class TextureSlotViewModel
     /// <summary>The parameter name.</summary>
     public string Parameter => Slot.Parameter;
 
+    /// <summary>
+    /// What the slot is in plain words ("Colour (what you see)", "Bumps (normal map)", "Paint mask" …), with the game's
+    /// parameter name after it; the parameter name alone for a slot the studio does not know.
+    /// </summary>
+    public string Label => KindKey(Slot.Parameter) is { } key ? Loc.F("Studio.Textures.SlotLabel", Loc.T(key), Slot.Parameter) : Slot.Parameter;
+
     /// <summary>The stock texture.</summary>
     public string TexturePath => Slot.TexturePath;
 
@@ -322,6 +494,12 @@ public sealed class TextureSlotViewModel
 
     /// <summary>The clone has its own picture here.</summary>
     public bool IsReplaced => ReplacedFile is not null;
+
+    /// <summary>A picture is shown.</summary>
+    public bool HasPicture => Picture is not null;
+
+    /// <summary>Whose picture the slot shows: "Your picture: x.png" or "The game's texture".</summary>
+    public string Status => IsReplaced ? Loc.F("Studio.Textures.Yours", Path.GetFileName(ReplacedFile!)) : Loc.T("Studio.Textures.Games");
 
     /// <summary>Size and format, e.g. <c>1024 x 1024, PF_DXT1</c>.</summary>
     public string Info => Slot.Width > 0 ? Loc.F("Studio.Textures.Info", Slot.Width, Slot.Height, Slot.PixelFormat) : string.Empty;
@@ -334,4 +512,17 @@ public sealed class TextureSlotViewModel
 
     /// <summary>The game's texture again.</summary>
     public IAsyncRelayCommand ResetCommand { get; }
+
+    /// <summary>The string key that says what a texture parameter is, by the words SCUM's materials name them with; null when unknown.</summary>
+    internal static string? KindKey(string parameter)
+    {
+        var p = parameter.ToUpperInvariant();
+        return p.Contains("NORMAL", StringComparison.Ordinal) ? "Studio.Textures.Kind.Normal"
+            : p.Contains("MASK", StringComparison.Ordinal) && (p.Contains("COLO", StringComparison.Ordinal) || p.Contains("PAINT", StringComparison.Ordinal)) ? "Studio.Textures.Kind.PaintMask"
+            : p.Contains("DIFFUSE", StringComparison.Ordinal) || p.Contains("ALBEDO", StringComparison.Ordinal) || p.Contains("BASE", StringComparison.Ordinal) || p.Contains("COLOR", StringComparison.Ordinal) ? "Studio.Textures.Kind.Colour"
+            : p.Contains("ROUGH", StringComparison.Ordinal) || p.Contains("SPEC", StringComparison.Ordinal) || p.Contains("METAL", StringComparison.Ordinal) || p.Contains("ORM", StringComparison.Ordinal) ? "Studio.Textures.Kind.Shine"
+            : p.Contains("DIRT", StringComparison.Ordinal) || p.Contains("DAMAGE", StringComparison.Ordinal) || p.Contains("SCRATCH", StringComparison.Ordinal) || p.Contains("RUST", StringComparison.Ordinal) ? "Studio.Textures.Kind.Wear"
+            : p.Contains("MASK", StringComparison.Ordinal) ? "Studio.Textures.Kind.Mask"
+            : null;
+    }
 }

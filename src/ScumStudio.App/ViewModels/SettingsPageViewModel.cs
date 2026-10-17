@@ -206,6 +206,7 @@ public sealed partial class SettingsPageViewModel : PageViewModel, IDisposable
             DeleteWithCompanions = s.Ui.DeleteWithCompanions;
             (SpawnModels, AnimateWater, Lighting) = (s.Ui.SpawnModels, s.Ui.AnimateWater, s.Ui.Lighting);
             AntiAliasedFoliage = s.Ui.AntiAliasedFoliage;
+            (SmoothCamera, SteadyFoliage) = (s.Ui.SmoothCamera, s.Ui.SteadyFoliage);
             NearClip = NearClipOption.Nearest(s.Ui.NearClipCentimetres);
             (RenderDistance, SmoothFrames) = (s.Ui.RenderDistanceSectors, s.Ui.SmoothFrames);
             McpEnabled = s.Mcp.Enabled;
@@ -343,6 +344,14 @@ public sealed partial class SettingsPageViewModel : PageViewModel, IDisposable
     [ObservableProperty]
     private bool _antiAliasedFoliage = true;
 
+    /// <summary>Steady camera steps and smoothed mouse turns on the Map.</summary>
+    [ObservableProperty]
+    private bool _smoothCamera = true;
+
+    /// <summary>Trees and bushes steadied over frames while the Map moves.</summary>
+    [ObservableProperty]
+    private bool _steadyFoliage = true;
+
     /// <summary>How close to the camera the Map still draws (F15: tight rooms).</summary>
     [ObservableProperty]
     private NearClipOption _nearClip = NearClipOption.Nearest(10f);
@@ -398,6 +407,22 @@ public sealed partial class SettingsPageViewModel : PageViewModel, IDisposable
         if (!_reloading)
         {
             _services.UpdateSettings(s => s with { Ui = s.Ui with { AntiAliasedFoliage = value } });
+        }
+    }
+
+    partial void OnSmoothCameraChanged(bool value)
+    {
+        if (!_reloading)
+        {
+            _services.UpdateSettings(s => s with { Ui = s.Ui with { SmoothCamera = value } });
+        }
+    }
+
+    partial void OnSteadyFoliageChanged(bool value)
+    {
+        if (!_reloading)
+        {
+            _services.UpdateSettings(s => s with { Ui = s.Ui with { SteadyFoliage = value } });
         }
     }
 

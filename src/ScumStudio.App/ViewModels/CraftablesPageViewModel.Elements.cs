@@ -197,6 +197,8 @@ public sealed partial class CraftableRowViewModel
         {
             OnPropertyChanged(name);
         }
+
+        NotifyBuilding();
     }
 }
 
@@ -288,12 +290,12 @@ public sealed class ElementLevelViewModel : ObservableObject
     public ElementLevelViewModel(int index, ElementLevel level, IReadOnlyDictionary<string, string>? saved, Action changed)
     {
         Title = Loc.F("Craftables.Element.Level", index + 1, ElementEditorViewModel.Leaf(level.Element));
-        var stored = ElementSettings.Editable.Where(k => k != Respawn)
+        var stored = ElementSettings.Editable.Where(k => k is not (Respawn or WithoutFlag)) // the flag is the craftable's "Needs a flag"
             .Select(k => level.Values.FirstOrDefault(v => v.Path == k))
             .OfType<Tunable>()
             .ToList();
         Values = stored.Select(t => new ElementValueViewModel(t, saved?.GetValueOrDefault(t.Path), changed)).ToList();
-        Inherited = ElementSettings.Editable.Where(k => k != Respawn && stored.All(t => t.Path != k)).Select(ElementValueViewModel.LabelOf).ToList();
+        Inherited = ElementSettings.Editable.Where(k => k is not (Respawn or WithoutFlag) && stored.All(t => t.Path != k)).Select(ElementValueViewModel.LabelOf).ToList();
 
         // A value the file has for a property this level does not store stays in the file: the export reports it.
         _kept = (saved ?? new Dictionary<string, string>()).Where(e => stored.All(t => t.Path != e.Key)).ToDictionary(e => e.Key, e => e.Value);
@@ -327,6 +329,7 @@ public sealed class ElementLevelViewModel : ObservableObject
     }
 
     private const string Respawn = "_isUsedForRespawn";
+    private const string WithoutFlag = "_canBePlacedWithoutFlag";
 }
 
 /// <summary>A value of an element level: the game's, the edited one and Reset.</summary>

@@ -31,6 +31,9 @@ public sealed class MaterialInspector
     private const int MaxDepth = 16;
     private const string BrightnessName = "Base Material Brightness";
     private const string ScaleTintName = "Base Material Tint";
+
+    /// <summary>The master of the gravel roads and dirt runways, which the game draws only into the landscape texture.</summary>
+    private const string DirtRoadMaster = "/Game/ConZ_Files/Materials/Road/Gravel_Road/M_DirtRoad_Master.";
     private readonly AssetCatalog _catalog;
 
     /// <summary>Creates an inspector that resolves parents through <paramref name="catalog"/>.</summary>
@@ -148,9 +151,16 @@ public sealed class MaterialInspector
         var texList = Sorted(textures.Values);
         var vecList = Sorted(vectors.Values);
         var baseColor = picked.BaseColor ?? referenced.FirstOrDefault(r => LooksLikeDiffuse(r) && !IsOverlay(r) && !IsEnginePlaceholder(r));
-        return new MaterialInfo(material.Name, AssetPaths.NormalizeObjectPath(material.GetPathName(), _catalog.ProjectName), chain,
+        var selfPath = AssetPaths.NormalizeObjectPath(material.GetPathName(), _catalog.ProjectName);
+        var trail = chain.Append(selfPath).Any(p => p.StartsWith(DirtRoadMaster, StringComparison.OrdinalIgnoreCase));
+        return new MaterialInfo(material.Name, selfPath, chain,
             Sorted(scalars.Values), vecList, texList, baseColor, picked.Tint, referenced)
         {
+            OnlyIntoLandscape = trail,
+            CoverageTexture = trail && textures.TryGetValue("DirtMask", out var mask) && mask.TexturePath.Length > 0
+                              && !mask.TexturePath.Contains("Dummy", StringComparison.OrdinalIgnoreCase) ? mask.TexturePath : null,
+            CoverageAmount = trail && scalars.TryGetValue("Trail_Amount", out var amount) ? Math.Clamp(amount.Value, 0f, 1f) : 1f,
+            CoverageContrast = trail && scalars.TryGetValue("Trail_Contrast", out var contrast) ? Math.Max(contrast.Value, 0.1f) : 1f,
             OpacityMaskClip = maskClip,
             UsedWithSplineMeshes = splineMeshes,
             NormalTexture = picked.Normal,
@@ -412,7 +422,10 @@ public sealed class MaterialInspector
         || name.Contains("Detail", StringComparison.OrdinalIgnoreCase) || name.Contains("Decay", StringComparison.OrdinalIgnoreCase)
         || name.Contains("Damage", StringComparison.OrdinalIgnoreCase) || name.Contains("RMA", StringComparison.OrdinalIgnoreCase)
         || name.Contains("Aging", StringComparison.OrdinalIgnoreCase) || name.Contains("Dirt", StringComparison.OrdinalIgnoreCase)
-        || name.Contains("Rust", StringComparison.OrdinalIgnoreCase) || name.Contains("Grunge", StringComparison.OrdinalIgnoreCase);
+        || name.Contains("Rust", StringComparison.OrdinalIgnoreCase) || name.Contains("Grunge", StringComparison.OrdinalIgnoreCase)
+        // The base-building masters' 'UtilityTexture' (a packed mask, near white) and squad emblem maps matched "Texture"
+        // and drew storage shelves and furniture white; their colour is the layer's '_DR' map (r37).
+        || name.Contains("Utility", StringComparison.OrdinalIgnoreCase) || name.Contains("Emblem", StringComparison.OrdinalIgnoreCase);
 
     private UObject? TryLoad(FPackageIndex index, string path)
     {

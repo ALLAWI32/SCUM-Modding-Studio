@@ -36,7 +36,7 @@ public sealed class DecalsViewModelTests
         Assert.InRange(placed.Position.Y, 49.5f, 50f);
         Assert.True(Vector3.Dot(placed.Normal, Vector3.UnitY) > 0.99f);
         Assert.Equal(40f, placed.WidthCm);
-        Assert.Equal(20f, placed.HeightCm, 3); // the design's 2:1
+        Assert.Equal(40f / DecalLibrary.Find("flames-1")!.Aspect, placed.HeightCm, 3); // the design's own shape
         Assert.Equal(placed.Id, page.SelectedDecal?.Layer.Id);
 
         // A drag is one step, however many moves it has.

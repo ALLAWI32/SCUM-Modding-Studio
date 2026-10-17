@@ -61,7 +61,7 @@ public sealed partial class SpawnsPageViewModel
 
     /// <summary>What a click on the map does.</summary>
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(IsPanTool), nameof(IsSectorTool), nameof(IsRectangleTool), nameof(IsPolygonTool), nameof(IsPlaceTool))]
+    [NotifyPropertyChangedFor(nameof(IsPanTool), nameof(IsSectorTool), nameof(IsRectangleTool), nameof(IsPolygonTool), nameof(IsPlaceTool), nameof(IsSelectTool))]
     private SpawnMapTool _mapTool = SpawnMapTool.Sector;
 
     /// <summary>The selected area (two-way with the map).</summary>
@@ -153,6 +153,9 @@ public sealed partial class SpawnsPageViewModel
     /// <summary>New place tool.</summary>
     public bool IsPlaceTool { get => MapTool == SpawnMapTool.Place; set => PickTool(value, SpawnMapTool.Place); }
 
+    /// <summary>Select point tool: pick, drag, nudge and turn one place.</summary>
+    public bool IsSelectTool { get => MapTool == SpawnMapTool.Select; set => PickTool(value, SpawnMapTool.Select); }
+
     /// <summary>An area is selected.</summary>
     public bool HasArea => Area is not null;
 
@@ -179,6 +182,11 @@ public sealed partial class SpawnsPageViewModel
     partial void OnSelectedPlaceChanged(SpawnAreaPlaceItem? value)
     {
         UpdateHighlight();
+        if (value is not null)
+        {
+            SelectedMarkerId = value.Id; // the row picked in the list is the place the map and the card show
+        }
+
         var leaf = value?.Place.Group;
         var entry = value?.Place.Kind switch
         {
@@ -219,6 +227,7 @@ public sealed partial class SpawnsPageViewModel
         NewKindOption = NewKinds.FirstOrDefault(k => k.Kind == NewKindOption?.Kind) ?? NewKinds[0];
         FillSettingChoices();
         FilterArea();
+        DropHiddenPoint();
         if ((Tab == SpawnTab.Npcs) != _npcMarkers)
         {
             PlacesReady = RebuildAsync(); // the zombie / NPC points change glyph
@@ -298,20 +307,22 @@ public sealed partial class SpawnsPageViewModel
         }
 
         (_index, _ids, Markers) = (index, ids, markers);
+        ResolvePoint();
         await (AreaQuery = QueryAreaAsync(Area)).ConfigureAwait(true);
     }
 
     private static SpawnMapMarker Marker(int id, SpawnPlace place, bool npcs)
     {
         var at = place.Transform.Translation;
+        var yaw = TransformValue.FromTransform(place.Transform).Rotation.Yaw; // the picked place shows which way it faces
         return place.Kind switch
         {
-            SpawnPlaceKind.Vehicle => new SpawnMapMarker(id, at.X, at.Y, SpawnMapLayer.Vehicles),
-            SpawnPlaceKind.Zone => new SpawnMapMarker(id, at.X, at.Y, SpawnMapLayer.Zones, place.SizeX, place.SizeY, TransformValue.FromTransform(place.Transform).Rotation.Yaw),
-            SpawnPlaceKind.Animal => new SpawnMapMarker(id, at.X, at.Y, SpawnMapLayer.Animals, place.SizeX, place.SizeY),
+            SpawnPlaceKind.Vehicle => new SpawnMapMarker(id, at.X, at.Y, SpawnMapLayer.Vehicles, Yaw: yaw),
+            SpawnPlaceKind.Zone => new SpawnMapMarker(id, at.X, at.Y, SpawnMapLayer.Zones, place.SizeX, place.SizeY, yaw),
+            SpawnPlaceKind.Animal => new SpawnMapMarker(id, at.X, at.Y, SpawnMapLayer.Animals, place.SizeX, place.SizeY, yaw),
 
             // A zombie / NPC point spawns what its zone draws: shown in the category the user looks at.
-            _ => new SpawnMapMarker(id, at.X, at.Y, npcs ? SpawnMapLayer.Npcs : SpawnMapLayer.Zombies),
+            _ => new SpawnMapMarker(id, at.X, at.Y, npcs ? SpawnMapLayer.Npcs : SpawnMapLayer.Zombies, Yaw: yaw),
         };
     }
 
@@ -339,7 +350,7 @@ public sealed partial class SpawnsPageViewModel
 
         // The same area again (after an edit): the checked and the selected places stay picked.
         var kept = _areaHits.Where(h => h.IsChecked).Select(h => h.Actor).ToHashSet();
-        var selected = SelectedPlace?.Actor;
+        var selected = _pointActor is { } picked ? new ActorRef(SpawnPlaces.StaticDataPath, picked) : SelectedPlace?.Actor; // the row of the picked place
         var ui = clock.Elapsed;
         try
         {
@@ -461,6 +472,7 @@ public sealed partial class SpawnsPageViewModel
         var op = new AddSpawnPlaceOp(name, kind, SettingValue(kind, setting), new TransformValue(new FVector(world.X, world.Y, (ground ?? 0f) + lift), FRotator.Zero, scale));
         if (Record(op))
         {
+            _pointActor = name; // the new place is the picked one once the map has it
             _services.Notifications.Success(Loc.T("Spawns.Place.New"), Loc.F("Spawns.Place.Added", name, SpawnPlaces.SettingName(setting)));
         }
     }

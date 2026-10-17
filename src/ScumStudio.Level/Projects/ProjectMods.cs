@@ -144,19 +144,30 @@ public static class ProjectMods
     /// of a modded level is the mod's level with the project's edits) and the mods' <c>AssetRegistry.bin</c>, which is never
     /// shipped as it is (<see cref="MergeRegistries"/>). Returns how many files were carried.
     /// </summary>
-    public static int CarryInto(IReadOnlyList<string> modFolders, string staging, string projectName = AssetPaths.DefaultProjectName)
+    public static int CarryInto(IReadOnlyList<string> modFolders, string staging, string projectName = AssetPaths.DefaultProjectName) =>
+        CarryInto(modFolders, staging, projectName, null);
+
+    /// <summary>
+    /// <see cref="CarryInto(IReadOnlyList{string}, string, string)"/>, and adds every package it carried to
+    /// <paramref name="packages"/> (package path → the mod's folder name): the package check holds those to the mod as its
+    /// author made it, not to the game (<see cref="Export.ValidationOptions.Carried"/>).
+    /// </summary>
+    public static int CarryInto(IReadOnlyList<string> modFolders, string staging, string projectName, IDictionary<string, string>? packages)
     {
         ArgumentNullException.ThrowIfNull(modFolders);
         var written = Directory.Exists(staging)
             ? Directory.EnumerateFiles(staging, "*", SearchOption.AllDirectories).Select(f => Path.GetRelativePath(staging, f)).ToHashSet(StringComparer.OrdinalIgnoreCase)
             : [];
         var carried = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var from = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var folder in modFolders.Where(IsCarried))
         {
             if (AssetCatalog.FindLooseProjectRoot(folder, projectName) is not { } root)
             {
                 continue;
             }
+
+            var mod = Path.GetFileName(Path.TrimEndingDirectorySeparator(folder));
 
             foreach (var file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories).Where(IsGameFile))
             {
@@ -169,6 +180,7 @@ public static class ProjectMods
                 if (!written.Contains(relative))
                 {
                     carried[relative] = file; // a later import wins
+                    from[relative] = mod;
                 }
             }
         }
@@ -178,6 +190,10 @@ public static class ProjectMods
             var target = Path.Combine(staging, relative);
             Directory.CreateDirectory(Path.GetDirectoryName(target)!);
             File.Copy(file, target, overwrite: true);
+            if (packages is not null && AssetPaths.IsPackageFile(relative))
+            {
+                packages[AssetPaths.ToPackagePath(relative.Replace('\\', '/'), projectName)] = from[relative];
+            }
         }
 
         return carried.Count;

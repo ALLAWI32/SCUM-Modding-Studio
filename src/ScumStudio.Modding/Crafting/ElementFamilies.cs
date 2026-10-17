@@ -21,7 +21,15 @@ public sealed record ElementLevel(string Recipe, string Element, IReadOnlyList<T
 /// <param name="ItemClass">The item package a <c>BaseBuildingItemComponent</c> spawns (<c>_itemClass</c>: a chest, a lamp, a fridge), or null.</param>
 /// <param name="Levels">Level 0 and its upgrades, in the game's order.</param>
 /// <param name="IsRespawnPoint">The element stores <c>_isUsedForRespawn</c> true (beds, shelters).</param>
-public sealed record ElementFamily(string Element, string Recipe, string NativeClass, string? ItemClass, IReadOnlyList<ElementLevel> Levels, bool IsRespawnPoint);
+public sealed record ElementFamily(string Element, string Recipe, string NativeClass, string? ItemClass, IReadOnlyList<ElementLevel> Levels, bool IsRespawnPoint)
+{
+    /// <summary>
+    /// The game ships no placeable recipe for the element (its cabins <c>BP_Base_Cabin</c>, <c>_02</c>, <c>_03</c>):
+    /// <see cref="Recipe"/> is the furniture template's (<see cref="CraftablesPlanner.FurnitureRecipe"/>), copied to build
+    /// the element's clone; the element, its placement, health, decay and repair values stay the game's.
+    /// </summary>
+    public bool BorrowsRecipe { get; init; }
+}
 
 /// <summary>
 /// The game's base element families (SDK build 149664, <c>UBaseBuildingComponent</c>): an element is a Blueprint of the
@@ -87,14 +95,26 @@ public static class ElementFamilies
             return (null, modular);
         }
 
-        if (!index.Recipes.TryGetValue(element, out var recipe) || !IsElement(native))
+        if (!IsElement(native))
         {
             return (null, $"{PackageMap.Leaf(element)} has no placeable recipe in the game to clone");
         }
 
+        // An element the game ships without a recipe (the cabins: owner, 2026-10-17) is still built as itself, with its
+        // own placement, health, decay and repair values: a copy of the furniture template's recipe makes it.
+        var borrowed = !index.Recipes.TryGetValue(element, out var recipe);
+        if (borrowed)
+        {
+            recipe = PackageMap.Normalize(CraftablesPlanner.FurnitureRecipe);
+            if (!catalog.PackageExists(recipe))
+            {
+                return (null, $"{PackageMap.Leaf(element)} has no placeable recipe in the game to clone");
+            }
+        }
+
         try
         {
-            return (Family(catalog, element, recipe, native!), null);
+            return (Family(catalog, element, recipe!, native!) with { BorrowsRecipe = borrowed }, null);
         }
         catch (Exception ex) when (ex is IOException or InvalidDataException or FormatException or EndOfStreamException)
         {

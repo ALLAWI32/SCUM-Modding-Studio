@@ -290,6 +290,7 @@ public static partial class CraftablesPlanner
                 }
 
                 AddEdits(catalog, craftable, plan, packages, edits);
+                AddBuildingEdits(catalog, craftable, plan, packages, edits, warnings);
                 if (craftable.NeedsPower)
                 {
                     warnings.Add($"{craftable.Name}: \"needs electricity\" is kept but not exported: a station's power need is not a value of the game's data (native code).");

@@ -66,6 +66,14 @@
               <TextBlock Text="{Tr Common.OpenFolder}" />
             </StackPanel>
           </Button>
+          <!-- Owner 2026-10-17: each page as its own mod (this page's changes only, client + server paks with .sig) -->
+          <Button x:Name="PageExportButton" Classes="accent" Command="{Binding PageExport.ExportCommand}" IsVisible="{Binding PageExport, Converter={x:Static ObjectConverters.IsNotNull}}"
+                  ToolTip.Tip="{Tr Export.Module.Button.Tip}">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <c:GlyphIcon Kind="Icon.Download" IconSize="14" />
+              <TextBlock Text="{Tr Export.Module.Button}" />
+            </StackPanel>
+          </Button>
         </StackPanel>
       </Grid>
     </Border>
@@ -348,7 +356,8 @@
                 <Panel>
                   <c:ViewportGrid Background="{DynamicResource ViewportBrush}" AxisXBrush="{DynamicResource AxisXBrush}" AxisYBrush="{DynamicResource AxisYBrush}" IsVisible="{Binding !HasPreview}" />
                   <c:MeshPreview x:Name="ItemPreview" Model="{Binding Preview}" HighlightAttachment="{Binding HighlightAttachment}" IsVisible="{Binding HasPreview}"
-                                 Tool="{Binding StudioTool}" GizmoMode="{Binding StudioGizmoMode}" PartOverrides="{Binding StudioPartOverrides}" />
+                                 Tool="{Binding StudioTool}" GizmoMode="{Binding StudioGizmoMode}" PartOverrides="{Binding StudioPartOverrides}"
+                                 ShowFigure="{Binding ShowScaleFigure}" />
                   <ProgressBar IsIndeterminate="True" IsVisible="{Binding IsPreviewLoading}" VerticalAlignment="Top" Margin="8,6" />
                   <!-- The model's name (left) and the mouse hint (right) share the bottom line; the name trims instead of running under the hint. -->
                   <Grid VerticalAlignment="Bottom" Margin="8" ColumnDefinitions="*,Auto" ColumnSpacing="8" IsHitTestVisible="False">
@@ -359,8 +368,9 @@
                       <TextBlock Text="{Tr Module.PreviewHint}" MaxWidth="420" TextTrimming="CharacterEllipsis" />
                     </Border>
                   </Grid>
+                  <!-- A WrapPanel: at the 1024 minimum the 3D view is ~130 px wide and Person fell outside it (review 3.5.0) -->
                   <Border Classes="segmented" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="8" IsVisible="{Binding HasPreview}">
-                    <StackPanel Orientation="Horizontal">
+                    <WrapPanel HorizontalAlignment="Right">
                       <ToggleButton x:Name="ItemPreviewSunButton" IsChecked="{Binding #ItemPreview.Light, Converter={x:Static c:PreviewLightConverter.IsSun}}" ToolTip.Tip="{Tr Preview.Sun.Tip}">
                         <StackPanel Orientation="Horizontal" Spacing="5">
                           <c:GlyphIcon Kind="Icon.Sun" IconSize="13" VerticalAlignment="Center" />
@@ -373,7 +383,18 @@
                           <TextBlock Text="{Tr Preview.Scale}" VerticalAlignment="Center" />
                         </StackPanel>
                       </ToggleButton>
-                    </StackPanel>
+                      <!-- Weapons: the person beside the gun is off by default (owner); Scale keeps the grid -->
+                      <ToggleButton x:Name="ItemPreviewFigureButton" IsChecked="{Binding ShowScaleFigure}" IsVisible="{Binding IsWeaponModule}"
+                                    IsEnabled="{Binding #ItemPreview.ShowScale}" ToolTip.Tip="{Tr Weapons.Figure.Tip}">
+                        <StackPanel Orientation="Horizontal" Spacing="5">
+                          <c:GlyphIcon Kind="Icon.Eye" IconSize="13" VerticalAlignment="Center" />
+                          <TextBlock Text="{Tr Weapons.Figure}" VerticalAlignment="Center" />
+                        </StackPanel>
+                      </ToggleButton>
+                      <!-- Other pages (vehicles): the game's prisoner beside the model; the same switch as the Weapons one above -->
+                      <ToggleButton x:Name="ItemPreviewPersonButton" IsChecked="{Binding ShowScaleFigure}" IsVisible="{Binding !IsWeaponModule}" IsEnabled="{Binding #ItemPreview.ShowScale}"
+                                    Content="{Tr Preview.Person}" ToolTip.Tip="{Tr Preview.Person.Tip}" />
+                    </WrapPanel>
                   </Border>
                   <!-- Vehicles studio: what the left mouse button does on the tab shown (turn, place a decal, move a part) -->
                   <Border x:Name="StudioToolHint" Classes="hud" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="8" MaxWidth="360" IsHitTestVisible="False"
@@ -415,9 +436,16 @@
                     </Grid>
                     <TextBlock Text="{Binding PaintCaption}" Classes="caption wrap" />
                     <Grid ColumnDefinitions="*,Auto" Margin="0,6,0,0">
-                      <TextBlock Text="{Tr Paint.Together}" VerticalAlignment="Center" TextWrapping="Wrap" />
+                      <TextBlock Text="{Binding PaintTogetherText}" VerticalAlignment="Center" TextWrapping="Wrap" ToolTip.Tip="{Binding PaintTogetherTip}" />
                       <ToggleSwitch x:Name="PaintTogetherSwitch" Grid.Column="1" IsChecked="{Binding PaintTogether}" OnContent="" OffContent="" MinWidth="0"
-                                    ToolTip.Tip="{Tr Paint.Together.Tip}" />
+                                    ToolTip.Tip="{Binding PaintTogetherTip}" />
+                    </Grid>
+                    <!-- Weapons: what the rows below are (owner: "the list AP RPK New Drum … is confusing") -->
+                    <TextBlock x:Name="PaintListNote" Text="{Binding PaintListNote}" Classes="caption wrap" IsVisible="{Binding HasPaintListNote}" Margin="0,4,0,0" />
+                    <Grid ColumnDefinitions="*,Auto" Margin="0,6,0,0" IsVisible="{Binding HasWeaponMagazine}">
+                      <TextBlock Text="{Tr Weapons.Exploded}" VerticalAlignment="Center" TextWrapping="Wrap" ToolTip.Tip="{Tr Weapons.Exploded.Tip}" />
+                      <ToggleSwitch x:Name="WeaponMagazineSwitch" Grid.Column="1" IsChecked="{Binding ShowWeaponMagazine}" OnContent="" OffContent="" MinWidth="0"
+                                    ToolTip.Tip="{Tr Weapons.Exploded.Tip}" />
                     </Grid>
                     <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8" IsVisible="{Binding HasArmour}">
                       <TextBlock Text="{Tr Paint.Armour}" VerticalAlignment="Center" />
@@ -440,7 +468,15 @@
                       <ItemsControl.ItemTemplate>
                         <DataTemplate x:DataType="vm:PaintMaterialViewModel">
                           <StackPanel Spacing="6" Margin="0,8,0,4">
-                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
+                              <TextBlock Text="{Binding Title}" FontWeight="SemiBold" TextWrapping="Wrap" ToolTip.Tip="{Binding MaterialPath}" VerticalAlignment="Center" />
+                              <!-- Weapons: show this part selected on the gun -->
+                              <Button Grid.Column="1" Classes="ghost square small" IsVisible="{Binding PartLabel, Converter={x:Static ObjectConverters.IsNotNull}}"
+                                      Command="{Binding $parent[UserControl].((vm:ModulePageViewModel)DataContext).ShowPaintPartCommand}" CommandParameter="{Binding}"
+                                      ToolTip.Tip="{Tr Weapons.Part.Show.Tip}">
+                                <c:GlyphIcon Kind="Icon.Eye" IconSize="13" />
+                              </Button>
+                            </Grid>
                             <TextBlock Text="{Tr Paint.Added}" Classes="caption wrap" IsVisible="{Binding IsArmour}" />
                             <TextBlock Text="{Tr Paint.Tint}" Classes="caption wrap" IsVisible="{Binding IsTint}" />
                             <CheckBox IsChecked="{Binding Plain}" IsVisible="{Binding IsArmour}" ToolTip.Tip="{Tr Paint.Plain.Tip}">
@@ -472,6 +508,12 @@
                                 </ItemsControl.ItemTemplate>
                               </ItemsControl>
                             </WrapPanel>
+                            <!-- Weapons: how strongly the colour replaces the gun's own (owner: "far too bright"; the texture and shine stay) -->
+                            <Grid ColumnDefinitions="80,*,44" ColumnSpacing="6" IsVisible="{Binding HasStrength}">
+                              <TextBlock Text="{Tr Weapons.Paint.Strength}" Classes="caption" VerticalAlignment="Center" ToolTip.Tip="{Tr Weapons.Paint.Strength.Tip}" />
+                              <Slider Grid.Column="1" Minimum="0" Maximum="1" Value="{Binding Strength}" SmallChange="0.05" LargeChange="0.1" ToolTip.Tip="{Tr Weapons.Paint.Strength.Tip}" />
+                              <TextBlock Grid.Column="2" Text="{Binding StrengthText}" Classes="caption mono" VerticalAlignment="Center" HorizontalAlignment="Right" />
+                            </Grid>
                             <Grid ColumnDefinitions="80,*,44" ColumnSpacing="6" IsVisible="{Binding HasMetal}">
                               <TextBlock Text="{Tr Paint.Metal}" Classes="caption" VerticalAlignment="Center" />
                               <Slider Grid.Column="1" Minimum="0" Maximum="1" Value="{Binding Metal}" SmallChange="0.05" LargeChange="0.1" ToolTip.Tip="{Tr Paint.Metal.Tip}" />
@@ -512,9 +554,21 @@
                   <c:GlyphIcon Kind="Icon.Copy" IconSize="16" VerticalAlignment="Center" />
                   <TextBlock Text="{Tr Module.CloneTitle}" Classes="h3" VerticalAlignment="Center" />
                 </StackPanel>
+                <!-- Owner: a clone is its own item (name, spawn command, values, colour) beside the stock one -->
+                <TextBlock Text="{Tr Weapons.Clone.Explain}" Classes="caption wrap" />
+                <TextBlock x:Name="CloneOfNote" Text="{Binding CloneOfText}" Classes="caption wrap" FontWeight="SemiBold"
+                           IsVisible="{Binding CloneOfText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                 <TextBox x:Name="CloneNameBox" Text="{Binding CloneName}" Watermark="{Tr Module.CloneName}" ToolTip.Tip="{Tr Module.CloneName.Tip}" />
                 <TextBlock Text="{Binding CloneNameError}" Classes="error caption wrap" IsVisible="{Binding CloneNameError, Converter={x:Static ObjectConverters.IsNotNull}}" />
+                <TextBlock x:Name="CloneNameNote" Text="{Binding CloneNameNote}" Classes="caption wrap" TextWrapping="Wrap" IsVisible="{Binding CloneNameNote, Converter={x:Static ObjectConverters.IsNotNull}}"
+                           ToolTip.Tip="{Tr Module.CloneNameSaved.Tip}" />
                 <TextBox Text="{Binding CloneCaption}" Watermark="{Tr Module.CloneCaption}" ToolTip.Tip="{Tr Module.CloneCaption.Tip}" />
+                <StackPanel Spacing="2" IsVisible="{Binding CloneSpawnText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                  <TextBlock Text="{Tr Weapons.Clone.SpawnLabel}" Classes="caption" />
+                  <Border Classes="inset" Padding="8,6" ToolTip.Tip="{Tr Weapons.Clone.SpawnLabel.Tip}">
+                    <SelectableTextBlock x:Name="CloneSpawnPreview" Text="{Binding CloneSpawnText}" Classes="mono" />
+                  </Border>
+                </StackPanel>
                 <CheckBox Content="{Tr Module.CloneAttachments}" IsChecked="{Binding IncludeAttachments}" IsVisible="{Binding IsVehicleModule}" ToolTip.Tip="{Tr Module.CloneAttachments.Tip}" />
                 <CheckBox Content="{Tr Module.ClonePresets}" IsChecked="{Binding IncludeSpawnPresets}" IsVisible="{Binding IsVehicleModule}" ToolTip.Tip="{Tr Module.ClonePresets.Tip}" />
                 <TextBlock Text="{Binding ClonePreview}" Classes="caption wrap" />
@@ -526,6 +580,29 @@
                 </Button>
                 <Button Classes="danger" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Command="{Binding RemoveCloneCommand}"
                         IsVisible="{Binding CanRemoveClone}" Content="{Tr Module.RemoveClone}" ToolTip.Tip="{Tr Module.RemoveClone.Tip}" />
+              </StackPanel>
+            </Border>
+
+            <!-- The selected item's own name in game and its spawn command (a clone: its own) -->
+            <Border x:Name="NameCard" Classes="card" IsVisible="{Binding HasSelection}">
+              <StackPanel Spacing="8">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <c:GlyphIcon Kind="Icon.Pin" IconSize="16" VerticalAlignment="Center" />
+                  <TextBlock Text="{Tr Weapons.Name.Title}" Classes="h3" VerticalAlignment="Center" />
+                </StackPanel>
+                <TextBlock Text="{Tr Weapons.Name.Body}" Classes="caption wrap" />
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
+                  <TextBox x:Name="CaptionEditBox" Text="{Binding CaptionEdit}" Watermark="{Tr Module.CloneCaption}" ToolTip.Tip="{Tr Weapons.Name.Edit.Tip}" />
+                  <Button Grid.Column="1" Content="{Tr Weapons.Name.Set}" Command="{Binding ApplyCaptionCommand}" ToolTip.Tip="{Tr Weapons.Name.Set.Tip}" />
+                </Grid>
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
+                  <Border Classes="inset" Padding="8,6" ToolTip.Tip="{Tr Module.SpawnChip.Tip}">
+                    <SelectableTextBlock Text="{Binding SpawnCommandText}" Classes="mono" TextWrapping="Wrap" />
+                  </Border>
+                  <Button Grid.Column="1" Classes="ghost square" Command="{Binding CopySpawnCommandCommand}" ToolTip.Tip="{Tr Module.CopySpawn.Tip}" VerticalAlignment="Center">
+                    <c:GlyphIcon Kind="Icon.Copy" IconSize="14" />
+                  </Button>
+                </Grid>
               </StackPanel>
             </Border>
 

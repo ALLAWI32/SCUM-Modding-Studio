@@ -33,7 +33,9 @@ public static partial class OwnPaks
         var name = match.Groups["name"].Value;
         return !projectModNames.Select(ProjectExporter.SanitizeModName).Any(m =>
             string.Equals(name, m, StringComparison.OrdinalIgnoreCase)
-            || string.Equals(name, m + CraftablesExporter.Suffix, StringComparison.OrdinalIgnoreCase));
+            || string.Equals(name, m + CraftablesExporter.Suffix, StringComparison.OrdinalIgnoreCase)
+            || ModuleExport.PakModules.Select(p => p.ToString()).Append(ModuleExport.RegistryName)
+                .Any(part => string.Equals(name, m + "-" + part, StringComparison.OrdinalIgnoreCase))); // a page's own mod
     }
 
     /// <summary>

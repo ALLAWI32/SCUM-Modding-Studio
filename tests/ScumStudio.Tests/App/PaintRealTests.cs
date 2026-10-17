@@ -161,6 +161,7 @@ public sealed class PaintRealTests
 
             var knife = weapons.Paints.First();
             knife.ApplyFinishCommand.Execute(PaintFinish.All.Single(f => f.Key == "Gold"));
+            var shown = knife.LinearColour;
             weapons.ApplyPaintCommand.Execute(null);
 
             var magazine = weapons.AllItems.First(i => i.Asset.Kind == ScumStudio.Modding.Catalog.ModdableKind.Magazine);
@@ -172,8 +173,11 @@ public sealed class PaintRealTests
                 new ExportOptions { OutputDirectory = ctx.Combine("out"), WritePak = false });
             using var written = AssetCatalog.OpenLoose(result.StagingDirectory);
             var tint = new ScumStudio.Assets.Materials.MaterialInspector(written).Inspect(knife.MaterialPath).Vectors.Single(v => v.Name == "Difuse_Colorization").Value;
-            Assert.InRange(tint.X, 0.9f, 1.01f); // gold, added to a material that stored no tint of its own
-            Assert.InRange(tint.Z, 0.01f, 0.1f);
+            // Gold over the knife's own print (r37: a tint by default, at the panel's strength; 3.4.0 defaulted to the flat
+            // coat), added to a material that stored no tint of its own: what the panel showed.
+            Assert.Equal(shown.X, tint.X, 3);
+            Assert.Equal(shown.Z, tint.Z, 3);
+            Assert.True(tint.X > 0.9f && tint.Z < tint.X / 3f, $"gold: {tint}");
         }
         finally
         {
@@ -205,16 +209,17 @@ public sealed class PaintRealTests
             Assert.True(HeadlessUi.PumpUntil(() => weapons.HasPaints, TimeSpan.FromSeconds(30)),
                 "no paint; preview parts: " + string.Join(", ", weapons.Preview?.Parts.Select(p => p.Material).Distinct() ?? ["(no preview)"]));
 
-            // Left alone it is the game's AK; gold is an even gold coat, full metal, drawn without the wood and steel print.
+            // Left alone it is the game's AK; gold tints its own print (r37, owner: the even coat by default was far too
+            // bright), lifted so it does not come out mud; the even gold coat (no wood and steel print) on request.
             var body = weapons.Paints.First(p => p.MaterialPath.EndsWith(".MI_AK47_01", StringComparison.Ordinal));
-            Assert.True(body.IsTint && !body.Painted && body.Plain && !weapons.ApplyPaintCommand.CanExecute(null));
+            Assert.True(body.IsTint && !body.Painted && !body.Plain && !weapons.ApplyPaintCommand.CanExecute(null));
             Assert.Equal(0.75, body.Metal, 3); // the metal the AK stores
             body.ApplyFinishCommand.Execute(PaintFinish.All.Single(f => f.Key == "Gold"));
-            Assert.Contains(weapons.Preview!.Parts, p => p.Material == body.MaterialPath && p.TexturePath is null && p.Tint == body.LinearColour);
-            body.Plain = false; // over its own texture: lifted so the gold does not come out mud
             Assert.True(body.Gain > 1f, $"gain {body.Gain}");
             Assert.Contains(weapons.Preview!.Parts, p => p.Material == body.MaterialPath && p.TexturePath is not null && p.Tint == body.LinearColour);
             body.Plain = true;
+            body.Strength = 1;
+            Assert.Contains(weapons.Preview!.Parts, p => p.Material == body.MaterialPath && p.TexturePath!.StartsWith("#flatlook/", StringComparison.Ordinal) && p.Tint == body.LinearColour);
             weapons.ApplyPaintCommand.Execute(null);
 
             var result = await new ProjectExporter().ExportAsync(ctx.Services.Projects.Current!, ctx.Services.Workspace.Catalog!,

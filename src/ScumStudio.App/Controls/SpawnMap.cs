@@ -80,10 +80,22 @@ public enum SpawnMapTool
 
     /// <summary>A click raises <see cref="SpawnMap.PlaceCommand"/> with the world point.</summary>
     Place,
+
+    /// <summary>
+    /// A click picks the spawn place under it (<see cref="SpawnMap.SelectedId"/>), a drag on a place moves it
+    /// (<see cref="SpawnMap.MoveCommand"/>), a drag elsewhere pans; the keys nudge, turn and remove the picked place.
+    /// </summary>
+    Select,
 }
 
-/// <summary>One spawn place on the <see cref="SpawnMap"/> (world cm); a zone or hunting area also has its half sizes and yaw (degrees).</summary>
+/// <summary>One spawn place on the <see cref="SpawnMap"/> (world cm); a zone or hunting area also has its half sizes. Yaw (degrees) is where it faces.</summary>
 public readonly record struct SpawnMapMarker(int Id, float X, float Y, SpawnMapLayer Layer, float RadiusX = 0, float RadiusY = 0, float Yaw = 0);
+
+/// <summary>The place <paramref name="Id"/> dragged or nudged on the <see cref="SpawnMap"/> to <paramref name="To"/> (world cm).</summary>
+public readonly record struct SpawnMapMove(int Id, Vector2 To);
+
+/// <summary>The place <paramref name="Id"/> turned on the <see cref="SpawnMap"/> by <paramref name="Degrees"/> (clockwise on the map = the game's yaw).</summary>
+public readonly record struct SpawnMapTurn(int Id, float Degrees);
 
 /// <summary>
 /// The island seen from above for the Spawns page: the island picture (<see cref="Picture"/>, laid out by
@@ -121,11 +133,29 @@ public sealed partial class SpawnMap : Control, ICustomHitTest
     public static readonly StyledProperty<ICommand?> PlaceCommandProperty =
         AvaloniaProperty.Register<SpawnMap, ICommand?>(nameof(PlaceCommand));
 
+    /// <summary>The picked spawn place (a marker id), or null; two-way.</summary>
+    public static readonly StyledProperty<int?> SelectedIdProperty =
+        AvaloniaProperty.Register<SpawnMap, int?>(nameof(SelectedId), defaultBindingMode: BindingMode.TwoWay);
+
+    /// <summary>Raised when the picked place was dragged or nudged; the parameter is a <see cref="SpawnMapMove"/>.</summary>
+    public static readonly StyledProperty<ICommand?> MoveCommandProperty =
+        AvaloniaProperty.Register<SpawnMap, ICommand?>(nameof(MoveCommand));
+
+    /// <summary>Raised when the picked place was turned with Q / E; the parameter is a <see cref="SpawnMapTurn"/>.</summary>
+    public static readonly StyledProperty<ICommand?> TurnCommandProperty =
+        AvaloniaProperty.Register<SpawnMap, ICommand?>(nameof(TurnCommand));
+
+    /// <summary>Raised by the Delete key on the picked place; the parameter is its id.</summary>
+    public static readonly StyledProperty<ICommand?> DeleteCommandProperty =
+        AvaloniaProperty.Register<SpawnMap, ICommand?>(nameof(DeleteCommand));
+
     /// <summary>Most single places drawn as glyphs; more visible places are drawn as counts.</summary>
     public const int GlyphLimit = 3000;
 
-    // Closest zoom: one screen pixel per 25 cm.
-    private const double MaxScale = IslandMap.SizeCm / 25.0;
+    /// <summary>Closest zoom, in centimetres per screen pixel (owner: "place a point within a metre": 50 pixels per metre).</summary>
+    public const double ClosestCmPerPixel = 2.0;
+
+    private const double MaxScale = IslandMap.SizeCm / ClosestCmPerPixel;
 
     private double _scale = 1;
     private Point _offset;
@@ -135,7 +165,7 @@ public sealed partial class SpawnMap : Control, ICustomHitTest
 
     static SpawnMap()
     {
-        AffectsRender<SpawnMap>(PictureProperty, MarkersProperty, ShownLayersProperty, AreaProperty, HighlightedIdsProperty);
+        AffectsRender<SpawnMap>(PictureProperty, MarkersProperty, ShownLayersProperty, AreaProperty, HighlightedIdsProperty, SelectedIdProperty);
         ClipToBoundsProperty.OverrideDefaultValue<SpawnMap>(true);
         FocusableProperty.OverrideDefaultValue<SpawnMap>(true);
     }
@@ -189,8 +219,39 @@ public sealed partial class SpawnMap : Control, ICustomHitTest
         set => SetValue(PlaceCommandProperty, value);
     }
 
+    /// <inheritdoc cref="SelectedIdProperty" />
+    public int? SelectedId
+    {
+        get => GetValue(SelectedIdProperty);
+        set => SetValue(SelectedIdProperty, value);
+    }
+
+    /// <inheritdoc cref="MoveCommandProperty" />
+    public ICommand? MoveCommand
+    {
+        get => GetValue(MoveCommandProperty);
+        set => SetValue(MoveCommandProperty, value);
+    }
+
+    /// <inheritdoc cref="TurnCommandProperty" />
+    public ICommand? TurnCommand
+    {
+        get => GetValue(TurnCommandProperty);
+        set => SetValue(TurnCommandProperty, value);
+    }
+
+    /// <inheritdoc cref="DeleteCommandProperty" />
+    public ICommand? DeleteCommand
+    {
+        get => GetValue(DeleteCommandProperty);
+        set => SetValue(DeleteCommandProperty, value);
+    }
+
     /// <summary>Screen pixels across the whole picture (the zoom).</summary>
     public double ViewScale => _scale;
+
+    /// <summary>Screen pixels per metre of the island at the current zoom.</summary>
+    public double PixelsPerMetre => _scale * 100.0 / IslandMap.SizeCm;
 
     /// <summary>The screen point (control pixels) of the world point (<paramref name="x"/>, <paramref name="y"/>) cm.</summary>
     public Point WorldToScreen(float x, float y)
@@ -273,7 +334,11 @@ public sealed partial class SpawnMap : Control, ICustomHitTest
         var square = new Rect(_offset, new Size(_scale, _scale));
         if (Picture is { } picture && picture.Size.Width > 0 && picture.Size.Height > 0)
         {
-            context.DrawImage(picture, new Rect(picture.Size), square);
+            // Far past the picture's own pixels it is only a blur: faded, so the metre grid and the places read close in.
+            using (context.PushOpacity(Math.Clamp(6 * picture.Size.Width / _scale, 0.45, 1)))
+            {
+                context.DrawImage(picture, new Rect(picture.Size), square);
+            }
         }
         else
         {
@@ -281,9 +346,12 @@ public sealed partial class SpawnMap : Control, ICustomHitTest
         }
 
         DrawZones(context, bounds);
+        DrawFineGrid(context, bounds);
         DrawGrid(context, bounds);
         DrawMarkers(context, bounds);
         DrawSelection(context);
+        DrawPicked(context);
+        DrawReadout(context, bounds);
     }
 
     /// <inheritdoc />
@@ -303,10 +371,16 @@ public sealed partial class SpawnMap : Control, ICustomHitTest
         if (change.Property == ToolProperty)
         {
             CancelShape();
+            DropPickPreview();
         }
         else if (change.Property == MarkersProperty)
         {
             PrepareMarkers(Markers);
+            (_pending, _turned) = (null, null); // the moved or turned place stands where the new markers say
+        }
+        else if (change.Property == SelectedIdProperty)
+        {
+            DropPickPreview();
         }
     }
 

@@ -143,6 +143,81 @@ public sealed class ImpostorTests(ITestOutputHelper output)
     }
 
     [GlFact]
+    public void CardTurnsSmoothlyBetweenItsPictures()
+    {
+        // Owner: far trees "flicker" as the camera passes. The camera circles a far tree a degree at a time from one baked
+        // heading to the next (45°): the card showed the nearest picture, so nothing changed for 22 steps and then the whole
+        // tree swapped at once; it now changes a little every step: blended on the Map's 4-sample target (alpha to coverage),
+        // dithered on a one-sample one.
+        using var gl = GlHarness.Create(256, 256);
+        gl.UseUnlit();
+        var (tree, _) = Tree(gl);
+        Impostor(gl, tree);
+        var scene = new Scene();
+        scene.Add(tree, Matrix4x4.CreateTranslation(5000f, 0f, -3000f), 1);
+        gl.Renderer.Settings = gl.Renderer.Settings with { LodBias = 1e-6f };
+        using var smooth = gl.Renderer.CreateTarget(256, 256, samples: 4);
+        foreach (var target in new[] { smooth, gl.Target })
+        {
+            var frames = new List<byte[]>();
+            for (var heading = 0; heading <= 45; heading++)
+            {
+                gl.Renderer.Render(target, scene, Distant(tree, heading, ImpostorBaker.Elevation, new Vector3(5000f, 0f, -3000f)));
+                Assert.Equal(2L, gl.Renderer.LastStats.Triangles);
+                frames.Add(target.ReadColorRgba());
+            }
+
+            var steps = frames.Zip(frames.Skip(1), (a, b) => a.Select((v, i) => (double)Math.Abs(v - b[i])).Sum()).ToList();
+            var (total, largest) = (steps.Sum(), steps.Max());
+            output.WriteLine($"{target.Samples} sample(s), 1 degree steps from one picture to the next: largest change {largest / total:P0} of the whole turn ({steps.Count(s => s > 0)} of {steps.Count} steps change)");
+            Assert.True(total > 0, "the tree looks the same from 45 degrees on");
+            Assert.True(largest <= 0.15 * total, $"{target.Samples} sample(s): one 1 degree step makes {largest / total:P0} of the change from one picture to the next");
+        }
+    }
+
+    [GlFact]
+    public void ATreeAtALodThresholdKeepsItsLodWhileTheCameraWobbles()
+    {
+        // Owner: trees "flicker" in motion. A camera hovering where a tree's projected size is the LOD 0 / LOD 1 threshold
+        // (3 % nearer and farther, frame by frame) drew it at LOD 0 and LOD 1 in turn; the renderer now keeps the LOD it drew.
+        using var gl = GlHarness.Create(256, 256);
+        gl.UseUnlit();
+        var (tree, _) = Tree(gl);
+        var camera = new FlyCamera { FieldOfView = 60f };
+        camera.SetClipRange(10f, 1_000_000f);
+        long Triangles(Scene scene, float distance)
+        {
+            camera.Orbit(tree.Bounds.Center, 30f, -10f, distance);
+            gl.Renderer.Render(gl.Target, scene, camera);
+            return gl.Renderer.LastStats.Triangles;
+        }
+
+        Scene Fresh()
+        {
+            var scene = new Scene(); // new batches: no LOD drawn before
+            scene.Add(tree, Matrix4x4.Identity, 1);
+            return scene;
+        }
+
+        var (near, far) = (100f, 100_000f);
+        for (var i = 0; i < 40; i++)
+        {
+            var middle = MathF.Sqrt(near * far);
+            (near, far) = Triangles(Fresh(), middle) == TreeTriangles(0) ? (middle, far) : (near, middle);
+        }
+
+        var threshold = MathF.Sqrt(near * far);
+        var wobbling = Fresh();
+        var drawn = Enumerable.Range(0, 20).Select(frame => Triangles(wobbling, threshold * (frame % 2 == 0 ? 0.97f : 1.03f))).ToList();
+        var swaps = drawn.Zip(drawn.Skip(1), (a, b) => a != b ? 1 : 0).Sum();
+        output.WriteLine($"LOD 0 / LOD 1 threshold at {threshold / 100f:0.0} m; 20 frames 3 % either side: {swaps} LOD swaps ({string.Join(" ", drawn.Distinct())} triangles)");
+        Assert.Equal(TreeTriangles(0), Triangles(Fresh(), threshold * 0.9f));
+        Assert.Equal(TreeTriangles(1), Triangles(Fresh(), threshold * 1.1f));
+        Assert.Equal(0, swaps);
+        Assert.Equal(TreeTriangles(1), Triangles(wobbling, threshold * 1.2f)); // well past it: switches
+    }
+
+    [GlFact]
     public void BakeLeavesOverlayAndSettingsAlone()
     {
         // Baking happens between two frames of the Map: last frame's gizmo lines and brush ring, the grid, the sky and the

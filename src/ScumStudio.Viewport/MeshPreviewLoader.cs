@@ -44,6 +44,13 @@ public sealed record PreviewPart(string Name, MeshData Mesh, string? TexturePath
 
     /// <summary>The vehicle attachment package this part draws (<c>/Game/…/BPC_X_Door_FrontLeft</c>), or empty for the vehicle's own mesh.</summary>
     public string Attachment { get; init; } = string.Empty;
+
+    /// <summary>
+    /// The UV channel the material reads its colour mask through (SCUM's <c>M_Car_01</c> 'Color Mask UV Channel': 1 on the
+    /// Laika's and the WolfsWagen's bodies, 0 on the Rager's); its colour texture is always read through UV0. The mesh
+    /// carries that channel (<see cref="MeshData.Uv(int)"/>).
+    /// </summary>
+    public int MaskUv { get; init; }
 }
 
 /// <summary>A CPU-side model for <c>MeshPreview</c>: parts plus the decoded base-colour textures they share.</summary>
@@ -162,7 +169,10 @@ public sealed class MeshPreviewLoader
     /// materials of their slots (a null or empty entry keeps the mesh's own).
     /// </summary>
     /// <exception cref="InvalidDataException">The object is not a mesh.</exception>
-    public PreviewModel LoadMesh(string objectPath, IReadOnlyList<string?>? overrideMaterials = null)
+    /// <param name="objectPath">The mesh.</param>
+    /// <param name="overrideMaterials">Materials for its slots (null or empty entries keep the mesh's own).</param>
+    /// <param name="pose">A skeletal mesh's bones in another pose than its bind pose (<see cref="Skinning"/>; the scale figure's arms down), or null.</param>
+    public PreviewModel LoadMesh(string objectPath, IReadOnlyList<string?>? overrideMaterials = null, IReadOnlyDictionary<string, FTransform>? pose = null)
     {
         var obj = _catalog.LoadObject(objectPath);
         if (!MeshExtractor.IsMesh(obj))
@@ -171,7 +181,7 @@ public sealed class MeshPreviewLoader
         }
 
         var parts = new List<PreviewPart>();
-        AddMeshParts(parts, obj, objectPath, FTransform.Identity, overrides: overrideMaterials);
+        AddMeshParts(parts, obj, objectPath, FTransform.Identity, pose, overrideMaterials);
         return new PreviewModel(obj.Name, parts, _textures);
     }
 
@@ -889,6 +899,20 @@ public sealed class MeshPreviewLoader
             _meshes[meshPath] = data;
         }
 
+        // A car body whose colour mask lies in another UV channel (the Laika's, the WolfsWagen's): that channel comes along.
+        var maskUv = GroupSections(data, overrides).Select(g => MaskUvOf(g.Material)).DefaultIfEmpty(0).Max();
+        if (maskUv > 0 && data.Uv(maskUv) is null)
+        {
+            try
+            {
+                data = _meshes[meshPath] = MeshExtractor.Extract(mesh, LodOf is null ? 0 : LodOf(MeshExtractor.Describe(mesh).Lods), extraUvs: true);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                _logger.LogDebug("Mesh {Mesh} keeps only its first UV channel: {Message}", meshPath, ex.Message);
+            }
+        }
+
         if (pose is not null && mesh is USkeletalMesh skeletal)
         {
             try
@@ -924,11 +948,14 @@ public sealed class MeshPreviewLoader
                     indices.AddRange(new ArraySegment<uint>(data.Indices, section.FirstIndex, section.IndexCount));
                 }
 
-                part = MeshData.Create(data.Name, data.Positions, indices.ToArray(), data.Normals, data.Uv0);
+                part = MeshData.Create(data.Name, data.Positions, indices.ToArray(), data.Normals, data.Uv0) with { ExtraUvs = data.ExtraUvs };
             }
 
             var name = group.Material.Length == 0 ? data.Name : data.Name + " / " + group.Material[(group.Material.LastIndexOfAny(['/', '.']) + 1)..];
-            parts.Add(new PreviewPart(name, part, texture, transform, tint, clip) { Material = group.Material, NormalPath = normal, Roughness = roughness });
+            parts.Add(new PreviewPart(name, part, texture, transform, tint, clip)
+            {
+                Material = group.Material, NormalPath = normal, Roughness = roughness, MaskUv = MaskUvOf(group.Material),
+            });
         }
     }
 
@@ -982,6 +1009,39 @@ public sealed class MeshPreviewLoader
 
         var look = MaterialLooks.Of(material, materialPath, textured: false);
         return (null, look.Tint, look.Clip, look.Roughness);
+    }
+
+    /// <summary>The material's scalar naming the UV channel of its colour mask (<c>M_Car_01</c>).</summary>
+    public const string MaskUvParameter = "Color Mask UV Channel";
+
+    /// <summary>
+    /// The UV channel <paramref name="materialPath"/> reads its colour mask through (<see cref="PreviewPart.MaskUv"/>): its
+    /// <see cref="MaskUvParameter"/>, 0 without one (the master's default) or when the material cannot be read.
+    /// </summary>
+    private int MaskUvOf(string materialPath)
+    {
+        if (string.IsNullOrEmpty(materialPath))
+        {
+            return 0;
+        }
+
+        if (!_materials.TryGetValue(materialPath, out var material))
+        {
+            try
+            {
+                material = new MaterialInspector(_catalog).Inspect(materialPath);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                _logger.LogDebug("Material {Material} could not be inspected: {Message}", materialPath, ex.Message);
+                material = null;
+            }
+
+            _materials[materialPath] = material;
+        }
+
+        var channel = material?.Scalars.FirstOrDefault(s => string.Equals(s.Name, MaskUvParameter, StringComparison.OrdinalIgnoreCase))?.Value ?? 0f;
+        return Math.Clamp((int)MathF.Round(channel), 0, 7);
     }
 
     /// <summary>The material's normal map (decoded once per path), or null.</summary>

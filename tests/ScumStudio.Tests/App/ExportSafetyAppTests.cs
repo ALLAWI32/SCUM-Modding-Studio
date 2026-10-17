@@ -49,6 +49,36 @@ public sealed class ExportSafetyAppTests : IDisposable
         Assert.Empty(Directory.EnumerateFiles(server));
     }
 
+    /// <summary>
+    /// Review 3.5.0: one click copies the whole project's paks and, on a page, its page pak and the Registry pak into the same
+    /// server mods folder; the Registry pak loaded above the whole project's and its list of assets left out their records.
+    /// Copying one way of installing removes the other's paks of the same project there, never another project's.
+    /// </summary>
+    [Fact]
+    public void CopyingOneInstallModeToTheServerRemovesTheOther()
+    {
+        Directory.CreateDirectory(_dir);
+        string[] whole = ["pakchunk900-Mod_P.pak", "pakchunk900-Mod_P.sig", "pakchunk901-ModCraftables_P.pak", "pakchunk901-ModCraftables_P.sig"];
+        string[] pages = ["pakchunk912-Mod-Vehicles_P.pak", "pakchunk912-Mod-Vehicles_P.sig", "pakchunk919-Mod-Registry_P.pak", "pakchunk919-Mod-Registry_P.sig"];
+        string[] other = ["pakchunk900-Other_P.pak", "pakchunk912-Other-Vehicles_P.pak"];
+        void Write()
+        {
+            foreach (var file in whole.Concat(pages).Concat(other))
+            {
+                File.WriteAllBytes(Path.Combine(_dir, file), [0]);
+            }
+        }
+
+        Write();
+        Assert.Equal(whole.Order(), ModExportService.RemoveOtherInstallMode(_dir, "Mod", 900, pagesInstalled: true).Select(Path.GetFileName).Order());
+        Assert.Equal(pages.Concat(other).Order(StringComparer.OrdinalIgnoreCase), Directory.GetFiles(_dir).Select(f => Path.GetFileName(f)!).Order(StringComparer.OrdinalIgnoreCase));
+
+        Write();
+        Assert.Equal(pages.Order(), ModExportService.RemoveOtherInstallMode(_dir, "Mod", 900, pagesInstalled: false).Select(Path.GetFileName).Order());
+        Assert.Equal(whole.Concat(other).Order(StringComparer.OrdinalIgnoreCase), Directory.GetFiles(_dir).Select(f => Path.GetFileName(f)!).Order(StringComparer.OrdinalIgnoreCase));
+        Assert.Empty(ModExportService.RemoveOtherInstallMode(Path.Combine(_dir, "missing"), "Mod", 900, pagesInstalled: true));
+    }
+
     [Fact]
     public void ACraftablesPakForOneSideOnlyIsNamedAndTheInstallRuleIsSaid()
     {

@@ -75,6 +75,21 @@ public sealed class ModPackageValidatorTests : IDisposable
     }
 
     [Fact]
+    public void DeletingOneActorAndCopyingAnotherInTheSameLevelPasses()
+    {
+        // One object deleted and one copied in the same level: the actor list keeps its length and every actor after the
+        // deleted one sits one place earlier. The list is a set to the game, but the check read the moved places as
+        // references to other actors and refused the pak (final check after r37: a Map pak and the whole project's pak).
+        var stock = Build(new Defects());
+        var (bytes, _) = LevelPackageEditor.Apply(CookedPackage.Parse(stock.UAsset, stock.UExp, null, LevelPath),
+            new LevelEditRequest { DeleteActors = ["Rock_B"], Copies = [new ActorCopy("Rock_A", "Rock_A_Copy", null)] });
+
+        var result = Check(bytes, stock);
+
+        Assert.True(result.Passed, string.Join('\n', result.Problems));
+    }
+
+    [Fact]
     public void ADeletedActorStillInTheActorListIsNamed()
     {
         var result = Check(new Defects { DeleteRockB = true, ClearTarget = true, KeepDeletedListed = true });
@@ -130,6 +145,45 @@ public sealed class ModPackageValidatorTests : IDisposable
         var result = Check(new Defects { MissingMesh = true });
 
         Assert.Contains(result.Problems, p => p.Contains("neither the game nor the mod has the package /Game/Nowhere/SM_Missing", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void AnImportOnlyTheClientHasIsNoHoleInTheServersPakButOneNobodyHasStillIs()
+    {
+        // Report "ServerMods" (3.4.0): the server's pak is checked against the dedicated server's cook, which leaves out what
+        // only players' games use; the client's game files tell such an asset from a hole.
+        var client = Path.Combine(_dir, "client-game");
+        Write(client, "SCUM/Content/Nowhere/SM_Missing", BuildMesh(), ".uasset");
+        using var clientCatalog = AssetCatalog.OpenLoose(client);
+
+        var serverOnly = Check(Build(new Defects { MissingMesh = true }), options: new ValidationOptions { Client = clientCatalog });
+        Assert.True(serverOnly.Passed, string.Join('\n', serverOnly.Problems));
+
+        // Neither side has it: still stopped, as without the client's files.
+        var other = Path.Combine(_dir, "client-game-other");
+        Write(other, "SCUM/Content/Elsewhere/SM_Other", BuildMesh(), ".uasset");
+        using var emptyClient = AssetCatalog.OpenLoose(other);
+        var nobody = Check(Build(new Defects { MissingMesh = true }), options: new ValidationOptions { Client = emptyClient });
+        Assert.Contains(nobody.Problems, p => p.Contains("imports /Game/Nowhere/SM_Missing, but neither the game nor the mod has the package /Game/Nowhere/SM_Missing (the game would get null there)", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void AnImportedModsOwnReferenceTheGameNoLongerHasIsANoteUnlessAnObjectIsBuiltFromIt()
+    {
+        // Report "ServerMods": an imported mod's BP_Prisoner from before a game update imports a post process the game removed.
+        var carried = new ValidationOptions { Carried = new Dictionary<string, string> { [LevelPath] = "OldMod" } };
+        var reference = Check(Build(new Defects { MissingMesh = true }), options: carried);
+        Assert.True(reference.Passed, string.Join('\n', reference.Problems));
+        var note = Assert.Single(reference.Notes);
+        Assert.Contains($"{LevelPath} (from the imported mod OldMod) imports /Game/Nowhere/SM_Missing", note, StringComparison.Ordinal);
+        Assert.Contains("made for another version of SCUM", note, StringComparison.Ordinal);
+
+        // The same file written by the export itself is a broken import that stops it.
+        Assert.Contains(Check(Build(new Defects { MissingMesh = true })).Problems, p => p.Contains("neither the game nor the mod has the package /Game/Nowhere/SM_Missing", StringComparison.Ordinal));
+
+        // An object of the mod's package built from what is gone (its class): the game cannot make it, so it still stops.
+        var built = Check(Build(new Defects { MissingClass = true }), options: carried);
+        Assert.Contains(built.Problems, p => p.Contains("imports /Game/Nowhere/BP_Gone", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -233,7 +287,7 @@ public sealed class ModPackageValidatorTests : IDisposable
 
     private ValidationResult Check(Defects defects) => Check(Build(defects));
 
-    private ValidationResult Check(PackageBytes mod, PackageBytes? stock = null)
+    private ValidationResult Check(PackageBytes mod, PackageBytes? stock = null, ValidationOptions? options = null)
     {
         var game = Path.Combine(_dir, "game-" + Guid.NewGuid().ToString("N"));
         var staging = Path.Combine(_dir, "staging-" + Guid.NewGuid().ToString("N"));
@@ -241,7 +295,7 @@ public sealed class ModPackageValidatorTests : IDisposable
         Write(game, "SCUM/Content/ConZ_Files/Models/Rocks/SM_Rock", BuildMesh(), ".uasset");
         Write(staging, LevelFile, mod, ".umap");
         using var catalog = AssetCatalog.OpenLoose(game);
-        return ModPackageValidator.Validate(staging, catalog);
+        return ModPackageValidator.Validate(staging, catalog, options, CancellationToken.None);
     }
 
     private static void Write(string root, string virtualBase, PackageBytes bytes, string extension) =>
@@ -270,6 +324,8 @@ public sealed class ModPackageValidatorTests : IDisposable
 
         public bool MissingMesh { get; init; }
 
+        public bool MissingClass { get; init; }
+
         public bool ExtraBytes { get; init; }
 
         public bool RepeatGuid { get; init; }
@@ -297,7 +353,7 @@ public sealed class ModPackageValidatorTests : IDisposable
         var b = p.Export(d.DuplicateName ? "Rock_A" : "Rock_B", d.DeleteRockB ? inert : actorClass, level);
         var bMesh = p.Export("StaticMeshComponent0", d.DeleteRockB ? inert : p.ScriptClass(Engine, "StaticMeshComponent"), b);
         var bLight = p.Export("PointLight", d.DeleteRockB ? inert : p.ScriptClass(Engine, "PointLightComponent"), b);
-        var sw = p.Export("Switch", p.ScriptClass(Engine, "Actor"), level);
+        var sw = p.Export("Switch", d.MissingClass ? p.ObjectImport("/Game/Nowhere/BP_Gone", Engine, "BlueprintGeneratedClass", "BP_Gone_C") : p.ScriptClass(Engine, "Actor"), level);
         var swRoot = p.Export("DefaultSceneRoot", p.ScriptClass(Engine, "SceneComponent"), sw);
         var missing = d.MissingMesh ? p.ObjectImport("/Game/Nowhere/SM_Missing", Engine, "StaticMesh", "SM_Missing") : 0;
         var lift = d.WithLift ? p.Export("BP_CarLift_2", p.ScriptClass(Engine, "Actor"), level) : 0;

@@ -1066,6 +1066,9 @@ public sealed partial class CraftableRowViewModel : ThumbnailItem
         Ingredients = Ingredients.Where(i => i.IsKept).Select(i => i.ToModel()).ToList(),
         Element = ElementModel(),
         Use = UseModel(),
+        NeedsFlag = CraftCategories.IsPlaceable(Kind) ? NeedsFlagModel : _source.NeedsFlag,
+        RepairCostPercent = CraftCategories.IsPlaceable(Kind) ? RepairCostModel : _source.RepairCostPercent,
+        InFront = CraftCategories.IsPlaceable(Kind) ? InFrontModel : _source.InFront,
     };
 
     /// <summary>Re-reads the texts composed here in the new UI language.</summary>
@@ -1075,6 +1078,10 @@ public sealed partial class CraftableRowViewModel : ThumbnailItem
         OnPropertyChanged(nameof(TokenTaken));
         OnPropertyChanged(nameof(PathPreview));
         OnPropertyChanged(nameof(PictureNote));
+        OnPropertyChanged(nameof(InFrontAuto));
+        OnPropertyChanged(nameof(InFrontSuggestion));
+        NotifyBuilding(); // step 2's "build it like the game's" texts (review 3.5.0: they stayed in the old language)
+        OnPropertyChanged(nameof(RepairCostStock));
     }
 
     /// <summary>Replaces the ingredient rows.</summary>
@@ -1120,6 +1127,7 @@ public sealed partial class CraftableRowViewModel : ThumbnailItem
         }
 
         var game = fallback is not null ? CraftSectionChoice.LabelOf(fallback.Tag) : template is null ? "…" : PackageMap.Leaf(template);
+        DefaultSection = game;
         Sections = [new CraftSectionChoice(null, Loc.F("Craftables.ShowsIn.Default", game)), .. listed];
         OnPropertyChanged(nameof(Sections));
         OnPropertyChanged(nameof(SelectedSection));
@@ -1132,6 +1140,11 @@ public sealed partial class CraftableRowViewModel : ThumbnailItem
     protected override void OnPropertyChanged(System.ComponentModel.PropertyChangedEventArgs e)
     {
         base.OnPropertyChanged(e);
+        if (e.PropertyName is nameof(Use) or nameof(Kind) or nameof(Category) or nameof(Sections) or nameof(Element))
+        {
+            OnPropertyChanged(nameof(WhereText)); // step 2 says where it shows up
+        }
+
         if (e.PropertyName is nameof(Name) or nameof(Kind) or nameof(Material) or nameof(Category) or nameof(Icon) or nameof(Station) or nameof(NeedsPower)
             or nameof(Radius) or nameof(Output) or nameof(Fuel) or nameof(DayOnly))
         {

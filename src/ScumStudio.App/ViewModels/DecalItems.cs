@@ -51,6 +51,22 @@ public sealed class DecalDesignItem : ObservableObject
         _picture = picture;
     }
 
+    /// <summary>A sticker of the project (its PNG, JPG or SVG copy, relative to the project) in the library grid.</summary>
+    /// <param name="stickerFile">The copy, relative to the project (<c>decals/stickers/x.png</c>).</param>
+    /// <param name="number">Its number among the stickers (1 first).</param>
+    /// <param name="svg">Its drawing when it is an SVG (drawn like a library design), else null.</param>
+    /// <param name="picture">The picture file to show for a PNG or JPG.</param>
+    public DecalDesignItem(string stickerFile, int number, DecalDesign? svg, string? picture)
+    {
+        StickerFile = stickerFile;
+        Design = svg ?? new DecalDesign("sticker:" + stickerFile, "Stickers", 1, 1, [new DecalRegion(string.Empty, 0xFFFFFF)]);
+        Name = Loc.F("Studio.Decals.Design", DecalCategoryItem.LabelOf("Stickers"), number);
+        _picture = svg is null && picture is not null ? () => Task.FromResult<string?>(picture) : null;
+    }
+
+    /// <summary>The project sticker this item stands for (relative to the project), or null for a design.</summary>
+    public string? StickerFile { get; }
+
     /// <summary>The design (for a game tattoo: its id and colour, its true shape once the atlas is read).</summary>
     public DecalDesign Design { get; }
 
@@ -135,6 +151,10 @@ public sealed partial class DecalLayerViewModel : ObservableObject
 {
     private readonly Action<DecalLayer> _edited;
     private readonly Action<DecalLayerViewModel, Vector3>? _moved;
+
+    /// <summary>Largest side of a decal, cm: a decal stuck to the surface may cover a whole truck or plane.</summary>
+    public const double MaxSizeCm = 2000;
+
     private bool _quiet;
 
     /// <summary>Width on the car, cm (the height follows, keeping the design's shape).</summary>
@@ -173,6 +193,14 @@ public sealed partial class DecalLayerViewModel : ObservableObject
     [ObservableProperty]
     private bool _mirror;
 
+    /// <summary>Stuck to the surface: it reaches every part under it and may cover the whole vehicle (<see cref="DecalLayer.Wrap"/>).</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(SizeSliderMax))]
+    private bool _wrap;
+
+    /// <summary>The size slider's end: a decal stuck to the surface goes up to <see cref="MaxSizeCm"/>, a sticker to 3 m.</summary>
+    public double SizeSliderMax => Wrap ? MaxSizeCm : 300;
+
     /// <summary>Index into <see cref="Modes"/>.</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsPalette), nameof(ShowsRegions), nameof(ShownRegions))]
@@ -199,6 +227,7 @@ public sealed partial class DecalLayerViewModel : ObservableObject
         _opacity = Math.Round(layer.Opacity * 100);
         _flip = layer.FlipX;
         _mirror = layer.Mirror;
+        _wrap = layer.Wrap; // review 3.5.0: a rebuilt list lost it, and the 3 m slider then cut a whole-vehicle decal down
         _modeIndex = (int)layer.ColourMode;
         var shown = layer.RegionColours(regions, defaults);
         Regions = [.. Enumerable.Range(0, regions).Select(k => new DecalColourItem(Loc.F("Studio.Decals.Region", k + 1), ToColour(shown[k]), _ => Commit(true)))];
@@ -251,6 +280,7 @@ public sealed partial class DecalLayerViewModel : ObservableObject
         try
         {
             Layer = layer;
+            Wrap = layer.Wrap; // first: the size slider's end follows it, and a larger size must not meet the 3 m end
             (Size, Height, Rotation, Opacity, Flip, Mirror, ModeIndex) =
                 (layer.WidthCm, Math.Round(layer.HeightCm, 1), layer.RotationDeg, Math.Round(layer.Opacity * 100), layer.FlipX, layer.Mirror, (int)layer.ColourMode);
         }
@@ -298,6 +328,8 @@ public sealed partial class DecalLayerViewModel : ObservableObject
 
     partial void OnMirrorChanged(bool value) => Commit(true);
 
+    partial void OnWrapChanged(bool value) => Commit(true);
+
     partial void OnModeIndexChanged(int value) => Commit(true);
 
     partial void OnXChanged(double value) => Move();
@@ -324,12 +356,12 @@ public sealed partial class DecalLayerViewModel : ObservableObject
 
         var aspect = Layer.WidthCm > 0 ? Layer.HeightCm / Layer.WidthCm : 1f;
         var mode = (DecalColourMode)Math.Clamp(ModeIndex, 0, 2);
-        var width = (float)Math.Clamp(double.IsFinite(Size) ? Size : Layer.WidthCm, 1, 500);
-        var height = keepShape ? width * aspect : (float)Math.Clamp(double.IsFinite(Height) ? Height : Layer.HeightCm, 1, 500);
+        var width = (float)Math.Clamp(double.IsFinite(Size) ? Size : Layer.WidthCm, 1, MaxSizeCm);
+        var height = keepShape ? width * aspect : (float)Math.Clamp(double.IsFinite(Height) ? Height : Layer.HeightCm, 1, MaxSizeCm);
         Layer = Layer with
         {
             WidthCm = width, HeightCm = height, RotationDeg = (float)Rotation,
-            Opacity = (float)Math.Clamp(Opacity / 100, 0, 1), FlipX = Flip, Mirror = Mirror, ColourMode = mode,
+            Opacity = (float)Math.Clamp(Opacity / 100, 0, 1), FlipX = Flip, Mirror = Mirror, Wrap = Wrap, ColourMode = mode,
             Colours = mode == DecalColourMode.Single ? [Regions[0].Hex] : [.. Regions.Select(r => r.Hex)],
             Palette = [.. Palette.Select(p => p.Hex)],
         };

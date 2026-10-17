@@ -20,7 +20,19 @@ public static class PaintBaker
     private static readonly float[] ToLinear = Enumerable.Range(0, 256).Select(i => SrgbToLinear(i / 255f)).ToArray();
     private static readonly byte[] ToSrgb = Enumerable.Range(0, 4096).Select(i => (byte)Math.Clamp(Math.Round(255 * LinearToSrgb(i / 4095f)), 0, 255)).ToArray();
 
-    /// <summary>Paints <paramref name="diffuse"/> (sRGB) with linear colours through <paramref name="mask"/> (any size; sampled nearest).</summary>
+    /// <summary>
+    /// Paints <paramref name="diffuse"/> through <paramref name="mask"/> where the game reads the mask: through the UV channel
+    /// <paramref name="parts"/> (the material's parts) give it (<see cref="PreviewPart.MaskUv"/>; the Laika's and the
+    /// WolfsWagen's bodies read it through UV1), redrawn in the diffuse's UV0 first (<see cref="DecalBaker.MaskInColourUv"/>).
+    /// </summary>
+    public static TextureImage Bake(TextureImage diffuse, TextureImage mask, Vector4 colourA, Vector4? colourB, IReadOnlyList<PreviewPart> parts)
+    {
+        ArgumentNullException.ThrowIfNull(diffuse);
+        ArgumentNullException.ThrowIfNull(parts);
+        return Bake(diffuse, DecalBaker.MaskInColourUv(mask, parts, diffuse.Width, diffuse.Height), colourA, colourB);
+    }
+
+    /// <summary>Paints <paramref name="diffuse"/> (sRGB) with linear colours through <paramref name="mask"/> (any size; sampled nearest) in the diffuse's own UVs.</summary>
     /// <param name="diffuse">The material's diffuse texture.</param>
     /// <param name="mask">The colour mask: green = paint, blue = paint in the second colour (<see cref="PaintRule"/>).</param>
     /// <param name="colourA">Main colour (linear).</param>

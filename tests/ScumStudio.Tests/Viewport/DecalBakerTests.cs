@@ -125,21 +125,6 @@ public sealed class DecalBakerTests(ITestOutputHelper output)
         Assert.Equal(["BPC_Car_Door_Right"], baked.SharedUv);
     }
 
-    [Fact]
-    public async Task AFullSizeBakeTakesUnderTwoSecondsOnAWorker()
-    {
-        var tube = new PreviewPart("Body", DecalMeshes.Cylinder(50, 100, 256, 64), null, FTransform.Identity);
-        var layer = new DecalLayer { Position = new Vector3(0, 50, 0), Normal = Vector3.UnitY, WidthCm = 60, HeightCm = 30, Mirror = true };
-        var design = DecalLibrary.Find("flames-3")!;
-        var image = layer.Render(design.Rasterize(512), design);
-        var diffuse = Image("D", 2048, 128, 128, 128);
-        var clock = Stopwatch.StartNew();
-        var baked = await Task.Run(() => DecalBaker.Bake(diffuse, Image("Mask", 1, 0, 255, 0), [tube], DecalBaker.Stamps(layer, image, tube.Transform)));
-        output.WriteLine($"2048 bake: {clock.ElapsedMilliseconds} ms");
-        Assert.Equal(2048, baked.Diffuse.Width);
-        if (!Ci.On) Assert.True(clock.ElapsedMilliseconds < 2000, $"{clock.ElapsedMilliseconds} ms");
-    }
-
     private static PreviewPart Part(string name, FTransform transform) =>
         new(name, DecalMeshes.Cylinder(50, 100, 128, 32), null, transform) { Attachment = "/Game/Cars/" + name };
 
@@ -148,7 +133,7 @@ public sealed class DecalBakerTests(ITestOutputHelper output)
 
     private static TextureImage Grey() => Image("D", Size, 128, 128, 128);
 
-    private static TextureImage Image(string name, int size, byte r, byte g, byte b)
+    internal static TextureImage Image(string name, int size, byte r, byte g, byte b)
     {
         var rgba = new byte[size * size * 4];
         for (var i = 0; i < rgba.Length; i += 4)
@@ -183,5 +168,28 @@ public sealed class DecalBakerTests(ITestOutputHelper output)
     {
         static float S(float v) => v <= 0.0031308f ? 12.92f * v : (1.055f * MathF.Pow(v, 1 / 2.4f)) - 0.055f;
         return new Vector3(S(linear.X), S(linear.Y), S(linear.Z));
+    }
+}
+
+/// <summary>
+/// The full-size bake's two-second budget, apart from the parallel tests: next to the real-file tests in one process it
+/// took 2,256 ms once (r37 merge check) and passed alone on the same build.
+/// </summary>
+[Collection(TimingCollection.Name)]
+public sealed class DecalBakerTimingTests(ITestOutputHelper output)
+{
+    [Fact]
+    public async Task AFullSizeBakeTakesUnderTwoSecondsOnAWorker()
+    {
+        var tube = new PreviewPart("Body", DecalMeshes.Cylinder(50, 100, 256, 64), null, FTransform.Identity);
+        var layer = new DecalLayer { Position = new Vector3(0, 50, 0), Normal = Vector3.UnitY, WidthCm = 60, HeightCm = 30, Mirror = true };
+        var design = DecalLibrary.Find("flames-3")!;
+        var image = layer.Render(design.Rasterize(512), design);
+        var diffuse = DecalBakerTests.Image("D", 2048, 128, 128, 128);
+        var clock = Stopwatch.StartNew();
+        var baked = await Task.Run(() => DecalBaker.Bake(diffuse, DecalBakerTests.Image("Mask", 1, 0, 255, 0), [tube], DecalBaker.Stamps(layer, image, tube.Transform)));
+        output.WriteLine($"2048 bake: {clock.ElapsedMilliseconds} ms");
+        Assert.Equal(2048, baked.Diffuse.Width);
+        if (!Ci.On) Assert.True(clock.ElapsedMilliseconds < 2000, $"{clock.ElapsedMilliseconds} ms");
     }
 }

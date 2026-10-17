@@ -182,4 +182,15 @@ public sealed class MaterialPickTests
         Assert.Null(MaterialInspector.PickNormal([T("Detail Normal", "T_Concrete_Detail_Normal_01"), T("B Material Normal Blend", "T_X_N")]));
         Assert.Null(MaterialInspector.PickNormal([T("Normal", "T_FlatNormal_Dummy_01")]));
     }
+
+    [Fact]
+    public void TheBaseBuildingUtilityMapIsNoColour()
+    {
+        // r37 (owner: white fences inside the hangar): the storage shelves' M_BB_Furniture_Master instance sets its blue
+        // layer's colour 'B_DR' and the packed 'UtilityTexture'; "Texture" took the utility map and drew them near white.
+        var picked = MaterialInspector.Pick(new([], [], [T("B_DR", "T_Storage_Shelf_D_0"), T("B_NHM", "T_Storage_Shelf_N_0"), T("UtilityTexture", "T_BB_Utility")]),
+            new([], [], [T("SquadEmblemBackgroundTexture", "T_three_diagonal_2")]));
+        Assert.Equal("/Game/T/T_Storage_Shelf_D_0.T_Storage_Shelf_D_0", picked.BaseColor);
+        Assert.Null(MaterialInspector.PickTexture([T("SquadEmblemBackgroundTexture", "T_three_diagonal_2"), T("UtilityTexture", "T_BB_Utility")]));
+    }
 }

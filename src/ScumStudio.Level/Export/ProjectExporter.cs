@@ -98,6 +98,25 @@ public sealed record ExportOptions
     /// wrong. Always on in the app and the command line; off only for tests that stage packages they know are partial.
     /// </summary>
     public bool Validate { get; init; } = true;
+
+    /// <summary>
+    /// One page's mod (owner 2026-10-17: each part as its own mod): the pak, its staging folder and its report are named after
+    /// it (<see cref="ModuleExport"/>), and the state passed in is that page's part (<see cref="ModuleExport.StateOf"/>). Null:
+    /// the whole project's pak.
+    /// </summary>
+    public ExportModule? Module { get; init; }
+
+    /// <summary>
+    /// The pak of the same project that ships a package this pak does not (package path → its file name), or null: the
+    /// package check accepts references to it and the result names that pak (<see cref="ValidationResult.Needs"/>).
+    /// </summary>
+    public Func<string, string?>? Elsewhere { get; init; }
+
+    /// <summary>
+    /// The server cook: the client's game files, for the package check (<see cref="ValidationOptions.Client"/>: a dedicated
+    /// server cook leaves out what only players' games use). Null for the client cook.
+    /// </summary>
+    public AssetCatalog? ClientCatalog { get; init; }
 }
 
 /// <summary>One rewritten level.</summary>
@@ -306,13 +325,14 @@ public sealed partial class ProjectExporter
         }
 
         var modName = SanitizeModName(options.ModName ?? projectName);
+        var module = options.Module;
         if (role == ProjectSourceRole.Client)
         {
             ClientSpawnReference = null;
         }
 
         var roleDirectory = Path.Combine(Path.GetFullPath(options.OutputDirectory), RoleFolder(role));
-        var staging = Path.Combine(roleDirectory, StagingFolderName);
+        var staging = Path.Combine(roleDirectory, module is { } part ? ModuleExport.StagingFolder(part) : StagingFolderName);
         ResetDirectory(staging);
 
         // Instances are read so instance edits can be located and verified in PerInstanceSMData.
@@ -479,7 +499,9 @@ public sealed partial class ProjectExporter
             CutTerrainHoles(catalog, state.TerrainHoles, staging, levels, warnings, cancellationToken);
         }
 
-        if ((volumes.Count > 0 || state.ChangedLevels.Any(Spawns.SpawnPlaces.IsStaticData))
+        // The Map page's mod writes the island's spawn places only when its placed objects clear some (with the Spawns page's
+        // edits too: one file holds both, and the Map pak loads above the Spawns pak); the Spawns page's mod writes its edits.
+        if ((volumes.Count > 0 || (module != ExportModule.Map && state.ChangedLevels.Any(Spawns.SpawnPlaces.IsStaticData)))
             && catalog.TryGetPackageFile(Spawns.SpawnPlaces.StaticDataPath, out var placesFile)
             && await WriteSpawnPlacesAsync(state, catalog, placesFile, staging, warnings, volumes, role, cancellationToken).ConfigureAwait(false) is { } placesAsset)
         {
@@ -552,7 +574,8 @@ public sealed partial class ProjectExporter
 
         // Imported mods (someone's pak unpacked into the project) go in too, under what this export rewrote from them. Their
         // registries are never shipped as they are: the staged one is stock plus their records of what ships plus ours.
-        var carried = ProjectMods.CarryInto(options.Mods, staging, catalog.ProjectName);
+        var carriedPackages = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var carried = ProjectMods.CarryInto(options.Mods, staging, catalog.ProjectName, carriedPackages);
         if (carried > 0)
         {
             _logger.LogInformation("Imported mods: {Files} file(s) carried into the pak.", carried);
@@ -571,13 +594,14 @@ public sealed partial class ProjectExporter
         // Every staged package is read back against the game's own before anything is packed: a pak the game could trip
         // over (loading, playing, leaving a server, closing the game) is never written (owner 2026-10-16). It runs after
         // the server's stubs are written, so it checks the packages that go into the pak.
-        var validation = Validate(staging, catalog, options, progress, cancellationToken);
+        var validation = Validate(staging, catalog, options, progress, cancellationToken, carriedPackages);
+        warnings.AddRange(validation?.Notes ?? []);
 
         string? pakPath = null;
         string? sigPath = null;
         if (options.WritePak)
         {
-            pakPath = Path.Combine(roleDirectory, PakFileName(modName, options.PakChunkIndex));
+            pakPath = Path.Combine(roleDirectory, module is { } own ? ModuleExport.PakFileName(modName, own, options.PakChunkIndex) : PakFileName(modName, options.PakChunkIndex));
             progress?.Report($"Packing {Path.GetFileName(pakPath)}");
             var writer = new PakWriter(new PakWriterOptions { Compression = options.Compression, IncludeAssetRegistry = writeRegistry }, _logger);
             await writer.WriteFromDirectoryAsync(staging, pakPath, null, cancellationToken).ConfigureAwait(false);
@@ -598,7 +622,7 @@ public sealed partial class ProjectExporter
         string? economyPath = null;
         var removedTraders = TraderPosts.RemovedStockTraders(state,
             documentCache.Where(d => d.Value is not null && TraderPosts.IsOutpostLevel(d.Key)).Select(d => d.Value!)).Order(StringComparer.OrdinalIgnoreCase).ToList();
-        if (!options.LeaveOutEconomy && EconomyFor(state, options.Economy, removedTraders) is { } economy)
+        if (!options.LeaveOutEconomy && module is null && EconomyFor(state, options.Economy, removedTraders) is { } economy) // a page's mod: the Economy page exports it
         {
             economyPath = economy.SaveTo(roleDirectory, withNote: true);
         }
@@ -606,7 +630,7 @@ public sealed partial class ProjectExporter
         var result = new ExportResult
         {
             Role = role,
-            ModName = modName,
+            ModName = module is { } named ? ModuleExport.ModName(modName, named) : modName,
             StagingDirectory = staging,
             PakPath = pakPath,
             SigPath = sigPath,
@@ -624,16 +648,18 @@ public sealed partial class ProjectExporter
             RemovedItemSpawners = removedSpawners,
             Validation = validation,
         };
-        var reportPath = Path.Combine(roleDirectory, ReportFileName);
-        await File.WriteAllTextAsync(reportPath, BuildReport(result, catalog), new UTF8Encoding(false), cancellationToken).ConfigureAwait(false);
+        var reportPath = Path.Combine(roleDirectory, module is { } reported ? ModuleExport.ReportFileName(reported) : ReportFileName);
+        await File.WriteAllTextAsync(reportPath, BuildReport(result, catalog, module, module is null ? null : ModuleExport.RegistryPakFileName(modName, options.PakChunkIndex)), new UTF8Encoding(false), cancellationToken).ConfigureAwait(false);
         return result with { ReportPath = reportPath };
     }
 
     /// <summary>
     /// Runs <see cref="ModPackageValidator"/> over <paramref name="staging"/> (unless <see cref="ExportOptions.Validate"/> is
     /// off) and throws <see cref="ModValidationException"/> when it found anything; the pak is then not written.
+    /// <paramref name="carried"/> names the packages carried from imported mods as their authors made them.
     /// </summary>
-    internal static ValidationResult? Validate(string staging, AssetCatalog catalog, ExportOptions options, IProgress<string>? progress, CancellationToken cancellationToken)
+    internal static ValidationResult? Validate(string staging, AssetCatalog catalog, ExportOptions options, IProgress<string>? progress, CancellationToken cancellationToken,
+        IReadOnlyDictionary<string, string>? carried = null)
     {
         if (!options.Validate)
         {
@@ -641,7 +667,11 @@ public sealed partial class ProjectExporter
         }
 
         progress?.Report("Checking every package");
-        var result = ModPackageValidator.Validate(staging, catalog, cancellationToken);
+        var result = ModPackageValidator.Validate(staging, catalog, new ValidationOptions
+        {
+            Client = options.ClientCatalog,
+            Carried = carried ?? new Dictionary<string, string>(),
+        }, cancellationToken, options.Elsewhere);
         var list = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(staging))!, ModPackageValidator.ListFileName);
         if (result.Passed)
         {
@@ -1734,7 +1764,7 @@ public sealed partial class ProjectExporter
         Directory.CreateDirectory(directory);
     }
 
-    private static string BuildReport(ExportResult result, AssetCatalog catalog)
+    private static string BuildReport(ExportResult result, AssetCatalog catalog, ExportModule? module = null, string? registryPak = null)
     {
         var sb = new StringBuilder();
         sb.Append("# ").Append(result.ModName).Append(" — ").Append(result.Role).AppendLine(" export");
@@ -1841,7 +1871,9 @@ public sealed partial class ProjectExporter
         sb.AppendLine();
         sb.AppendLine("## Install");
         sb.AppendLine();
-        sb.AppendLine(InstallNote(result.Role));
+        sb.AppendLine(module is not null
+            ? ModuleExport.InstallNote(result.Role, Path.GetFileName(result.PakPath) ?? result.ModName, registryPak ?? string.Empty, result.Validation?.Needs ?? [])
+            : InstallNote(result.Role));
         AppendTraderReport(sb, result);
         if (result.Warnings.Count > 0)
         {

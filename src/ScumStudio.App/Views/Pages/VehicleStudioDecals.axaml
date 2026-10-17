@@ -5,47 +5,7 @@
              x:Class="ScumStudio.App.Views.Pages.VehicleStudioDecals"
              x:DataType="vm:ModulePageViewModel">
   <DockPanel>
-    <StackPanel DockPanel.Dock="Top" Spacing="6" Margin="12,8,12,4">
-      <TextBlock Text="{Tr Studio.Decals.Title}" FontWeight="SemiBold" />
-      <TextBlock Text="{Tr Studio.Decals.Caption}" Classes="caption wrap" />
-      <ListBox x:Name="DecalCategoryList" Classes="chips" ItemsSource="{Binding DecalCategories}" SelectedItem="{Binding DecalCategory}"
-               ToolTip.Tip="{Tr Studio.Decals.Design.Tip}">
-        <ListBox.ItemsPanel>
-          <ItemsPanelTemplate><WrapPanel ItemSpacing="4" LineSpacing="4" /></ItemsPanelTemplate>
-        </ListBox.ItemsPanel>
-        <ListBox.ItemTemplate>
-          <DataTemplate x:DataType="vm:DecalCategoryItem">
-            <TextBlock Text="{Binding Label}" />
-          </DataTemplate>
-        </ListBox.ItemTemplate>
-      </ListBox>
-      <TextBlock x:Name="GameTattoosNote" Text="{Binding GameTattoosNote}" Classes="caption wrap" IsVisible="{Binding ShowGameTattoosNote}" />
-      <ScrollViewer MaxHeight="228" HorizontalScrollBarVisibility="Disabled">
-        <ItemsControl x:Name="DecalDesignGrid" ItemsSource="{Binding DecalDesigns}">
-          <ItemsControl.ItemsPanel>
-            <ItemsPanelTemplate><WrapPanel ItemSpacing="4" LineSpacing="4" /></ItemsPanelTemplate>
-          </ItemsControl.ItemsPanel>
-          <ItemsControl.ItemTemplate>
-            <DataTemplate x:DataType="vm:DecalDesignItem">
-              <Button Classes="ghost" Padding="4" ToolTip.Tip="{Tr Studio.Decals.Design.Tip}" CommandParameter="{Binding}"
-                      Command="{Binding $parent[UserControl].((vm:ModulePageViewModel)DataContext).ArmDecalCommand}">
-                <StackPanel Spacing="2" Width="64">
-                  <Image Source="{Binding Thumbnail}" Width="56" Height="56" Stretch="Uniform" />
-                  <TextBlock Text="{Binding Name}" Classes="caption" TextTrimming="CharacterEllipsis" HorizontalAlignment="Center" />
-                </StackPanel>
-              </Button>
-            </DataTemplate>
-          </ItemsControl.ItemTemplate>
-        </ItemsControl>
-      </ScrollViewer>
-      <Button x:Name="AddStickerButton" Classes="ghost" Command="{Binding AddStickerCommand}" ToolTip.Tip="{Tr Studio.Decals.AddSticker.Tip}">
-        <StackPanel Orientation="Horizontal" Spacing="6">
-          <c:GlyphIcon Kind="Icon.Image" IconSize="15" />
-          <TextBlock Text="{Tr Studio.Decals.AddSticker}" />
-        </StackPanel>
-      </Button>
-      <TextBlock x:Name="DecalKeysHint" Text="{Tr Studio.Decals.Keys}" Classes="caption wrap" ToolTip.Tip="{Tr Studio.Decals.Keys}" />
-    </StackPanel>
+    <!-- The Undo / Apply bar docks first, so it keeps its height at the smallest window (review 3.5.0: 1024x640 squashed it to 5 px); the library and the layers scroll together above it. -->
     <Border DockPanel.Dock="Bottom" Padding="12,8" BorderThickness="0,1,0,0" BorderBrush="{DynamicResource StrokeSubtleBrush}">
       <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Right">
         <Button Classes="ghost" Command="{Binding UndoDecalCommand}" IsEnabled="{Binding CanUndoDecal}" ToolTip.Tip="{Tr Studio.Decals.Undo.Tip}">
@@ -59,145 +19,192 @@
       </StackPanel>
     </Border>
     <ScrollViewer HorizontalScrollBarVisibility="Disabled">
-      <StackPanel Spacing="6" Margin="12,4,12,8">
-        <TextBlock Text="{Tr Studio.Decals.Empty}" Classes="caption wrap" IsVisible="{Binding !HasDecals}" />
-        <ListBox x:Name="DecalLayerList" Classes="plain" ItemsSource="{Binding DecalLayers}" SelectedItem="{Binding SelectedDecal}"
-                 IsVisible="{Binding HasDecals}" ToolTip.Tip="{Tr Studio.Decals.Caption}">
-          <ListBox.ItemTemplate>
-            <DataTemplate x:DataType="vm:DecalLayerViewModel">
-              <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="2">
-                <TextBlock Text="{Binding Name}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
-                <Button Grid.Column="1" Classes="ghost small" Padding="4,2" ToolTip.Tip="{Tr Studio.Decals.Hide.Tip}" CommandParameter="{Binding}"
-                        Command="{Binding $parent[UserControl].((vm:ModulePageViewModel)DataContext).ToggleDecalHiddenCommand}">
-                  <Panel>
-                    <c:GlyphIcon Kind="Icon.Eye" IconSize="13" IsVisible="{Binding !IsHidden}" />
-                    <c:GlyphIcon Kind="Icon.EyeOff" IconSize="13" IsVisible="{Binding IsHidden}" />
-                  </Panel>
-                </Button>
-                <Button Grid.Column="2" Classes="ghost small" Padding="4,2" ToolTip.Tip="{Tr Studio.Decals.Lock.Tip}" CommandParameter="{Binding}"
-                        Command="{Binding $parent[UserControl].((vm:ModulePageViewModel)DataContext).ToggleDecalLockedCommand}">
-                  <Panel>
-                    <c:GlyphIcon Kind="Icon.Lock" IconSize="13" Opacity="0.35" IsVisible="{Binding !IsLocked}" />
-                    <c:GlyphIcon Kind="Icon.Lock" IconSize="13" IsVisible="{Binding IsLocked}" />
-                  </Panel>
-                </Button>
-              </Grid>
-            </DataTemplate>
-          </ListBox.ItemTemplate>
-        </ListBox>
-        <WrapPanel ItemSpacing="4" LineSpacing="4" IsVisible="{Binding HasDecals}">
-          <Button Classes="ghost small" Command="{Binding MoveDecalUpCommand}" ToolTip.Tip="{Tr Studio.Decals.Up.Tip}">
-            <c:GlyphIcon Kind="Icon.ChevronDown" IconSize="14" RenderTransform="rotate(180deg)" />
-          </Button>
-          <Button Classes="ghost small" Command="{Binding MoveDecalDownCommand}" ToolTip.Tip="{Tr Studio.Decals.Down.Tip}">
-            <c:GlyphIcon Kind="Icon.ChevronDown" IconSize="14" />
-          </Button>
-          <Button Classes="ghost small" Command="{Binding DuplicateDecalCommand}" ToolTip.Tip="{Tr Studio.Decals.Duplicate.Tip}">
-            <c:GlyphIcon Kind="Icon.Copy" IconSize="14" />
-          </Button>
-          <Button Classes="ghost small" Command="{Binding DeleteDecalCommand}" ToolTip.Tip="{Tr Studio.Decals.Delete.Tip}">
-            <c:GlyphIcon Kind="Icon.Trash" IconSize="14" />
-          </Button>
-          <Button x:Name="MirrorSideButton" Classes="ghost small" Command="{Binding MirrorDecalToOtherSideCommand}" ToolTip.Tip="{Tr Studio.Decals.MirrorSide.Tip}">
-            <StackPanel Orientation="Horizontal" Spacing="4">
-              <c:GlyphIcon Kind="Icon.Scale" IconSize="13" />
-              <TextBlock Text="{Tr Studio.Decals.MirrorSide}" />
+      <StackPanel>
+        <StackPanel Spacing="6" Margin="12,8,12,4">
+          <TextBlock Text="{Tr Studio.Decals.Title}" FontWeight="SemiBold" />
+          <TextBlock Text="{Tr Studio.Decals.Caption}" Classes="caption wrap" />
+          <ListBox x:Name="DecalCategoryList" Classes="chips" ItemsSource="{Binding DecalCategories}" SelectedItem="{Binding DecalCategory}"
+                   ToolTip.Tip="{Tr Studio.Decals.Design.Tip}">
+            <ListBox.ItemsPanel>
+              <ItemsPanelTemplate><WrapPanel ItemSpacing="4" LineSpacing="4" /></ItemsPanelTemplate>
+            </ListBox.ItemsPanel>
+            <ListBox.ItemTemplate>
+              <DataTemplate x:DataType="vm:DecalCategoryItem">
+                <TextBlock Text="{Binding Label}" />
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+          <TextBlock x:Name="DecalDragHint" Text="{Tr Studio.Decals.DragHint}" Classes="muted caption wrap" TextWrapping="Wrap" ToolTip.Tip="{Tr Studio.Decals.DragHint.Tip}" />
+          <TextBlock x:Name="GameTattoosNote" Text="{Binding GameTattoosNote}" Classes="caption wrap" IsVisible="{Binding ShowGameTattoosNote}" />
+          <ScrollViewer MaxHeight="228" HorizontalScrollBarVisibility="Disabled">
+            <ItemsControl x:Name="DecalDesignGrid" ItemsSource="{Binding DecalDesigns}">
+              <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate><WrapPanel ItemSpacing="4" LineSpacing="4" /></ItemsPanelTemplate>
+              </ItemsControl.ItemsPanel>
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:DecalDesignItem">
+                  <Button Classes="ghost" Padding="4" ToolTip.Tip="{Tr Studio.Decals.Design.Tip}" CommandParameter="{Binding}"
+                          Command="{Binding $parent[UserControl].((vm:ModulePageViewModel)DataContext).ArmDecalCommand}">
+                    <StackPanel Spacing="2" Width="64">
+                      <Image Source="{Binding Thumbnail}" Width="56" Height="56" Stretch="Uniform" />
+                      <TextBlock Text="{Binding Name}" Classes="caption" TextTrimming="CharacterEllipsis" HorizontalAlignment="Center" />
+                    </StackPanel>
+                  </Button>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </ScrollViewer>
+          <Button x:Name="AddStickerButton" Classes="ghost" Command="{Binding AddStickerCommand}" ToolTip.Tip="{Tr Studio.Decals.AddSticker.Tip}">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <c:GlyphIcon Kind="Icon.Image" IconSize="15" />
+              <TextBlock Text="{Tr Studio.Decals.AddSticker}" />
             </StackPanel>
           </Button>
-        </WrapPanel>
-        <ContentControl Content="{Binding SelectedDecal}">
-          <ContentControl.ContentTemplate>
-            <DataTemplate x:DataType="vm:DecalLayerViewModel">
-              <StackPanel Spacing="6">
-                <Grid ColumnDefinitions="80,*,72" ColumnSpacing="6">
-                  <TextBlock Text="{Tr Studio.Decals.Size}" Classes="caption" VerticalAlignment="Center" />
-                  <Slider Grid.Column="1" Minimum="5" Maximum="300" Value="{Binding Size}" SmallChange="1" LargeChange="10" ToolTip.Tip="{Tr Studio.Decals.Size.Tip}" />
-                  <NumericUpDown Grid.Column="2" Value="{Binding Size}" Minimum="1" Maximum="500" Increment="1" FormatString="0.#" ShowButtonSpinner="False"
-                                 ToolTip.Tip="{Tr Studio.Decals.Width.Tip}" />
+          <TextBlock x:Name="DecalKeysHint" Text="{Tr Studio.Decals.Keys}" Classes="caption wrap" ToolTip.Tip="{Tr Studio.Decals.Keys}" />
+        </StackPanel>
+        <StackPanel Spacing="6" Margin="12,4,12,8">
+          <TextBlock Text="{Tr Studio.Decals.Empty}" Classes="caption wrap" IsVisible="{Binding !HasDecals}" />
+          <ListBox x:Name="DecalLayerList" Classes="plain" ItemsSource="{Binding DecalLayers}" SelectedItem="{Binding SelectedDecal}"
+                   IsVisible="{Binding HasDecals}" ToolTip.Tip="{Tr Studio.Decals.Caption}">
+            <ListBox.ItemTemplate>
+              <DataTemplate x:DataType="vm:DecalLayerViewModel">
+                <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="2">
+                  <TextBlock Text="{Binding Name}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                  <Button Grid.Column="1" Classes="ghost small" Padding="4,2" ToolTip.Tip="{Tr Studio.Decals.Hide.Tip}" CommandParameter="{Binding}"
+                          Command="{Binding $parent[UserControl].((vm:ModulePageViewModel)DataContext).ToggleDecalHiddenCommand}">
+                    <Panel>
+                      <c:GlyphIcon Kind="Icon.Eye" IconSize="13" IsVisible="{Binding !IsHidden}" />
+                      <c:GlyphIcon Kind="Icon.EyeOff" IconSize="13" IsVisible="{Binding IsHidden}" />
+                    </Panel>
+                  </Button>
+                  <Button Grid.Column="2" Classes="ghost small" Padding="4,2" ToolTip.Tip="{Tr Studio.Decals.Lock.Tip}" CommandParameter="{Binding}"
+                          Command="{Binding $parent[UserControl].((vm:ModulePageViewModel)DataContext).ToggleDecalLockedCommand}">
+                    <Panel>
+                      <c:GlyphIcon Kind="Icon.Lock" IconSize="13" Opacity="0.35" IsVisible="{Binding !IsLocked}" />
+                      <c:GlyphIcon Kind="Icon.Lock" IconSize="13" IsVisible="{Binding IsLocked}" />
+                    </Panel>
+                  </Button>
                 </Grid>
-                <Grid ColumnDefinitions="80,*,72" ColumnSpacing="6">
-                  <TextBlock Text="{Tr Studio.Decals.Height}" Classes="caption" VerticalAlignment="Center" />
-                  <NumericUpDown Grid.Column="2" Value="{Binding Height}" Minimum="1" Maximum="500" Increment="1" FormatString="0.#" ShowButtonSpinner="False"
-                                 ToolTip.Tip="{Tr Studio.Decals.Height.Tip}" />
-                </Grid>
-                <Grid ColumnDefinitions="80,*,72" ColumnSpacing="6">
-                  <TextBlock Text="{Tr Studio.Decals.Rotation}" Classes="caption" VerticalAlignment="Center" />
-                  <Slider Grid.Column="1" Minimum="-180" Maximum="180" Value="{Binding Rotation}" SmallChange="1" LargeChange="15" ToolTip.Tip="{Tr Studio.Decals.Rotation.Tip}" />
-                  <NumericUpDown Grid.Column="2" Value="{Binding Rotation}" Minimum="-180" Maximum="180" Increment="1" FormatString="0.#" ShowButtonSpinner="False"
-                                 ToolTip.Tip="{Tr Studio.Decals.Rotation.Tip}" />
-                </Grid>
-                <Grid ColumnDefinitions="80,*,*,*" ColumnSpacing="4">
-                  <TextBlock Text="{Tr Studio.Decals.Position}" Classes="caption" VerticalAlignment="Center" />
-                  <NumericUpDown Grid.Column="1" Value="{Binding X}" Increment="1" FormatString="0.#" ShowButtonSpinner="False" ToolTip.Tip="{Tr Studio.Decals.Position.Tip}" />
-                  <NumericUpDown Grid.Column="2" Value="{Binding Y}" Increment="1" FormatString="0.#" ShowButtonSpinner="False" ToolTip.Tip="{Tr Studio.Decals.Position.Tip}" />
-                  <NumericUpDown Grid.Column="3" Value="{Binding Z}" Increment="1" FormatString="0.#" ShowButtonSpinner="False" ToolTip.Tip="{Tr Studio.Decals.Position.Tip}" />
-                </Grid>
-                <Grid ColumnDefinitions="80,*,44" ColumnSpacing="6">
-                  <TextBlock Text="{Tr Studio.Decals.Opacity}" Classes="caption" VerticalAlignment="Center" />
-                  <Slider Grid.Column="1" Minimum="0" Maximum="100" Value="{Binding Opacity}" SmallChange="1" LargeChange="10" ToolTip.Tip="{Tr Studio.Decals.Opacity.Tip}" />
-                  <TextBlock Grid.Column="2" Text="{Binding Opacity, StringFormat={}{0:0} %}" Classes="caption mono" VerticalAlignment="Center" HorizontalAlignment="Right" />
-                </Grid>
-                <WrapPanel ItemSpacing="12">
-                  <CheckBox IsChecked="{Binding Flip}" ToolTip.Tip="{Tr Studio.Decals.Flip.Tip}">
-                    <TextBlock Text="{Tr Studio.Decals.Flip}" />
-                  </CheckBox>
-                  <CheckBox IsChecked="{Binding Mirror}" ToolTip.Tip="{Tr Studio.Decals.Mirror.Tip}">
-                    <TextBlock Text="{Tr Studio.Decals.Mirror}" />
-                  </CheckBox>
-                </WrapPanel>
-                <ComboBox ItemsSource="{x:Static vm:DecalLayerViewModel.Modes}" SelectedIndex="{Binding ModeIndex}" IsVisible="{Binding !IsSticker}"
-                          HorizontalAlignment="Stretch" ToolTip.Tip="{Tr Studio.Decals.Mode.Tip}" />
-                <ItemsControl ItemsSource="{Binding ShownRegions}" IsVisible="{Binding ShowsRegions}">
-                  <ItemsControl.ItemTemplate>
-                    <DataTemplate x:DataType="vm:DecalColourItem">
-                      <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,2">
-                        <ColorPicker Color="{Binding Colour}" IsAlphaEnabled="False" IsAlphaVisible="False" ToolTip.Tip="{Tr Studio.Decals.Region.Tip}" />
-                        <TextBlock Text="{Binding Label}" VerticalAlignment="Center" />
-                      </StackPanel>
-                    </DataTemplate>
-                  </ItemsControl.ItemTemplate>
-                </ItemsControl>
-                <StackPanel Spacing="6" IsVisible="{Binding IsPalette}">
-                  <TextBlock Text="{Tr Studio.Decals.Palette}" Classes="caption" />
-                  <ItemsControl ItemsSource="{Binding Palette}">
-                    <ItemsControl.ItemsPanel>
-                      <ItemsPanelTemplate><WrapPanel ItemSpacing="4" LineSpacing="4" /></ItemsPanelTemplate>
-                    </ItemsControl.ItemsPanel>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+          <WrapPanel ItemSpacing="4" LineSpacing="4" IsVisible="{Binding HasDecals}">
+            <Button Classes="ghost small" Command="{Binding MoveDecalUpCommand}" ToolTip.Tip="{Tr Studio.Decals.Up.Tip}">
+              <c:GlyphIcon Kind="Icon.ChevronDown" IconSize="14" RenderTransform="rotate(180deg)" />
+            </Button>
+            <Button Classes="ghost small" Command="{Binding MoveDecalDownCommand}" ToolTip.Tip="{Tr Studio.Decals.Down.Tip}">
+              <c:GlyphIcon Kind="Icon.ChevronDown" IconSize="14" />
+            </Button>
+            <Button Classes="ghost small" Command="{Binding DuplicateDecalCommand}" ToolTip.Tip="{Tr Studio.Decals.Duplicate.Tip}">
+              <c:GlyphIcon Kind="Icon.Copy" IconSize="14" />
+            </Button>
+            <Button Classes="ghost small" Command="{Binding DeleteDecalCommand}" ToolTip.Tip="{Tr Studio.Decals.Delete.Tip}">
+              <c:GlyphIcon Kind="Icon.Trash" IconSize="14" />
+            </Button>
+            <Button x:Name="MirrorSideButton" Classes="ghost small" Command="{Binding MirrorDecalToOtherSideCommand}" ToolTip.Tip="{Tr Studio.Decals.MirrorSide.Tip}">
+              <StackPanel Orientation="Horizontal" Spacing="4">
+                <c:GlyphIcon Kind="Icon.Scale" IconSize="13" />
+                <TextBlock Text="{Tr Studio.Decals.MirrorSide}" />
+              </StackPanel>
+            </Button>
+          </WrapPanel>
+          <ContentControl Content="{Binding SelectedDecal}">
+            <ContentControl.ContentTemplate>
+              <DataTemplate x:DataType="vm:DecalLayerViewModel">
+                <StackPanel Spacing="6">
+                  <Grid ColumnDefinitions="80,*,72" ColumnSpacing="6">
+                    <TextBlock Text="{Tr Studio.Decals.Size}" Classes="caption" VerticalAlignment="Center" />
+                    <Slider Grid.Column="1" Minimum="5" Maximum="{Binding SizeSliderMax}" Value="{Binding Size}" SmallChange="1" LargeChange="10" ToolTip.Tip="{Tr Studio.Decals.Size.Tip}" />
+                    <NumericUpDown Grid.Column="2" Value="{Binding Size}" Minimum="1" Maximum="2000" Increment="1" FormatString="0.#" ShowButtonSpinner="False"
+                                   ToolTip.Tip="{Tr Studio.Decals.Width.Tip}" />
+                  </Grid>
+                  <Grid ColumnDefinitions="80,*,72" ColumnSpacing="6">
+                    <TextBlock Text="{Tr Studio.Decals.Height}" Classes="caption" VerticalAlignment="Center" />
+                    <NumericUpDown Grid.Column="2" Value="{Binding Height}" Minimum="1" Maximum="2000" Increment="1" FormatString="0.#" ShowButtonSpinner="False"
+                                   ToolTip.Tip="{Tr Studio.Decals.Height.Tip}" />
+                  </Grid>
+                  <Grid ColumnDefinitions="80,*,72" ColumnSpacing="6">
+                    <TextBlock Text="{Tr Studio.Decals.Rotation}" Classes="caption" VerticalAlignment="Center" />
+                    <Slider Grid.Column="1" Minimum="-180" Maximum="180" Value="{Binding Rotation}" SmallChange="1" LargeChange="15" ToolTip.Tip="{Tr Studio.Decals.Rotation.Tip}" />
+                    <NumericUpDown Grid.Column="2" Value="{Binding Rotation}" Minimum="-180" Maximum="180" Increment="1" FormatString="0.#" ShowButtonSpinner="False"
+                                   ToolTip.Tip="{Tr Studio.Decals.Rotation.Tip}" />
+                  </Grid>
+                  <Grid ColumnDefinitions="80,*,*,*" ColumnSpacing="4">
+                    <TextBlock Text="{Tr Studio.Decals.Position}" Classes="caption" VerticalAlignment="Center" />
+                    <NumericUpDown Grid.Column="1" Value="{Binding X}" Increment="1" FormatString="0.#" ShowButtonSpinner="False" ToolTip.Tip="{Tr Studio.Decals.Position.Tip}" />
+                    <NumericUpDown Grid.Column="2" Value="{Binding Y}" Increment="1" FormatString="0.#" ShowButtonSpinner="False" ToolTip.Tip="{Tr Studio.Decals.Position.Tip}" />
+                    <NumericUpDown Grid.Column="3" Value="{Binding Z}" Increment="1" FormatString="0.#" ShowButtonSpinner="False" ToolTip.Tip="{Tr Studio.Decals.Position.Tip}" />
+                  </Grid>
+                  <Grid ColumnDefinitions="80,*,44" ColumnSpacing="6">
+                    <TextBlock Text="{Tr Studio.Decals.Opacity}" Classes="caption" VerticalAlignment="Center" />
+                    <Slider Grid.Column="1" Minimum="0" Maximum="100" Value="{Binding Opacity}" SmallChange="1" LargeChange="10" ToolTip.Tip="{Tr Studio.Decals.Opacity.Tip}" />
+                    <TextBlock Grid.Column="2" Text="{Binding Opacity, StringFormat={}{0:0} %}" Classes="caption mono" VerticalAlignment="Center" HorizontalAlignment="Right" />
+                  </Grid>
+                  <WrapPanel ItemSpacing="12">
+                    <CheckBox IsChecked="{Binding Flip}" ToolTip.Tip="{Tr Studio.Decals.Flip.Tip}">
+                      <TextBlock Text="{Tr Studio.Decals.Flip}" />
+                    </CheckBox>
+                    <CheckBox IsChecked="{Binding Mirror}" ToolTip.Tip="{Tr Studio.Decals.Mirror.Tip}">
+                      <TextBlock Text="{Tr Studio.Decals.Mirror}" />
+                    </CheckBox>
+                    <CheckBox x:Name="DecalWrapBox" IsChecked="{Binding Wrap}" ToolTip.Tip="{Tr Studio.Decals.Wrap.Tip}">
+                      <TextBlock Text="{Tr Studio.Decals.Wrap}" />
+                    </CheckBox>
+                  </WrapPanel>
+                  <ComboBox ItemsSource="{x:Static vm:DecalLayerViewModel.Modes}" SelectedIndex="{Binding ModeIndex}" IsVisible="{Binding !IsSticker}"
+                            HorizontalAlignment="Stretch" ToolTip.Tip="{Tr Studio.Decals.Mode.Tip}" />
+                  <ItemsControl ItemsSource="{Binding ShownRegions}" IsVisible="{Binding ShowsRegions}">
                     <ItemsControl.ItemTemplate>
                       <DataTemplate x:DataType="vm:DecalColourItem">
-                        <ColorPicker Color="{Binding Colour}" IsAlphaEnabled="False" IsAlphaVisible="False" ToolTip.Tip="{Tr Studio.Decals.Palette.Tip}" />
+                        <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,2">
+                          <ColorPicker Color="{Binding Colour}" IsAlphaEnabled="False" IsAlphaVisible="False" ToolTip.Tip="{Tr Studio.Decals.Region.Tip}" />
+                          <TextBlock Text="{Binding Label}" VerticalAlignment="Center" />
+                        </StackPanel>
                       </DataTemplate>
                     </ItemsControl.ItemTemplate>
                   </ItemsControl>
-                  <StackPanel Orientation="Horizontal" Spacing="8">
-                    <Button Classes="ghost small" Content="{Tr Studio.Decals.Shuffle}" ToolTip.Tip="{Tr Studio.Decals.Shuffle.Tip}"
-                            Command="{Binding $parent[UserControl].((vm:ModulePageViewModel)DataContext).ShuffleDecalCommand}" />
-                    <TextBlock Text="{Binding SeedText}" Classes="caption mono" VerticalAlignment="Center" />
+                  <StackPanel Spacing="6" IsVisible="{Binding IsPalette}">
+                    <TextBlock Text="{Tr Studio.Decals.Palette}" Classes="caption" />
+                    <ItemsControl ItemsSource="{Binding Palette}">
+                      <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate><WrapPanel ItemSpacing="4" LineSpacing="4" /></ItemsPanelTemplate>
+                      </ItemsControl.ItemsPanel>
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:DecalColourItem">
+                          <ColorPicker Color="{Binding Colour}" IsAlphaEnabled="False" IsAlphaVisible="False" ToolTip.Tip="{Tr Studio.Decals.Palette.Tip}" />
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                      <Button Classes="ghost small" Content="{Tr Studio.Decals.Shuffle}" ToolTip.Tip="{Tr Studio.Decals.Shuffle.Tip}"
+                              Command="{Binding $parent[UserControl].((vm:ModulePageViewModel)DataContext).ShuffleDecalCommand}" />
+                      <TextBlock Text="{Binding SeedText}" Classes="caption mono" VerticalAlignment="Center" />
+                    </StackPanel>
                   </StackPanel>
                 </StackPanel>
-              </StackPanel>
-            </DataTemplate>
-          </ContentControl.ContentTemplate>
-        </ContentControl>
-        <Separator Margin="0,4" />
-        <TextBlock Text="{Tr Studio.Decals.Presets}" FontWeight="SemiBold" />
-        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
-          <TextBox x:Name="DecalPresetNameBox" Text="{Binding DecalPresetName}" Watermark="{Tr Studio.Decals.PresetName}" ToolTip.Tip="{Tr Studio.Decals.PresetName.Tip}" />
-          <Button x:Name="SaveDecalPresetButton" Grid.Column="1" Classes="ghost small" Content="{Tr Studio.Decals.SavePreset}" Command="{Binding SaveDecalPresetCommand}"
-                  IsEnabled="{Binding HasDecals}" ToolTip.Tip="{Tr Studio.Decals.SavePreset.Tip}" />
-        </Grid>
-        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
-          <ComboBox x:Name="DecalPresetPicker" ItemsSource="{Binding DecalPresets}" SelectedItem="{Binding SelectedDecalPreset}" HorizontalAlignment="Stretch"
-                    PlaceholderText="{Tr Studio.Decals.Presets}" ToolTip.Tip="{Tr Studio.Decals.PresetPick.Tip}" />
-          <Button x:Name="ApplyDecalPresetButton" Grid.Column="1" Classes="ghost small" Content="{Tr Studio.Decals.ApplyPreset}" Command="{Binding ApplyDecalPresetCommand}"
-                  IsEnabled="{Binding SelectedDecalPreset, Converter={x:Static ObjectConverters.IsNotNull}}" ToolTip.Tip="{Tr Studio.Decals.ApplyPreset.Tip}" />
-        </Grid>
-        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
-          <ComboBox x:Name="DecalSourcePicker" ItemsSource="{Binding DecalSourceClones}" SelectedItem="{Binding SelectedDecalSource}" HorizontalAlignment="Stretch"
-                    PlaceholderText="{Tr Studio.Decals.CopyFrom}" ToolTip.Tip="{Tr Studio.Decals.ClonePick.Tip}" />
-          <Button x:Name="CopyDecalsButton" Grid.Column="1" Classes="ghost small" Content="{Tr Studio.Decals.CopyFrom}" Command="{Binding CopyDecalsFromCloneCommand}"
-                  IsEnabled="{Binding SelectedDecalSource, Converter={x:Static ObjectConverters.IsNotNull}}" ToolTip.Tip="{Tr Studio.Decals.CopyFrom.Tip}" />
-        </Grid>
+              </DataTemplate>
+            </ContentControl.ContentTemplate>
+          </ContentControl>
+          <Separator Margin="0,4" />
+          <TextBlock Text="{Tr Studio.Decals.Presets}" FontWeight="SemiBold" />
+          <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
+            <TextBox x:Name="DecalPresetNameBox" Text="{Binding DecalPresetName}" Watermark="{Tr Studio.Decals.PresetName}" ToolTip.Tip="{Tr Studio.Decals.PresetName.Tip}" />
+            <Button x:Name="SaveDecalPresetButton" Grid.Column="1" Classes="ghost small" Content="{Tr Studio.Decals.SavePreset}" Command="{Binding SaveDecalPresetCommand}"
+                    IsEnabled="{Binding HasDecals}" ToolTip.Tip="{Tr Studio.Decals.SavePreset.Tip}" />
+          </Grid>
+          <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
+            <ComboBox x:Name="DecalPresetPicker" ItemsSource="{Binding DecalPresets}" SelectedItem="{Binding SelectedDecalPreset}" HorizontalAlignment="Stretch"
+                      PlaceholderText="{Tr Studio.Decals.Presets}" ToolTip.Tip="{Tr Studio.Decals.PresetPick.Tip}" />
+            <Button x:Name="ApplyDecalPresetButton" Grid.Column="1" Classes="ghost small" Content="{Tr Studio.Decals.ApplyPreset}" Command="{Binding ApplyDecalPresetCommand}"
+                    IsEnabled="{Binding SelectedDecalPreset, Converter={x:Static ObjectConverters.IsNotNull}}" ToolTip.Tip="{Tr Studio.Decals.ApplyPreset.Tip}" />
+          </Grid>
+          <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
+            <ComboBox x:Name="DecalSourcePicker" ItemsSource="{Binding DecalSourceClones}" SelectedItem="{Binding SelectedDecalSource}" HorizontalAlignment="Stretch"
+                      PlaceholderText="{Tr Studio.Decals.CopyFrom}" ToolTip.Tip="{Tr Studio.Decals.ClonePick.Tip}" />
+            <Button x:Name="CopyDecalsButton" Grid.Column="1" Classes="ghost small" Content="{Tr Studio.Decals.CopyFrom}" Command="{Binding CopyDecalsFromCloneCommand}"
+                    IsEnabled="{Binding SelectedDecalSource, Converter={x:Static ObjectConverters.IsNotNull}}" ToolTip.Tip="{Tr Studio.Decals.CopyFrom.Tip}" />
+          </Grid>
+        </StackPanel>
       </StackPanel>
     </ScrollViewer>
   </DockPanel>

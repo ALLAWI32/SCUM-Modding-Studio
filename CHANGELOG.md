@@ -3,6 +3,190 @@
 All notable changes are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [semantic versioning](https://semver.org/).
 
+## [3.5.0] - 2026-10-17
+
+### New
+- **Spawns: full control of each spawn place** (owner: "click a single vehicle spawn point on the map, see it, drag it,
+  rotate it, change what it spawns, delete it, show it on the Map"): the Spawns map has a *Select point* tool. A click picks
+  one vehicle point, zombie / NPC point, threat zone or hunting area and a card shows its name, coordinates, which way it
+  faces and what it spawns. Drag it to move it (it goes onto the terrain where the island's terrain is known, 20 cm above it
+  for a vehicle; indoor points keep their height; *Snap to the ground* turns this off), nudge it with the arrow keys (1 m,
+  Shift 10 m, Ctrl 10 cm), turn it by dragging its arrow or with Q / E (15°, Shift 1°), type exact X / Y / height / turn, *Put on the ground*, pick
+  what it spawns, or delete it (Delete key). *Show on the Map* opens the Map page with the camera on that place and the
+  place selected (its sector loads when it is not shown yet). The map now zooms in to 2 cm per pixel, draws a metre grid
+  close in, a scale bar, and the cursor's sector and coordinates. Every change is one undo step and Export mod writes it
+  like the other spawn edits; checked on the game's files by moving a real vehicle spawn point, exporting, and reading the
+  new position back from the written island data. Whether a vehicle then appears there, facing that way, only the game
+  shows. The map's *Move* tool is now called *Pan* (it moves the view, not a place).
+- **Each page as its own mod** (owner): the Vehicles, Weapons, Items and Spawns pages have *Export this page*, the
+  Craftables page has step 6 *Export craftables mod*, the Map has *Export map only* under its History (its header's *Export
+  mod* still builds the whole project in one pak) and the Economy page keeps its own *Export* (EconomyOverride.json, a server
+  file, no pak). Each one writes only that page's changes as `pakchunk<N+k>-<Name>-<Page>_P.pak` for the client and, with the
+  server folder set, the server, each with its `.sig`, and runs the package check on every pak. The game reads one
+  `AssetRegistry.bin`, the highest pak's: every page pak carries its own records (it works alone), and the
+  `pakchunk<N+19>-<Name>-Registry_P.pak` written after every page export carries the game's records plus those of every
+  page pak in the export folder, so page paks installed together keep every clone known to the game (proven with the real
+  game files: a Vehicles, a Weapons and a Craftables pak installed together). Each report's Install section says which
+  paks to copy and which other page pak it uses (a Map pak placing a clone of the Items pak).
+- **Craftables page in six steps** (owner: "too many options, unclear where it shows up, I could not find how to export"):
+  1 what players get (pick from the game in 3D with *Add from the game*), 2 where it shows up (base building menu, crafting
+  menu or both, with one sentence naming the menu and its section, e.g. "base BUILDING menu, section Furniture > Chairs"),
+  3 ingredients (*Add ingredient*, *Fill in for me* from a material), 4 the picture in the menu, 5 file names and folder,
+  6 Export. The station, electricity and the copied game object's values are folded under *More options*; every control
+  has a short tooltip.
+
+### Fixes
+- **Objects the Map drew pure white are painted again** (owner: "the light-tower generator trailer, a white trailer, white
+  fences inside a hangar are white on the Map but textured in the game"): many of the game's colour textures are streaming
+  virtual textures, kept as tiles instead of regular mips, and the Map could not read them, so it drew those objects in
+  their material's plain white. It now puts them together from their tiles: the light towers and generator trailers,
+  1,293 textures of the game in all, show their paint. The storage shelves in the hangars took a packed utility map for
+  their colour and are drawn in their own paint now too.
+- **No more white and blue blotches over the far land** (owner, from high up over the forests): the game's own far view
+  of towns, outposts and forests drew most of its pieces white for the same reason (967 of its 1,043 textures). From high
+  up the far land is green with its forests, towns and coast, as the game shows it.
+- **No more brown puddles with dark jagged rims on the ground** (owner, near the coast): on a coast tile the close-up
+  ground detail went to the seabed under the water, so small patches painted on the land (dry grass in an outpost's
+  gravel) were drawn flat and cut out with a dark ragged edge. The detail now goes to what is painted on the land and
+  fades out softly where it ends. Gravel roads and dirt runways, which the game only paints into the ground, are now two
+  soft wheel tracks over the ground instead of a flat grey or brown sheet, and *Fit to ground* over them sets things on
+  the ground where the game draws the road (3.4.0 set them on the hidden road piece, up to 30 cm above it).
+- **No white diamond inside the B_4 hangar, no white walls by the outpost** (check of the Map at Game-like): the diamond high
+  on the hangar's back wall was the Map's own pin for a zone the game never draws (SCUM's `VolumeZone`, a brush and nothing
+  else); an actor whose root is a brush is now taken for the volume it is, with no pin. Four engine cubes by the B_4 outpost
+  (white walls 27 m and 5 m long) are hidden in the game on the actor itself (*Actor Hidden In Game*), which the Map did not
+  read; actors hidden in the game are no longer drawn.
+- **Roads in the far view are whole again** (check of the Map at Game-like): from high up the roads were pale broken dashes.
+  Each landscape tile was drawn twice, by the island's terrain and by the game's far model of the tile (its ground under one
+  island-wide texture, too blurred to show a road), each poking through the other. A tile's far model now keeps only its
+  distant forest; the ground is the terrain's, roads and all.
+- **No flat brown smudge on the B_4 airfield** (check of the Map at Game-like): a ground component with more paint layers on
+  its land than the four the close-up ground draws left the smallest patch without grain (dry grass in front of the hangar,
+  a blurred brown sheet; no road piece lies there). The four now go to the layers that leave the least ground without
+  grain, and the ground they leave takes the grain of a fifth layer, the largest patch left.
+- A project with a vehicle or item clone **and** craftables could not be exported: the Craftables pak's registry keeps
+  the project pak's clone records, and the package check reported them as missing. It now finds them in the project pak.
+- A map edit that deletes objects and copies as many others in the **same level** (delete one fence, duplicate another)
+  could not be exported: the level's list of objects keeps its length then, every object after the deleted one moves up one
+  place, and the package check read each moved place as a reference to another object ("…points at …; the game's points
+  at …, which is still there"), so the export was refused. The list is a set to the game; the check now holds only its
+  first place (the level's settings) to the game's and still checks every listed object (once, of this level, not deleted,
+  none of the game's left out). Checked on the game's files: the whole project's paks and every page's pak (Spawns, Map,
+  Vehicles, Weapons, Items, Craftables, Registry) of a project with edits on every page pass the check.
+- **"It won't export": BP_Prisoner imports PP_LowLightVision_Inst** (report from a project called ServerMods, 3.4.0: "I
+  have only cloned 2 vehicles and added stickers"): cloned cars and stickers never put BP_Prisoner in the mod (checked on the
+  real game with the Rager, Laika, WolfsWagen and the Kinglet Duster plane). The same two cars then got no server pak on a
+  real dedicated server: its game files keep every texture without pixels (a server never draws), writing a sticker into
+  the server's copy failed, and the package check refused the server pak for the car materials that use the stickers. A
+  new texture's server copy is now the server's own texture under the new name; checked with a real dedicated server's
+  files, the Rager and the Laika with stickers get both paks from *Export mod* and from the Vehicles page's *Export this
+  page*, each passing the check. A prisoner like that can only come
+  in with an imported mod, one made before SCUM's update that removed `PP_LowLightVision_Inst`; when the game files the app
+  had open had not read that mod, the package check held the mod's prisoner to the game's own and stopped the export. Now the export always reads the
+  imported mods it carries (it opens the game files again when an earlier re-read failed), and a package carried from an
+  imported mod is held to the mod as its author made it: a reference to something this game no longer has is a warning
+  that names the mod ("made for another version of SCUM; ask its author for an update"), not a stop. It still stops when
+  the mod's objects are built from what is gone (their class or template), and a broken import the export writes itself
+  still stops it. The server's pak is checked knowing the client's game files: what only players' games use (the
+  dedicated server's cook leaves it out) is no longer a hole there. Whether the out-of-date mod itself behaves in the
+  game is up to that mod.
+- **Laika and WolfsWagen: paint and stickers land where you put them** (bug report: "the Laika and WolfsWagen textures
+  aren't syncing to the body correctly, and if you place a sticker on them anywhere it gets distorted and moved around the
+  cars"): SCUM's car material reads the colour texture through the body's first UV set but the colour mask through the set
+  its *Color Mask UV Channel* names, and that is the second one on the Laika and the WolfsWagen (the Rager uses the first for
+  both). The studio read both through the first: the 3D view painted the wrong places, and a baked sticker took the paint
+  off somewhere else on the car, so in game it stayed hidden under the paint while bare patches showed on other panels. The
+  3D view, the live sticker preview and *Apply decals* now read and write the mask through its own UV set. A sticker is
+  pressed onto the panel you click and runs on onto neighbouring panels only where their texture space is their own; when
+  another place of the car uses the same texels (the left and right front doors of all three cars share some), a warning
+  says once, right after you place or move the sticker, that it shows there too. Checked on the game's files: a sticker on a
+  front door and on the hood of each car changes what the game's paint rule shows only under the sticker (3.4.0: the
+  Laika's door sticker showed on none of its 3,873 sample points and changed 6,119 points on the body's other side and roof);
+  the Rager bakes as before. How it looks under the game's own lighting only the game shows.
+- **Page paks installed together keep every page's changes** (check before release, on the game's files): the Vehicles,
+  Weapons and Items paks each sell their clones in their own copy of the traders' table, and the highest one hid the
+  others' rows, so the traders stopped selling those clones; the Registry pak now carries that table with the rows and
+  prices of every page pak in the folder. The Craftables page's pak, which gives an ingredient a tag in the item's own
+  setup, now builds on the Weapons or Items page pak's copy instead of the game's, so their edits of that item stay; a
+  page exported again under a higher page pak that ships the same package says so and names the page to export again
+  (also the Map pak over newer Spawns edits). Melee damage goes into the Weapons pak, a trader price into the pak of the
+  page whose item it prices, a stock vehicle's paint into the Vehicles pak, and the Spawns page's vehicle presets and
+  animals into the Spawns pak (they went to the Map's or the Vehicles' pak, and that page's own export had nothing to
+  export). When a page's server pak cannot be built, its older server copy is removed and the server's Registry pak is
+  written again without it; the server's cook of a page reads the project's imported mods like the players' does. Copying
+  page paks into the server's mods folder removes the same project's whole-project paks there, and the other way round:
+  the two must never be installed together.
+- Smaller fixes from the check before release: *Export this page* on the Spawns, Vehicles, Weapons and Items pages saves
+  their unsaved changes first (it said there was nothing to export, or left them out). At the smallest window the 3D
+  view's *Sun* / *Scale* / *Person* switches wrap instead of running out of view, and the Craftables step 2 rows (*Build it
+  like the game's*, *Place in front*) wrap in long languages. The Craftables step 2 texts, the paint list's texts and the
+  Spawns point card follow a language switch. The *Name in game* box no longer shows the game's text-table reference
+  (the Rager's); it stays empty with its hint until a name is typed.
+- **Vehicles decals: a whole-vehicle decal keeps its size** (check before release): placing or removing another decal,
+  *Undo decal* or opening the project again rebuilt the decal list without *Stick to the surface*, and just picking the
+  15 m decal in the list again then cut it to 3 m and turned that off. The list keeps both now. At the smallest window
+  (1024x640) *Apply decals* and *Undo* were squashed to a few pixels under the designs; they keep their place at the bottom,
+  and the designs and the decal list scroll above them.
+
+### Changed
+- **The Map flies and looks steadier in motion, like the game** (owner: "camera motion is not smooth like the game", trees
+  and bushes "shimmer" while it moves). *Smooth camera* (Settings, on): each frame moves the camera by the average frame
+  time instead of the uneven measured one (step spread 15.6 % → 5.5 % on 60 Hz frames that start 0-6 ms late), the first
+  frame after a stop no longer jumps up to a tenth of a second ahead, a slow frame is spread over the next ones, and mouse
+  turns are taken once per frame and eased over about two frames (turn spread 20.8 % → 12.6 % with a 125 Hz mouse). While
+  the view flies the studio asks Windows for a 1 ms clock, so the 60 Hz timer that paces Avalonia's frames no longer runs a
+  whole frame late now and then (2 % of its ticks on this PC, none with it). *Steady foliage in motion* (Settings, on):
+  each frame is blended with the last one where the camera saw it (temporal anti-aliasing without the jitter): a slow pan
+  over a forest of leaf cards flickers about half as much and stays closer to a 64-sample picture than a plain frame; at
+  rest the view is drawn exactly as before. Far impostor trees blend into their next picture as the camera passes instead
+  of snapping (one 1° step made the whole change, now at most 5-7 % of it), a cluster of trees near a LOD threshold keeps
+  its LOD instead of swapping back and forth, and the Smooth switch no longer swaps foliage distance in and out every 2.5 s
+  on a PC just at its limit (43 → 9 changes a minute; it waits longer after a raise that did not hold).
+- **Weapons studio looks like the game** (owner's 3.4.0 test): the Weapons page opens on the **AKM**, guns are sorted by
+  kind (assault rifles first with the AKM and AK-47 on top, then machine guns, SMGs, sniper rifles, rifles, shotguns,
+  pistols, bows, launchers, improvised guns; melee and spare parts last; a clone right after its gun; the kind shows under
+  each name). Guns are drawn **opaque with their own metal, wood and occlusion** (the game's packed AOMEC map): 3.4.0 cut
+  them out by their roughness, so the AK magazine came out ghostly. **Paint blends with the gun's own texture** (the game
+  multiplies it by the colour) at a gentle default **Strength** of 70 % with a slider, lifted at most 3x; the flat even coat
+  is now an option, not the default, and the metal and roughness stay where the gun has them. The **magazines a gun's mesh
+  carries** (the AKM: its AK magazine and the RPK drum) are laid out under the gun instead of inside it, each its own
+  "Magazine" row to colour (a switch hides them); every paint row now says which part it paints (Gun body, Stock, grip and
+  handguard, Magazine, Whole weapon …), its eye button shows that part selected on the gun, and the switch reads "Same
+  colour on every part". A part can only be coloured on its own where the game gives it its own material. The 1.8 m person is a separate toggle, off on
+  the Weapons page. A **Name in game** card sets the selected item's in-game name and copies its spawn command, and the
+  clone card shows the clone's own `#SpawnItem` command before it is made. Only the game can confirm the in-game colour of
+  a painted gun.
+- **Vehicles studio, after the owner's test of 3.4.0** (an airplane and the Rager): the box man beside vehicles is gone; the
+  game's own prisoner (orange jumpsuit, read from your game files, arms down) stands there for scale, with a *Person*
+  toggle beside *Scale* to hide him. *Textures* says which material (and which parts wear it), what each slot is (colour,
+  bumps, paint mask, shine…), shows a picture of what it holds now and whose it is; a replaced picture shows on the car at
+  once and Ctrl+Z takes it off again. The decal library is redrawn from smooth curves: 98 designs in 11 categories (new
+  Camo and Stars), racing numbers in a real broad-pen face instead of clock segments, baked at 1024 px. Drag a design from
+  the library onto the car and let go where it goes. *Stick to the surface* projects a decal onto every part under it,
+  each part taking its piece, up to 20 m (a whole vehicle). Added stickers are listed under *Stickers* and armed at once;
+  an unreadable file says so. *Parts*: Remove, Game position and Ctrl+Z now show in the 3D view, an added part is drawn on
+  the car (and can be removed again), and the panel says why when a part cannot be taken off or no model is chosen. The
+  clone name box offers the game's name and a number (Rager1, Rager2 …) with its `#SpawnVehicle` command; Rager_1 typed is
+  saved as Rager_v1 (the engine would read Rager_1 as "Rager" number 2).
+- **Craftables: base buildings like the game's** (owner's "Base Cabin 03"): the game ships no recipe for its cabins
+  (`BP_Base_Cabin`, `_02`, `_03`), so they were built on the improvised chair (20 health, not on the highest ground point under
+  it so a 15 m cabin sank into a slope, allowed to tilt). An element without a recipe is now built as itself, with its own
+  placement (highest ground point, upright, turned only around its vertical axis), 3000 health, 672 decay hours and repair
+  values; a copy of the chair's recipe makes it (same asset names, ingredients, section and picture). A craftable made
+  Furniture from such an element shows *Build like the game's* (one click, with the warning that what players built changes
+  behaviour). New for every built craftable: *Needs a flag* (the element's `_canBePlacedWithoutFlag`, on every level) and
+  *Repair cost %* (one repair-tool use restores `HealthRepairedPerUse` x 100 / %, so the uses follow the damage). A furniture
+  or station craftable of 3 m and more is placed like the game's large buildings. Game code, not data: where the placement
+  ghost appears (the game centres it on the aimed point; its own cabins too), Shift + mouse wheel distance, and what one
+  repair-tool use consumes (the tool's data, not the recipe's materials).
+- **Craftables: Place in front (experimental)** (owner: a 15 m cabin appears around him): a built craftable can be placed
+  ahead of the player instead of around the aimed point. Its recipe gets `PlacementLocationOffset` (a recipe value two of the
+  game's own recipes use, the Woodland pack's curtains, with the same placement ghost), which moves the placement point
+  itself: the ghost and the element built from it move together, collision, snap points and ladder with it (the element is
+  one mesh component; the ghost is another actor, so no element offset could move both). Off by default, suggested from
+  3 m; the distance is automatic (half its size + 1 m, at most 15 m: the 15 m cabin 8.5 m) or set in metres, along +X
+  unless a game test shows another direction. With the switch off the export is byte for byte the one before.
+
 ## [3.4.0] - 2026-10-17
 
 ### New in this release

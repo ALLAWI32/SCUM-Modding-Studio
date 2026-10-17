@@ -45,6 +45,15 @@ public sealed record MeshData(
     public int TriangleCount => Indices.Length / 3;
 
     /// <summary>
+    /// The UV channels after the first (index 0 = UV1), each <c>2N</c> floats like <see cref="Uv0"/>; empty unless they were
+    /// asked for (a car's colour mask can be read through UV1: SCUM's <c>M_Car_01</c> 'Color Mask UV Channel').
+    /// </summary>
+    public float[][] ExtraUvs { get; init; } = [];
+
+    /// <summary>UV channel <paramref name="channel"/> (0 = <see cref="Uv0"/>), or null when the mesh does not carry it.</summary>
+    public float[]? Uv(int channel) => channel == 0 ? Uv0 : channel > 0 && channel <= ExtraUvs.Length && ExtraUvs[channel - 1].Length == Uv0.Length ? ExtraUvs[channel - 1] : null;
+
+    /// <summary>
     /// Creates a mesh and computes <see cref="Bounds"/> from <paramref name="positions"/>.
     /// When <paramref name="sections"/> is null a single unnamed section covering all indices is used.
     /// </summary>

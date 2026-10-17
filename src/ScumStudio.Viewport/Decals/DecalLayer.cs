@@ -66,6 +66,13 @@ public sealed record DecalLayer
     /// <summary>A mirrored copy on the other side of the vehicle (across its Y = 0 plane).</summary>
     public bool Mirror { get; init; }
 
+    /// <summary>
+    /// Stuck to the surface (owner: "a decal that follows the car and can cover all of it"): projected deep along its
+    /// normal onto every part under it, whatever material each is painted with, so one decal crosses doors, fenders and the
+    /// hood, each part taking its piece; it may be as large as the whole vehicle.
+    /// </summary>
+    public bool Wrap { get; init; }
+
     /// <summary>Not drawn and not baked, but kept in the list (the layer list's eye).</summary>
     public bool Hidden { get; init; }
 

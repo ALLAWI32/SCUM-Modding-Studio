@@ -35,6 +35,8 @@ public sealed partial class SpawnMap
         Resize,
         Move,
         Corner,
+        Place,
+        Turn,
     }
 
     /// <summary>True while a shape is being drawn or changed (Esc drops it).</summary>
@@ -57,7 +59,20 @@ public sealed partial class SpawnMap
         }
 
         _drag = DragKind.Pan;
-        if (Tool == SpawnMapTool.Rectangle)
+        if (Tool == SpawnMapTool.Select && OnTurnHandle(at) is { } turning)
+        {
+            // The picked place's arrow: a drag turns it about its centre.
+            CommitKeys();
+            (_drag, _keysFor, _nudge, _turn) = (DragKind.Turn, turning, default, 0f);
+        }
+        else if (Tool == SpawnMapTool.Select && PlaceAt(at) is { } picked)
+        {
+            // A press on a place picks it; a drag from there moves it (where it is grabbed stays under the cursor).
+            CommitKeys();
+            SelectedId = _ids[picked];
+            (_drag, _grabbed, _grabFrom) = (DragKind.Place, _ids[picked], MarkerWorld(picked));
+        }
+        else if (Tool == SpawnMapTool.Rectangle)
         {
             if (Area is { Shape: not SpawnAreaShape.Polygon } box && HandleAt(box, at) is { } handle)
             {
@@ -90,6 +105,7 @@ public sealed partial class SpawnMap
     {
         base.OnPointerMoved(e);
         var at = e.GetPosition(this);
+        ShowCursor(at);
         if (_drag == DragKind.None)
         {
             if (_polygon.Count > 0)
@@ -128,6 +144,12 @@ public sealed partial class SpawnMap
                 corners[_handle] = ScreenToWorld(at);
                 _draft = SpawnArea.Polygon(corners);
                 break;
+            case DragKind.Place:
+                Preview(_grabbed, _grabFrom + (ScreenToWorld(at) - ScreenToWorld(_pressAt)));
+                break;
+            case DragKind.Turn:
+                TurnTowards(at, e.KeyModifiers.HasFlag(KeyModifiers.Shift));
+                break;
         }
 
         _lastAt = at;
@@ -153,6 +175,14 @@ public sealed partial class SpawnMap
         {
             Click(ScreenToWorld(at));
         }
+        else if (drag == DragKind.Place && !click && _pending is { } moved)
+        {
+            Commit(moved.Id, moved.To);
+        }
+        else if (drag == DragKind.Turn)
+        {
+            CommitKeys(); // the turn, once
+        }
         else if (drag is DragKind.Draw or DragKind.Resize or DragKind.Move or DragKind.Corner && _draft is { } draft)
         {
             Area = draft;
@@ -168,9 +198,25 @@ public sealed partial class SpawnMap
         base.OnPointerCaptureLost(e);
         if (_drag != DragKind.None)
         {
+            if (_drag == DragKind.Place)
+            {
+                _pending = null; // the drag was taken away: the place stays where it was
+            }
+            else if (_drag == DragKind.Turn)
+            {
+                (_keysFor, _turn) = (null, 0f);
+            }
+
             (_drag, _draft) = (DragKind.None, null);
             InvalidateVisual();
         }
+    }
+
+    /// <inheritdoc />
+    protected override void OnPointerExited(PointerEventArgs e)
+    {
+        base.OnPointerExited(e);
+        CursorText = string.Empty;
     }
 
     /// <inheritdoc />
@@ -195,6 +241,20 @@ public sealed partial class SpawnMap
             ClosePolygon();
             e.Handled = true;
         }
+        else if (PickKeyDown(e.Key, e.KeyModifiers))
+        {
+            e.Handled = true;
+        }
+    }
+
+    /// <inheritdoc />
+    protected override void OnKeyUp(KeyEventArgs e)
+    {
+        base.OnKeyUp(e);
+        if (PickKeyUp(e.Key))
+        {
+            e.Handled = true;
+        }
     }
 
     private void Click(Vector2 world)
@@ -210,6 +270,10 @@ public sealed partial class SpawnMap
                 break;
             case SpawnMapTool.Place when PlaceCommand is { } command && command.CanExecute(world):
                 command.Execute(world);
+                break;
+            case SpawnMapTool.Select:
+                CommitKeys();
+                SelectedId = null; // a click beside every place lets go of the picked one
                 break;
         }
     }

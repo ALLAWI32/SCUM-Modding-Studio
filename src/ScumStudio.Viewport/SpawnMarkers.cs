@@ -170,14 +170,17 @@ public static partial class SpawnMarkers
     /// True for an actor the map had nothing to draw for: no mesh of its own, no instances, no spawn or trader pin. A fire,
     /// a lamp, an NPC (Hektor, Discord: "if you delete a camp, fire animations remain behind, the tool doesn't show them; the
     /// traders stay put"). <paramref name="effect"/>: it is a light, particle, sound (Wwise too) or fog, not something else
-    /// (<see cref="ActorRoles"/>). Actors that stand for the level itself are never a pin.
+    /// (<see cref="ActorRoles"/>). Actors that stand for the level itself are never a pin, nor are volumes: an actor whose
+    /// root is a brush (<c>BrushComponent</c>) is a shape the game never draws, whatever its class is called (SCUM's
+    /// <c>VolumeZone</c>: its pin floated as a white diamond high inside the B_4 hangar).
     /// </summary>
     public static bool IsPinOnly(ActorRecord actor, out bool effect)
     {
         ArgumentNullException.ThrowIfNull(actor);
         effect = false;
         if (actor.RootComponent is null || actor.InstanceTransforms.Count > 0 || actor.TraderMarkers.Count > 0 || IsLootSpawner(actor) || KindOf(actor) is not null
-            || actor.Kind is ActorKind.StaticMeshActor or ActorKind.Volume || actor.ClassName.StartsWith("Landscape", StringComparison.Ordinal)
+            || actor.Kind is ActorKind.StaticMeshActor or ActorKind.Volume || actor.Root is { ClassName: "BrushComponent" }
+            || actor.ClassName.StartsWith("Landscape", StringComparison.Ordinal)
             || ActorRoles.IsStructural(actor.ClassName) || actor.Components.Any(c => c.StaticMeshPath is not null && c.IsVisible && !c.IsInstanced)
             || actor.Components.Any(c => c.SpawnMarkers.Count > 0))
         {

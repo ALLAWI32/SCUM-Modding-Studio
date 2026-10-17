@@ -91,7 +91,8 @@ internal sealed partial class ProjectCommands
                     pictures ??= new CraftIconRenderer(catalog, logger);
                     var result = project.State.IsEmpty ? null
                         : await exporter.ExportAsync(project, catalog, options with { BendMeshes = meshes.Describe }, role, null, ctx.GetCancellationToken()).ConfigureAwait(false);
-                    var crafted = await CraftablesExporter.ExportAsync(craftables, options.ModName ?? project.Manifest.Name, catalog, options with { ModelPictures = pictures.Render }, role,
+                    var crafted = await CraftablesExporter.ExportAsync(craftables, options.ModName ?? project.Manifest.Name, catalog,
+                        options with { ModelPictures = pictures.Render, Elsewhere = result is null ? null : CraftablesExporter.ProjectPakPackages(result, catalog) }, role,
                         CraftablesExporter.StagedRegistry(result), logger, ctx.GetCancellationToken()).ConfigureAwait(false);
                     foreach (var exported in new[] { result, crafted }.OfType<ExportResult>())
                     {

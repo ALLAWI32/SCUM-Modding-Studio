@@ -280,6 +280,13 @@ public sealed record ActorRecord(
     /// </summary>
     public bool WaterVolume { get; init; }
 
+    /// <summary>
+    /// True when the actor is hidden in the game (<c>bHidden</c>, the editor's "Actor Hidden In Game", on the actor or its
+    /// archetype): the game draws none of its components, whatever their own flags say. B_4's white walls of engine cubes
+    /// (<c>Cube4</c>-<c>Cube7</c>, blockers) are such actors.
+    /// </summary>
+    public bool HiddenInGame { get; init; }
+
     /// <summary>Number of synthesized components (see <see cref="ComponentRecord.IsSynthesized"/>).</summary>
     public int SynthesizedComponentCount => Components.Count(c => c.IsSynthesized);
 

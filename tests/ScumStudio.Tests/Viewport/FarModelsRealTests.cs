@@ -65,6 +65,79 @@ public sealed class FarModelsRealTests
         Assert.All(far.Placements, p => Assert.Equal(float.PositiveInfinity, LevelSceneUploader.DrawDistanceOf(p)));
     }
 
+    /// <summary>
+    /// r37 (owner, 3.4.0: white and blue blotches over the far forests from high up): every colour slot of the far models
+    /// has a colour texture the Map can decode. 512 of their first 650 slots are streaming virtual textures (no regular
+    /// mips), which drew in the material's white until <c>VirtualTextureMips</c>.
+    /// </summary>
+    [Fact]
+    public void EveryFarModelColourSlotDecodes()
+    {
+        using var catalog = Open();
+        if (catalog is null)
+        {
+            return;
+        }
+
+        var meshes = FarModelsScene.Read(catalog, WorldIndex.FromCatalog(catalog)).Select(m => m.MeshPath).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var inspector = new ScumStudio.Assets.Materials.MaterialInspector(catalog);
+        var decoded = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+        var slots = 0;
+        var virtualSlots = 0;
+        var white = new List<string>();
+        foreach (var mesh in meshes)
+        {
+            CUE4Parse.UE4.Assets.Exports.StaticMesh.UStaticMesh staticMesh;
+            try
+            {
+                staticMesh = catalog.LoadObject<CUE4Parse.UE4.Assets.Exports.StaticMesh.UStaticMesh>(mesh);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                continue;
+            }
+
+            foreach (var material in (staticMesh.StaticMaterials ?? []).Select(m => m.MaterialInterface?.GetPathName()).OfType<string>())
+            {
+                slots++;
+                var colour = inspector.Inspect(material).BaseColorTexture;
+                if (colour is null)
+                {
+                    white.Add($"{mesh}: {material} has no colour texture");
+                    continue;
+                }
+
+                if (!decoded.TryGetValue(colour, out var ok))
+                {
+                    var texture = catalog.LoadObject<CUE4Parse.UE4.Assets.Exports.Texture.UTexture2D>(colour);
+                    virtualSlots += texture.PlatformData.Mips.Length == 0 ? 1 : 0;
+                    try
+                    {
+                        ScumStudio.Assets.Textures.TextureDecoder.Decode(texture, maxSize: 64);
+                        ok = true;
+                    }
+                    catch (Exception ex) when (ex is not OutOfMemoryException)
+                    {
+                        ok = false;
+                    }
+
+                    decoded[colour] = ok;
+                }
+
+                if (!ok)
+                {
+                    white.Add($"{mesh}: {colour} does not decode");
+                }
+            }
+        }
+
+        _output.WriteLine($"{meshes.Count} far meshes, {slots} colour slots, {decoded.Count} textures ({virtualSlots} virtual), {white.Count} drawn white");
+        white.Take(20).ToList().ForEach(_output.WriteLine);
+        Assert.True(slots > 1000, $"{slots} slots");
+        Assert.True(virtualSlots > 300, $"{virtualSlots} virtual textures");
+        Assert.True(white.Count <= 5, $"{white.Count} far colour slots drawn white");
+    }
+
     [Fact]
     public void FoliageComponentsCarryTheGamesCullDistances()
     {

@@ -74,6 +74,12 @@ public sealed class RenderBatch
 
     /// <inheritdoc cref="Owner"/>
     internal int Index { get; set; }
+
+    /// <summary>
+    /// The LOD each cluster was drawn at in the last frame of the scene (-1: not drawn), for <see cref="Cameras.LodMath.ChooseLodSteady"/>;
+    /// made by the renderer on the first frame, gone with the batch when it is rebuilt.
+    /// </summary>
+    internal sbyte[]? ShownLods { get; set; }
 }
 
 /// <summary>Result of <see cref="SceneBatcher.Build(Scene)"/>.</summary>

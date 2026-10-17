@@ -54,6 +54,29 @@ public static partial class CloneFamilyPlanner
     public static bool IsValidName(string? name) => name is not null && ValidName().IsMatch(name) && FNameRef.Split(name).Number == 0;
 
     /// <summary>
+    /// <paramref name="name"/> as a clone may be called: a name ending in <c>_&lt;number&gt;</c> (<c>Rager_1</c>, which the engine
+    /// would read as "Rager" number 2) ends in <c>_v&lt;number&gt;</c> instead (<c>Rager_v1</c>), the rule the family's own
+    /// leaves follow; any other name is kept.
+    /// </summary>
+    public static string SafeName(string name)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        var (text, number) = FNameRef.Split(name);
+        return number == 0 ? name : $"{text}_v{(number - 1).ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+    }
+
+    /// <summary>
+    /// The <paramref name="number"/>-th numbered name of <paramref name="stem"/> (the game's name without <c>BPC_</c>):
+    /// <c>Rager1</c>, <c>Rager2</c> …, or <c>SF19_v1</c> when the stem ends in a digit. Never ends in <c>_&lt;number&gt;</c>.
+    /// </summary>
+    public static string NumberedName(string stem, int number)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(stem);
+        var n = number.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        return char.IsAsciiDigit(stem[^1]) ? $"{stem}_v{n}" : stem + n;
+    }
+
+    /// <summary>
     /// Plans an item clone (weapon, magazine, ammunition, projectile): the item and its <c>_ES</c>, and with
     /// <paramref name="includePaint"/> the meshes it shows that wear paint and that paint (the clone's colour is its own).
     /// </summary>

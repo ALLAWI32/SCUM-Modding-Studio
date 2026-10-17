@@ -14,6 +14,9 @@ public enum GraphicsFeature
 
     /// <summary>Block-compressed (BC1-BC7) texture uploads; without them textures are decoded to RGBA8 first.</summary>
     CompressedTextures,
+
+    /// <summary>Steady foliage in motion (<see cref="TemporalStabilizer"/>): each frame blended with the last one where the camera saw it.</summary>
+    TemporalStabilization,
 }
 
 /// <summary>

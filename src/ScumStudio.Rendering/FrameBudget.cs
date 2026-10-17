@@ -6,7 +6,10 @@ namespace ScumStudio.Rendering;
 /// moving average; while it stays above the target for half a second the view is lowered one step, while it stays well
 /// under it for two seconds it is raised one step. The steps, in order: foliage distance ×0.75, coarser LODs, foliage
 /// distance ×0.5, half the shadow distance, no shadows, twice the smallest object drawn, one sector less of far view.
-/// Texture detail is never touched (a new size means preparing the levels again, a streaming hitch).
+/// Texture detail is never touched (a new size means preparing the levels again, a streaming hitch). A raise that has to be
+/// undone within 4 s doubles the wait before the next raise (up to 32 s; a raise that holds 30 s ends that back-off):
+/// a view that is slow at one step and fast at the next no longer swaps its foliage distance in and out every 2.5 s while
+/// flying (owner: trees "flicker" in motion).
 /// Allocation-free once the settings of a level are made (<see cref="Apply"/> hands the same object back).
 /// </summary>
 public sealed class FrameBudget
@@ -22,9 +25,15 @@ public sealed class FrameBudget
     private const double LowerAfterSeconds = 0.5;
     private const double RaiseAfterSeconds = 2.0;
     private const double Smoothing = 0.2; // weight of the newest frame in the average
+    private const double RelapseSeconds = 4.0; // lowered again this soon after a raise: the raise did not hold
+    private const double MaxRaiseWaitSeconds = 32.0;
+    private const double SteadySeconds = 30.0; // a raise that held this long ends the back-off
 
     private double _overSince = -1;
     private double _underSince = -1;
+    private double _raiseWait = RaiseAfterSeconds;
+    private double _raisedAt = double.NegativeInfinity;
+    private double _loweredAt = double.NegativeInfinity;
     private RenderSettings? _baseline;
     private RenderSettings? _applied;
     private int _appliedLevel = -1;
@@ -39,7 +48,7 @@ public sealed class FrameBudget
             _enabled = value;
             if (!value)
             {
-                (Level, _overSince, _underSince) = (0, -1, -1);
+                (Level, _overSince, _underSince, _raiseWait, _raisedAt, _loweredAt) = (0, -1, -1, RaiseAfterSeconds, double.NegativeInfinity, double.NegativeInfinity);
             }
         }
     }
@@ -63,6 +72,11 @@ public sealed class FrameBudget
             return false;
         }
 
+        if (_raiseWait > RaiseAfterSeconds && _raisedAt > _loweredAt && nowSeconds - _raisedAt >= SteadySeconds)
+        {
+            _raiseWait = RaiseAfterSeconds; // the last raise held: back to the quick wait
+        }
+
         if (CostMs > TargetMs * Over)
         {
             _underSince = -1;
@@ -74,6 +88,12 @@ public sealed class FrameBudget
             {
                 Level++;
                 _overSince = nowSeconds; // the next step waits for the new level to be measured
+                _loweredAt = nowSeconds;
+                if (nowSeconds - _raisedAt < RelapseSeconds)
+                {
+                    _raiseWait = Math.Min(_raiseWait * 2, MaxRaiseWaitSeconds); // the raise did not hold: wait longer next time
+                }
+
                 return true;
             }
         }
@@ -84,10 +104,11 @@ public sealed class FrameBudget
             {
                 _underSince = nowSeconds;
             }
-            else if (nowSeconds - _underSince >= RaiseAfterSeconds && Level > 0)
+            else if (nowSeconds - _underSince >= _raiseWait && Level > 0)
             {
                 Level--;
                 _underSince = nowSeconds;
+                _raisedAt = nowSeconds;
                 return true;
             }
         }

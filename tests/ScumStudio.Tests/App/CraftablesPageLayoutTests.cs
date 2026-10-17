@@ -1,5 +1,6 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using ScumStudio.App.Localization;
 using ScumStudio.App.ViewModels;
 using ScumStudio.Core.Abstractions;
@@ -78,10 +79,27 @@ public sealed class CraftablesPageLayoutTests
                 Assert.True(editor.Right <= width && editor.Bottom <= height, $"{at}: the editor {editor} leaves the window");
                 Disjoint(at, window, "CraftRecipeTab", "CraftGalleryTab", "CraftUndoButton");
 
-                // The editor's options: side by side or on the next line, never on each other, never cut on the right.
+                // Owner 2026-10-17: the editor is six numbered steps, top to bottom, each one in full width of the editor; the
+                // rarely needed options are folded away, and Export is a step of its own.
+                var steps = new[] { "CraftStepWhat", "CraftStepWhere", "CraftStepIngredients", "CraftStepPicture", "CraftStepFiles", "CraftStepExport" }
+                    .Select(n => (Name: n, Rect: At(window, HeadlessUi.FindNamed<Border>(window, n) ?? throw new InvalidOperationException($"no {n}")))).ToList();
+                for (var i = 1; i < steps.Count; i++)
+                {
+                    Assert.True(steps[i - 1].Rect.Bottom <= steps[i].Rect.Top + 0.5, $"{at}: {steps[i - 1].Name} {steps[i - 1].Rect} is not above {steps[i].Name} {steps[i].Rect}");
+                    Assert.True(steps[i].Rect.Right <= editor.Right + 0.5, $"{at}: {steps[i].Name} ends at {steps[i].Rect.Right:0}, the editor at {editor.Right:0}");
+                }
+
+                Assert.False(HeadlessUi.FindNamed<Expander>(window, "CraftMoreOptions")!.IsExpanded);
+                Assert.True(HeadlessUi.FindNamed<Button>(window, "CraftPickFromGame")!.IsEffectivelyVisible);
+                var export = HeadlessUi.FindNamed<Button>(window, "CraftExportButton")!;
+                Assert.True(export.IsEffectivelyEnabled && export.Command is not null, $"{at}: the Export step has no working button");
+                Assert.Equal(Loc.T("Export.Module.Button.Tip"), ToolTip.GetTip(export));
+                Assert.Equal(row.WhereText, HeadlessUi.FindNamed<TextBlock>(window, "CraftWhereText")!.Text);
+
+                // The step's options: side by side or on the next line, never on each other, never cut on the right.
                 var options = HeadlessUi.FindNamed<WrapPanel>(window, "CraftEditorOptions")!;
                 var boxes = options.Children.Where(c => c.IsVisible).Select(c => (Control: c, Rect: At(window, c))).ToList();
-                Assert.True(boxes.Count >= 4, $"{at}: {boxes.Count} options shown");
+                Assert.True(boxes.Count >= 2, $"{at}: {boxes.Count} options shown");
                 for (var i = 0; i < boxes.Count; i++)
                 {
                     Assert.True(boxes[i].Rect.Right <= editor.Right + 0.5, $"{at}: option {i} ends at {boxes[i].Rect.Right:0}, the editor at {editor.Right:0}");
@@ -102,6 +120,67 @@ public sealed class CraftablesPageLayoutTests
 
                 HeadlessUi.SaveScreenshot(window, $"craftables-{row.Kind}-{width}x{height}".ToLowerInvariant());
             }
+        });
+    }
+
+    /// <summary>
+    /// Owner 2026-10-17: "unclear where the item will show up". Step 2 says it in one sentence: a furniture craftable is in
+    /// the base BUILDING menu under its section, a power object (an item placed afterwards) in the CRAFTING menu; a chosen
+    /// section is named, and every step's control has a tooltip.
+    /// </summary>
+    [Avalonia.Headless.XUnit.AvaloniaFact]
+    public async Task StepTwoSaysWhichMenuAndSection()
+    {
+        Craftable[] craftables =
+        [
+            new() { Name = "Oak Chair", Source = "/Game/A/SM_Chair", Mesh = "/Game/A/SM_Chair" },
+            new() { Name = "Sun Panel", Source = "/Game/A/SM_Solar", Mesh = "/Game/A/SM_Solar", Kind = CraftKind.Power, Material = CraftMaterial.Metal },
+        ];
+        await WithPageAsync(1600, 900, craftables, (window, page) =>
+        {
+            var chair = page.Items[0];
+            page.SelectedItem = chair;
+            HeadlessUi.Pump();
+            Assert.Equal(CraftUse.Build, chair.Use);
+            Assert.Equal(Loc.F("Craftables.Where.InBuild", chair.SectionName), chair.WhereText);
+            Assert.Contains("BUILDING", chair.WhereText, StringComparison.Ordinal);
+            Assert.Equal(chair.WhereText, HeadlessUi.FindNamed<TextBlock>(window, "CraftWhereText")!.Text);
+
+            // A section picked in the box is the one the sentence names.
+            if (chair.Sections.FirstOrDefault(s => s.Tag is not null) is { } picked)
+            {
+                chair.SelectedSection = picked;
+                HeadlessUi.Pump();
+                Assert.Contains(picked.Label, chair.WhereText, StringComparison.Ordinal);
+                Assert.Equal(chair.WhereText, HeadlessUi.FindNamed<TextBlock>(window, "CraftWhereText")!.Text);
+            }
+
+            var panel = page.Items[1];
+            page.SelectedItem = panel;
+            HeadlessUi.Pump();
+            Assert.Equal(CraftUse.Craft, panel.Use);
+            Assert.Contains("CRAFTING", panel.WhereText, StringComparison.Ordinal);
+            Assert.False(HeadlessUi.FindNamed<ToggleButton>(window, "CraftUseBuild")!.IsEffectivelyEnabled);
+            Assert.True(HeadlessUi.FindNamed<ToggleButton>(window, "CraftUseCraft")!.IsChecked);
+
+            // Every control of the steps explains itself.
+            foreach (var name in new[] { "CraftUseBuild", "CraftUseCraft", "CraftUseBoth", "CraftShowsInBox", "CraftKindBox", "CraftMaterialBox", "CraftSuggestButton",
+                         "CraftAddIngredientButton", "CraftPictureBox", "CraftAssetNameBox", "CraftFolderBox", "CraftExportButton", "CraftMoreOptions", "CraftPickFromGame" })
+            {
+                Assert.False(string.IsNullOrWhiteSpace(ToolTip.GetTip(HeadlessUi.FindNamed<Control>(window, name)!) as string), $"{name} has no tooltip");
+            }
+
+            HeadlessUi.SaveScreenshot(window, "craftables-steps-power");
+
+            // The bottom of the editor: the file names, the Export step and the folded options.
+            HeadlessUi.FindNamed<ScrollViewer>(window, "CraftEditorScroll")!.ScrollToEnd();
+            HeadlessUi.Pump();
+            HeadlessUi.SaveScreenshot(window, "craftables-steps-bottom");
+
+            // Step 1's button opens the gallery of the game's objects.
+            HeadlessUi.FindNamed<Button>(window, "CraftPickFromGame")!.Command!.Execute(null);
+            HeadlessUi.Pump();
+            Assert.True(page.IsGalleryOpen);
         });
     }
 

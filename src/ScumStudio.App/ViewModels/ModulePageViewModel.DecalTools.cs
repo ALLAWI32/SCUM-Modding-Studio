@@ -266,7 +266,7 @@ public abstract partial class ModulePageViewModel
     /// <summary>Sizes the selected decal by <paramref name="factor"/>, keeping its shape.</summary>
     internal bool ResizeDecal(float factor) => EditSelectedDecal(l =>
     {
-        var width = Math.Clamp(l.WidthCm * factor, 1f, 500f);
+        var width = Math.Clamp(l.WidthCm * factor, 1f, (float)DecalLayerViewModel.MaxSizeCm);
         return l with { WidthCm = width, HeightCm = l.HeightCm * (width / l.WidthCm) };
     });
 

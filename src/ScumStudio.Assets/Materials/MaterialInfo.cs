@@ -106,4 +106,23 @@ public sealed record MaterialInfo(
     /// Most SCUM masters can (buildings, rocks, roads); the game asks only its road pieces to, see <c>BendMesh.DrawsIntoLandscape</c>.
     /// </summary>
     public bool WritesLandscapeTexture { get; init; }
+
+    /// <summary>
+    /// True for a gravel road or dirt runway piece (<c>M_DirtRoad_Master</c>): the game draws it only into the landscape
+    /// texture, where its colour covers the ground by its own coverage (<see cref="CoverageTexture"/>), never as a surface of
+    /// its own. Drawn opaque it was a flat brown sheet with the ground's jagged edge cutting through it (owner, 3.4.0).
+    /// </summary>
+    public bool OnlyIntoLandscape { get; init; }
+
+    /// <summary>
+    /// For <see cref="OnlyIntoLandscape"/>: the grey mask that says how much of the ground the piece covers (<c>DirtMask</c>:
+    /// the wheel tracks bright, the sides black), or null when the material keeps the master's dummy.
+    /// </summary>
+    public string? CoverageTexture { get; init; }
+
+    /// <summary>For <see cref="OnlyIntoLandscape"/>: the most the piece covers the ground (<c>Trail_Amount</c>, 0.8 in the master).</summary>
+    public float CoverageAmount { get; init; } = 1f;
+
+    /// <summary>For <see cref="OnlyIntoLandscape"/>: how sharply the coverage follows its mask (<c>Trail_Contrast</c>, 3 in the master).</summary>
+    public float CoverageContrast { get; init; } = 1f;
 }

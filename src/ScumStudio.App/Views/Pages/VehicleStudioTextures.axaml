@@ -1,11 +1,15 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:ScumStudio.App.ViewModels"
+             xmlns:conv="using:ScumStudio.App.Converters"
              x:Class="ScumStudio.App.Views.Pages.VehicleStudioTextures"
              x:DataType="vm:ModulePageViewModel">
   <StackPanel Spacing="6" Margin="12,8">
     <TextBlock Text="{Tr Studio.Textures.Title}" Classes="h2" />
-    <TextBlock Text="{Tr Studio.Textures.Caption}" Classes="caption wrap" />
+    <TextBlock Text="{Tr Studio.Textures.Caption}" Classes="caption wrap" TextWrapping="Wrap" />
+
+    <!-- 1. Which part: the material (a paint slot of the vehicle) and the parts that wear it -->
+    <TextBlock Text="{Tr Studio.Textures.Step.Material}" Classes="caption" FontWeight="SemiBold" Margin="0,4,0,0" />
     <ComboBox x:Name="TextureMaterialPicker" ItemsSource="{Binding Paints}" SelectedItem="{Binding TextureMaterial}" HorizontalAlignment="Stretch"
               ToolTip.Tip="{Tr Studio.Textures.Slots.Tip}">
       <ComboBox.ItemTemplate>
@@ -14,25 +18,39 @@
         </DataTemplate>
       </ComboBox.ItemTemplate>
     </ComboBox>
+    <TextBlock x:Name="TextureMaterialParts" Text="{Binding TextureMaterialParts}" Classes="muted caption wrap" TextWrapping="Wrap"
+               IsVisible="{Binding TextureMaterialParts, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" ToolTip.Tip="{Tr Studio.Textures.WornBy.Tip}" />
+
+    <!-- 2. Which slot: each picture of that material, with what it shows now -->
+    <TextBlock Text="{Tr Studio.Textures.Step.Slot}" Classes="caption" FontWeight="SemiBold" Margin="0,6,0,0" IsVisible="{Binding HasTextureSlots}" />
     <ItemsControl x:Name="TextureSlotList" ItemsSource="{Binding TextureSlots}">
       <ItemsControl.ItemTemplate>
         <DataTemplate x:DataType="vm:TextureSlotViewModel">
-          <StackPanel Spacing="4" Margin="0,6,0,2">
-            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-              <TextBlock Text="{Binding Parameter}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
-              <TextBlock Grid.Column="1" Text="{Binding Info}" Classes="caption" VerticalAlignment="Center" />
+          <Border Classes="panel" Padding="8" Margin="0,3">
+            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10">
+              <Border Width="84" Height="84" CornerRadius="{DynamicResource SmallCornerRadius}" ClipToBounds="True" Background="{DynamicResource Surface2Brush}"
+                      VerticalAlignment="Top" ToolTip.Tip="{Tr Studio.Textures.Picture.Tip}">
+                <Image x:Name="SlotPicture" Source="{Binding Picture, Converter={x:Static conv:TextureImageConverter.Instance}}" Stretch="Uniform" />
+              </Border>
+              <StackPanel Grid.Column="1" Spacing="3">
+                <TextBlock Text="{Binding Label}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Parameter}" />
+                <TextBlock Text="{Binding Status}" Classes="caption" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Tr Studio.Textures.Status.Tip}" />
+                <TextBlock Text="{Binding Info}" Classes="muted caption" ToolTip.Tip="{Tr Studio.Textures.Info.Tip}" />
+                <!-- 3. What to do with it -->
+                <WrapPanel Orientation="Horizontal" Margin="0,2,0,0">
+                  <Button Classes="accent small" Margin="0,0,6,4" Content="{Tr Studio.Textures.Replace}" Command="{Binding ReplaceCommand}"
+                          ToolTip.Tip="{Tr Studio.Textures.Replace.Tip}" />
+                  <Button Classes="ghost small" Margin="0,0,6,4" Content="{Tr Studio.Textures.Reset}" Command="{Binding ResetCommand}"
+                          ToolTip.Tip="{Tr Studio.Textures.Reset.Tip}" />
+                  <Button Classes="ghost small" Margin="0,0,6,4" Content="{Tr Studio.Textures.SavePng}" Command="{Binding SavePngCommand}"
+                          ToolTip.Tip="{Tr Studio.Textures.SavePng.Tip}" />
+                </WrapPanel>
+              </StackPanel>
             </Grid>
-            <WrapPanel Orientation="Horizontal">
-              <Button Classes="accent small" Margin="0,0,6,4" Content="{Tr Studio.Textures.Replace}" Command="{Binding ReplaceCommand}"
-                      ToolTip.Tip="{Tr Studio.Textures.Replace.Tip}" />
-              <Button Classes="ghost small" Margin="0,0,6,4" Content="{Tr Studio.Textures.SavePng}" Command="{Binding SavePngCommand}"
-                      ToolTip.Tip="{Tr Studio.Textures.SavePng.Tip}" />
-              <Button Classes="ghost small" Margin="0,0,6,4" Content="{Tr Studio.Textures.Reset}" Command="{Binding ResetCommand}"
-                      ToolTip.Tip="{Tr Studio.Textures.Reset.Tip}" />
-            </WrapPanel>
-          </StackPanel>
+          </Border>
         </DataTemplate>
       </ItemsControl.ItemTemplate>
     </ItemsControl>
+    <TextBlock Text="{Tr Studio.Textures.UndoHint}" Classes="muted caption wrap" TextWrapping="Wrap" IsVisible="{Binding HasTextureSlots}" />
   </StackPanel>
 </UserControl>

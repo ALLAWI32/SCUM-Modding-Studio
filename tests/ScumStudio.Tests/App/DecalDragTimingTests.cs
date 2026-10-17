@@ -38,7 +38,7 @@ public sealed class DecalDragTimingTests(ITestOutputHelper output)
         page.UseDecalPreview(Car(), "BPC_MyCar", [paint],
             new Dictionary<string, TextureImage> { [Texture] = Image(2048, 128, 128, 128, srgb: true) },
             new Dictionary<string, TextureImage> { [Body] = Image(2048, 0, 255, 0, srgb: false) });
-        page.ArmDecalCommand.Execute(page.DecalDesigns.Single(d => d.Design.Id == "flames-1"));
+        page.ArmDecalCommand.Execute(page.DecalDesigns.Single(d => d.Design.Id == "shape-heart"));
         Assert.True(page.PlaceDecal(DecalsViewModelTests.Ray(0)));
         Assert.True(HeadlessUi.PumpUntil(() => !page.DecalPreviewBusy, TimeSpan.FromSeconds(60)));
 

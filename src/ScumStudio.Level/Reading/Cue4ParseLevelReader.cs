@@ -438,6 +438,7 @@ public sealed partial class Cue4ParseLevelReader : ILevelReader
             SentryClass = sentry,
             TraderMarkers = ReadTraderMarkers(actor),
             WaterVolume = TryGetProperty(actor, "bWaterVolume", out bool water, ref ignored) && water,
+            HiddenInGame = TryGetProperty(actor, "bHidden", out bool hidden, ref ignored) && hidden,
             IsItemContainer = ClassChain(header.ClassPath, header.IsBlueprintClass).Contains("ItemContainer", StringComparer.Ordinal),
             IsLoaded = true,
             PropertyNames = PropertyNames(actor),

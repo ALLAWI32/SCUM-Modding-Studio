@@ -1,10 +1,13 @@
 using System.Numerics;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Microsoft.Extensions.Logging;
 using ScumStudio.App.Localization;
+using ScumStudio.Assets.Textures;
 using ScumStudio.Core.Mathematics;
 using ScumStudio.Level.Editing;
 using ScumStudio.Modding.Tuning;
+using ScumStudio.Viewport;
 
 namespace ScumStudio.App.ViewModels;
 
@@ -137,8 +140,14 @@ public abstract partial class ModulePageViewModel
     /// <returns>True when a part was added.</returns>
     public bool AddPartAt(Vector3 point)
     {
-        if (!IsAddingPart || SelectedPartMesh is not { } mesh)
+        if (!IsAddingPart)
         {
+            return false;
+        }
+
+        if (SelectedPartMesh is not { } mesh)
+        {
+            StudioPartNote = Loc.T("Studio.Parts.PickModel"); // armed without a model: say what is missing
             return false;
         }
 
@@ -183,10 +192,29 @@ public abstract partial class ModulePageViewModel
     [RelayCommand]
     private void RemovePart()
     {
-        if (_studioPart is { } part)
+        if (_studioPart is not { } part)
         {
-            Journal(studio => studio.Remove(part));
+            StudioPartNote = Loc.T("Studio.Parts.PickFirst");
+            return;
         }
+
+        var studio = PartsStudioOf();
+        if (studio is not null && !studio.IsAdded(part.Attachment) && studio.IsRemoved(part))
+        {
+            return; // already off the spawn: Ctrl+Z or Game position puts it back
+        }
+
+        // A part no cloned spawn preset holds cannot leave the spawn (the vehicle's own body, a clone without presets): say so.
+        Journal(s =>
+        {
+            var step = s.Remove(part);
+            if (step is null)
+            {
+                throw new PartRefusedException("Studio.Parts.NotSpawned", $"{part.Label} is in no cloned spawn preset.");
+            }
+
+            return step;
+        });
     }
 
     [RelayCommand(CanExecute = nameof(CanEditPart))]
@@ -287,10 +315,9 @@ public abstract partial class ModulePageViewModel
             SelectStudioPart(_studioPartIndex); // the journaled place is the new starting point
         }
 
-        if (_studioPart is { } part)
-        {
-            SetOverride(part, part.Place);
-        }
+        // The 3D view follows the project (moves, hides, parts taken off or added), as after an undo; the boxes show the place.
+        ShowPlace(_studioPart?.Place);
+        _ = RefreshStudioPartsAsync();
 
         return true;
     }
@@ -299,7 +326,7 @@ public abstract partial class ModulePageViewModel
     {
         var over = place is null ? null : PartsStudio.OverrideOf(part with { Place = place });
         var stock = Preview?.Parts.Select((p, i) => (p.Attachment, i))
-            .Where(p => p.Attachment.Length > 0 && string.Equals(PartsStudioOf()?.CloneOf(p.Attachment), part.Attachment, StringComparison.OrdinalIgnoreCase))
+            .Where(p => p.Attachment.Length > 0 && string.Equals(PartsStudioOf()?.CloneOf(p.Attachment) ?? p.Attachment, part.Attachment, StringComparison.OrdinalIgnoreCase))
             .Select(p => p.i) ?? [];
         foreach (var i in stock.ToList())
         {
@@ -333,5 +360,161 @@ public abstract partial class ModulePageViewModel
         return _catalog is { } catalog && catalog.PackageExists(package)
             ? catalog.GetExports(package).FirstOrDefault(e => e.ClassName is "StaticMesh" or "SkeletalMesh")?.ClassName
             : null;
+    }
+
+    /// <summary>The project's added parts as the 3D view draws them (appended after the vehicle's own parts).</summary>
+    private IReadOnlyList<PreviewPart> _addedPreviewParts = [];
+
+    /// <summary>The textures of <see cref="_addedPreviewParts"/>.</summary>
+    private IReadOnlyDictionary<string, TextureImage> _addedPreviewTextures = new Dictionary<string, TextureImage>();
+
+    /// <summary>The models added parts show, loaded once each (object path → model, null when unreadable).</summary>
+    private readonly Dictionary<string, PreviewModel?> _addedMeshes = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The preview as loaded from the template (before paint and added parts).</summary>
+    private PreviewModel? _previewLoaded;
+
+    private int _studioPartsLoads;
+
+    /// <summary>Completes when the last <see cref="RefreshStudioPartsAsync"/> finished (tests).</summary>
+    internal Task StudioPartsCompletion { get; private set; } = Task.CompletedTask;
+
+    /// <summary><paramref name="model"/> with the project's added parts after its own (the same model when there are none).</summary>
+    private PreviewModel WithAddedParts(PreviewModel model)
+    {
+        if (_addedPreviewParts.Count == 0)
+        {
+            return model;
+        }
+
+        var textures = new Dictionary<string, TextureImage>(model.Textures, StringComparer.OrdinalIgnoreCase);
+        foreach (var (path, image) in _addedPreviewTextures)
+        {
+            textures.TryAdd(path, image);
+        }
+
+        return model with { Parts = [.. model.Parts, .. _addedPreviewParts], Textures = textures };
+    }
+
+    /// <summary>
+    /// Shows the clone's parts as the project has them now (after a step, an undo or a redo, or a new preview): a stock part
+    /// moved or hidden is drawn there, one taken off the spawn is hidden, and every part "Add part…" bolted on is drawn on
+    /// its socket with its model.
+    /// </summary>
+    internal Task RefreshStudioPartsAsync() => StudioPartsCompletion = RefreshStudioPartsCoreAsync();
+
+    private async Task RefreshStudioPartsCoreAsync()
+    {
+        var load = ++_studioPartsLoads;
+        if (!IsVehicleModule || Preview is not { } model)
+        {
+            return;
+        }
+
+        var studio = PartsStudioOf();
+        _partOverrides.Clear();
+        if (studio is not null)
+        {
+            var known = new Dictionary<string, PartOverride?>(StringComparer.OrdinalIgnoreCase);
+            for (var i = 0; i < model.Parts.Count; i++)
+            {
+                var attachment = model.Parts[i].Attachment;
+                if (attachment.Length == 0 || studio.IsAdded(attachment))
+                {
+                    continue; // an added part is drawn where the project has it
+                }
+
+                if (!known.TryGetValue(attachment, out var over))
+                {
+                    var part = studio.Select(attachment);
+                    known[attachment] = over = part is null ? null
+                        : studio.IsRemoved(part) ? new PartOverride(FTransform.Identity, Hidden: true)
+                        : studio.Mesh is null ? null
+                        : PartsStudio.OverrideOf(part);
+                }
+
+                if (over is not null)
+                {
+                    _partOverrides[i] = over;
+                }
+            }
+        }
+
+        OnPropertyChanged(nameof(StudioPartOverrides));
+        PartOverridesChanged?.Invoke(this, EventArgs.Empty);
+
+        var added = studio?.AddedParts() ?? [];
+        var catalog = _catalog;
+        var missing = added.Select(p => p.Mesh).OfType<string>().Distinct(StringComparer.OrdinalIgnoreCase).Where(m => !_addedMeshes.ContainsKey(m)).ToList();
+        if (missing.Count > 0 && catalog is not null)
+        {
+            var logger = _services.Logger;
+            var loaded = await Task.Run(() => missing.Select(m =>
+            {
+                try
+                {
+                    return (Mesh: m, Model: (PreviewModel?)new MeshPreviewLoader(catalog, logger) { TextureSize = 1024, ForGpu = true }.LoadMesh(m));
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    logger.LogInformation("Added part model {Mesh}: {Message}", m, ex.Message);
+                    return (Mesh: m, Model: null);
+                }
+            }).ToList()).ConfigureAwait(true);
+            foreach (var (mesh, part) in loaded)
+            {
+                _addedMeshes[mesh] = part;
+            }
+        }
+
+        if (load != _studioPartsLoads)
+        {
+            return; // a newer refresh runs
+        }
+
+        var parts = new List<PreviewPart>();
+        var textures = new Dictionary<string, TextureImage>(StringComparer.OrdinalIgnoreCase);
+        foreach (var part in added)
+        {
+            if (part.Mesh is not { } mesh || _addedMeshes.GetValueOrDefault(mesh) is not { } shown || (part.Place ?? part.Game) is not { } place)
+            {
+                continue;
+            }
+
+            var at = PartsStudio.Transform(place);
+            parts.AddRange(shown.Parts.Select(p => p with { Transform = Compose(p.Transform, at), Attachment = part.Attachment }));
+            foreach (var (path, image) in shown.Textures)
+            {
+                textures.TryAdd(path, image);
+            }
+        }
+
+        if (parts.Count == _addedPreviewParts.Count && parts.Zip(_addedPreviewParts).All(p => p.First == p.Second))
+        {
+            return;
+        }
+
+        _addedPreviewParts = parts;
+        _addedPreviewTextures = textures;
+        if (_previewBase is not null)
+        {
+            Repaint();
+        }
+        else if (_previewLoaded is { } loadedModel)
+        {
+            Preview = WithAddedParts(loadedModel);
+        }
+
+        static FTransform Compose(FTransform local, FTransform socket) =>
+            new(socket.Rotation * local.Rotation, socket.TransformPosition(local.Translation), socket.Scale3D * local.Scale3D);
+    }
+
+    /// <summary>Forgets the added parts drawn (another vehicle selected).</summary>
+    private void ForgetAddedParts()
+    {
+        _studioPartsLoads++;
+        _addedPreviewParts = [];
+        _addedPreviewTextures = new Dictionary<string, TextureImage>();
+        _previewLoaded = null;
     }
 }

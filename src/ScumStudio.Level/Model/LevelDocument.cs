@@ -354,6 +354,7 @@ public sealed class LevelDocument
                 TraderMarkers = actor.TraderMarkers ?? [],
                 IsItemContainer = actor.IsItemContainer,
                 WaterVolume = actor.WaterVolume,
+                HiddenInGame = actor.HiddenInGame,
             };
         }
 

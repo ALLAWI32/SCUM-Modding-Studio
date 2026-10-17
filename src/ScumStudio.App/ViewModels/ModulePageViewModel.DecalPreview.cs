@@ -1,5 +1,6 @@
 using System.Numerics;
 using Microsoft.Extensions.Logging;
+using ScumStudio.App.Localization;
 using ScumStudio.Assets.Textures;
 using ScumStudio.Viewport;
 using ScumStudio.Viewport.Decals;
@@ -21,6 +22,7 @@ public abstract partial class ModulePageViewModel
     private readonly Dictionary<string, DecalLiveBake> _decalLive = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, DecalLiveJob> _decalRunning = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, DecalLiveJob> _decalWaiting = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> _decalSharedTold = new(StringComparer.OrdinalIgnoreCase);
     private int _decalVersion;
 
     /// <summary>A bake of the 3D view's decals is running on a worker (or waiting for one).</summary>
@@ -74,6 +76,7 @@ public abstract partial class ModulePageViewModel
     {
         _decalLive.Clear();
         _decalWaiting.Clear();
+        _decalSharedTold.Clear();
     }
 
     private void StartDecalBake(DecalLiveJob job)
@@ -89,8 +92,8 @@ public abstract partial class ModulePageViewModel
         {
             done = await Task.Run(() =>
             {
-                var (diffuse, mask) = job.Reuse is { } kept ? (kept.Diffuse, kept.Mask) : Compose(job);
-                return new DecalLiveBake(job.Version, job.Size, job.A, job.B, diffuse, mask, PaintBaker.Bake(diffuse, mask, job.A, job.B));
+                var (diffuse, mask, shared) = job.Reuse is { } kept ? (kept.Diffuse, kept.Mask, kept.SharedUv) : Compose(job);
+                return new DecalLiveBake(job.Version, job.Size, job.A, job.B, diffuse, mask, PaintBaker.Bake(diffuse, mask, job.A, job.B, job.Parts)) { SharedUv = shared };
             }).ConfigureAwait(true);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
@@ -112,12 +115,35 @@ public abstract partial class ModulePageViewModel
         if (done is not null)
         {
             Repaint(); // shows it (a newer bake waiting shows the moment it is done)
+            if (!DecalsDragging && done.Version == _decalVersion)
+            {
+                TellSharedUv(job.Material, done.SharedUv);
+            }
         }
 
-        static (TextureImage Diffuse, TextureImage Mask) Compose(DecalLiveJob job)
+        static (TextureImage Diffuse, TextureImage Mask, IReadOnlyList<string> SharedUv) Compose(DecalLiveJob job)
         {
             var baked = DecalBaker.Bake(job.Diffuse, job.Mask, job.Parts, job.Stamps, job.Size);
-            return (baked.Diffuse, baked.Mask);
+            return (baked.Diffuse, baked.Mask, baked.SharedUv);
+        }
+    }
+
+    /// <summary>
+    /// Says once (until it changes) which places of the car show a decal of <paramref name="material"/> too because they use
+    /// the same texels (a door whose UVs are the other door's, mirrored): the game cannot show it on one of them only.
+    /// </summary>
+    private void TellSharedUv(string material, IReadOnlyList<string> shared)
+    {
+        var names = string.Join(", ", shared);
+        if (_decalSharedTold.GetValueOrDefault(material, string.Empty) == names)
+        {
+            return;
+        }
+
+        _decalSharedTold[material] = names;
+        if (shared.Count > 0)
+        {
+            _services.Notifications.Warning(Loc.T("Studio.Decals.Title"), Loc.F("Studio.Decals.SharedUv", names));
         }
     }
 
@@ -129,5 +155,9 @@ public abstract partial class ModulePageViewModel
     }
 
     /// <summary>A finished preview bake: the decals at <see cref="Version"/> composed in, then painted.</summary>
-    private sealed record DecalLiveBake(int Version, int Size, Vector4 A, Vector4? B, TextureImage Diffuse, TextureImage Mask, TextureImage Image);
+    private sealed record DecalLiveBake(int Version, int Size, Vector4 A, Vector4? B, TextureImage Diffuse, TextureImage Mask, TextureImage Image)
+    {
+        /// <summary>The places that show these decals too (<see cref="DecalBakeResult.SharedUv"/>).</summary>
+        public IReadOnlyList<string> SharedUv { get; init; } = [];
+    }
 }

@@ -186,6 +186,9 @@ public sealed record LevelExportData
     /// <summary>Volume actors: <c>bWaterVolume</c> as stored or in the archetype (players swim in it).</summary>
     public bool WaterVolume { get; init; }
 
+    /// <summary>Actors: <c>bHidden</c> ("Actor Hidden In Game") as stored or in the archetype.</summary>
+    public bool HiddenInGame { get; init; }
+
     /// <summary>Sentry spawner actors: <c>PatrolPoints</c> relative to the spawner; null for other actors.</summary>
     public IReadOnlyList<FVector>? PatrolPoints { get; init; }
 

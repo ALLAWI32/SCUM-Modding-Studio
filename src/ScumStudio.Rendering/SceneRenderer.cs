@@ -272,6 +272,9 @@ public sealed class SceneRenderer : IDisposable
         float HasNhr(int i) => detail.Normals is { } list && i < list.Count && list[i] is not null ? 1f : 0f;
 
         _meshProgram.Set("uLayerTiling", detail.InvTilingCm);
+        (detail.Rest ?? _white).Bind(RestLayerUnit);
+        _meshProgram.Set("uLayerTiling4", detail.Rest is null ? 0f : detail.RestInvTilingCm);
+        _meshProgram.Set("uLayerMean4", detail.RestMean);
         _meshProgram.Set("uTerrainDetail", 1);
     }
 
@@ -445,6 +448,8 @@ public sealed class SceneRenderer : IDisposable
         {
             _meshProgram.Set(LayerNhrUniforms[i], 8 + i);
         }
+
+        _meshProgram.Set("uLayer4", RestLayerUnit);
         TerrainDetailTextures? boundDetail = null;
 
         var drawCalls = 0;
@@ -565,6 +570,7 @@ public sealed class SceneRenderer : IDisposable
             GpuTexture.UnbindSampler(_gl, unit);
         }
 
+        GpuTexture.UnbindSampler(_gl, RestLayerUnit);
         ReadOnlySpan<int> copyUnits = [ShadowUnit, CopyColorUnit, CopyDepthUnit];
         foreach (var unit in copyUnits)
         {
@@ -1005,12 +1011,24 @@ public sealed class SceneRenderer : IDisposable
 
             var usedLods = 0;
             var shadowLods = 0;
+            // The LODs of the last frame hold a cluster near a threshold (a pick reads them, it does not move them on).
+            var shown = batch.ShownLods;
+            if (shown is null || shown.Length != clusters.Length)
+            {
+                shown = new sbyte[clusters.Length];
+                Array.Fill(shown, (sbyte)-1);
+                if (!pick)
+                {
+                    batch.ShownLods = shown;
+                }
+            }
+
             for (var c = 0; c < clusters.Length; c++)
             {
                 var lod = -1;
                 if (inView)
                 {
-                    lod = LodMath.Classify(clusters[c], frustum, eye, tanHalfFov, minScreenSize, distanceScale, mesh.LodScreenSizes, s.ObjectDrawDistance, s.LodBias);
+                    lod = LodMath.Classify(clusters[c], frustum, eye, tanHalfFov, minScreenSize, distanceScale, mesh.LodScreenSizes, s.ObjectDrawDistance, s.LodBias, shown[c]);
                     if (lod < 0)
                     {
                         culled += clusters[c].Count;
@@ -1023,6 +1041,10 @@ public sealed class SceneRenderer : IDisposable
                 }
 
                 _lodOfCluster[c] = lod;
+                if (!pick)
+                {
+                    shown[c] = (sbyte)lod;
+                }
 
                 // Sun shadows: the clusters in the shadow box, also those just outside the view (a tree behind the camera
                 // still shades the ground in front of it), at the LOD and draw distance they would have on screen.
@@ -1324,6 +1346,9 @@ public sealed class SceneRenderer : IDisposable
     }
 
     private const int ShadowUnit = 6;
+
+    /// <summary>The terrain's fifth paint layer, whose grain the ground no slot covers takes (<see cref="TerrainDetailTextures.Rest"/>).</summary>
+    private const int RestLayerUnit = 12;
     private const int CopyColorUnit = 13;
     private const int CopyDepthUnit = 14;
 

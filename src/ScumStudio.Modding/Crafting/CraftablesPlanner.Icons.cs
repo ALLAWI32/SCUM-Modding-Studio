@@ -60,9 +60,9 @@ public static partial class CraftablesPlanner
 
         try
         {
-            if (ElementFamilies.Of(catalog, craftable.Element?.Template ?? source) is not { } family)
+            if (ElementFamilies.Of(catalog, craftable.Element?.Template ?? source) is not { } family || family.BorrowsRecipe)
             {
-                return null;
+                return null; // a borrowed recipe's picture is the chair's, not the element's
             }
 
             // An element given another mesh no longer looks like the game's element: its picture would show the old one.

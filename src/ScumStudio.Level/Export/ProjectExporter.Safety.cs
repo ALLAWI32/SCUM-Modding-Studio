@@ -14,7 +14,7 @@ namespace ScumStudio.Level.Export;
 /// </summary>
 public sealed partial class ProjectExporter
 {
-    /// <summary>File in the role folder listing the item spawners the last export placed (one <c>level|actor|item</c> per line).</summary>
+    /// <summary>File in the export folder's hidden work folder listing the item spawners the last export placed (one <c>level|actor|item</c> per line).</summary>
     public const string ItemSpawnersFileName = "item-spawners.txt";
 
     /// <summary>What an item spawner leaves behind (the report's note).</summary>
@@ -22,12 +22,14 @@ public sealed partial class ProjectExporter
         "Items these spawners already spawned stay in players' worlds: the game saves every spawned item, and a pak cannot remove it. "
         + "Remove them with Map → Clean saved items: stop the server (or quit the game), choose its SCUM.db, Find, Remove ticked, start the server (a backup is made first).";
 
-    /// <summary>Where a cook's paks go (the report's install note).</summary>
+    /// <summary>Where a cook's files go (the report's install note): everything in the mod's folder, nothing else with it.</summary>
     public static string InstallNote(ProjectSourceRole role) => role == ProjectSourceRole.Server
-        ? "This is the SERVER pak: it goes into the dedicated server's mods folder. Every player needs the CLIENT pak of the same export in the game's Paks\\~mods, "
-            + "and the Craftables paks go the same way (client pak on every player, server pak on the server). Restart the server and the game after copying."
-        : "This is the CLIENT pak: every player needs it in the game's Paks\\~mods. A server needs the SERVER pak of the same export in its mods folder, "
-            + "and the Craftables paks go the same way (client pak on every player, server pak on the server). Restart the game and the server after copying.";
+        ? "SERVER files. Copy every .pak and .sig in this folder (the project's pak and the Craftables pak alike) into the dedicated server's SCUM\\Content\\Paks\\~mods (make the ~mods folder when it is missing) "
+            + "and start the server with -fileopenlog (without it the server refuses every mod pak and stops). Every player needs the CLIENT folder of the same export "
+            + "in the game's SCUM\\Content\\Paks\\~mods. Never install this project's page paks (the \"- pages\" folder) together with these. Restart the server and the game after copying."
+        : "CLIENT files. Copy every .pak and .sig in this folder (the project's pak and the Craftables pak alike) into the game's SCUM\\Content\\Paks\\~mods on every player's PC (make the ~mods folder when it is missing). "
+            + "A server with this mod needs the SERVER folder of the same export in its SCUM\\Content\\Paks\\~mods, started with -fileopenlog (without it the server refuses every mod pak and stops). "
+            + "Never install this project's page paks (the \"- pages\" folder) together with these. Restart the game and the server after copying.";
 
     /// <summary>
     /// The stub pass of one cook's staging: the server's events become its 12-byte stubs (<see cref="ServerEventStubs"/>);
@@ -60,6 +62,19 @@ public sealed partial class ProjectExporter
     /// </summary>
     internal static List<string> ItemSpawnersGone(EditState state, string roleDirectory, IReadOnlyDictionary<string, LevelDocument?> documents, List<string> warnings)
     {
+        var gone = ItemSpawnersGone(state, roleDirectory, documents, warnings, out var placed);
+        WriteItemSpawners(roleDirectory, placed, warnings);
+        return gone;
+    }
+
+    /// <summary>
+    /// <see cref="ItemSpawnersGone(EditState, string, IReadOnlyDictionary{string, LevelDocument?}, List{string})"/> without writing the
+    /// list: <paramref name="placed"/> is what this export places, for <see cref="WriteItemSpawners"/> once its pak is written (an
+    /// export the package check refuses leaves the list of the last export that wrote a pak).
+    /// </summary>
+    internal static List<string> ItemSpawnersGone(EditState state, string roleDirectory, IReadOnlyDictionary<string, LevelDocument?> documents, List<string> warnings,
+        out IReadOnlyList<string> placed)
+    {
         var gone = new List<string>();
         foreach (var deleted in state.DeletedActors.OrderBy(a => a.Level, StringComparer.OrdinalIgnoreCase).ThenBy(a => a.Actor, StringComparer.OrdinalIgnoreCase))
         {
@@ -69,7 +84,7 @@ public sealed partial class ProjectExporter
             }
         }
 
-        var placed = state.AddedActors.Values.OfType<AddBlueprintActorOp>()
+        placed = state.AddedActors.Values.OfType<AddBlueprintActorOp>()
             .Where(b => b.Item is not null || string.Equals(b.ClassPath, PlacedBlueprintIndex.WorldItemSpawnerClass, StringComparison.Ordinal))
             .Select(b => string.Join('|', b.Level, b.NewName, b.Item ?? string.Empty))
             .Order(StringComparer.OrdinalIgnoreCase)
@@ -86,15 +101,27 @@ public sealed partial class ProjectExporter
                     gone.Add(parts.Length == 3 ? $"{parts[0]}: {parts[1]}{(parts[2].Length > 0 ? $" ({parts[2]})" : string.Empty)} (placed by an earlier export)" : line);
                 }
             }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            warnings.Add($"The list of placed item spawners ({file}) could not be read: {ex.Message}");
+        }
 
+        return gone;
+    }
+
+    /// <summary>Writes <see cref="ItemSpawnersFileName"/> in <paramref name="roleDirectory"/>: the item spawners this export placed.</summary>
+    internal static void WriteItemSpawners(string roleDirectory, IReadOnlyList<string> placed, List<string> warnings)
+    {
+        var file = Path.Combine(roleDirectory, ItemSpawnersFileName);
+        try
+        {
             File.WriteAllLines(file, placed, new UTF8Encoding(false));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            warnings.Add($"The list of placed item spawners ({file}) could not be read or written: {ex.Message}");
+            warnings.Add($"The list of placed item spawners ({file}) could not be written: {ex.Message}");
         }
-
-        return gone;
     }
 
     /// <summary>A world item spawner (<c>/Script/SCUM.WorldItemSpawner</c>) or an actor with a spawner component of its own.</summary>

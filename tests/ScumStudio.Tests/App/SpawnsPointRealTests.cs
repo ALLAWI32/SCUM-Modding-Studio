@@ -56,9 +56,10 @@ public sealed class SpawnsPointRealTests(ITestOutputHelper output)
             var map = HeadlessUi.FindNamed<SpawnMap>(window, "SpawnMap")!;
             HeadlessUi.SaveScreenshot(window, "spawns-point-picked");
 
-            // Dragged 8 m right and 5 m down on the map (+X, +Y), released: one move, onto the real terrain.
+            // Dragged 8 m left and 5 m up on the map (+X, +Y: the map is turned like the game's, D4 top left), released: one
+            // move, onto the real terrain.
             var from = map.TranslatePoint(map.ScreenOf(id)!.Value, window)!.Value; // the mouse works in the window's pixels
-            var to = from + new Vector(8 * map.PixelsPerMetre, 5 * map.PixelsPerMetre);
+            var to = from - new Vector(8 * map.PixelsPerMetre, 5 * map.PixelsPerMetre);
             var history = ctx.Services.Projects.History.Count;
             window.MouseMove(from);
             window.MouseDown(from, MouseButton.Left);

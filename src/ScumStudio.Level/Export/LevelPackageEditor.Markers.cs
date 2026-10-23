@@ -30,13 +30,15 @@ public static partial class LevelPackageEditor
         }
 
         var (source, work, array) = found;
-        if (array.Items.Any(i => i is not StructValue || HasUndecoded(i)))
+
+        // No point kept (a placed building with no loot inside): only the template's element type is needed.
+        if (patch.Points.Count > 0 && array.Items.Any(i => i is not StructValue || HasUndecoded(i)))
         {
             warnings.Add($"'{label}': its template's {patch.Array} holds values this studio cannot read; its spawn points were not written.");
             return null;
         }
 
-        if (!ReferenceEquals(source, package))
+        if (patch.Points.Count > 0 && !ReferenceEquals(source, package))
         {
             var session = new ImportSession(package, source, levelIndex + 1, 0, exports, data, imports, names, wide, addedNames, preload, warnings);
             session.RemapValues(work, array.Items);

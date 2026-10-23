@@ -1,9 +1,12 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using ScumStudio.App.Services;
 using ScumStudio.Assets.Catalog;
+using ScumStudio.Assets.Textures;
 using ScumStudio.Rendering.Imaging;
 using ScumStudio.Tests.Fixtures;
+using ScumStudio.Tests.Level;
 using ScumStudio.Tests.Rendering;
+using ScumStudio.Viewport;
 
 namespace ScumStudio.Tests.App;
 
@@ -88,6 +91,73 @@ public sealed class ThumbnailServiceTests
             // Something was drawn: not every pixel is the clear colour.
             var first = (rgba[0], rgba[1], rgba[2]);
             Assert.Contains(Enumerable.Range(0, width * height), i => (rgba[i * 4], rgba[(i * 4) + 1], rgba[(i * 4) + 2]) != first);
+        }
+        finally
+        {
+            Cleanup(directory);
+        }
+    }
+
+    [Fact]
+    public void CacheKeyFollowsTheDecoderAndLookVersions()
+    {
+        // r39 (owner, igor8802): 3.5.0 decoded the ZIL trucks' streaming virtual textures, but the cache key stayed the same,
+        // so the white tiles 3.4.0 had written were read back for good. The key and the folder now carry the versions of the
+        // loader and of the decoder: bumping either one makes every thumbnail again, without touching the service.
+        var directory = TempDirectory();
+        using var now = new ThumbnailService(directory, NullLogger.Instance);
+        using var newLook = new ThumbnailService(directory, NullLogger.Instance, ThumbnailService.VersionOf(MeshPreviewLoader.LookVersion + 1, TextureDecoder.Version));
+        using var newDecoder = new ThumbnailService(directory, NullLogger.Instance, ThumbnailService.VersionOf(MeshPreviewLoader.LookVersion, TextureDecoder.Version + 1));
+        Assert.Equal(ThumbnailService.VersionOf(MeshPreviewLoader.LookVersion, TextureDecoder.Version), now.Version);
+
+        const string mesh = "/Game/ConZ_Files/Models/Vehicles/Zil_Truck/130_Emergency/MainMesh/SM_130E_Cabin_01";
+        ThumbnailService[] services = [now, newLook, newDecoder];
+        var files = services.Select(s => s.CacheFile(mesh, 1234)).ToList();
+        Assert.Equal(3, files.Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        Assert.All(services, s => Assert.Equal(Path.Combine(directory, "v" + s.Version), Path.GetDirectoryName(s.CacheFile(mesh, 1234))));
+
+        // The same package gives the same file; a game update (another package size) another one.
+        Assert.Equal(files[0], now.CacheFile(mesh, 1234));
+        Assert.NotEqual(files[0], now.CacheFile(mesh, 1235));
+    }
+
+    [Fact]
+    public async Task OldVersionFoldersAreSwept()
+    {
+        // 3.5.1 and earlier wrote every version's tiles side by side into the cache folder and never removed one (68 MB of
+        // dead tiles on the owner's PC). The first thumbnail asked for removes the other versions' folders and the loose
+        // PNGs of that flat layout; what is no thumbnail cache stays.
+        using var temp = new LevelTempDirectory();
+        Directory.CreateDirectory(temp.Combine("SCUM", "Content", "T"));
+        File.WriteAllBytes(temp.Combine("SCUM", "Content", "T", "T_Sweep.uasset"), [0]); // only its size is read
+        using var catalog = AssetCatalog.OpenLoose(temp.Path);
+        var directory = TempDirectory();
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(directory, "v0.0.0"));
+            File.WriteAllBytes(Path.Combine(directory, "v0.0.0", "0123456789ABCDEF01234567.png"), [1]);
+            File.WriteAllBytes(Path.Combine(directory, "abc.png"), [1]);
+            File.WriteAllText(Path.Combine(directory, "notes.txt"), "kept");
+            Directory.CreateDirectory(Path.Combine(directory, "various"));
+
+            using var service = new ThumbnailService(directory, NullLogger.Instance);
+            var png = await service.GetDerivedAsync(catalog, "/Game/T/T_Sweep", "sweep-test", () => (new byte[2 * 2 * 4], 2, 2));
+            Assert.NotNull(service.Sweeping);
+            await service.Sweeping!;
+
+            Assert.NotNull(png);
+            Assert.True(File.Exists(png), png);
+            Assert.Equal(service.VersionDirectory, Path.GetDirectoryName(png));
+            Assert.False(Directory.Exists(Path.Combine(directory, "v0.0.0")));
+            Assert.False(File.Exists(Path.Combine(directory, "abc.png")));
+            Assert.True(File.Exists(Path.Combine(directory, "notes.txt")));
+            Assert.True(Directory.Exists(Path.Combine(directory, "various")));
+
+            // A second service of the same version keeps that version's tiles.
+            using var again = new ThumbnailService(directory, NullLogger.Instance);
+            Assert.Equal(png, await again.GetDerivedAsync(catalog, "/Game/T/T_Sweep", "sweep-test", () => null));
+            await again.Sweeping!;
+            Assert.True(File.Exists(png), png);
         }
         finally
         {

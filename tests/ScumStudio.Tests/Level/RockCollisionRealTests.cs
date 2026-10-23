@@ -143,9 +143,13 @@ public sealed class RockCollisionRealTests
         // The bent cliff is written straight (the game's own triangle collision; bent it got 15 cm slabs of boxes).
         Assert.Contains(result.Warnings, w => w.Contains("Cliff_02b_Added: exported straight - a rock or cliff", StringComparison.Ordinal));
         using var written = AssetCatalog.OpenLoose(result.StagingDirectory);
-        var package = ModdableAssets.ReadPackage(written, Farm);
         foreach (var name in new[] { shell.NewName, big.NewName, cliff.NewName })
         {
+            // The coast is out of the farm's reach (200 m): each went into the terrain tile under it (FarPlacement).
+            var into = Assert.Single(result.FarPlaced, m => m.From.Actor == name).To;
+            Assert.Equal(name, into.Actor);
+            Assert.Contains("/Landscape_", into.Level, StringComparison.Ordinal);
+            var package = ModdableAssets.ReadPackage(written, into.Level);
             var actor = Enumerable.Range(0, package.Exports.Count).Single(i => package.ResolveName(package.Exports[i].ObjectName) == name);
             Assert.Equal("StaticMeshActor", package.GetExportClassName(actor));
             var componentIndex = Enumerable.Range(0, package.Exports.Count).Single(i => package.Exports[i].OuterIndex == actor + 1);

@@ -30,7 +30,7 @@ public static partial class LevelPackageEditor
     {
         var label = $"{patch.Actor}.{patch.Component}";
         var actor = FindLevelActor(exports, names, levelIndex + 1, patch.Actor);
-        var component = actor > 0 ? FindChild(exports, names, actor, patch.Component) : 0;
+        var component = actor > 0 ? FindComponentPath(package, exports, data, names, actor, patch.Component) : 0;
         if (component <= 0)
         {
             warnings.Add($"{label}: no such component in the level; its loot was not written.");

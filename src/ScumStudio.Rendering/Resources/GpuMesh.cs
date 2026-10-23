@@ -41,6 +41,23 @@ public sealed class GpuSection
         Texture = texture;
     }
 
+    private GpuSection(GpuSection template, PreparedSection section)
+    {
+        NormalMap = template.NormalMap;
+        Roughness = template.Roughness;
+        AlphaCutoff = template.AlphaCutoff;
+        Tint = template.Tint;
+        HasOwnColour = template.HasOwnColour;
+        FirstIndex = (uint)section.FirstIndex;
+        IndexCount = (uint)section.IndexCount;
+        BaseVertex = (uint)section.BaseVertex;
+        Material = section.Material;
+        Texture = template.Texture;
+    }
+
+    /// <summary>This section's look (textures, tint, clip, roughness) over the index range of <paramref name="section"/>.</summary>
+    internal GpuSection Over(PreparedSection section) => new(this, section);
+
     /// <summary>Opacity clip value of a masked material (pixels whose texture alpha is below it are discarded); 0 = opaque.</summary>
     public float AlphaCutoff { get; }
 
@@ -335,6 +352,43 @@ public sealed class GpuMesh : IDisposable
         ImpostorLod = Lods.Length;
         Lods = [.. Lods, new GpuLod(screenSize, [section])];
         LodScreenSizes = [.. LodScreenSizes, screenSize];
+    }
+
+    /// <summary>
+    /// Replaces the vertex and index data with <paramref name="mesh"/>, which has the same LODs and sections as the data
+    /// uploaded before but other sizes (a terrain component drawn finer or coarser as the camera comes and goes). The mesh
+    /// keeps its id, VAO, textures, terrain detail, instances and <see cref="Bounds"/>: the caller makes sure the new data
+    /// lies inside them (nodes are culled by those bounds).
+    /// </summary>
+    /// <exception cref="ArgumentException"><paramref name="mesh"/> has other LODs or sections.</exception>
+    /// <exception cref="InvalidOperationException">The mesh draws an impostor card (its card lives in these buffers).</exception>
+    public void ReplaceGeometry(PreparedMesh mesh)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentNullException.ThrowIfNull(mesh);
+        if (ImpostorLod >= 0)
+        {
+            throw new InvalidOperationException($"Mesh '{Name}' draws an impostor card; its geometry cannot be replaced.");
+        }
+
+        if (mesh.Lods.Length != Lods.Length || mesh.Lods.Where((l, i) => l.Sections.Length != Lods[i].Sections.Length).Any())
+        {
+            throw new ArgumentException($"Mesh '{mesh.Name}' has other LODs or sections than '{Name}'.", nameof(mesh));
+        }
+
+        _gl.BindVertexArray(Vao); // the index buffer binding is the VAO's
+        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, VertexBuffer);
+        _gl.BufferData<float>(BufferTargetARB.ArrayBuffer, mesh.Vertices, BufferUsageARB.StaticDraw);
+        _gl.BindBuffer(BufferTargetARB.ElementArrayBuffer, IndexBuffer);
+        _gl.BufferData<uint>(BufferTargetARB.ElementArrayBuffer, mesh.Indices, BufferUsageARB.StaticDraw);
+        _gl.BindVertexArray(0);
+        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, 0);
+        var oldBytes = ((long)VertexCount * PreparedMesh.FloatsPerVertex + IndexCount) * sizeof(float);
+        Track((((long)mesh.Vertices.Length + mesh.Indices.Length) * sizeof(float)) - oldBytes);
+        Lods = mesh.Lods.Select((l, i) => new GpuLod(l.ScreenSize, l.Sections.Select((s, k) => Lods[i].Sections[k].Over(s)).ToArray())).ToArray();
+        LodScreenSizes = Lods.Select(l => l.ScreenSize).ToArray();
+        VertexCount = mesh.VertexCount;
+        IndexCount = mesh.Indices.Length;
     }
 
     // Grows a buffer by data, keeping the buffer object the VAO names: the old contents go out to a scratch buffer and back.

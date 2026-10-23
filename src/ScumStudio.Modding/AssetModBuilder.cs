@@ -59,6 +59,12 @@ public sealed partial record AssetModRequest(IReadOnlyList<ClonePlan> Clones, IR
     /// <summary>The project folder the pictures of new textures (<see cref="TextureWrites"/>) are read from, or null.</summary>
     public string? FileRoot { get; init; }
 
+    /// <summary>
+    /// Vehicle parts whose model keeps its own size and pivot (the parts added to a car: the model sits where the user
+    /// clicked). Every other part given another model has it fitted in place of its own (<see cref="PartModelFit"/>).
+    /// </summary>
+    public IReadOnlyCollection<string> FreeModels { get; init; } = [];
+
     /// <summary>True when nothing is requested.</summary>
     public bool IsEmpty => Clones.Count == 0 && Edits.Count == 0 && Replacements.Count == 0 && DataAssets.Count == 0 && SoldElsewhere.Count == 0;
 }
@@ -113,6 +119,10 @@ public static partial class AssetModBuilder
     /// <summary>Provider path of the cooked registry.</summary>
     public const string AssetRegistryPath = "SCUM/AssetRegistry.bin";
 
+    /// <summary>True for a package in the game's folder of ingredient tags (<c>CI_*</c>, <see cref="Crafting.RecipeIngredients.TagFolder"/>).</summary>
+    private static bool IsIngredientTag(string path) =>
+        PackageMap.Normalize(path).StartsWith(Crafting.RecipeIngredients.TagFolder + "/", StringComparison.OrdinalIgnoreCase);
+
     /// <summary>Builds <paramref name="request"/> against <paramref name="catalog"/>.</summary>
     public static AssetModBuildResult Build(AssetCatalog catalog, AssetModRequest request)
     {
@@ -123,6 +133,7 @@ public static partial class AssetModBuilder
         var maps = new List<(string Owner, PackageMap Map, IReadOnlyList<KeyValuePair<string, string>>? Copied)>();
         var cloned = new List<ClonePlan>();
         var dropped = new HashSet<string>(StringComparer.OrdinalIgnoreCase); // new paths of clones that were not built
+        var madeVisible = new List<(string, string, string, string)>(); // clones' _visibleToAdminCommands set true, for the report
 
         foreach (var requested in request.Clones)
         {
@@ -169,10 +180,14 @@ public static partial class AssetModBuilder
                 }
 
                 SettleRedirectedImports(catalog, plan, copies);
+
+                // A clone is made to be spawned under its new name, also when the game hides its template from #SpawnItem /
+                // #SpawnVehicle (AssetModBuilder.AdminCommands.cs; RegistryCloner leaves the tag off its records).
+                madeVisible.AddRange(MakeVisibleToAdminCommands(plan, copies, warnings));
             }
             catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or FormatException)
             {
-                warnings.Add($"{plan.NewPrimary}: not created, none of its {plan.Packages.Count} package(s) ship ({ex.Message}).");
+                warnings.Add($"{plan.NewPrimary}: not created, none of its {plan.Packages.Count} package(s) ship ({ex.Message}).{RemakeHint}");
                 dropped.UnionWith(plan.Packages.Select(p => PackageMap.Normalize(p.Value)));
                 continue;
             }
@@ -342,7 +357,7 @@ public static partial class AssetModBuilder
         AddIngredientInstances(catalog, request, built, warnings);
         SetRecipeAmounts(catalog, request, built, warnings);
 
-        var applied = new List<(string, string, string, string)>();
+        var applied = new List<(string, string, string, string)>(madeVisible);
         WriteTextures(catalog, request, built, applied, warnings);
         var pictures = WritePictures(catalog, request, built, dropped, warnings);
         foreach (var (packagePath, all) in request.Edits)
@@ -381,6 +396,22 @@ public static partial class AssetModBuilder
 
             try
             {
+                // A part shown with another model of the game: the model sits where the part's own did, at its size (Discord
+                // 2026-10-19, ZIL wheels on a Rager). A part added to a car keeps its model as the user placed it.
+                if (edits.Any(e => e.Path == VehicleAttachmentEdits.MeshPath)
+                    && !request.FreeModels.Any(f => string.Equals(PackageMap.Normalize(f), path, StringComparison.OrdinalIgnoreCase)))
+                {
+                    var (fit, problem) = PartModelFit.OffsetEdit(package, edits, m => PartModelFit.BoundsOf(catalog, m), m => GameModelPath(request, m));
+                    if (fit is not null)
+                    {
+                        edits.Add(fit);
+                    }
+                    else if (problem is not null)
+                    {
+                        warnings.Add($"{path}: {problem}.");
+                    }
+                }
+
                 // Stored values first (same-size patches), then parameters by name (a material instance may gain entries).
                 // Spawn preset slots and weapon sockets are rewritten whole (they add exports, imports and array items).
                 var parts = edits.Where(e => VehicleParts.IsEdit(e.Path)).ToList();
@@ -458,6 +489,14 @@ public static partial class AssetModBuilder
                 foreach (var (owner, map, copied) in maps)
                 {
                     registered.AddRange(RegistryCloner.Register(registry, map, warnings, owner, copied, kept));
+
+                    // A new ingredient tag (an item's, a group's, a station's) is no primary asset, but every tag of the game has
+                    // its record (NativeClass CraftingIngredientTag): the copy gets its template's too (r40).
+                    var tags = (copied ?? (IEnumerable<KeyValuePair<string, string>>)map.Packages).Where(p => IsIngredientTag(p.Value)).ToList();
+                    if (tags.Count > 0)
+                    {
+                        registered.AddRange(RegistryCloner.Register(registry, new PackageMap(tags), warnings, owner, null, kept, anyRecord: true));
+                    }
                 }
 
                 // A new picture is a texture: its record (size, format, group) is its template's, which has no primary type.
@@ -479,6 +518,47 @@ public static partial class AssetModBuilder
             .Select(b => new BuiltAssetPackage(b.Key, b.Value.Bytes, b.Value.Package.UBulk, b.Value.IsClone))
             .ToList();
         return new AssetModBuildResult(packages, registryBytes, registered, applied, warnings);
+    }
+
+    /// <summary>The game's object path of a model a clone of the request renamed (its template's model), else the path as given.</summary>
+    private static string GameModelPath(AssetModRequest request, string objectPath)
+    {
+        var package = PackageMap.Normalize(VehicleParts.PackageOf(objectPath));
+        foreach (var plan in request.Clones)
+        {
+            foreach (var (old, renamed) in plan.Packages)
+            {
+                if (string.Equals(PackageMap.Normalize(renamed), package, StringComparison.OrdinalIgnoreCase))
+                {
+                    return PackageMap.Normalize(old) + "." + PackageMap.Leaf(old);
+                }
+            }
+        }
+
+        return objectPath;
+    }
+
+    /// <summary>
+    /// Said after a clone the export cannot build: one recorded by an older studio may build when it is made again (3.5.1
+    /// named a numbered part <c>_v</c>, which the SF19's mesh refuses); an item, weapon or vehicle clone is checked when it is made
+    /// (<see cref="WhyNotBuilt"/>, which leaves this out).
+    /// </summary>
+    internal const string RemakeHint = " A clone made with an older version of the studio may build when it is removed and made again.";
+
+    /// <summary>
+    /// Why the export cannot build <paramref name="plan"/> (its own warning), or null when it builds: the clone is built in
+    /// memory, nothing is registered or written. r40: a clone the export would leave out of the pak (22 of the game's 2,841
+    /// items and weapons in 3.5.1, the M16A4 Premium among them) is refused when it is made, with the reason.
+    /// </summary>
+    public static string? WhyNotBuilt(AssetCatalog catalog, ClonePlan plan)
+    {
+        ArgumentNullException.ThrowIfNull(catalog);
+        ArgumentNullException.ThrowIfNull(plan);
+        var result = Build(catalog, new AssetModRequest([plan], new Dictionary<string, IReadOnlyList<TunableEdit>>()) { WriteRegistry = false, SellClones = false });
+        var primary = PackageMap.Normalize(plan.NewPrimary);
+        return result.Packages.Any(p => string.Equals(p.PackagePath, primary, StringComparison.OrdinalIgnoreCase))
+            ? null
+            : (result.Warnings.FirstOrDefault(w => w.Contains(primary, StringComparison.OrdinalIgnoreCase)) ?? result.Warnings.FirstOrDefault() ?? $"{primary}: not created.").Replace(RemakeHint, string.Empty, StringComparison.Ordinal);
     }
 
     /// <summary>

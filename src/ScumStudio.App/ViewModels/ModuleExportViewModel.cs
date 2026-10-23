@@ -58,15 +58,27 @@ public sealed partial class ModuleExportViewModel : ObservableObject
         }
 
         var (results, installed) = export;
-        LastResult = Describe(results, installed);
-        if (results.Count > 0)
+        LastResult = Describe(results, installed, results.ServerRefused);
+        if (results.Count > 0 && await InstallCheckService.ToastLineAsync(_services, project!, written: InstallCheckService.ClientPaks(results)).ConfigureAwait(true) is { } installLine)
+        {
+            LastResult += " " + installLine; // Check my install, in one line
+        }
+        if (results.ServerRefused is not null)
+        {
+            _services.Notifications.Warning(Loc.F("Export.Module.Done", label), LastResult); // the refusal's error toast stays
+        }
+        else if (results.Count > 0)
         {
             _services.Notifications.Success(Loc.F("Export.Module.Done", label), LastResult);
         }
     }
 
-    /// <summary>The paks written, where the server copies went, and the install rule, in the UI language.</summary>
-    public static string Describe(IReadOnlyList<ExportResult> results, IReadOnlyList<string> installed)
+    /// <summary>
+    /// The paks written, where the server copies went, and the install rule, in the UI language. With
+    /// <paramref name="serverRefused"/> (the package check refused a server pak) it says that pak was NOT written, never to
+    /// set the Server folder (review 3.5.1).
+    /// </summary>
+    public static string Describe(IReadOnlyList<ExportResult> results, IReadOnlyList<string> installed, ModValidationException? serverRefused = null)
     {
         ArgumentNullException.ThrowIfNull(results);
         ArgumentNullException.ThrowIfNull(installed);
@@ -78,11 +90,16 @@ public sealed partial class ModuleExportViewModel : ObservableObject
         var client = results.Where(r => r.Role == ProjectSourceRole.Client && r.PakPath is not null).ToList();
         var folder = client.Select(r => Path.GetDirectoryName(r.PakPath)).FirstOrDefault() ?? string.Empty;
         var text = Loc.F("Export.Module.Written", string.Join(" + ", client.Select(r => Path.GetFileName(r.PakPath))), folder);
-        if (!results.Any(r => r.Role == ProjectSourceRole.Server))
+        if (serverRefused is not null)
+        {
+            text += " " + Loc.F("Export.Module.ServerRefused", Path.GetFileName(serverRefused.PakPath) ?? ProjectExporter.RoleFolder(ProjectSourceRole.Server));
+        }
+        else if (!results.Any(r => r.Role == ProjectSourceRole.Server))
         {
             text += " " + Loc.T("Export.Module.NoServer");
         }
-        else if (installed.Count > 0)
+
+        if (installed.Count > 0)
         {
             text += " " + Loc.F("Map.ServerPakCopied", Path.GetDirectoryName(installed[0])).Trim();
         }

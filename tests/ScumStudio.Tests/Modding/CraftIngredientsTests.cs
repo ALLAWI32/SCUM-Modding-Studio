@@ -173,7 +173,7 @@ public sealed class CraftIngredientsTests : IDisposable
         var output = Path.Combine(_game.Root, "out");
         var setupPath = IngredientFixture.Ak47 + "_ES";
         Assert.True(Catalog.TryGetPackageFile(setupPath, out var file));
-        var staged = Path.Combine([output, ProjectExporter.RoleFolder(ProjectSourceRole.Client), ProjectExporter.StagingFolderName, .. file.Path[..file.Path.LastIndexOf('.')].Split('/')]);
+        var staged = Path.Combine([ProjectExporter.ExportFolder(output, "MyMod", pages: false, ProjectSourceRole.Client), ProjectExporter.WorkFolderName, ProjectExporter.StagingFolderName, .. file.Path[..file.Path.LastIndexOf('.')].Split('/')]);
         var edited = TunablePatcher.Apply(ModdableAssets.ReadPackage(Catalog, setupPath), [new TunableEdit("Default__Weapon_AK47_ES_C", "Caption", "AK-47 Custom")]).Bytes;
         var craftables = new CraftablesFile { Items = [Kit("Rifle Kit", new CraftIngredient(string.Empty, 1, Item: IngredientFixture.Ak47, AddTag: true))] };
 

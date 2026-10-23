@@ -1,6 +1,7 @@
 using ScumStudio.Assets.Catalog;
 using ScumStudio.Level.Editing;
 using ScumStudio.Level.Export;
+using ScumStudio.Level.Projects;
 using ScumStudio.Level.Spawns;
 using ScumStudio.Tests.Modding;
 using ScumStudio.Tests.Pak;
@@ -183,5 +184,42 @@ public sealed class ModuleExportTests
         var together = ModPackageValidator.Validate(staging, catalog, default, p => p == Clone ? "pakchunk912-My-Vehicles_P.pak" : null);
         Assert.True(together.Passed, string.Join('\n', together.Problems));
         Assert.Equal(["pakchunk912-My-Vehicles_P.pak"], together.Needs);
+    }
+
+    /// <summary>
+    /// r39 (igor8802): a robot replaced with NPCs is a Map edit (the robot removed) and Spawns edits (the posts, the NPC area,
+    /// its settings), and neither page pak names the other's packages. Each page pak's install note names the other; other
+    /// pages and projects without such an edit are left as they were.
+    /// </summary>
+    [Fact]
+    public void ARobotReplacedWithNpcsTiesTheMapAndSpawnsPaks()
+    {
+        var barracks = "/Game/ConZ_Files/Maps/The_Island/D_0_Military_Barracks";
+        var posts = new AddSpawnPlaceOp("NewNpcGroup_0001", SpawnPlaceKind.CharacterGroup, NpcGuards.PostType, ScumStudio.Level.Model.TransformValue.At(1f, 2f, 3f), Points: [ScumStudio.Core.Mathematics.FVector.Zero]);
+        var state = EditState.Replay([new BatchOp("Robot out, NPC area in", [new DeleteActorOp(new ActorRef(barracks, "SentrySpawner_0")), posts])]);
+        var (map, spawns) = (ModuleExport.PakFileName("My", ExportModule.Map, 902), ModuleExport.PakFileName("My", ExportModule.Spawns, 902));
+
+        Assert.Equal([spawns], ModuleExport.GoesWith(state, ExportModule.Map, "My", 902));
+        Assert.Equal([map], ModuleExport.GoesWith(state, ExportModule.Spawns, "My", 902));
+        Assert.Empty(ModuleExport.GoesWith(state, ExportModule.Vehicles, "My", 902));
+        Assert.Contains(spawns, ModuleExport.InstallNote(ProjectSourceRole.Client, map, string.Empty, ModuleExport.GoesWith(state, ExportModule.Map, "My", 902)), StringComparison.Ordinal);
+        Assert.Contains(map, ModuleExport.InstallNote(ProjectSourceRole.Server, spawns, string.Empty, ModuleExport.GoesWith(state, ExportModule.Spawns, "My", 902)), StringComparison.Ordinal);
+
+        // A rock removed and a group of points added, or a robot removed alone: no tie.
+        Assert.Empty(ModuleExport.GoesWith(EditState.Replay([new DeleteActorOp(new ActorRef(barracks, "Rock_7")), posts]), ExportModule.Map, "My", 902));
+        Assert.Empty(ModuleExport.GoesWith(EditState.Replay([new DeleteActorOp(new ActorRef(barracks, "SentrySpawner_0"))]), ExportModule.Spawns, "My", 902));
+    }
+
+    /// <summary>
+    /// The dedicated server refuses every pak in its <c>~mods</c> ("Pak file or matching sig file integrity compromised") and
+    /// quits unless it is started with -fileopenlog (3.5.0 check, server build 25803875): every server install text says so.
+    /// </summary>
+    [Fact]
+    public void TheServerInstallTextsSayFileOpenLog()
+    {
+        Assert.Contains("-fileopenlog", ProjectExporter.InstallNote(ProjectSourceRole.Server), StringComparison.Ordinal);
+        Assert.Contains("-fileopenlog", ModuleExport.InstallNote(ProjectSourceRole.Server, "pakchunk912-My-Vehicles_P.pak", string.Empty, []), StringComparison.Ordinal);
+        Assert.All(ScumStudio.App.Localization.Loc.Languages, language =>
+            Assert.Contains("-fileopenlog", ScumStudio.App.Localization.Loc.Table(language.Code)["Export.Module.Install"], StringComparison.Ordinal));
     }
 }

@@ -170,7 +170,10 @@ included in this repository.</sub>
   camera loads in full detail.
 - Toolbar:
   - **Maximize** (`F11`) and **Pop out**: give the 3D view the whole page or its own window (second monitor).
-  - **Quality**: Performance, Balanced, High or Ultra (how far and how detailed the view draws).
+  - **Quality**: Performance, Balanced, High or Ultra (how far and how detailed the view draws). The ground near the
+    camera is drawn from every point of the game's height map (1.5 m apart), as the game draws it there, so objects
+    laid on it sit as in the game; farther ground is drawn from every second or fourth point. Higher qualities draw
+    more of it at full detail.
   - **Spawns**: show or hide the game's spawn places as pins. Gold: loot points (the properties panel says what spawns
     there), orange: loot zones, red: sentries, pink: sentry patrol paths, purple: bunker creatures, blue: car-shop
     vehicles, green: drop zones. Spawner pins move, copy and delete like objects; loot points inside buildings move with
@@ -189,7 +192,16 @@ included in this repository.</sub>
   - **Frame all** / **Frame selection** (`F`), **Last object** (`Backspace`).
   - **Shape**: bend, lengthen, widen, raise, resize the selection (see below).
   - **Landscape**: the ground look of the whole island (Game, Snow, Desert, Autumn, All grass), tree swaps (an oak
-    drawn as a pine everywhere) and **Fit to ground** for the selection.
+    drawn as a pine everywhere) and **Fit to ground** for the selection. What the Map draws differently from the game:
+    the game's **ground grass** (the short grass and flowers it scatters over meadows from the ground layers) is not
+    drawn, so meadows look bare here; it is there in the game and your edits leave it as it is (except **Clear grass**
+    under an object you place). Objects drawn plain light grey are ones whose colour the studio cannot read from the
+    game's material; the game draws them in colour.
+  - **Hole tool** (experimental, in Landscape): players fall through a hole anywhere, but the game draws the hole only
+    on **green** ground: the landscape pieces whose material was built with the game's hole layer in the Unreal editor
+    (about one piece in nine). Every piece's material is compiled for its own set of ground layers, the others have no
+    hole in their compiled shaders, and a pak cannot compile new ones: on **amber** ground cover the opening with your
+    own model.
   - **Extend** (`Ctrl+E`): lay a copy right after the selected wall, road or tunnel piece; press again to keep building.
   - **Add object**: type or paste an object path (copied from Assets) to place it in front of the camera: a mesh, a
     Blueprint (a copy of one the game placed on the island) or an item (spawned by a world item spawner).

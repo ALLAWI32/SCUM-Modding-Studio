@@ -106,6 +106,14 @@ public abstract partial class ModulePageViewModel : PageViewModel, ISearchablePa
     [ObservableProperty]
     private string _valuesSummary = string.Empty;
 
+    /// <summary>What the selected part's values do in the game where it is not plain (a plane's speed, a bag's room), or empty.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasValuesNote))]
+    private string _valuesNote = string.Empty;
+
+    /// <summary>True when <see cref="ValuesNote"/> is shown.</summary>
+    public bool HasValuesNote => ValuesNote.Length > 0;
+
     /// <summary>Display caption of the selected asset (its entity setup's <c>Caption</c>), or empty.</summary>
     [ObservableProperty]
     private string _caption = string.Empty;
@@ -211,6 +219,12 @@ public abstract partial class ModulePageViewModel : PageViewModel, ISearchablePa
 
     /// <summary>Gameplay values shown by "Key stats" (property names).</summary>
     protected abstract IReadOnlySet<string> KeyStats { get; }
+
+    /// <summary>True when "Key stats" shows <paramref name="value"/> of the selected asset (by default: its name is a <see cref="KeyStats"/> name).</summary>
+    protected virtual bool IsKeyStat(Tunable value) => KeyStats.Contains(value.Name);
+
+    /// <summary>The note over the values of <paramref name="part"/> of <paramref name="item"/> (<see cref="ValuesNote"/>), or empty.</summary>
+    protected virtual string ValuesNoteFor(ModuleItemViewModel item, ModulePart part, IReadOnlyList<Tunable> values) => string.Empty;
 
     /// <summary>Chips for the loaded assets.</summary>
     protected abstract IReadOnlyList<ModuleFilter> BuildFilters(IReadOnlyList<ModuleItemViewModel> items);
@@ -441,6 +455,13 @@ public abstract partial class ModulePageViewModel : PageViewModel, ISearchablePa
             return;
         }
 
+        // r40: a clone the export could not build is refused now, with the reason, not left out of the pak at export.
+        if (await Task.Run(() => ScumStudio.Modding.AssetModBuilder.WhyNotBuilt(catalog, plan)).ConfigureAwait(true) is { } why)
+        {
+            _services.Notifications.Error(Loc.T("Module.CannotClone"), Loc.F("Module.CannotBuildClone", why));
+            return;
+        }
+
         var op = new CloneAssetOp(ModuleItemViewModel.KindLabel(item.Asset.Kind).ToLowerInvariant(), template, plan.NewPrimary,
             plan.Packages.Select(p => new PackagePair(p.Key, p.Value)).ToList());
         try
@@ -544,6 +565,7 @@ public abstract partial class ModulePageViewModel : PageViewModel, ISearchablePa
         Caption = string.Empty;
         _allRows = [];
         Groups = [];
+        ValuesNote = string.Empty;
         Preview = null;
         _previewBase = null;
         ForgetAddedParts();
@@ -798,6 +820,11 @@ public abstract partial class ModulePageViewModel : PageViewModel, ISearchablePa
         }
 
         OnPropertyChanged(nameof(CloneNameError));
+        if (SelectedItem is { } selected && SelectedPart is { } part && _allRows.Count > 0)
+        {
+            ValuesNote = ValuesNoteFor(selected, part, [.. _allRows.Select(r => r.Tunable)]);
+        }
+
         OnPropertyChanged(nameof(PaintListNote)); // review 3.5.0: the paint texts stayed in the old language
         OnPropertyChanged(nameof(PaintTogetherText));
         OnPropertyChanged(nameof(PaintTogetherTip));
@@ -1032,6 +1059,7 @@ public abstract partial class ModulePageViewModel : PageViewModel, ISearchablePa
             }
 
             var state = _services.Projects.Current?.State;
+            ValuesNote = SelectedItem is { } shown ? ValuesNoteFor(shown, part, tunables) : string.Empty;
             _allRows = tunables
                 .Select(t => new TunableRowViewModel(part.PackagePath, t, state?.GetAssetValue(part.PackagePath, t.Export, t.Path)?.Current ?? t.Value))
                 .ToList();
@@ -1052,6 +1080,7 @@ public abstract partial class ModulePageViewModel : PageViewModel, ISearchablePa
         {
             _allRows = [];
             Groups = [];
+            ValuesNote = string.Empty;
             ValuesSummary = Loc.F("Module.CouldNotRead", part.PackagePath, ex.Message);
         }
         finally
@@ -1166,7 +1195,7 @@ public abstract partial class ModulePageViewModel : PageViewModel, ISearchablePa
         var rows = _allRows.Where(r => tokens.All(t => r.Tunable.Path.Contains(t, StringComparison.OrdinalIgnoreCase) || r.Label.Contains(t, StringComparison.OrdinalIgnoreCase) || r.Tunable.Group.Contains(t, StringComparison.OrdinalIgnoreCase)));
         if (KeyStatsOnly && SelectedPart is not ({ IsVehicleParts: true } or { IsWeaponMounts: true }))
         {
-            var key = rows.Where(r => KeyStats.Contains(r.Tunable.Name)).ToList();
+            var key = rows.Where(r => IsKeyStat(r.Tunable)).ToList();
             rows = key.Count > 0 ? key : rows;
         }
 

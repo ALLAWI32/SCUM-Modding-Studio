@@ -279,6 +279,36 @@ public sealed class SceneRenderer : IDisposable
     }
 
 
+    /// <summary>
+    /// Replaces the vertex and index data of an uploaded mesh (<see cref="GpuMesh.ReplaceGeometry"/>: same LODs and sections,
+    /// other sizes, inside the mesh's bounds); nodes drawing it draw the new data from the next frame. False when the mesh
+    /// is gone.
+    /// </summary>
+    public bool ReplaceMeshGeometry(MeshHandle handle, PreparedMesh mesh)
+    {
+        ArgumentNullException.ThrowIfNull(handle);
+        ArgumentNullException.ThrowIfNull(mesh);
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (!_meshes.TryGetValue(handle.Id, out var gpu))
+        {
+            return false;
+        }
+
+        GlErrors.Drain(_gl); // only this upload's errors count
+        gpu.ReplaceGeometry(mesh);
+        if (WoundAgainstNormals(mesh))
+        {
+            _reversedWinding.Add(handle.Id);
+        }
+        else
+        {
+            _reversedWinding.Remove(handle.Id);
+        }
+
+        GlErrors.Check(_gl, $"replacing the data of mesh '{mesh.Name}'");
+        return true;
+    }
+
     /// <summary>Deletes an uploaded mesh. Nodes still referencing it are skipped when drawing.</summary>
     public bool RemoveMesh(MeshHandle handle)
     {

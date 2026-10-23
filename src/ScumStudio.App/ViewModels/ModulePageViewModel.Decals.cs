@@ -167,7 +167,65 @@ public abstract partial class ModulePageViewModel
         }
 
         Step(_decals with { Layers = [.. _decals.Layers, layer] }, layer.Id);
+        if (!CanBakeInto(part.Material))
+        {
+            // r40: say it now, not after the export (the decal shows here and Apply decals cannot put it into the pak).
+            _services.Notifications.Warning(Loc.T("Studio.Decals.Title"), Loc.F("Studio.Decals.NotWritable", PartName(part)));
+        }
+
         return true;
+    }
+
+    private readonly Dictionary<string, bool> _bakeable = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// False when Apply decals cannot write a decal on <paramref name="material"/> into the selected clone (a material the
+    /// clone does not copy, such as the Rager's glass, or one without a colour texture); true when it can, or when there is
+    /// no clone of the game files to ask (a test target).
+    /// </summary>
+    private bool CanBakeInto(string material)
+    {
+        if (_catalog is null || SelectedItem is not { IsClone: true } || material.Length == 0)
+        {
+            return true;
+        }
+
+        if (!_bakeable.TryGetValue(material, out var can))
+        {
+            try
+            {
+                can = _bakeable[material] = TexturePlan(material, DecalDiffuse) is not null;
+            }
+            catch (Exception ex) when (ex is IOException or InvalidDataException or FormatException or InvalidOperationException)
+            {
+                can = _bakeable[material] = true; // unknown: Apply decals says so if it cannot
+            }
+        }
+
+        return can;
+    }
+
+    /// <summary>The names of the parts the shown decals sit on whose material Apply decals cannot write (empty when none).</summary>
+    private string UnwritableDecalParts()
+    {
+        if (DecalTarget() is not { } target)
+        {
+            return string.Empty;
+        }
+
+        return string.Join(", ", _decals.Layers.Where(l => !l.Hidden && !CanBakeInto(l.MaterialPath))
+            .Select(l => DecalPart(target.Model, l) is { } part ? PartName(part) : l.MaterialPath[(l.MaterialPath.LastIndexOf('.') + 1)..])
+            .Distinct(StringComparer.OrdinalIgnoreCase));
+    }
+
+    /// <summary>A part as the panel names it: its attachment (Door FrontLeft) or the body, with its material.</summary>
+    private static string PartName(PreviewPart part)
+    {
+        var material = part.Material[(part.Material.LastIndexOf('.') + 1)..];
+        var name = part.Attachment.Length > 0
+            ? ScumStudio.Modding.Tuning.VehicleParts.Label(part.Attachment + "." + part.Attachment[(part.Attachment.LastIndexOf('/') + 1)..] + "_C")
+            : Loc.T("Studio.Textures.Body");
+        return $"{name} ({material})";
     }
 
     /// <summary>
@@ -277,7 +335,7 @@ public abstract partial class ModulePageViewModel
                 {
                     if (TexturePlan(material, parameter) is not { } plan)
                     {
-                        continue; // checked by GameTextures: both slots exist
+                        continue; // a material that is not the clone's own, or (the mask) one that has no colour mask: nothing to write
                     }
 
                     var file = await ProjectTextures.SaveAsync(project.DirectoryPath, image.Rgba, image.Width, image.Height).ConfigureAwait(true);
@@ -302,6 +360,13 @@ public abstract partial class ModulePageViewModel
             _services.Projects.Apply(new BatchOp(Loc.T("Studio.Decals.Applied"), ops));
         }
 
+        // r40 (owner: "the stickers sometimes do not work"): a decal on a part whose material is not the clone's own (the
+        // Rager's glass) shows in the studio and never reaches the game. Say which parts.
+        if (UnwritableDecalParts() is { Length: > 0 } parts)
+        {
+            _services.Notifications.Warning(Loc.T("Studio.Decals.Applied"), Loc.F("Studio.Decals.NotWritten", parts));
+        }
+
         if (written == 0)
         {
             _services.Notifications.Warning(Loc.T("Studio.Decals.Apply"), Loc.T(_decals.Layers.Count == 0 ? "Studio.Decals.Empty" : "Studio.Decals.NoMask"));
@@ -315,6 +380,7 @@ public abstract partial class ModulePageViewModel
     /// <summary>Another vehicle was picked: the Decals panel lists that clone's saved decals (none for a stock vehicle).</summary>
     partial void OnSelectedItemChanged(ModuleItemViewModel? oldValue, ModuleItemViewModel? newValue)
     {
+        _bakeable.Clear();
         var clone = newValue is { IsClone: true } item ? item.PackagePath[(item.PackagePath.LastIndexOf('/') + 1)..] : string.Empty;
         if (_decalTarget is null && _decals.CloneLeaf != clone)
         {
@@ -394,7 +460,8 @@ public abstract partial class ModulePageViewModel
 
     /// <summary>
     /// The game's own colour texture and colour mask of <paramref name="material"/> at full size, or null when the material
-    /// has no texture of its own in one of the two slots (then nothing is written for it).
+    /// has no colour texture (then nothing is written for it). A material without a colour mask is not painted: its
+    /// decals are baked against no paint and only its colour texture is written.
     /// </summary>
     private (TextureImage Diffuse, TextureImage Mask)? GameTextures(AssetCatalog catalog, string material)
     {
@@ -405,7 +472,9 @@ public abstract partial class ModulePageViewModel
                 : null;
         try
         {
-            return Load(DecalDiffuse) is { } diffuse && Load(DecalMask) is { } mask ? (diffuse, mask) : null;
+            return Load(DecalDiffuse) is { } diffuse
+                ? (diffuse, Load(DecalMask) ?? diffuse with { Rgba = new byte[diffuse.Width * diffuse.Height * 4], IsSrgb = false, CompressedMips = null })
+                : null;
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
@@ -459,7 +528,7 @@ public abstract partial class ModulePageViewModel
         }
     }
 
-    /// <summary>Picks a PNG (its transparency kept), JPG or SVG, copies it into the project and arms it as a sticker.</summary>
+    /// <summary>Picks a PNG (its transparency kept), JPG, WebP, BMP, GIF, TGA, TIFF or SVG, keeps it in the project and arms it as a sticker.</summary>
     [RelayCommand]
     private async Task AddStickerAsync()
     {
@@ -469,14 +538,18 @@ public abstract partial class ModulePageViewModel
             return;
         }
 
-        var file = await _services.Dialogs.OpenFileAsync(Loc.T("Studio.Decals.AddSticker"), "png;jpg;jpeg;svg", Loc.T("Studio.Decals.Category.Stickers")).ConfigureAwait(true);
+        var file = await _services.Dialogs.OpenFileAsync(Loc.T("Studio.Decals.AddSticker"), "png;jpg;jpeg;webp;bmp;gif;tga;tif;tiff;svg", Loc.T("Studio.Decals.Category.Stickers")).ConfigureAwait(true);
         if (file is not null)
         {
             ImportSticker(file);
         }
     }
 
-    /// <summary>Copies the picture or drawing <paramref name="file"/> into the project's stickers and arms it; false when it cannot be used.</summary>
+    /// <summary>
+    /// Puts the picture or drawing <paramref name="file"/> among the project's stickers and arms it; false, saying what is
+    /// wrong and what to do, when it cannot be used. A picture is kept as an 8-bit RGBA PNG of at most 2048 pixels, upright
+    /// (<see cref="StickerPictures"/>: owner, 2026-10-19, "the PNG stickers sometimes do not work"); a drawing is copied.
+    /// </summary>
     internal bool ImportSticker(string file)
     {
         if (_services.Projects.Current is not { } project)
@@ -488,8 +561,25 @@ public abstract partial class ModulePageViewModel
         {
             var folder = Path.Combine(project.DirectoryPath, "decals", "stickers");
             Directory.CreateDirectory(folder);
-            var copy = Path.Combine(folder, Guid.NewGuid().ToString("N")[..12] + Path.GetExtension(file).ToLowerInvariant());
-            File.Copy(file, copy);
+            var id = Guid.NewGuid().ToString("N")[..12];
+            var copy = Path.Combine(folder, id + (IsSvg(file) ? ".svg" : ".png"));
+            if (IsSvg(file))
+            {
+                File.Copy(file, copy);
+            }
+            else
+            {
+                try
+                {
+                    StickerPictures.Save(file, copy);
+                }
+                catch (StickerPictureException ex)
+                {
+                    _services.Notifications.Error(Loc.T("Studio.Decals.AddSticker"), StickerProblemText(Path.GetFileName(file), ex));
+                    return false;
+                }
+            }
+
             var relative = Path.GetRelativePath(project.DirectoryPath, copy).Replace('\\', '/');
             if ((IsSvg(relative) ? SvgSticker(relative) is null : Sticker(relative) is null))
             {
@@ -511,6 +601,15 @@ public abstract partial class ModulePageViewModel
             return false;
         }
     }
+
+    /// <summary>What is wrong with a picture that cannot be a sticker, and what to do, in the UI language.</summary>
+    internal static string StickerProblemText(string file, StickerPictureException problem) => problem.Problem switch
+    {
+        StickerProblem.TooLarge => Loc.F("Studio.Decals.Sticker.TooLarge", file, problem.Width, problem.Height, StickerPictures.MaxInputSide),
+        StickerProblem.Empty => Loc.F("Studio.Decals.Sticker.Empty", file),
+        StickerProblem.Damaged => Loc.F("Studio.Decals.Sticker.Damaged", file),
+        _ => Loc.F("Studio.Decals.Sticker.NotAPicture", file),
+    };
 
     private bool CanEditDecal() => SelectedDecal is not null;
 

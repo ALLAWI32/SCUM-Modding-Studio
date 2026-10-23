@@ -34,8 +34,11 @@ public sealed record SpawnPlacesEditRequest
     /// <summary>New places (not copies: <see cref="AddSpawnPlaceOp"/>), each written with what it spawns.</summary>
     public IReadOnlyList<NewSpawnPlace> Created { get; init; } = [];
 
+    /// <summary>Sub-zones added to stock threat zones (<see cref="AddSubZoneOp"/>), by the zone's number in its list.</summary>
+    public IReadOnlyList<(int Zone, SubZone SubZone)> SubZones { get; init; } = [];
+
     /// <summary>True when nothing changes.</summary>
-    public bool IsEmpty => Deleted.Count == 0 && Moved.Count == 0 && Added.Count == 0 && Choices.Count == 0 && Created.Count == 0;
+    public bool IsEmpty => Deleted.Count == 0 && Moved.Count == 0 && Added.Count == 0 && Choices.Count == 0 && Created.Count == 0 && SubZones.Count == 0;
 }
 
 /// <summary>A new spawn place for <see cref="SpawnPlacesEditor.Apply"/> (see <see cref="AddSpawnPlaceOp"/>).</summary>
@@ -62,7 +65,8 @@ public sealed record SpawnPlacesReference(IReadOnlyDictionary<SpawnPlaceKind, in
 /// <param name="Warnings">Edits that could not be written.</param>
 /// <param name="Chosen">Stock places whose choice of what spawns was written.</param>
 /// <param name="Created">New places written (not copies).</param>
-public sealed record SpawnPlacesReport(int Deleted, int Moved, int Added, IReadOnlyList<string> Warnings, int Chosen = 0, int Created = 0);
+/// <param name="SubZones">Sub-zones written into stock threat zones.</param>
+public sealed record SpawnPlacesReport(int Deleted, int Moved, int Added, IReadOnlyList<string> Warnings, int Chosen = 0, int Created = 0, int SubZones = 0);
 
 /// <summary>
 /// Writes spawn place edits into <c>The_Island_LevelStaticData</c>: each touched array is rebuilt from its stock entries
@@ -76,8 +80,15 @@ public static class SpawnPlacesEditor
 {
     private static readonly string[] ZoneMembers = ["_semiXAxisSize", "_semiYAxisSize", "_boundingBox", "_zoneActivationBoundingBox", "_LPCZoneActivationBoundingBox"];
 
-    // A zone's sub-zones (boxes with settings of their own) and the points drones approach it from: world places around it.
-    private static readonly string[] PlaceBound = ["_subZoneData", "_flyingSpawnedCharacterApproachLocations"];
+    // A zone's sub-zones (boxes with settings of their own: SCUM's FEncounterSubZoneData).
+    private const string SubZoneData = "_subZoneData";
+
+    // A zone's sub-zones and the points drones approach it from: world places around it.
+    private static readonly string[] PlaceBound = [SubZoneData, "_flyingSpawnedCharacterApproachLocations"];
+
+    // The members of a sub-zone and of each of its boxes (FEncounterSubZoneData, FEncounterSubZoneBoxData).
+    private static readonly string[] SubZoneMembers = ["BoxDataArray", "SubZoneBox", "ShouldInstantlyLoadAllNecessaryClasses", "EncounterZoneData", "SubZonePriority"];
+    private static readonly string[] SubZoneBoxMembers = ["AreaBox", "BoxRotation"];
 
     // The members of each list's entries (SCUM's FVehicleSpawnPointData, FEncounterLegacy/TaggedCharacterSpawnPoint,
     // FEncounterStaticZoneDescription, FHuntingBiomeDescription with its FBiomeParameters). A new place writes its place,
@@ -154,7 +165,20 @@ public static class SpawnPlacesEditor
             }
         }
 
-        return new SpawnPlacesEditRequest { Deleted = deleted, Moved = moved, Added = added, Choices = choices, AddedChoices = addedChoices, Created = created };
+        var subZones = new List<(int, SubZone)>();
+        foreach (var (zone, subZone) in state.SubZones.Where(s => SpawnPlaces.IsStaticData(s.Zone.Level)))
+        {
+            if (SpawnPlaces.ParseName(zone.Actor) is { Kind: SpawnPlaceKind.Zone } stock && !deleted.Contains(stock))
+            {
+                subZones.Add((stock.Index, subZone));
+            }
+            else
+            {
+                warnings?.Add($"{zone.Actor}: its sub-zone ({subZone}) goes with the removed zone; not written.");
+            }
+        }
+
+        return new SpawnPlacesEditRequest { Deleted = deleted, Moved = moved, Added = added, Choices = choices, AddedChoices = addedChoices, Created = created, SubZones = subZones };
     }
 
     /// <summary>
@@ -307,13 +331,14 @@ public static class SpawnPlacesEditor
             return request;
         }
 
-        warnings.Add($"Spawn places: {why}. The edits name stock places by their number in the client's lists, so none of the removed, moved, re-chosen or copied stock places were written into this pak (new places were): export client and server together, from game files of the same build.");
+        warnings.Add($"Spawn places: {why}. The edits name stock places by their number in the client's lists, so none of the removed, moved, re-chosen or copied stock places and no sub-zone of a stock zone were written into this pak (new places were): export client and server together, from game files of the same build.");
         return new SpawnPlacesEditRequest { Created = request.Created };
     }
 
     /// <summary>Every stock place <paramref name="request"/> names by its number in a list.</summary>
     private static IEnumerable<(SpawnPlaceKind Kind, int Index)> Numbered(SpawnPlacesEditRequest request) =>
-        request.Deleted.Concat(request.Moved.Keys).Concat(request.Choices.Keys).Concat(request.Added.Select(a => (a.Kind, a.Source)));
+        request.Deleted.Concat(request.Moved.Keys).Concat(request.Choices.Keys).Concat(request.Added.Select(a => (a.Kind, a.Source)))
+            .Concat(request.SubZones.Select(s => (SpawnPlaceKind.Zone, s.Zone)));
 
     /// <summary>
     /// Applies <paramref name="request"/> to the static data <paramref name="package"/>. A zone's settings or a hunting
@@ -329,10 +354,10 @@ public static class SpawnPlacesEditor
         var block = package.ReadProperties(exportIndex);
         var tables = new Tables(package, exportIndex, packageExists);
         var warnings = new List<string>();
-        int deleted = 0, moved = 0, added = 0, chosen = 0, created = 0;
+        int deleted = 0, moved = 0, added = 0, chosen = 0, created = 0, subZones = 0;
 
         var kinds = request.Deleted.Select(d => d.Kind).Concat(request.Moved.Keys.Select(m => m.Kind)).Concat(request.Added.Select(a => a.Kind))
-            .Concat(request.Choices.Keys.Select(c => c.Kind)).Concat(request.Created.Select(c => c.Kind)).Distinct();
+            .Concat(request.Choices.Keys.Select(c => c.Kind)).Concat(request.Created.Select(c => c.Kind)).Concat(request.SubZones.Select(_ => SpawnPlaceKind.Zone)).Distinct();
         var arrays = kinds.Select(k => (Kind: k, Tag: block.Find(SpawnPlaces.ArrayOf(k)))).ToList();
         warnings.AddRange(arrays.Where(a => a.Tag is not { Value: ArrayValue { InnerTag: not null } }).Select(a => $"{SpawnPlaces.ArrayOf(a.Kind)}: not in the island data; its edits were not written."));
         foreach (var (kind, tag) in arrays.Where(a => a.Tag is { Value: ArrayValue { InnerTag: not null } }).OrderByDescending(a => a.Tag!.Offset)) // from the back: the offsets in front stay valid
@@ -344,6 +369,7 @@ public static class SpawnPlacesEditor
             foreach (var index in request.Deleted.Where(d => d.Kind == kind).Select(d => d.Index)
                          .Concat(request.Moved.Keys.Where(m => m.Kind == kind).Select(m => m.Index))
                          .Concat(request.Choices.Keys.Where(c => c.Kind == kind).Select(c => c.Index))
+                         .Concat(request.SubZones.Where(_ => kind == SpawnPlaceKind.Zone).Select(s => s.Zone))
                          .Where(i => i < 0 || i >= count).Distinct().Order())
             {
                 warnings.Add($"{SpawnPlaces.ActorName(kind, index)}: the island data has {count} {SpawnPlaces.ArrayOf(kind)}; not written (read from another game build?).");
@@ -368,6 +394,14 @@ public static class SpawnPlacesEditor
                 if (request.Choices.TryGetValue((kind, i), out var choice) && Choose(tables, bytes, kind, item, choice, -item.Offset, SpawnPlaces.ActorName(kind, i), warnings))
                 {
                     chosen++;
+                }
+
+                // Sub-zones go last: they change the length of the zone.
+                if (kind == SpawnPlaceKind.Zone && request.SubZones.Where(s => s.Zone == i).Select(s => s.SubZone).ToList() is { Count: > 0 } subs
+                    && AddSubZones(tables, payload, array, bytes, item, subs, SpawnPlaces.ActorName(kind, i), warnings) is { } grown)
+                {
+                    bytes = grown;
+                    subZones += subs.Count;
                 }
 
                 items.Add(bytes);
@@ -423,7 +457,81 @@ public static class SpawnPlacesEditor
             input = input with { Names = tables.Names, NameIsWide = tables.Wide, Imports = tables.Imports, Exports = tables.Exports, PreloadDependencies = tables.Preload };
         }
 
-        return (PackageWriter.Build(input), new SpawnPlacesReport(deleted, moved, added, warnings, chosen, created));
+        return (PackageWriter.Build(input), new SpawnPlacesReport(deleted, moved, added, warnings, chosen, created, subZones));
+    }
+
+    /// <summary>
+    /// The bytes of the stock zone <paramref name="item"/> (<paramref name="bytes"/>, its place and settings already written)
+    /// with <paramref name="subZones"/> after its own sub-zones. Each is laid out as the first whole sub-zone of the island
+    /// data (the game's NPC-only ones look the same: one list of boxes, the box around them, the settings, the priority and
+    /// the class-loading switch), then written: one box (not turned) and the same box around it, its settings, its
+    /// priority, the class-loading switch off. Null, with a warning, when the zone stores no sub-zone list, no stock
+    /// sub-zone can serve or the settings cannot be imported: the zone then stays as the game has it.
+    /// </summary>
+    private static byte[]? AddSubZones(Tables tables, byte[] payload, ArrayValue zones, byte[] bytes, StructValue item, IReadOnlyList<SubZone> subZones, string name, List<string> warnings)
+    {
+        var shift = -item.Offset;
+        if (SpawnPlaces.Member(item, SubZoneData) is not { Value: ArrayValue { InnerTag: not null } own } tag)
+        {
+            warnings.Add($"{name}: the island data stores no sub-zone list for this zone; its {subZones.Count} new sub-zone(s) were not written.");
+            return null;
+        }
+
+        var template = zones.Items.OfType<StructValue>()
+            .SelectMany(z => SpawnPlaces.Member(z, SubZoneData)?.Value is ArrayValue a ? a.Items.OfType<StructValue>() : [])
+            .FirstOrDefault(IsSubZoneTemplate);
+        if (template is null)
+        {
+            warnings.Add($"{name}: no sub-zone of the island data stores every member a new one gets ({string.Join(", ", SubZoneMembers)}); its {subZones.Count} new sub-zone(s) were not written.");
+            return null;
+        }
+
+        var items = own.Items.OfType<StructValue>().Select(s => bytes.AsSpan(s.Offset + shift, s.Size).ToArray()).ToList();
+        foreach (var subZone in subZones)
+        {
+            var made = payload.AsSpan(template.Offset, template.Size).ToArray();
+            var at = -template.Offset;
+            if (tables.Import(subZone.Setting, "EncounterZoneData", out var problem) is not { } settings)
+            {
+                warnings.Add($"{name}: sub-zone settings {subZone.Setting}: {problem}; not written.");
+                return null;
+            }
+
+            // The same-size members first, then the list of boxes (its length may change).
+            BinaryPrimitives.WriteInt32LittleEndian(made.AsSpan(((ObjectValue)SpawnPlaces.Member(template, "EncounterZoneData")!.Value).Offset + at), settings);
+            BinaryPrimitives.WriteInt32LittleEndian(made.AsSpan(((IntValue)SpawnPlaces.Member(template, "SubZonePriority")!.Value).Offset + at), subZone.Priority);
+            made[SpawnPlaces.Member(template, "ShouldInstantlyLoadAllNecessaryClasses")!.BoolValueOffset + at] = 0;
+            WriteBox(made, (BoxValue)SpawnPlaces.Member(template, "SubZoneBox")!.Value, subZone.Min, subZone.Max, at);
+
+            var boxes = SpawnPlaces.Member(template, "BoxDataArray")!;
+            var first = (StructValue)((ArrayValue)boxes.Value).Items[0];
+            var box = payload.AsSpan(first.Offset, first.Size).ToArray();
+            WriteBox(box, (BoxValue)SpawnPlaces.Member(first, "AreaBox")!.Value, subZone.Min, subZone.Max, -first.Offset);
+            Floats(box, ((RotatorValue)SpawnPlaces.Member(first, "BoxRotation")!.Value).Offset - first.Offset, 0f, 0f, 0f);
+            items.Add(ReplaceStructArray(made, boxes, (ArrayValue)boxes.Value, [box], at));
+        }
+
+        return ReplaceStructArray(bytes, tag, own, items, shift);
+    }
+
+    /// <summary>True when <paramref name="subZone"/> stores every member a new sub-zone gets, each of the type written, and nothing else.</summary>
+    private static bool IsSubZoneTemplate(StructValue subZone) =>
+        subZone.Properties.Select(p => p.Name).Order(StringComparer.Ordinal).SequenceEqual(SubZoneMembers.Order(StringComparer.Ordinal))
+        && SpawnPlaces.Member(subZone, "BoxDataArray")?.Value is ArrayValue { InnerTag: not null, Items: [StructValue first, ..] }
+        && first.Properties.Select(p => p.Name).Order(StringComparer.Ordinal).SequenceEqual(SubZoneBoxMembers.Order(StringComparer.Ordinal))
+        && SpawnPlaces.Member(first, "AreaBox")?.Value is BoxValue && SpawnPlaces.Member(first, "BoxRotation")?.Value is RotatorValue
+        && SpawnPlaces.Member(subZone, "SubZoneBox")?.Value is BoxValue && SpawnPlaces.Member(subZone, "EncounterZoneData")?.Value is ObjectValue
+        && SpawnPlaces.Member(subZone, "SubZonePriority")?.Value is IntValue
+        && SpawnPlaces.Member(subZone, "ShouldInstantlyLoadAllNecessaryClasses") is { Type: "BoolProperty", BoolValueOffset: >= 0 };
+
+    /// <summary>Writes a box (its two corners, and valid) into item bytes (offsets shifted by <paramref name="shift"/>).</summary>
+    private static void WriteBox(byte[] bytes, BoxValue box, FVector min, FVector max, int shift)
+    {
+        Floats(bytes, box.Offset + shift, min.X, min.Y, min.Z, max.X, max.Y, max.Z);
+        if (box.Size >= 25)
+        {
+            bytes[box.Offset + shift + 24] = 1;
+        }
     }
 
     /// <summary>
@@ -639,13 +747,14 @@ public static class SpawnPlacesEditor
     /// <summary>
     /// <paramref name="payload"/> with the array-of-structs <paramref name="tag"/> holding <paramref name="items"/> (each
     /// the bytes of one tagged struct element): the count, the inner struct tag (its size = all items) and the items; the
-    /// tag's size follows. Offsets after the tag move; read the result again before patching further.
+    /// tag's size follows. Offsets after the tag move; read the result again before patching further. With
+    /// <paramref name="shift"/>, <paramref name="payload"/> is the bytes of one element and the offsets are shifted by it.
     /// </summary>
-    internal static byte[] ReplaceStructArray(byte[] payload, PropertyTag tag, ArrayValue array, IReadOnlyList<byte[]> items)
+    internal static byte[] ReplaceStructArray(byte[] payload, PropertyTag tag, ArrayValue array, IReadOnlyList<byte[]> items, int shift = 0)
     {
         var inner = array.InnerTag ?? throw new ArgumentException("Not an array of structs.", nameof(array));
         var itemsLength = items.Sum(b => b.Length);
-        var header = payload.AsSpan(inner.Offset, inner.ValueOffset - inner.Offset).ToArray();
+        var header = payload.AsSpan(inner.Offset + shift, inner.ValueOffset - inner.Offset).ToArray();
         BinaryPrimitives.WriteInt32LittleEndian(header.AsSpan(inner.SizeFieldOffset - inner.Offset), itemsLength);
         var value = new byte[4 + header.Length + itemsLength];
         BinaryPrimitives.WriteInt32LittleEndian(value, items.Count);
@@ -658,10 +767,10 @@ public static class SpawnPlacesEditor
         }
 
         var result = new byte[payload.Length - tag.Size + value.Length];
-        payload.AsSpan(0, tag.ValueOffset).CopyTo(result);
-        value.CopyTo(result, tag.ValueOffset);
-        payload.AsSpan(tag.EndOffset).CopyTo(result.AsSpan(tag.ValueOffset + value.Length));
-        BinaryPrimitives.WriteInt32LittleEndian(result.AsSpan(tag.SizeFieldOffset), value.Length);
+        payload.AsSpan(0, tag.ValueOffset + shift).CopyTo(result);
+        value.CopyTo(result, tag.ValueOffset + shift);
+        payload.AsSpan(tag.EndOffset + shift).CopyTo(result.AsSpan(tag.ValueOffset + shift + value.Length));
+        BinaryPrimitives.WriteInt32LittleEndian(result.AsSpan(tag.SizeFieldOffset + shift), value.Length);
         return result;
     }
 

@@ -1,5 +1,7 @@
 using System.Globalization;
+using CUE4Parse.UE4.Assets.Exports.StaticMesh;
 using ScumStudio.Assets.Catalog;
+using ScumStudio.Assets.Meshes;
 using ScumStudio.Modding.Catalog;
 using ScumStudio.Modding.Cloning;
 using ScumStudio.Modding.Tuning;
@@ -17,7 +19,11 @@ namespace ScumStudio.Modding.Crafting;
 /// ghost is another actor (<c>BP_PlaceableActorBaseBuilding</c>: its own root, box and mesh components) whose
 /// <c>Server_Place(Location, Rotation)</c> the element is built at. So no element offset can move the ghost with it, and
 /// <c>PlacementMeshOffset</c> (47 recipes, 1-5 cm on upgrades) moves only the ghost's picture. <c>PlacementLocationOffset</c>
-/// moves the placement point itself; 2 recipes of the game store it (the Woodland pack's curtains, same ghost actor).
+/// moves the placement point itself; 2 recipes of the game store it (the Woodland pack's curtains, same ghost actor). The
+/// owner's test (3.5.0): the game adds it in world directions after finding the ground, so the ghost floated and did not
+/// turn with him. What makes a big building placeable is the game's own large-building recipe
+/// (<see cref="LargeBuildingRecipe"/>) with its placement check drawn in (<see cref="AddPlacementShrink"/>), so "Place in
+/// front" is left out wherever that recipe is used.
 /// </para>
 /// </summary>
 public static partial class CraftablesPlanner
@@ -42,9 +48,15 @@ public static partial class CraftablesPlanner
     /// <summary>The largest "Place in front" distance the metres box takes.</summary>
     public const float InFrontMaxMeters = 30;
 
+    /// <summary>What a big building's placement check keeps around its pivot, cm: the player stands 2-3 m from the point he aims at.</summary>
+    public const float PlacementCheckKeepCm = 150;
+
     private const string WithoutFlag = "_canBePlacedWithoutFlag";
     private const string HealthPerRepair = "_repairableParams.HealthRepairedPerUse";
     private const string PlacementOffset = "PlacementLocationOffset";
+    private const string CollisionScale = "CollisionMeshScale";
+    private const string BoundsInsetMin = "BoundsExtensionWhilePlacingMin";
+    private const string BoundsInsetMax = "BoundsExtensionWhilePlacingMax";
 
     /// <summary>
     /// The automatic "Place in front" distance of a craftable of <paramref name="sizeMeters"/> (its largest extent): 0 below
@@ -96,13 +108,32 @@ public static partial class CraftablesPlanner
     /// The flag, repair and (for a large furniture or station) placement values of the craftable's elements; only a value that
     /// differs from what the element has is written, and a value the data cannot hold is a warning.
     /// </summary>
-    private static void AddBuildingEdits(AssetCatalog catalog, Craftable craftable, ClonePlan plan, CraftablePackages packages, Dictionary<string, IReadOnlyList<TunableEdit>> edits, List<string> warnings)
+    private static void AddBuildingEdits(AssetCatalog catalog, Craftable craftable, ClonePlan plan, CraftablePackages packages, Dictionary<string, IReadOnlyList<TunableEdit>> edits, List<string> warnings,
+        string? projectDirectory = null)
     {
         var large = craftable.Kind is CraftKind.Furniture or CraftKind.Station && craftable.SizeMeters >= LargeBuildingMeters;
         var percent = craftable.RepairCostPercent;
+        var shed = UsesLargeBuildingRecipe(catalog, craftable);
+        var building = shed || DrawsPlacementIn(catalog, craftable); // a big station keeps the workbench's recipe, drawn in too
+        if (building)
+        {
+            AddPlacementShrink(catalog, craftable, plan, packages, edits, warnings, projectDirectory);
+        }
+
         if (craftable.Kind is CraftKind.Furniture or CraftKind.Station or CraftKind.Element && InFrontMeters(craftable) is > 0 and var ahead)
         {
-            AddInFront(catalog, craftable, plan, packages, ahead, edits, warnings);
+            // Placed as a building with its check drawn in, the player may stand inside the ghost: no offset is needed, and
+            // the game adds one in world directions after finding the ground (3.5.0: the ghost floated and did not turn with him).
+            if (building)
+            {
+                warnings.Add(shed
+                    ? $"{craftable.Name}: \"Place in front\" is not written: it is placed with the game's Large Log Shed recipe and its placement check drawn in, so you may stand inside the ghost."
+                    : $"{craftable.Name}: \"Place in front\" is not written: it is placed like the game's large buildings with its placement check drawn in, so you may stand inside the ghost.");
+            }
+            else
+            {
+                AddInFront(catalog, craftable, plan, packages, ahead, edits, warnings);
+            }
         }
 
         if (craftable.NeedsFlag is null && percent is null && !large)
@@ -192,6 +223,120 @@ public static partial class CraftablesPlanner
         edits[packages.Recipe] = list;
         var sign = axis is InFrontAxis.MinusX or InFrontAxis.MinusY ? "-" : "+";
         warnings.Add($"{craftable.Name}: placed {meters.ToString("0.#", CultureInfo.InvariantCulture)} m along {sign}{(axis is InFrontAxis.PlusY or InFrontAxis.MinusY ? "Y" : "X")} (experimental: its recipe's PlacementLocationOffset); check in game that the ghost shows where it is built.");
+    }
+
+    /// <summary>
+    /// A big building's placement check, drawn in to its middle (owner, 3.5.0: "always red, Overlapping character, I am
+    /// standing inside it"). The game centres the ghost on the aimed point, 2-3 m ahead, so inside a 15 m cabin the player's
+    /// feet meet its floor and the ghost's mesh overlaps him; every placeable recipe of the game checks mesh against mesh
+    /// (<c>BoxOverlapFlags</c> 2, the chair's too). The game's own cure for a false overlap is to shrink what is checked: its
+    /// wall lamps scale the collision mesh to 0.6, the workbench to 0.9 in Z, the chair and the bed draw their box in 5 cm.
+    /// So the copied recipe gets <c>CollisionMeshScale</c> (about the pivot) and <c>BoundsExtensionWhilePlacingMin</c>/<c>Max</c>
+    /// that keep <see cref="PlacementCheckKeepCm"/> around the pivot: the ghost turns green with the player inside it and
+    /// still refuses a rock or a tree at its middle; the ground traces keep the whole footprint, and the built element keeps
+    /// its full collision. Only a game test shows the ghost green: the warning says so.
+    /// <para>
+    /// Per side and per axis (review 3.5.1: one inset from the longest reach crossed the box's faces over on the shorter axis
+    /// of the owner's 11 x 15 m cabin): each face of the box moves in to <see cref="PlacementCheckKeepCm"/> from the pivot (never
+    /// past it; a face already that close keeps the recipe's own value), and the collision mesh is scaled per axis so that it
+    /// reaches no further. The template recipe's own values are the start (the workbench's 0.9 height scale stays). A model
+    /// imported from a 3D file is read from its own folder in <paramref name="projectDirectory"/> (<see cref="Craftable.Imported"/>).
+    /// </para>
+    /// </summary>
+    private static void AddPlacementShrink(AssetCatalog catalog, Craftable craftable, ClonePlan plan, CraftablePackages packages, Dictionary<string, IReadOnlyList<TunableEdit>> edits, List<string> warnings,
+        string? projectDirectory)
+    {
+        var stock = plan.Packages.First(p => p.Value == packages.Recipe).Key;
+        var export = PackageMap.Leaf(stock);
+        if (!catalog.GetExports(stock).Any(e => e.Name == export && e.ClassName == "PlaceableCraftingRecipe"))
+        {
+            return;
+        }
+
+        string NotDrawnIn(string why) =>
+            $"{craftable.Name}: its placement check is not drawn in ({why}); the ghost may stay red with you inside it.";
+        (float X, float Y, float Z) min, max;
+        AssetCatalog? own = null;
+        try
+        {
+            // A model imported from a 3D file is not in the game's files (review 3.5.1): its own cooked files are read.
+            if (craftable.Imported is { } imported)
+            {
+                if (ImportedMeshFolder(projectDirectory, imported) is not { } folder)
+                {
+                    warnings.Add(NotDrawnIn($"its imported model's files are not in the project's {imported} folder"));
+                    return;
+                }
+
+                own = AssetCatalog.OpenLoose(folder);
+            }
+
+            if ((own ?? catalog).LoadFirstExport<UStaticMesh>(PackageMap.Normalize(craftable.Mesh)) is not { } mesh)
+            {
+                warnings.Add(NotDrawnIn($"its mesh {PackageMap.Leaf(craftable.Mesh)} could not be read"));
+                return;
+            }
+
+            var bounds = MeshExtractor.DescribeStaticMesh(mesh).Bounds;
+            (min, max) = ((bounds.Min.X, bounds.Min.Y, bounds.Min.Z), (bounds.Max.X, bounds.Max.Y, bounds.Max.Z));
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            warnings.Add(NotDrawnIn($"its mesh {PackageMap.Leaf(craftable.Mesh)} could not be read: {ex.GetType().Name}"));
+            return;
+        }
+        finally
+        {
+            own?.Dispose();
+        }
+
+        var reachX = MathF.Max(-min.X, max.X); // cm, horizontally from the pivot
+        var reachY = MathF.Max(-min.Y, max.Y);
+        if (!float.IsFinite(reachX) || !float.IsFinite(reachY) || (reachX <= PlacementCheckKeepCm && reachY <= PlacementCheckKeepCm))
+        {
+            return; // small enough: the player aims from outside it
+        }
+
+        // The template recipe's own values (the shed stores none: 1, 1, 1 and no extension; the workbench scales Z to 0.9).
+        var stored = TunableReader.Read(ModdableAssets.ReadPackage(catalog, stock)).Where(t => t.Export == export).ToDictionary(t => t.Path, StringComparer.Ordinal);
+        float[] Stored(string property, float fallback) => stored.TryGetValue(property, out var value) ? TunableValue.ParseFloats(value.Value, 3) : [fallback, fallback, fallback];
+        var gameScale = Stored(CollisionScale, 1);
+        var gameMin = Stored(BoundsInsetMin, 0);
+        var gameMax = Stored(BoundsInsetMax, 0);
+
+        // A face this far from the pivot (cm) with the recipe's own extension moves in to the kept distance.
+        static float Face(float side, float game) => side + game > PlacementCheckKeepCm ? MathF.Round(PlacementCheckKeepCm - side, 1) : game;
+        static float Scale(float reach, float game) => reach * game > PlacementCheckKeepCm ? MathF.Round(PlacementCheckKeepCm / reach, 2) : game;
+        var scaleX = Scale(reachX, gameScale[0]);
+        var scaleY = Scale(reachY, gameScale[1]);
+        var renamed = plan.ToMap().RemapObject(export);
+        var list = edits.TryGetValue(packages.Recipe, out var existing)
+            ? existing.Where(e => !(e.Export == renamed && e.Path is CollisionScale or BoundsInsetMin or BoundsInsetMax)).ToList()
+            : [];
+        list.Add(new TunableEdit(renamed, CollisionScale, TunableValue.Format(scaleX, scaleY, gameScale[2])));
+        list.Add(new TunableEdit(renamed, BoundsInsetMin, TunableValue.Format(Face(-min.X, gameMin[0]), Face(-min.Y, gameMin[1]), gameMin[2])));
+        list.Add(new TunableEdit(renamed, BoundsInsetMax, TunableValue.Format(Face(max.X, gameMax[0]), Face(max.Y, gameMax[1]), gameMax[2])));
+        edits[packages.Recipe] = list;
+        string Text(float v) => v.ToString("0.##", CultureInfo.InvariantCulture);
+        warnings.Add($"{craftable.Name}: its placement check is drawn in to {(PlacementCheckKeepCm / 100).ToString("0.#", CultureInfo.InvariantCulture)} m around its middle "
+            + $"(collision mesh x{Text(scaleX)} by x{Text(scaleY)}, each side of its box moved in to {(PlacementCheckKeepCm / 100).ToString("0.#", CultureInfo.InvariantCulture)} m from its pivot), the way the game's wall lamps are, "
+            + "so the ghost can turn green with you standing inside it; what is built keeps its full collision. Check in game that it turns green.");
+    }
+
+    /// <summary>
+    /// The folder of a model imported from a 3D file (<paramref name="imported"/>, relative to <paramref name="projectDirectory"/>),
+    /// or null when there is no project folder or it is not inside it.
+    /// </summary>
+    private static string? ImportedMeshFolder(string? projectDirectory, string imported)
+    {
+        if (string.IsNullOrWhiteSpace(projectDirectory))
+        {
+            return null;
+        }
+
+        var root = Path.GetFullPath(projectDirectory);
+        var folder = Path.GetFullPath(Path.Combine(root, imported));
+        return folder.StartsWith(root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) && Directory.Exists(folder) ? folder : null;
     }
 
     /// <summary>The health one use of a repair tool restores at <paramref name="percent"/> % of the game's repair cost.</summary>

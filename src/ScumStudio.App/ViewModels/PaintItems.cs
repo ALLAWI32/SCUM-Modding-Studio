@@ -446,8 +446,14 @@ public sealed partial class PaintMaterialViewModel : ObservableObject
         }
     }
 
-    /// <summary>The value edits to record: (value, new text) for what changed.</summary>
-    public IEnumerable<(PaintValue Value, string Text)> Changes()
+    /// <summary>
+    /// The value edits to record: (value, new text) for what changed. A text that only differs in form from the recorded one is
+    /// no change (review 3.5.1: Apply paint left it out, but the panel kept counting it, so it stayed pending after an apply).
+    /// </summary>
+    public IEnumerable<(PaintValue Value, string Text)> Changes() =>
+        AllChanges().Where(c => !TunableValue.AreEqual(c.Value.Tunable.Kind, c.Value.Committed, c.Text)).ToList();
+
+    private List<(PaintValue Value, string Text)> AllChanges()
     {
         var edits = new List<(PaintValue, string)>();
         void Diff(PaintValue? value, string text)

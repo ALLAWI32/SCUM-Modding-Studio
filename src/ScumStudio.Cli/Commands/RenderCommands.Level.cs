@@ -6,6 +6,7 @@ using System.Numerics;
 using Microsoft.Extensions.Logging;
 using ScumStudio.Assets.Landscape;
 using ScumStudio.Core.Mathematics;
+using ScumStudio.Core.Settings;
 using ScumStudio.Level.Model;
 using ScumStudio.Level.Reading;
 using ScumStudio.Level.World;
@@ -73,12 +74,15 @@ internal sealed partial class RenderCommands
         var temporal = new Option<bool>("--temporal", "Steady the --frames as the Map's Steady foliage switch does (each frame blended with the last one where the camera saw it).");
         var framesOut = new Option<string?>("--frames-out", "Save every --frames frame as a PNG into this folder and print how much the frames flicker (FrameFlicker).");
         var orbitStep = new Option<float>("--orbit-step", () => 0.5f, "Degrees the camera orbits per --frames frame (0.02 is a slow pan).");
+        var terrainDetail = new Option<RenderQuality?>("--terrain-detail",
+            "Draw the ground near the camera from every landscape sample as the Map view does at this quality (performance, balanced, high, ultra, gamelike); use with --landscape-step 4, the step whole-island and cell views load.");
         var glDebug = new Option<bool>("--gl-debug",
             $"Draw on a debug context and print every message the graphics driver sends (errors and undefined behaviour first); exit code {DriverProblemsExitCode} when it reports a problem. For graphics-card crash reports.");
         var command = new Command("level", "Render whole cooked sublevels (all placed static meshes, plus terrain for landscape tiles) to PNG.")
         {
             source, sublevel, aes, output, size, yaw, pitch, dist, lod, lods, viewDistance, cullPixels, noTexture, textureSize, noInstances, noLandscape, landscapeStep, filter, noGrid, frames,
             ground, sea, noSea, groundTexture, target, island, spawnPlaces, noShadows, hour, around, radius, farModels, renderDistance, sectorSize, lodBias, objectDistance, samples, glDebug, temporal, framesOut, orbitStep,
+            terrainDetail,
         };
         command.SetHandler(async (InvocationContext ctx) =>
         {
@@ -244,7 +248,8 @@ internal sealed partial class RenderCommands
                 var frame = RenderPreparedScene(context, prepared, width, height, parse.GetValueForOption(yaw), parse.GetValueForOption(pitch),
                     parse.GetValueForOption(dist), !parse.GetValueForOption(noGrid), orbitTarget, Math.Max(0, parse.GetValueForOption(frames)), culling, backdrop, backdropDistance,
                     Math.Max(1, parse.GetValueForOption(samples)), parse.GetValueForOption(glDebug),
-                    parse.GetValueForOption(temporal), parse.GetValueForOption(framesOut), parse.GetValueForOption(orbitStep));
+                    parse.GetValueForOption(temporal), parse.GetValueForOption(framesOut), parse.GetValueForOption(orbitStep),
+                    parse.GetValueForOption(terrainDetail) is { } detailQuality ? TerrainDetailSettings.For(detailQuality) : null);
                 frame.Report.InsertRange(Math.Min(2, frame.Report.Count), backdropLines);
 
                 var outFile = parse.GetValueForOption(output)!;
@@ -290,7 +295,8 @@ internal sealed partial class RenderCommands
     internal static (byte[] Rgba, List<string> Report, int DriverProblems) RenderPreparedScene(
         OffscreenGlContext context, PreparedLevelScene prepared, int width, int height, float yaw, float pitch, float? distance, bool showGrid,
         Vector3? orbitTargetUe = null, int extraFrames = 0, RenderSettings? culling = null, PreparedLevelScene? backdrop = null, float backdropDistance = 0f,
-        int samples = 1, bool driverMessages = false, bool temporal = false, string? framesOut = null, float orbitStep = 0.5f)
+        int samples = 1, bool driverMessages = false, bool temporal = false, string? framesOut = null, float orbitStep = 0.5f,
+        TerrainDetailSettings? terrainDetail = null)
     {
         using (context)
         {
@@ -344,6 +350,20 @@ internal sealed partial class RenderCommands
                 camera.SetClipRange(10f, 3_000_000f); // as the viewport does with the island behind
             }
 
+            // The Map view's finer ground near the camera, all of it sent before the first frame (the app sends it over frames).
+            var rings = terrainDetail is null ? null : new TerrainDetailRings { Settings = terrainDetail };
+            var detailLine = string.Empty;
+            if (rings is not null)
+            {
+                var detailClock = Stopwatch.StartNew();
+                while (rings.Update(renderer, level, camera.Position, double.PositiveInfinity))
+                {
+                    Thread.Sleep(2);
+                }
+
+                detailLine = Invariant($"terrain detail: {rings.FinerCount} component(s) drawn finer than loaded, {rings.FinerVertices:N0} vertices (budget {terrainDetail!.VertexBudget:N0}; full detail within {terrainDetail.FullRadiusCm / 100f:0} m, every second sample within {terrainDetail.HalfRadiusCm / 100f:0} m), built and sent in {detailClock.Elapsed.TotalMilliseconds:0} ms");
+            }
+
             using var target = renderer.CreateTarget(width, height, samples);
             clock.Restart();
             var stats = Draw();
@@ -378,6 +398,11 @@ internal sealed partial class RenderCommands
 
             report.Add(Invariant($"scene: {level.PlacedCount} of {prepared.RequestedPlacements} placements from {prepared.Documents.Sum(d => d.Actors.Count)} actors in {prepared.Documents.Count} level(s); bounds (UE cm) ({ueMin.X:0.#}, {ueMin.Y:0.#}, {ueMin.Z:0.#}) .. ({ueMax.X:0.#}, {ueMax.Y:0.#}, {ueMax.Z:0.#})"));
             report.Add(Invariant($"frame: {stats.Batches} draw(s), {stats.Instances} drawn, {stats.Culled} culled, {stats.Triangles:N0} triangles, {renderMs:0.0} ms incl. read-back, camera distance {dist:0}"));
+            if (detailLine.Length > 0)
+            {
+                report.Add(detailLine);
+            }
+
             if (island is not null && backdrop is not null)
             {
                 // The app uploads the backdrop in one frame: this is the hitch when the island (or its far models) appears.
@@ -399,6 +424,7 @@ internal sealed partial class RenderCommands
                 {
                     camera.Orbit(centre, yaw + ((i + 1) * orbitStep), pitch, dist);
                     clock.Restart();
+                    rings?.Update(renderer, level, camera.Position, 3.0); // as the Map view: part of the frame
                     stats = Draw();
                     stabilizer?.Apply(target, camera);
                     cpu[i] = clock.Elapsed.TotalMilliseconds;

@@ -121,6 +121,22 @@ public sealed class PaintJournalTests
         Assert.False(page.IsPreviewLoading);
     }
 
+    [Fact]
+    public void AValueThatOnlyDiffersInFormIsNoChange()
+    {
+        // Review 3.5.1: Apply paint leaves out a value whose text only differs in form from the recorded one, but the panel
+        // still counted it as a change: after an apply that recorded the real ones it stayed pending, Apply still enabled.
+        PaintValue Value(string path, TunableKind kind, string stock) => new(Body, new Tunable("Default__MI", path, kind, stock), stock);
+        var paint = new PaintMaterialViewModel(Body + ".MI_Test_Body", "Body", Value("VectorParameterValues[0].ParameterValue", TunableKind.Color, TunableValue.Format(0.2f, 0.2f, 0.2f, 1f)), null, null, null,
+            roughness: Value("ScalarParameterValues[2].ParameterValue", TunableKind.Float, "0.5"), roughnessB: Value("ScalarParameterValues[3].ParameterValue", TunableKind.Float, "0.510"));
+        Assert.False(paint.IsPending);
+
+        paint.Roughness = 0.51; // colour B already has it, written another way
+        var change = Assert.Single(paint.Changes());
+        Assert.Equal(("ScalarParameterValues[2].ParameterValue", "0.51"), (change.Value.Tunable.Path, change.Text));
+        Assert.True(paint.IsPending);
+    }
+
     /// <summary>A car paint with a colour, a second colour, metal and clear coat, all at their stock values.</summary>
     internal static PaintMaterialViewModel Paint(string package)
     {

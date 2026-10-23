@@ -181,6 +181,29 @@ public sealed class StudioToolsTests(ITestOutputHelper output)
         Assert.True(FVector.Distance(world.Translation, movedCopy.Transform.Location) > 50f);
     }
 
+    /// <summary>
+    /// r40 review, on the real game files: a bag's rows and columns are one byte in the file. set_item_values refuses 300
+    /// (it was journaled, and the export then dropped every edit of the item) for a stored and an inherited value, and takes 255.
+    /// </summary>
+    [PaksFact]
+    public async Task SetItemValuesRefusesABagSizeTheFileCannotHold()
+    {
+        using var temp = new LevelTempDirectory();
+        using var host = new HeadlessStudioHost();
+        var client = new Client(StudioTools.CreateServer(host), output);
+        await client.CallAsync("open_source", new { path = RealPaks.Folder });
+        await client.CallAsync("create_project", new { folder = temp.Combine("p"), name = "Bags" });
+        foreach (var (item, key) in new[] { ("Improvised_Bag_Small_01_ES", "EntityGridInventoryComponentSetup_0|NumRows"), ("Backpack_02_02_ES", "EntityGridInventoryComponentSetup_0|NumColumns") })
+        {
+            var refused = await client.CallAsync("set_item_values", new { item, values = new object[] { new { key, value = 300 } } }, expectError: true);
+            Assert.Contains("from 0 to 255", Client.Text(refused), StringComparison.Ordinal);
+        }
+
+        Assert.Empty(host.Project!.State.AssetValueOverrides);
+        await client.CallAsync("set_item_values", new { item = "Improvised_Bag_Small_01_ES", values = new object[] { new { key = "EntityGridInventoryComponentSetup_0|NumRows", value = 255 } } });
+        Assert.Equal("255", Assert.Single(host.Project.State.AssetValueOverrides).Current);
+    }
+
     [FixturesFact]
     public async Task AnAiCanTuneAndCloneWeaponsAndVehicles()
     {

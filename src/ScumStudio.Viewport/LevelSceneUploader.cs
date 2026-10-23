@@ -527,6 +527,9 @@ public sealed class LevelScene : IDisposable
     /// <summary>The scene nodes drawing terrain components, in <see cref="PreparedLevelScene.Terrain"/> order.</summary>
     public IReadOnlyList<SceneNode> TerrainNodes => _terrainParts.Select(p => p.Node).ToList();
 
+    /// <summary>The terrain components drawn: node, GPU mesh and the prepared component (render thread).</summary>
+    internal IReadOnlyList<TerrainPart> TerrainParts => _terrainParts;
+
     /// <summary>
     /// For a coarse whole-island backdrop: hides the landscape tiles <paramref name="detailed"/> draws at full resolution,
     /// so each tile is drawn once, as in the game (both drawn, the coarse one pokes through the detailed one in patches).
@@ -1419,7 +1422,7 @@ public static class LevelSceneUploader
         Dictionary<string, GpuTexture> layerTextures, List<GpuTexture> owned)
     {
         var texture = terrain.Albedo is { } albedo ? CreateTerrainTexture(renderer, albedo) : null;
-        var mesh = renderer.AddMesh(terrain.Mesh, MeshSpace.Unreal, 1f, texture);
+        var mesh = renderer.AddMesh(PackTerrain(terrain), texture);
         if (texture is not null && TerrainDetailFor(renderer, terrain, prepared, cache, layerTextures, owned) is { } detail)
         {
             renderer.SetMeshTerrainDetail(mesh, detail);
@@ -1428,6 +1431,23 @@ public static class LevelSceneUploader
         return (mesh, texture);
     }
 
+    /// <summary>
+    /// The vertex data of a terrain component as uploaded: its mesh, with bounds that also hold every full-resolution sample
+    /// of its <see cref="PreparedTerrain.Surface"/>, so the same GPU mesh can draw the component finer near the camera
+    /// (<see cref="TerrainDetailRings"/>) and still be culled right.
+    /// </summary>
+    internal static PreparedMesh PackTerrain(PreparedTerrain terrain)
+    {
+        var packed = PreparedMesh.From(terrain.Mesh, MeshSpace.Unreal, 1f);
+        if (terrain.Surface is not { } surface || packed.Bounds.IsEmpty)
+        {
+            return packed;
+        }
+
+        var b = packed.Bounds; // GL space: Y is up (UE Z)
+        var samples = new BoundingBox(new Vector3(b.Min.X, surface.MinHeightCm, b.Min.Z), new Vector3(b.Max.X, surface.MaxHeightCm, b.Max.Z));
+        return packed with { Bounds = b.Union(samples) };
+    }
 
     /// <summary>
     /// Uploads every LOD of <paramref name="asset"/>; each material section draws with its material's texture from

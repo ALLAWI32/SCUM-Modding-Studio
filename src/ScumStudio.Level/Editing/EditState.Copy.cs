@@ -32,6 +32,11 @@ public sealed partial class EditState
             {
                 Of(actor).ClearGrass = grass;
             }
+
+            if (_noLoot.Contains(actor))
+            {
+                Of(actor).NoLoot = true;
+            }
         }
 
         foreach (var ((actor, component), value) in _transforms)
@@ -119,6 +124,8 @@ public sealed partial class EditState
 
         public bool? ClearGrass { get; set; }
 
+        public bool NoLoot { get; set; }
+
         public List<PartEdit> Parts { get; } = [];
 
         public List<MeshEdit> Meshes { get; } = [];
@@ -140,6 +147,7 @@ public sealed partial class EditState
         {
             Bend = Bend,
             ClearGrass = ClearGrass,
+            NoLoot = NoLoot,
             Parts = Parts.OrderBy(p => p.Component, StringComparer.OrdinalIgnoreCase).ToList(),
             Meshes = Meshes.OrderBy(m => m.Component ?? string.Empty, StringComparer.OrdinalIgnoreCase).ToList(),
             Sways = Sways.OrderBy(s => s.Component, StringComparer.OrdinalIgnoreCase).ToList(),

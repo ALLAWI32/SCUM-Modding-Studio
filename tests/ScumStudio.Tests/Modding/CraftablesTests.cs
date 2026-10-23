@@ -88,7 +88,7 @@ public sealed class CraftablesTests
         // craft-1: craftables removed (or the box unticked) must not leave the old pak, whose registry would hide the project pak's.
         var dir = Path.Combine(Path.GetTempPath(), "scumstudio-craftstale-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(Path.Combine(dir, "game", "SCUM", "Content"));
-        var client = Path.Combine(dir, "out", ProjectExporter.RoleFolder(ProjectSourceRole.Client));
+        var client = ProjectExporter.ExportFolder(Path.Combine(dir, "out"), "MyMod", pages: false, ProjectSourceRole.Client);
         Directory.CreateDirectory(client);
         var pak = Path.Combine(client, "pakchunk901-MyModCraftables_P.pak");
         var project = Path.Combine(client, "pakchunk900-MyMod_P.pak");

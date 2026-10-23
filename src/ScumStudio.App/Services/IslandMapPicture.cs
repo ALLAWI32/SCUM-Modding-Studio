@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using CUE4Parse.UE4.Assets.Exports.Texture;
@@ -36,9 +37,10 @@ public sealed record IslandMapPictureResult(string? PngPath, IslandMapSource Sou
 
 /// <summary>
 /// The picture under the Spawns map, as a PNG in the app's cache: the user's own picture when one was imported, else the
-/// game's map texture (<see cref="IslandMap.TexturePath"/>, decoded once from the user's paks and kept; the picture is the
-/// game's artwork, so it never ships with the app), else the terrain seen from above, drawn from the newest terrain cache
-/// of the Map page. Nothing is downloaded.
+/// game's map texture (<see cref="IslandMap.TexturePath"/>, decoded once from the user's paks, turned 180 degrees as the
+/// game's spawn screen shows it and kept; the picture is the game's artwork, so it never ships with the app), else the
+/// terrain seen from above, drawn from the newest terrain cache of the Map page. Nothing is downloaded. An imported
+/// picture is shown as it is: a picture of the in-game map already has the game's orientation.
 /// </summary>
 public sealed class IslandMapPicture
 {
@@ -48,8 +50,8 @@ public sealed class IslandMapPicture
     /// <summary>Edge of the terrain picture.</summary>
     public const int TerrainSize = 2048;
 
-    // Bump when the terrain picture is drawn differently.
-    private const string TerrainVersion = "1";
+    // Bump when the terrain picture is drawn differently (2: turned 180 degrees with IslandMap, as the game shows the map).
+    private const string TerrainVersion = "2";
 
     private readonly ILogger _logger;
     private readonly string? _terrainDirectory;
@@ -136,8 +138,10 @@ public sealed class IslandMapPicture
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            // "turned": up to 3.5.0 the texture was kept as stored under "islandmap-<hash>.png"; that file must never be
+            // shown under the turned layout.
             if (game is not null
-                && await MakeAsync($"islandmap-{Hash(game.Key)}.png", () => game.Decode() is { } image ? (image.Rgba, image.Width, image.Height) : null, cancellationToken)
+                && await MakeAsync($"islandmap-turned-{Hash(game.Key)}.png", () => game.Decode() is { } image ? (TurnHalfway(image.Rgba), image.Width, image.Height) : null, cancellationToken)
                     .ConfigureAwait(false) is { } decoded)
             {
                 return new IslandMapPictureResult(decoded, IslandMapSource.Game);
@@ -213,6 +217,17 @@ public sealed class IslandMapPicture
         return rgba;
 
         static byte Shade(float value, float light) => (byte)Math.Clamp(value * light, 0f, 255f);
+    }
+
+    /// <summary>
+    /// Turns the RGBA8 picture <paramref name="rgba"/> by 180 degrees in place and returns it: the last pixel comes first,
+    /// as the game's spawn screen draws the map texture (its <c>MapImage</c> has <c>RenderTransform.Angle</c> 180).
+    /// </summary>
+    internal static byte[] TurnHalfway(byte[] rgba)
+    {
+        ArgumentNullException.ThrowIfNull(rgba);
+        MemoryMarshal.Cast<byte, uint>(rgba.AsSpan(0, rgba.Length / 4 * 4)).Reverse();
+        return rgba;
     }
 
     /// <summary>True when <paramref name="path"/> is a whole PNG file (signature first, IEND chunk last).</summary>

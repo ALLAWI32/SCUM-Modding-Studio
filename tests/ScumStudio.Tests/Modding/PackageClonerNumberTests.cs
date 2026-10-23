@@ -203,6 +203,80 @@ public sealed class PackageClonerNumberTests(ITestOutputHelper output)
         Assert.Contains("CR_X_20", error.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// r40 (the M16A4 Premium's skin mesh): its first name, the material's package path with number 3, appears twice in the
+    /// mesh's 2.6 MB of vertex data by chance. A bare package path is no name of an export's data: the clone goes ahead and
+    /// the payload stays byte for byte the game's.
+    /// </summary>
+    [Fact]
+    public void ABarePackagePathInUndecodedBytesIsChanceAndDoesNotRefuse()
+    {
+        var source = Blueprint("/Game/A/SK_W", "SK_W", 1898, [0xEE, 0xEE, 0xEE, 0xEE, .. Pair(6, 1898), 0xEE, 0xEE, 0xEE, 0xEE]);
+        var (cloned, clone) = CloneWith(source, "/Game/A/BP_T", ("/Game/A/BP_T", "/Game/A/BP_SS_Y"), ("/Game/A/SK_W_1897", "/Game/A/SK_W_Gold"));
+
+        Assert.Equal(("/Game/A/SK_W_Gold", 0), Raw(clone, clone.Imports[0].ObjectName));
+        Assert.Equal(("SK_W_Gold", 0), Raw(clone, clone.Imports[1].ObjectName));
+        Assert.Equal(source.GetExportData(0).ToArray(), clone.GetExportData(0).ToArray());
+        Assert.Empty(cloned.Warnings);
+
+        // The object name in the same bytes still refuses: an object is what such data names.
+        var named = Blueprint("/Game/A/SK_W", "SK_W", 1898, [0xEE, 0xEE, 0xEE, 0xEE, .. Pair(7, 1898), 0xEE, 0xEE, 0xEE, 0xEE]);
+        Assert.Throws<InvalidOperationException>(() => CloneWith(named, "/Game/A/BP_T", ("/Game/A/BP_T", "/Game/A/BP_SS_Y"), ("/Game/A/SK_W_1897", "/Game/A/SK_W_Gold")));
+    }
+
+    /// <summary>
+    /// r40 (the Scout knife, the AS Val, the Mosin bayonet …): FNames compare in any case and the game's files do not always
+    /// agree on one (the mesh imports MI_Scout_Met, the material's own export is MI_Scout_MEt). The copy renames it either way.
+    /// </summary>
+    [Fact]
+    public void TheMapRemapsAnObjectNameInAnyCase()
+    {
+        var map = new PackageMap([new("/Game/A/MI_Scout_Met", "/Game/A/MI_Gold_Met")]);
+        Assert.Equal("MI_Gold_Met", map.RemapObject("MI_Scout_MEt"));
+        Assert.Equal("/Game/A/MI_Gold_Met.MI_Gold_Met", map.RemapName("/Game/A/MI_Scout_MEt.MI_Scout_MEt"));
+        var clone = Clone(DataAsset("MI_Scout_MEt", 0, Opaque), "/Game/A/MI_Scout_Met", ("/Game/A/MI_Scout_Met", "/Game/A/MI_Gold_Met"));
+        Assert.Equal(("MI_Gold_Met", 0), Raw(clone, clone.Exports[0].ObjectName));
+    }
+
+    /// <summary>
+    /// r40 (the Trench Gun's SK_Winchester_1897, the Hunter 85's mesh): a mesh's native part names each material twice, as
+    /// its import and as its slot name, the same FName (MI_Trench_Gun_1897 = "MI_Trench_Gun" number 1898). The slot name is
+    /// read as a name of the material and follows its rename; a chance pair of the same entry with another number stays.
+    /// </summary>
+    [Fact]
+    public void AMeshsMaterialSlotNameFollowsTheMaterial()
+    {
+        List<string> names = ["/Script/CoreUObject", "Package", "Class", "/Script/Engine", "MaterialInstanceConstant", "SkeletalMesh", "/Game/A/MI_T", "MI_T", "SK_X", "None"];
+        List<ImportEntry> imports =
+        [
+            new(new FNameRef(0), new FNameRef(1), 0, new FNameRef(6, 1898)),
+            new(new FNameRef(3), new FNameRef(4), -1, new FNameRef(7, 1898)),
+            new(new FNameRef(0), new FNameRef(1), 0, new FNameRef(3)),
+            new(new FNameRef(0), new FNameRef(2), -3, new FNameRef(5)),
+        ];
+        byte[] payload = [0xEE, 0xEE, 0xEE, 0xEE, .. BitConverter.GetBytes(-2), .. Pair(7, 1898), .. Pair(7, 0), 0xEE, 0xEE, 0xEE, 0xEE];
+        var source = Build(names, imports, [Export(-4, new FNameRef(8))], payload);
+
+        var (cloned, clone) = CloneWith(source, "/Game/A/SK_X", ("/Game/A/SK_X", "/Game/A/SK_Y"), ("/Game/A/MI_T_1897", "/Game/A/MI_Gold"));
+
+        Assert.Equal(("MI_Gold", 0), Raw(clone, clone.Imports[1].ObjectName));
+        var data = clone.GetExportData(0).ToArray();
+        var slot = new FNameRef(BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(8)), BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(12)));
+        Assert.Equal(clone.Imports[1].ObjectName, slot); // the slot is the material's new name
+        Assert.Equal(("MI_T", 0), Raw(clone, new FNameRef(BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(16)), BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(20)))));
+        Assert.Empty(cloned.Warnings);
+    }
+
+    /// <summary>r40 (the Log Shed's entity setup): a numbered object of a renamed class (LogShed_1_C_1) is renamed with it.</summary>
+    [Fact]
+    public void ANumberedObjectOfARenamedClassIsRenamed()
+    {
+        var map = new PackageMap([new("/Game/A/LogShed_1", "/Game/A/ZqShed")]);
+        Assert.Equal("ZqShed_C_1", map.RemapObject("LogShed_1_C_1"));
+        Assert.Equal("/Game/A/ZqShed.ZqShed_C_1", map.RemapName("/Game/A/LogShed_1.LogShed_1_C_1"));
+        Assert.Equal("Other_C_1", map.RemapObject("Other_C_1"));
+    }
+
     [Fact]
     public void TheMapRemapsAnFNameByItsDisplayForm()
     {

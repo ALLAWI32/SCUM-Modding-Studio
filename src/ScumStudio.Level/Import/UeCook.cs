@@ -422,9 +422,26 @@ public static class UeCook
         }
     }
 
-    /// <summary>True when <paramref name="process"/> is in the engine job (tests).</summary>
-    internal static bool InEngineJob(Process process) =>
-        EngineJob.Value != IntPtr.Zero && IsProcessInJob(process.Handle, EngineJob.Value, out var inJob) && inJob;
+    /// <summary>
+    /// True when <paramref name="process"/> is in the engine job (tests). A process that ended since it was listed, or that
+    /// this one may not open, is not in it (a test lists every PING of the PC: one ending meanwhile threw "has exited").
+    /// </summary>
+    internal static bool InEngineJob(Process process)
+    {
+        if (EngineJob.Value == IntPtr.Zero)
+        {
+            return false;
+        }
+
+        try
+        {
+            return IsProcessInJob(process.Handle, EngineJob.Value, out var inJob) && inJob;
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or Win32Exception)
+        {
+            return false;
+        }
+    }
 
     private static IntPtr CreateKillOnCloseJob()
     {

@@ -361,29 +361,54 @@ public static partial class CloneFamilyPlanner
 
     /// <summary>
     /// New leaf for a family member: the token replaced (case-insensitive), or its squashed form (no underscores, as in
-    /// <c>KingletMarinerManualSpawnPreset</c>), else the new token prefixed. A leaf that would end in <c>_&lt;number&gt;</c>
-    /// (a paint mesh <c>SK_Winchester_1897</c>) ends in <c>_v&lt;number&gt;</c> instead, so it never splits into an FName number.
+    /// <c>KingletMarinerManualSpawnPreset</c>), else the new token prefixed. A numbered member keeps its number: the game's
+    /// <c>MI_M16_Apocalypso_2</c> is the name <c>MI_M16_Apocalypso</c> with number 3, and its copy is the name
+    /// <c>…_MI_M16_Apocalypso</c> with number 3 again (<c>…_MI_M16_Apocalypso_2</c>, written split as the cooker writes it). Only
+    /// its text changes, so the copies rename it in place and every reference to it follows, also in data the studio cannot
+    /// read (r40: the <c>_v2</c> form the studio used before changed the number, and the copy of the M16A4 Premium's mesh, of
+    /// the Trench Gun's and of 11 other families was refused). Any other leaf that would end in <c>_&lt;number&gt;</c> ends in
+    /// <c>_v&lt;number&gt;</c> instead, so it never splits into an FName number.
     /// </summary>
     public static string RenameLeaf(string leaf, string token, string newToken)
     {
-        string renamed;
+        ArgumentNullException.ThrowIfNull(leaf);
+        var kept = FNameRef.Split(leaf).Number;
+        var renamed = Replace(leaf, token, newToken);
+        var (text, number) = FNameRef.Split(renamed);
+        if (number == kept)
+        {
+            return renamed;
+        }
+
+        if (kept != 0)
+        {
+            // The token held the number (SM_LogShed_1 of LogShed_1): rename the text before it and keep the number.
+            var numbered = Replace(FNameRef.Split(leaf).Text, token, newToken) + "_" + (kept - 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
+            if (FNameRef.Split(numbered).Number == kept)
+            {
+                return numbered;
+            }
+        }
+
+        return number == 0 ? renamed : $"{text}_v{(number - 1).ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+    }
+
+    /// <summary>The token of <paramref name="leaf"/> replaced, or its squashed form, or the new token prefixed.</summary>
+    private static string Replace(string leaf, string token, string newToken)
+    {
         var squashed = token.Replace("_", string.Empty, StringComparison.Ordinal);
         if (leaf.Contains(token, StringComparison.OrdinalIgnoreCase))
         {
-            renamed = Regex.Replace(leaf, Regex.Escape(token), newToken.Replace("$", "$$", StringComparison.Ordinal), RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-        }
-        else if (squashed.Length > 0 && leaf.Contains(squashed, StringComparison.OrdinalIgnoreCase))
-        {
-            var newSquashed = newToken.Replace("_", string.Empty, StringComparison.Ordinal).Replace("$", "$$", StringComparison.Ordinal);
-            renamed = Regex.Replace(leaf, Regex.Escape(squashed), newSquashed, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-        }
-        else
-        {
-            renamed = newToken + "_" + leaf;
+            return Regex.Replace(leaf, Regex.Escape(token), newToken.Replace("$", "$$", StringComparison.Ordinal), RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         }
 
-        var (text, number) = FNameRef.Split(renamed);
-        return number == 0 ? renamed : $"{text}_v{(number - 1).ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+        if (squashed.Length > 0 && leaf.Contains(squashed, StringComparison.OrdinalIgnoreCase))
+        {
+            var newSquashed = newToken.Replace("_", string.Empty, StringComparison.Ordinal).Replace("$", "$$", StringComparison.Ordinal);
+            return Regex.Replace(leaf, Regex.Escape(squashed), newSquashed, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        }
+
+        return newToken + "_" + leaf;
     }
 
     /// <summary>

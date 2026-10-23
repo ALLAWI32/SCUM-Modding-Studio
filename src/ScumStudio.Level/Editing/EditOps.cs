@@ -39,10 +39,13 @@ namespace ScumStudio.Level.Editing;
 [JsonDerivedType(typeof(ReplaceMeshOp), "replaceMesh")]
 [JsonDerivedType(typeof(SetLootOp), "setLoot")]
 [JsonDerivedType(typeof(SetClearGrassOp), "setClearGrass")]
+[JsonDerivedType(typeof(SetNoLootOp), "setNoLoot")]
 [JsonDerivedType(typeof(DeleteComponentsOp), "deleteComponents")]
 [JsonDerivedType(typeof(RestoreComponentsOp), "restoreComponents")]
 [JsonDerivedType(typeof(SetSpawnChoiceOp), "setSpawnChoice")]
 [JsonDerivedType(typeof(AddSpawnPlaceOp), "addSpawnPlace")]
+[JsonDerivedType(typeof(AddSubZoneOp), "addSubZone")]
+[JsonDerivedType(typeof(RemoveSubZoneOp), "removeSubZone")]
 [JsonDerivedType(typeof(SetEconomyEntryOp), "setEconomyEntry")]
 [JsonDerivedType(typeof(SetEconomySettingOp), "setEconomySetting")]
 [JsonDerivedType(typeof(SetEconomySectionOp), "setEconomySection")]
@@ -806,6 +809,30 @@ public sealed record SetClearGrassOp(ActorRef Target, bool? Old, bool? New) : Ed
 }
 
 /// <summary>
+/// "No loot inside" of an object the project placed (defolt_0999 on Discord: "disable loot in the objects you add"): when
+/// on, the export empties the copy's searchable parts (its own and those of the child actors it carries, a building's
+/// lockers), gives the parts whose model carries loot a loot-free copy of that model, and empties its item spawners' loot
+/// points. Off = loot as the game has it for the copied object.
+/// </summary>
+/// <param name="Target">The placed actor.</param>
+/// <param name="Old">The setting before the edit.</param>
+/// <param name="New">The setting after the edit.</param>
+public sealed record SetNoLootOp(ActorRef Target, bool Old, bool New) : EditOp
+{
+    /// <inheritdoc />
+    public override EditOp Inverse() => this with { Old = New, New = Old };
+
+    /// <inheritdoc />
+    public override string Describe() => $"Loot inside {Target}: {(New ? "none" : "as the game has it")}";
+
+    /// <inheritdoc />
+    public override IReadOnlyList<string> GetTouchedLevels() => [Target.Level];
+
+    /// <inheritdoc />
+    public override ActorRef? GetPrimaryTarget() => Target;
+}
+
+/// <summary>
 /// What one spawner spawns (owner: "select a spawn, it gives me lists of what can go there and I replace it"): a sentry
 /// spawner's <c>SentryClass</c> (a soft class path in its level), or an island spawn place's choice in
 /// <c>The_Island_LevelStaticData</c> — a vehicle point's <c>VehicleLevelSpawnGroup</c> (<c>City</c>), a threat zone's
@@ -885,4 +912,67 @@ public sealed record AddSpawnPlaceOp(string NewName, SpawnPlaceKind Kind, string
 
     /// <inheritdoc />
     public override int GetHashCode() => HashCode.Combine(NewName, Kind, Setting, Transform, Tags?.Count ?? 0, Points?.Count ?? 0);
+}
+
+/// <summary>
+/// A box inside a stock threat zone with zone settings of its own: the game's <c>FEncounterSubZoneData</c> (the island's
+/// NPC-only areas are such boxes, e.g. the <c>HTZ_Military_TV_Bunker_NPC</c> ones of a bunker's entrance zone, priority 1).
+/// The game data stores no name for it; the box, the settings and the priority are all there is.
+/// </summary>
+/// <param name="Min">The box's lower corner (world space, centimetres).</param>
+/// <param name="Max">The box's upper corner.</param>
+/// <param name="Setting">
+/// Its zone settings: a name the island data imports (<c>HTZ_Military_TV_Bunker_NPC</c>) or a package path (the project's
+/// own copy: <c>/Game/ConZ_Files/Encounters/EncounterZones/Medium_Threat/MTZ_POI_Military_Base_Own</c>).
+/// </param>
+/// <param name="Priority">Its <c>SubZonePriority</c> (the island's NPC-only sub-zones have 1, the others 0 or -1).</param>
+public sealed record SubZone(Core.Mathematics.FVector Min, Core.Mathematics.FVector Max, string Setting, int Priority = 1)
+{
+    /// <summary>True when <paramref name="at"/> is in the box (edges included).</summary>
+    public bool Contains(Core.Mathematics.FVector at) =>
+        at.X >= Min.X && at.X <= Max.X && at.Y >= Min.Y && at.Y <= Max.Y && at.Z >= Min.Z && at.Z <= Max.Z;
+
+    /// <summary>"MTZ_POI_Military_Base_Own, priority 1, 105 x 50 m".</summary>
+    public override string ToString() => string.Create(CultureInfo.InvariantCulture,
+        $"{SpawnPlaces.SettingName(Setting)}, priority {Priority}, {(Max.X - Min.X) / 100f:0.#} x {(Max.Y - Min.Y) / 100f:0.#} m");
+}
+
+/// <summary>
+/// Adds a sub-zone (<see cref="SubZone"/>) to a stock threat zone of the island's static data: the game's own way to give
+/// part of a place other spawns (an NPC-only area inside a military base), where a second zone laid inside the place's
+/// own zone is a case the game's data never has (r39: the NPC guards of igor8802 never came).
+/// </summary>
+/// <param name="Zone">The stock zone (<c>ThreatZone_00222</c> in the <see cref="SpawnPlaces.StaticDataPath"/> document).</param>
+/// <param name="SubZone">The sub-zone.</param>
+public sealed record AddSubZoneOp(ActorRef Zone, SubZone SubZone) : EditOp
+{
+    /// <inheritdoc />
+    public override EditOp Inverse() => new RemoveSubZoneOp(Zone, SubZone);
+
+    /// <inheritdoc />
+    public override string Describe() => $"Add sub-zone ({SubZone}) to {Zone.Actor}";
+
+    /// <inheritdoc />
+    public override IReadOnlyList<string> GetTouchedLevels() => [Zone.Level];
+
+    /// <inheritdoc />
+    public override ActorRef? GetPrimaryTarget() => Zone;
+}
+
+/// <summary>Removes a sub-zone <see cref="AddSubZoneOp"/> added; its inverse adds it again.</summary>
+/// <param name="Zone">The stock zone.</param>
+/// <param name="SubZone">The sub-zone.</param>
+public sealed record RemoveSubZoneOp(ActorRef Zone, SubZone SubZone) : EditOp
+{
+    /// <inheritdoc />
+    public override EditOp Inverse() => new AddSubZoneOp(Zone, SubZone);
+
+    /// <inheritdoc />
+    public override string Describe() => $"Remove sub-zone ({SubZone}) from {Zone.Actor}";
+
+    /// <inheritdoc />
+    public override IReadOnlyList<string> GetTouchedLevels() => [Zone.Level];
+
+    /// <inheritdoc />
+    public override ActorRef? GetPrimaryTarget() => Zone;
 }

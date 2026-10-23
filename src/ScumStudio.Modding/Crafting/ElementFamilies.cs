@@ -25,8 +25,9 @@ public sealed record ElementFamily(string Element, string Recipe, string NativeC
 {
     /// <summary>
     /// The game ships no placeable recipe for the element (its cabins <c>BP_Base_Cabin</c>, <c>_02</c>, <c>_03</c>):
-    /// <see cref="Recipe"/> is the furniture template's (<see cref="CraftablesPlanner.FurnitureRecipe"/>), copied to build
-    /// the element's clone; the element, its placement, health, decay and repair values stay the game's.
+    /// <see cref="Recipe"/> is the large-building template's (<see cref="CraftablesPlanner.LargeBuildingRecipe"/>, the chair's
+    /// when the game lacks it), copied to build the element's clone; the element, its placement, health, decay and repair
+    /// values stay the game's.
     /// </summary>
     public bool BorrowsRecipe { get; init; }
 }
@@ -101,12 +102,14 @@ public static class ElementFamilies
         }
 
         // An element the game ships without a recipe (the cabins: owner, 2026-10-17) is still built as itself, with its
-        // own placement, health, decay and repair values: a copy of the furniture template's recipe makes it.
+        // own placement, health, decay and repair values: a copy of the game's large-building recipe makes it (the Large Log
+        // Shed's: a building's placement values, and the planner draws its placement check in so the player may stand
+        // inside the ghost; owner, 3.5.0: the cabin was always red), the chair's only when the game lacks that one.
         var borrowed = !index.Recipes.TryGetValue(element, out var recipe);
         if (borrowed)
         {
-            recipe = PackageMap.Normalize(CraftablesPlanner.FurnitureRecipe);
-            if (!catalog.PackageExists(recipe))
+            recipe = new[] { CraftablesPlanner.LargeBuildingRecipe, CraftablesPlanner.FurnitureRecipe }.Select(PackageMap.Normalize).FirstOrDefault(catalog.PackageExists);
+            if (recipe is null)
             {
                 return (null, $"{PackageMap.Leaf(element)} has no placeable recipe in the game to clone");
             }

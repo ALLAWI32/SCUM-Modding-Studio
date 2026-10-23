@@ -13,7 +13,11 @@ namespace ScumStudio.Modding.Cloning;
 public sealed partial class PackageMap
 {
     private readonly Dictionary<string, string> _packages = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, string> _objects = new(StringComparer.Ordinal);
+
+    // FNames compare in any case, and the game's files do not always agree on one: the material the Scout knife's mesh
+    // imports as MI_Scout_Met is the export MI_Scout_MEt in its own package (r40: six item families failed to clone,
+    // "the export MI_Scout_MEt was not renamed").
+    private readonly Dictionary<string, string> _objects = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Creates a map from (old, new) package paths.</summary>
     /// <exception cref="ArgumentException">A path is not a /Game package path, or an old path is mapped twice.</exception>
@@ -74,11 +78,13 @@ public sealed partial class PackageMap
             return cls + "_C";
         }
 
+        // A numbered object of a renamed one: X_3, and the class's X_C_1 (LogShed_1_C_1, r40: the soft path of the Log Shed's
+        // entity setup read with number 2 refused its clone).
         var underscore = name.LastIndexOf('_');
         if (underscore > 0 && underscore < name.Length - 1)
         {
             var tail = name[(underscore + 1)..];
-            if (tail.All(char.IsAsciiDigit) && _objects.TryGetValue(name[..underscore], out var numbered))
+            if (tail.All(char.IsAsciiDigit) && RemapObject(name[..underscore]) is var numbered && !string.Equals(numbered, name[..underscore], StringComparison.Ordinal))
             {
                 return numbered + "_" + tail;
             }

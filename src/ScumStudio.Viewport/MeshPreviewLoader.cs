@@ -74,6 +74,14 @@ public sealed record PreviewModel(string Name, IReadOnlyList<PreviewPart> Parts,
 /// </summary>
 public sealed class MeshPreviewLoader
 {
+    /// <summary>
+    /// What the loader's models look like. Bump it with any change that alters what this loader, <c>MaterialInspector</c> or
+    /// <c>MaterialLooks</c> produce (which texture or colour a part gets, which parts a Blueprint shows): the Assets
+    /// thumbnails are keyed by it and are then made again once. 2: no weather layer taken for the colour (r39: the
+    /// railway's ice).
+    /// </summary>
+    public const int LookVersion = 2;
+
     private const int MaxClassDepth = 8;
 
     /// <summary>Child actor components inside child actors followed at most (a cycle stops at its first repeat).</summary>
@@ -878,7 +886,7 @@ public sealed class MeshPreviewLoader
 
     /// <summary>
     /// Adds one part per material of <paramref name="mesh"/> (sections sharing a material are merged); a mesh without
-    /// render data is skipped. A skeletal mesh is skinned into <paramref name="pose"/> when one is given (<see cref="Skinning"/>).
+    /// render data, or with data that cannot be drawn (<see cref="BrokenMeshes"/>), is skipped. A skeletal mesh is skinned into <paramref name="pose"/> when one is given (<see cref="Skinning"/>).
     /// </summary>
     private void AddMeshParts(List<PreviewPart> parts, UObject mesh, string meshPath, FTransform transform, IReadOnlyDictionary<string, FTransform>? pose = null,
         IReadOnlyList<string?>? overrides = null)
@@ -893,6 +901,13 @@ public sealed class MeshPreviewLoader
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 _logger.LogDebug("Mesh {Mesh} could not be extracted: {Message}", meshPath, ex.Message);
+                return;
+            }
+
+            if (BrokenMeshes.ProblemOf(data) is { } problem)
+            {
+                // Nothing to draw (indices into no vertices in older game files): left out, as a mesh without render data.
+                BrokenMeshes.Warn(_logger, meshPath, problem);
                 return;
             }
 

@@ -16,6 +16,13 @@ public sealed record RegisteredAsset(string ObjectPath, string PrimaryAssetType)
 /// </summary>
 public static class RegistryCloner
 {
+    /// <summary>
+    /// The tag the cook writes on an item's, weapon's or vehicle's record when its class defaults store
+    /// <c>_visibleToAdminCommands = false</c>: the game's <c>#SpawnItem</c> / <c>#SpawnVehicle</c> refuse such a record (246 of the
+    /// game's items carry it). A clone's primary records are registered without it (<see cref="AssetModBuilder.VisibleToAdminCommands"/>).
+    /// </summary>
+    public const string HiddenFromAdminCommandsTag = "HiddenFromAdminCommands";
+
     /// <summary>Adds the records of the packages in <paramref name="map"/>; returns what was added.</summary>
     /// <param name="registry">Registry to extend (the stock one, plus what the same export already added).</param>
     /// <param name="map">The clone's package map.</param>
@@ -56,6 +63,12 @@ public static class RegistryCloner
         {
             var oldLeaf = PackageMap.Leaf(oldPackage);
             var newLeaf = PackageMap.Leaf(newPackage);
+
+            // The clone's own package (its owner's) is made to be spawned under its new name: the template's HiddenFromAdminCommands
+            // tag stays off its records, as AssetModBuilder sets its class defaults. The other copies (its entity setup, a vehicle's
+            // parts) and a copy registered without an owner keep every tag of their template.
+            var spawnable = owner is { } own && own.StartsWith('/')
+                && string.Equals(PackageMap.Normalize(newPackage), PackageMap.Normalize(own), StringComparison.OrdinalIgnoreCase);
             foreach (var suffix in new[] { string.Empty, "_C" })
             {
                 var newObject = $"{newPackage}.{newLeaf}{suffix}";
@@ -81,6 +94,11 @@ public static class RegistryCloner
                 var ok = true;
                 foreach (var (key, value) in tags)
                 {
+                    if (spawnable && key == HiddenFromAdminCommandsTag)
+                    {
+                        continue;
+                    }
+
                     AssetRegistryValue? v = value.Kind switch
                     {
                         AssetRegistryValueKind.NumberlessExportPath or AssetRegistryValueKind.ExportPath when value.ExportPath is { Count: 3 } p =>

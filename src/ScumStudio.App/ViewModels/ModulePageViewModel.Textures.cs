@@ -126,7 +126,12 @@ public abstract partial class ModulePageViewModel
         return ops.Count == 0 ? null : new BatchOp(Loc.T("Studio.Textures.Reset"), ops);
     }
 
-    /// <summary>The texture slots of a material instance (name, stock texture, size, format, sRGB), in the material's order.</summary>
+    /// <summary>
+    /// The texture slots of a material instance (name, stock texture, size, format, sRGB), in the material's order. Only
+    /// slots that hold a 2D texture: a car paint's reflection slot holds a cube map (<c>T_CubeMap_Dummy_01</c>, a
+    /// <c>TextureCube</c>) that no picture can replace, and loading it as a 2D texture threw and closed the panel (owner,
+    /// 2026-10-19, debugging 3.5.1 on his Rager clone).
+    /// </summary>
     internal static IReadOnlyList<TextureSlot> ReadTextureSlots(AssetCatalog catalog, string materialPath)
     {
         if (!catalog.TryLoadObject<UMaterialInstanceConstant>(materialPath, out var mi))
@@ -137,8 +142,13 @@ public abstract partial class ModulePageViewModel
         var slots = new List<TextureSlot>();
         foreach (var texture in new MaterialInspector(catalog).Inspect(mi).Textures.Where(t => t.TexturePath is { Length: > 0 }))
         {
-            var info = catalog.TryLoadObject<UTexture2D>(texture.TexturePath!, out var t) ? TextureDecoder.Describe(t) : null;
-            slots.Add(new TextureSlot(texture.Name, texture.TexturePath!, info?.Width ?? 0, info?.Height ?? 0, info?.PixelFormat ?? string.Empty, info?.IsSrgb ?? false));
+            if (!catalog.TryLoadObject<UTexture2D>(texture.TexturePath!, out var t))
+            {
+                continue; // a cube map, a texture array, or a texture the game files do not have
+            }
+
+            var info = TextureDecoder.Describe(t);
+            slots.Add(new TextureSlot(texture.Name, texture.TexturePath!, info.Width, info.Height, info.PixelFormat, info.IsSrgb));
         }
 
         return slots;
@@ -204,7 +214,12 @@ public abstract partial class ModulePageViewModel
                 return image with { Rgba = rgba, Width = w, Height = h, CompressedMips = null };
             }
 
-            var game = TextureDecoder.Decode(catalog.LoadObject<UTexture2D>(slot.TexturePath), SlotPictureSize);
+            if (!catalog.TryLoadObject<UTexture2D>(slot.TexturePath, out var texture))
+            {
+                return null; // not a 2D texture any more, or gone: the slot shows no picture
+            }
+
+            var game = TextureDecoder.Decode(texture, SlotPictureSize);
             var (r, gw, gh) = ThumbnailService.Shrink(game.Rgba, game.Width, game.Height, SlotPictureSize);
             var opaque = r.ToArray();
             for (var i = 3; i < opaque.Length; i += 4)
@@ -352,7 +367,7 @@ public abstract partial class ModulePageViewModel
                 slot.Picture = await Task.Run(() => SlotPicture(catalog, directory, slot)).ConfigureAwait(true);
             }
         }
-        catch (Exception ex) when (ex is FileNotFoundException or FormatException or InvalidDataException or IOException or InvalidOperationException)
+        catch (Exception ex) when (ex is FileNotFoundException or FormatException or InvalidDataException or IOException or InvalidOperationException or InvalidCastException or NotSupportedException)
         {
             _services.Logger.LogWarning("Textures of {Material}: {Message}", paint.MaterialPath, ex.Message);
             TextureSlots = [];

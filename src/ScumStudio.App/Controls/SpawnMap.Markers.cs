@@ -119,7 +119,7 @@ public sealed partial class SpawnMap
             fills[layer] ??= Translucent(Token(LayerBrushes[layer]), layer == (int)SpawnMapLayer.Zones ? 0.18 : 0.1);
             pens[layer] ??= new Pen(Token(LayerBrushes[layer]), 1.5);
             var pen = highlighted?.Contains(_ids[i]) == true ? ring ??= new Pen(Token("AccentBrush"), 2.5) : pens[layer];
-            using (context.PushTransform(Matrix.CreateRotation(marker.Yaw * Math.PI / 180) * Matrix.CreateTranslation(at.X, at.Y)))
+            using (context.PushTransform(Matrix.CreateRotation(IslandMap.ScreenYaw(marker.Yaw) * Math.PI / 180) * Matrix.CreateTranslation(at.X, at.Y)))
             {
                 context.DrawEllipse(fills[layer], pen, default, rx, ry);
             }

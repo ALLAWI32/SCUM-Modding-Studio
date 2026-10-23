@@ -37,13 +37,17 @@ public sealed record ActorEdits
     /// <summary>"Clear grass under it" as set (see <see cref="SetClearGrassOp"/>), or null for the default.</summary>
     public bool? ClearGrass { get; init; }
 
+    /// <summary>"No loot inside" (see <see cref="SetNoLootOp"/>): a copy of a placed object without loot has none either.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool NoLoot { get; init; }
+
     /// <summary>Instances of its instanced components deleted, moved or added.</summary>
     public IReadOnlyList<InstanceEdit> Instances { get; init; } = [];
 
     /// <summary>True when nothing is changed.</summary>
     [JsonIgnore]
     public bool IsEmpty => Bend is null && Parts.Count == 0 && Meshes.Count == 0 && Sways.Count == 0 && Points.Count == 0 && Loot.Count == 0
-                           && ClearGrass is null && Instances.Count == 0;
+                           && ClearGrass is null && !NoLoot && Instances.Count == 0;
 
     /// <summary>
     /// The edits that give <paramref name="created"/> (a copy, placed in the same batch before them) these changes. The
@@ -63,6 +67,11 @@ public sealed record ActorEdits
         if (ClearGrass is { } grass)
         {
             ops.Add(new SetClearGrassOp(created, null, grass));
+        }
+
+        if (NoLoot)
+        {
+            ops.Add(new SetNoLootOp(created, false, true));
         }
 
         if (rootMeshAndLootBaked)

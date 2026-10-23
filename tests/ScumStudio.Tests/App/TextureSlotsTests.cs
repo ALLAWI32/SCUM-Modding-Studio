@@ -36,6 +36,48 @@ public sealed class TextureSlotsTests
         Assert.Empty(ModulePageViewModel.ReadTextureSlots(catalog, "/Game/Tests/Materials/MI_Missing.MI_Missing"));
     }
 
+    /// <summary>
+    /// Owner, 2026-10-19 (3.5.1 source under the debugger, his Rager clone): a car material's reflection slot holds a cube
+    /// map (T_CubeMap_Dummy_01, a TextureCube); listing it as a 2D slot and loading its picture threw InvalidCastException
+    /// and the app closed. A slot whose texture is not a 2D texture is left out (no picture can replace it).
+    /// </summary>
+    [Fact]
+    public void ASlotThatIsNoTwoDTextureIsLeftOut()
+    {
+        using var temp = new LevelTempDirectory();
+        SyntheticTexture.WriteLoose(temp.Path, SyntheticTexture.Path);
+        const string material = "/Game/Tests/Materials/MI_Chrome";
+        var p = new SyntheticLevelPackage();
+        p.Name(material);
+        var diffuse = p.ObjectImport(SyntheticTexture.Path, "/Script/Engine", "Texture2D", "T_Body_D");
+        var cube = p.ObjectImport("/Game/Tests/Textures/T_CubeMap_Dummy_01", "/Script/Engine", "TextureCube", "T_CubeMap_Dummy_01");
+        var export = p.Export("MI_Chrome", p.ScriptClass("/Script/Engine", "MaterialInstanceConstant"), 0);
+        p.SetPayload(export, p.Properties(t => t.StructArray("TextureParameterValues", "TextureParameterValue",
+            item =>
+            {
+                item.TaggedStruct("ParameterInfo", "MaterialParameterInfo", info =>
+                {
+                    info.NameValue("Name", "Reflection Cube");
+                    info.ByteEnum("Association", "EMaterialParameterAssociation", "GlobalParameter");
+                });
+                item.Object("ParameterValue", cube);
+            },
+            item =>
+            {
+                item.TaggedStruct("ParameterInfo", "MaterialParameterInfo", info =>
+                {
+                    info.NameValue("Name", "Diffuse Map");
+                    info.ByteEnum("Association", "EMaterialParameterAssociation", "GlobalParameter");
+                });
+                item.Object("ParameterValue", diffuse);
+            })));
+        SyntheticTexture.WriteLoose(temp.Path, material, p.Build(), null);
+        using var catalog = AssetCatalog.OpenLoose(temp.Path);
+
+        var slot = Assert.Single(ModulePageViewModel.ReadTextureSlots(catalog, material + ".MI_Chrome"));
+        Assert.Equal("Diffuse Map", slot.Parameter); // the cube map slot is not listed, and nothing threw
+    }
+
     [Fact]
     public void ReplaceIsOneStepWithThePixelsTheParameterAndTheStreamingEntry()
     {

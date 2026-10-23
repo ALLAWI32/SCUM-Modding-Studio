@@ -18,8 +18,9 @@ namespace ScumStudio.App.Services;
 /// <summary>
 /// Small PNG previews for the asset tiles and list rows: a texture's small mip, a material's base-colour texture, or a
 /// mesh drawn with its textures through one shared off-screen OpenGL context on a worker thread. Made only when a tile
-/// on screen asks, kept in <c>cache/thumbnails/&lt;hash&gt;.png</c> keyed by package path and file size (a game update
-/// refreshes them), so a second visit costs one small PNG read.
+/// on screen asks, kept in <c>cache/thumbnails/v&lt;version&gt;/&lt;hash&gt;.png</c> keyed by package path and file size (a game
+/// update refreshes them) and by the version of the code that paints them (a studio update that draws them differently
+/// makes them again; the folders of other versions are deleted), so a second visit costs one small PNG read.
 /// </summary>
 public sealed class ThumbnailService : IDisposable
 {
@@ -39,16 +40,36 @@ public sealed class ThumbnailService : IDisposable
     private RenderTarget? _target;
     private volatile string? _glFailure;
     private volatile bool _disposed;
+    private volatile Task? _sweep;
+    private int _sweepStarted;
 
     /// <summary>Creates the service writing into <paramref name="directory"/>.</summary>
     public ThumbnailService(string directory, ILogger logger)
+        : this(directory, logger, VersionOf(MeshPreviewLoader.LookVersion, TextureDecoder.Version))
+    {
+    }
+
+    /// <summary>Creates the service for the thumbnails of <paramref name="version"/> (tests: another look or decoder version).</summary>
+    internal ThumbnailService(string directory, ILogger logger, string version)
     {
         Directory = directory ?? throw new ArgumentNullException(nameof(directory));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        ArgumentException.ThrowIfNullOrEmpty(version);
+        Version = version;
+        VersionDirectory = Path.Combine(directory, "v" + version);
     }
 
-    /// <summary>Cache folder.</summary>
+    /// <summary>Cache folder; the thumbnails sit in its <see cref="VersionDirectory"/>.</summary>
     public string Directory { get; }
+
+    /// <summary>The version of the code that paints the thumbnails (<c>render.look.decoder</c>, see <see cref="VersionOf"/>).</summary>
+    internal string Version { get; }
+
+    /// <summary>The sub-folder of <see cref="Directory"/> that holds this version's thumbnails.</summary>
+    internal string VersionDirectory { get; }
+
+    /// <summary>The removal of other versions' thumbnails, started by the first thumbnail asked for (null before that).</summary>
+    internal Task? Sweeping => _sweep;
 
     /// <summary>True when packages of <paramref name="className"/> get a thumbnail (textures, materials, meshes, Blueprints, foliage types).</summary>
     public static bool Supports(string? className) =>
@@ -199,14 +220,89 @@ public sealed class ThumbnailService : IDisposable
     // v3: Blueprints, 2x supersampled; v4: the masters' brightness and tint;
     // v5: foliage types, override materials, see-through glass, master-default colours;
     // v6: no snow layer or normal map taken for the colour (D06: purple-blue cliffs and shelves).
-    private const string RenderVersion = "6";
+    // v7: streaming virtual textures decode (3.5.0 made them white in 3.4.0's tiles)
+    // Rule since v7: RenderVersion covers only this service's own drawing (camera, light, size, background). Any change that
+    // alters what MeshPreviewLoader, MaterialInspector/MaterialLooks or TextureDecoder produce bumps the constant of that
+    // layer (MeshPreviewLoader.LookVersion, TextureDecoder.Version); the key is made of all three, so this file never needs
+    // touching for that (r39: 3.5.0's decoder fix left RenderVersion at "6" and 3.4.0's white ZIL tiles were served on).
+    private const string RenderVersion = "7";
 
-    private string CacheFile(string key, long size) =>
-        Path.Combine(Directory, Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key + "|" + size + "|" + RenderVersion)))[..24] + ".png");
+    /// <summary>The cache version of thumbnails painted by look version <paramref name="lookVersion"/> and decoder version <paramref name="decoderVersion"/>.</summary>
+    internal static string VersionOf(int lookVersion, int decoderVersion) =>
+        string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{RenderVersion}.{lookVersion}.{decoderVersion}");
+
+    /// <summary>The PNG of <paramref name="key"/> (a package or object path) whose package file is <paramref name="size"/> bytes.</summary>
+    internal string CacheFile(string key, long size) =>
+        Path.Combine(VersionDirectory, Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key + "|" + size + "|" + Version)))[..24] + ".png");
+
+    /// <summary>
+    /// Deletes what other versions left in <see cref="Directory"/>: their <c>v…</c> folders and the loose PNGs of the flat
+    /// layout before r39 (3.5.1 and earlier wrote every version's tiles side by side and never removed one). Best effort on
+    /// a worker: a file another program holds stays, and nothing throws.
+    /// </summary>
+    private void SweepOtherVersions()
+    {
+        try
+        {
+            if (!System.IO.Directory.Exists(Directory))
+            {
+                return;
+            }
+
+            var current = Path.GetFileName(VersionDirectory);
+            var removed = 0;
+            foreach (var folder in System.IO.Directory.EnumerateDirectories(Directory))
+            {
+                var name = Path.GetFileName(folder);
+                if (IsVersionFolder(name) && !string.Equals(name, current, StringComparison.OrdinalIgnoreCase) && TryDelete(() => System.IO.Directory.Delete(folder, recursive: true)))
+                {
+                    removed++;
+                }
+            }
+
+            foreach (var file in System.IO.Directory.EnumerateFiles(Directory))
+            {
+                if ((file.EndsWith(".png", StringComparison.OrdinalIgnoreCase) || file.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase)) && TryDelete(() => File.Delete(file)))
+                {
+                    removed++;
+                }
+            }
+
+            if (removed > 0)
+            {
+                _logger.LogInformation("Thumbnails of other studio versions removed: {Count} files and folders.", removed);
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogDebug("Old thumbnails not removed: {Message}", ex.Message);
+        }
+
+        static bool IsVersionFolder(string name) =>
+            name.Length > 1 && name[0] is 'v' or 'V' && name.AsSpan(1).IndexOfAnyExcept("0123456789.") < 0;
+
+        static bool TryDelete(Action delete)
+        {
+            try
+            {
+                delete();
+                return true;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return false;
+            }
+        }
+    }
 
     /// <summary>Returns the cached PNG, or makes it with <paramref name="produce"/> (null pixels = no thumbnail, remembered for the session).</summary>
     private async Task<string?> MakeAsync(string path, string name, Func<CancellationToken, Task<(byte[] Rgba, int Width, int Height)?>> produce, CancellationToken cancellationToken)
     {
+        if (Interlocked.Exchange(ref _sweepStarted, 1) == 0)
+        {
+            _sweep = Task.Run(SweepOtherVersions, CancellationToken.None);
+        }
+
         if (File.Exists(path))
         {
             return path;
@@ -226,7 +322,7 @@ public sealed class ThumbnailService : IDisposable
             }
 
             var (rgba, width, height) = Shrink(pixels.Rgba, pixels.Width, pixels.Height, Size);
-            System.IO.Directory.CreateDirectory(Directory);
+            System.IO.Directory.CreateDirectory(VersionDirectory);
             var temp = $"{path}.{Environment.CurrentManagedThreadId}.tmp";
             await using (var stream = File.Create(temp))
             {

@@ -130,8 +130,32 @@ public sealed class CraftBuildingRowTests
 
         // A chair-sized thing: not suggested, automatically 0 m (the game's placement even when switched on).
         var chair = new CraftableRowViewModel(new Craftable { Name = "Stool", Source = Cabin, Mesh = Cabin, Kind = CraftKind.Furniture, SizeMeters = 0.8f }, _ => { }, NoPicture);
+        Assert.True(chair.InFrontOffered);
         Assert.False(chair.InFrontSuggested);
         Assert.Equal(0m, chair.InFrontMeters);
+
+        // Not offered where the Large Log Shed's recipe places it with its check drawn in (the player may stand inside the
+        // ghost): large furniture, and an element the game ships no recipe for; a saved switch is then shown off.
+        var big = new CraftableRowViewModel(new Craftable { Name = "Hall", Source = Cabin, Mesh = Cabin, Kind = CraftKind.Furniture, SizeMeters = 15, InFront = new InFrontSettings(18f) }, _ => { }, NoPicture);
+        Assert.True(big.IsLargeTemplate);
+        Assert.False(big.InFrontOffered);
+        Assert.False(big.PlaceInFront);
+        Assert.False(big.InFrontSuggested);
+        Assert.Equal(Loc.T("Craftables.Building.Large"), big.LargeTemplateCaption);
+
+        // A station of 15 m: the same (its check is drawn in too), but it keeps the workbench's recipe, and the caption says so
+        // (review 3.5.1: it promised the Large Log Shed's recipe).
+        var forge = new CraftableRowViewModel(new Craftable { Name = "Forge", Source = Cabin, Mesh = Cabin, Kind = CraftKind.Station, SizeMeters = 15, InFront = new InFrontSettings(5f) }, _ => { }, NoPicture);
+        Assert.True(forge.IsLargeTemplate);
+        Assert.False(forge.InFrontOffered);
+        Assert.False(forge.PlaceInFront);
+        Assert.Equal(Loc.T("Craftables.Building.LargeStation"), forge.LargeTemplateCaption);
+        Assert.DoesNotContain("Log Shed", forge.LargeTemplateCaption, StringComparison.Ordinal);
+        var borrowed = new CraftableRowViewModel(new Craftable { Name = "Cabin", Source = Cabin, Mesh = Cabin, Kind = CraftKind.Element, SizeMeters = 15, Element = new ElementSettings { Template = Cabin } }, _ => { }, NoPicture);
+        borrowed.SetFamily(Family(Cabin, borrowed: true), null);
+        Assert.True(borrowed.BorrowsRecipe);
+        Assert.False(borrowed.InFrontOffered);
+        Assert.False(borrowed.InFrontSuggested);
     }
 
     private static ElementFamily Family(string element, bool borrowed, bool withoutFlag = false)
@@ -143,7 +167,8 @@ public sealed class CraftBuildingRowTests
             values.Add(new(cdo, "_canBePlacedWithoutFlag", TunableKind.Bool, "true") { Name = "_canBePlacedWithoutFlag" });
         }
 
-        return new ElementFamily(element, CraftablesPlanner.FurnitureRecipe, "BaseBuildingComponent", null, [new ElementLevel(CraftablesPlanner.FurnitureRecipe, element, values)], false)
+        var recipe = borrowed ? CraftablesPlanner.LargeBuildingRecipe : CraftablesPlanner.FurnitureRecipe;
+        return new ElementFamily(element, recipe, "BaseBuildingComponent", null, [new ElementLevel(recipe, element, values)], false)
         {
             BorrowsRecipe = borrowed,
         };

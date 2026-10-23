@@ -242,6 +242,9 @@ public sealed partial class LevelViewport : OpenGlControlBase
     private const double StageBudgetMovingMs = 4.0;
     private const double StageBudgetRestingMs = 30.0;
 
+    // Milliseconds a frame may spend sending the ground near the camera at full detail (one component is about 1 ms).
+    private const double TerrainDetailBudgetMs = 3.0;
+
     // The island backdrop goes to the GPU a few milliseconds a frame too (it was sent in one frame: audit F323).
     private readonly BackdropStager _backdropStager = new();
     private LevelScene? BackdropScene => _backdropStager.Scene;
@@ -315,6 +318,9 @@ public sealed partial class LevelViewport : OpenGlControlBase
     private PreparedLevelScene? _framedBackdrop;
     // Meshes stay on the GPU between scene swaps: the levels around a moving camera share most of them.
     private readonly GpuMeshCache _gpuMeshes = new();
+
+    // The ground near the camera drawn from every landscape sample (the levels load it at every fourth).
+    private readonly TerrainDetailRings _terrainDetail = new();
     private BoundingBox _snapMoving;
     private List<BoundingBox>? _snapOthers;
     private SnapPiece? _snapPiece;
@@ -1055,6 +1061,7 @@ public sealed partial class LevelViewport : OpenGlControlBase
         _level?.Dispose();
         _level = null;
         _gpuMeshes.Clear(); // the context and every mesh in it go away with the renderer
+        _terrainDetail.Clear();
         _stagedScene = null;
         _gpuTimer?.Dispose();
         _gpuTimer = null;
@@ -1507,6 +1514,14 @@ public sealed partial class LevelViewport : OpenGlControlBase
             var brushed = _level;
             ResolveBrush(() => brushed is null ? null : renderer.Pick(pickTarget, brushed.Scene, _camera, brush.X, brush.Y)?.WorldPosition);
             RequestNextFrameRendering(); // the circle is drawn where the cursor now is
+        }
+
+        // The ground near the camera from every landscape sample, as the game draws it there (TerrainDetailRings): rebuilt on
+        // a worker as the camera moves, sent a few milliseconds a frame.
+        _terrainDetail.Settings = TerrainDetailSettings.For(Quality);
+        if (_terrainDetail.Update(_renderer, _level, _camera.Position, TerrainDetailBudgetMs))
+        {
+            RequestNextFrameRendering();
         }
 
         RenderStats stats;

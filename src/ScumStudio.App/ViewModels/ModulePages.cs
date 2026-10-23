@@ -21,6 +21,20 @@ public sealed class VehiclesPageViewModel : ModulePageViewModel
         "BasePurchasePrice", "BaseSalePrice", "RequiredFamePoints", "CanBePurchasedByPlayer", "CanBeSoldByPlayer", "MaxAmountPurchasedAtOnce",
     };
 
+    /// <summary>
+    /// A plane's key values (Discord unknownskill, r40: "I change the speed of the plane but it does not apply while the
+    /// Rager and the WolfsWagen are OK"): the game pushes it with <c>_propellerForce</c> and stops its speed at
+    /// <c>_maxVelocity</c> (<see cref="ScumStudio.Modding.Tuning.InheritedValues.NativeDefaults"/>); the engine, gear and wheel
+    /// values a car's speed comes from only roll it on the ground (none of its wheels is driven), so they are not its key values.
+    /// </summary>
+    private static readonly HashSet<string> AirplaneKeyNames = new(StringComparer.Ordinal)
+    {
+        "_propellerForce", "_maxVelocity", "_reverseTaxiingForce", "_maxReverseTaxiingVelocity",
+        "_inWaterDestructionTimeInSeconds", "_explosionDamageRatio", "_shouldVehicleBurnWhenDestroyed", "Caption", "Description",
+        "_displayName", "Weight", "_maxHealth", "_health", "MaxHealth", "Health", "FuelCapacity", "_fuelCapacity", "_maxFuel",
+        "BasePurchasePrice", "BaseSalePrice", "RequiredFamePoints", "CanBePurchasedByPlayer", "CanBeSoldByPlayer", "MaxAmountPurchasedAtOnce",
+    };
+
     /// <summary>Creates the page.</summary>
     public VehiclesPageViewModel(AppServices services, Action? openSetup = null)
         : base(services, openSetup, "vehicles", "Vehicles", "Tune handling or clone a vehicle under a new name", [ModdableKind.Vehicle])
@@ -29,6 +43,30 @@ public sealed class VehiclesPageViewModel : ModulePageViewModel
 
     /// <inheritdoc />
     protected override IReadOnlySet<string> KeyStats => KeyNames;
+
+    /// <summary>True for a plane (the game's <c>Vehicles/Airplane</c> folder: the Kinglet Duster and Mariner, and their clones).</summary>
+    internal static bool IsAirplane(ModuleItemViewModel? item) => string.Equals(item?.Asset.Category, "Airplane", StringComparison.OrdinalIgnoreCase);
+
+    /// <inheritdoc />
+    protected override bool IsKeyStat(ScumStudio.Modding.Tuning.Tunable value) =>
+        IsAirplane(SelectedItem) ? AirplaneKeyNames.Contains(value.Name) : base.IsKeyStat(value);
+
+    /// <inheritdoc />
+    protected override string ValuesNoteFor(ModuleItemViewModel item, ModulePart part, IReadOnlyList<ScumStudio.Modding.Tuning.Tunable> values)
+    {
+        if (!IsAirplane(item))
+        {
+            return string.Empty;
+        }
+
+        if (string.Equals(part.PackagePath, item.PackagePath, StringComparison.OrdinalIgnoreCase))
+        {
+            return Localization.Loc.T("Module.Note.Airplane");
+        }
+
+        // The plane's engine part (BPC_Kinglet_Duster_Engine: RpmMax, RpmLimiter …) sets its engine sound, not its pull.
+        return part.PackagePath.EndsWith("_Engine", StringComparison.OrdinalIgnoreCase) ? Localization.Loc.T("Module.Note.AirplaneEngine") : string.Empty;
+    }
 
     /// <inheritdoc />
     protected override IReadOnlyList<ModuleFilter> BuildFilters(IReadOnlyList<ModuleItemViewModel> items) =>
@@ -132,6 +170,10 @@ public sealed class ItemsPageViewModel : ModulePageViewModel
         "ShelfLife", "_rarity", "_isIgnoredBySpawners", "_noiseLevel", "_damageOverTime",
         "Urban", "Rural", "Industrial", "Police", "MilitaryBasic", "MilitaryMedium", "MilitaryAdvanced", "MilitaryWW2", "Sport", "Market", "GasStation",
         "BasePurchasePrice", "BaseSalePrice", "RequiredFamePoints", "CanBePurchasedByPlayer", "CanBeSoldByPlayer", "MaxAmountPurchasedAtOnce",
+
+        // What a bag, a vest or clothes with pockets hold (r40, Discord unknownskill: "changing a backpack, how much size it
+        // has inside, load capacity"): its grid inventory (InheritedValues.SubobjectNative).
+        "NumRows", "NumColumns", "MaxContainedWeight", "HasContainedWeightLimit",
     };
 
     /// <summary>Creates the page.</summary>
@@ -142,6 +184,10 @@ public sealed class ItemsPageViewModel : ModulePageViewModel
 
     /// <inheritdoc />
     protected override IReadOnlySet<string> KeyStats => KeyNames;
+
+    /// <inheritdoc />
+    protected override string ValuesNoteFor(ModuleItemViewModel item, ModulePart part, IReadOnlyList<ScumStudio.Modding.Tuning.Tunable> values) =>
+        values.Any(v => v.Name == "NumRows" && v.ExportClass == "EntityGridInventoryComponentSetup") ? Localization.Loc.T("Module.Note.Container") : string.Empty;
 
     /// <inheritdoc />
     protected override IReadOnlyList<ModuleFilter> BuildFilters(IReadOnlyList<ModuleItemViewModel> items) =>

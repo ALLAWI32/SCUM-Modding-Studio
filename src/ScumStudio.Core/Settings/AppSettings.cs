@@ -207,6 +207,9 @@ public sealed record UiPreferences
     /// <summary>New objects (added, pasted, copied, extended, replaced, painted) clear the grass under them in the exported mod.</summary>
     public bool ClearGrassUnderNewObjects { get; init; } = true;
 
+    /// <summary>New objects (added, pasted, copied) get "No loot inside" in the exported mod (the Map's Add object box).</summary>
+    public bool NoLootInNewObjects { get; init; }
+
     /// <summary>
     /// Experimental: the Map's Landscape menu offers the hole tool (a bunker entrance's opening in the ground). It opens the
     /// collision only: the game still draws the ground over the hole (no new landscape shaders can be shipped in a pak).

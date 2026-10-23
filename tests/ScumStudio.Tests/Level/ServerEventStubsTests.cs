@@ -114,7 +114,7 @@ public sealed class ServerEventStubsTests : IDisposable
         Assert.Empty(client.StubbedEvents);
         Assert.NotEqual(AkAudioEventStubBuilder.StubExportSize, Read(client.StagingDirectory, ModEvent).Exports[0].SerialSize);
         Assert.Contains(client.Warnings, w => w.Contains("server-only sound event stub", StringComparison.Ordinal) && w.Contains("Car_Stop", StringComparison.Ordinal));
-        Assert.Contains("every player needs it", await File.ReadAllTextAsync(client.ReportPath!));
+        Assert.Contains("on every player's PC", await File.ReadAllTextAsync(client.ReportPath!)); // the Install section: the CLIENT folder
     }
 
     private static AkAudioEventStubBuilder Stub()

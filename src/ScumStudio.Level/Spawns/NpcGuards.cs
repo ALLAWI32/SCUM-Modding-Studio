@@ -31,9 +31,12 @@ public sealed record SentryRoute(ActorRef Spawner, IReadOnlyList<FVector> Path);
 /// state, and nothing a spawner or a spawn point stores gives an NPC a path; only a sentry robot follows
 /// <c>PatrolPoints</c>. So the robot's route becomes guard posts, not a patrol: the spawner is removed (its guarded zone
 /// manager forgets it on export), one group of zombie / NPC points (<see cref="SpawnPlaceKind.CharacterGroup"/>) stands on
-/// posts along the route (the armed NPC encounters spawn as a group at such points), and a threat zone over the route gets
-/// its own copy of zone settings whose only weighted encounter is the chosen NPC one. Whether the game spawns the guards at
-/// those posts, and how a zone inside the place's own zone is treated, only the game shows.
+/// posts along the route (the armed NPC encounters spawn as a group at such points), and an NPC area over the posts gets its
+/// own copy of zone settings whose only weighted encounter is the chosen NPC one: a sub-zone of the place's own threat zone,
+/// as the game's NPC-only areas are (r39). The game's NPC encounter is not a guard per post: 1 to 3 NPCs come only while a
+/// player walks into the area, 30 to 200 m ahead and out of view, then the area rests 20 to 30 minutes; they leave when the
+/// players do, a character under new-player protection gets none, and half the time zombies come with them. Whether they
+/// come at these posts only the game shows.
 /// </summary>
 public static class NpcGuards
 {
@@ -48,6 +51,21 @@ public static class NpcGuards
 
     /// <summary>The posts' type in the island data (the robots patrol outdoors).</summary>
     public const string PostType = "Exterior";
+
+    /// <summary>The guard area's <c>SubZonePriority</c>: the island's own NPC-only sub-zones (<c>HTZ_Military_TV_Bunker_NPC</c>) have 1.</summary>
+    public const int SubZonePriority = 1;
+
+    /// <summary>How the robots' spawner actors are named in the levels (<c>SentrySpawner_0</c>; their class is <c>SentrySpawner2</c>).</summary>
+    public const string SpawnerName = "SentrySpawner";
+
+    /// <summary>
+    /// The values of the game's own NPC-only sub-zone settings (<c>HTZ_Military_TV_Bunker_NPC</c>) the guard area's settings
+    /// copy gets: one encounter at a time in the area (a zone of the island spawns several side by side).
+    /// </summary>
+    public static IReadOnlyList<(string Path, TunableKind Kind, string Value)> NpcOnlyValues { get; } =
+    [
+        ("SingleEncounterPerZone", TunableKind.Bool, "true"),
+    ];
 
     /// <summary>
     /// Every armed NPC encounter of the game that a stock zone settings uses, with what it spawns, by name. Reads every
@@ -69,6 +87,20 @@ public static class NpcGuards
         }
 
         return result.OrderBy(t => t.Name, StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    /// <summary>
+    /// What the stock zone settings <paramref name="zonePackage"/> store of <see cref="NpcOnlyValues"/>, by property path (a
+    /// value not stored is not listed). Reads the package: call it on a worker.
+    /// </summary>
+    public static IReadOnlyDictionary<string, string> StoredNpcOnlyValues(AssetCatalog catalog, string zonePackage)
+    {
+        ArgumentNullException.ThrowIfNull(catalog);
+        ArgumentNullException.ThrowIfNull(zonePackage);
+        var leaf = zonePackage[(zonePackage.LastIndexOf('/') + 1)..];
+        return TunableReader.Read(Modding.Catalog.ModdableAssets.ReadPackage(catalog, zonePackage))
+            .Where(t => t.Export == leaf && NpcOnlyValues.Any(v => v.Path == t.Path))
+            .ToDictionary(t => t.Path, t => t.Value, StringComparer.Ordinal);
     }
 
     /// <summary>
@@ -114,9 +146,13 @@ public static class NpcGuards
 
     /// <summary>
     /// The edits of one replacement (one undo step): each robot's spawner removed, a group of
-    /// <paramref name="postsPerRobot"/> posts along each route, the guard zone's own settings (<paramref name="zoneCopy"/>, a
-    /// copy of <paramref name="type"/>'s stock zone settings: every other encounter of <paramref name="zoneRows"/> weighs
-    /// 0), and the guard zone over all the posts.
+    /// <paramref name="postsPerRobot"/> posts along each route, the guard area's own settings (<paramref name="zoneCopy"/>, a
+    /// copy of <paramref name="type"/>'s stock zone settings: every other encounter of <paramref name="zoneRows"/> weighs 0,
+    /// and <see cref="NpcOnlyValues"/> as the game's NPC-only settings have them), and the guard area over all the posts.
+    /// The area is written the way the game's data has an NPC-only area inside a place: a sub-zone (<see cref="AddSubZoneOp"/>,
+    /// priority <see cref="SubZonePriority"/>) of the smallest stock threat zone of <paramref name="zones"/> that holds every
+    /// post (r39: a second zone laid inside the place's own zone, which no zone of the island does, gave igor8802 no NPCs).
+    /// Only where no stock zone holds every post is it a threat zone of its own.
     /// </summary>
     /// <param name="routes">The robots to replace.</param>
     /// <param name="type">The NPCs to spawn.</param>
@@ -124,8 +160,11 @@ public static class NpcGuards
     /// <param name="zoneCopy">The copy of <see cref="NpcGuardType.ZonePackage"/> (<see cref="ZoneCopies.Plan"/>).</param>
     /// <param name="zoneRows">The encounter rows of the stock zone settings (<see cref="SpawnChoices.ForZone"/>, its level 0 list).</param>
     /// <param name="taken">Actor names the island data's document already has (the project's added places).</param>
+    /// <param name="zones">The island's places as the project has them (<see cref="SpawnPlaces.WithEdits"/>); null or none = no stock zone to hold the area.</param>
+    /// <param name="stockValues">The values the stock zone settings store, by property path (<see cref="NpcOnlyValues"/>' old values); null = none stored.</param>
     /// <exception cref="ArgumentException">No route, or the zone settings have no row for the encounter.</exception>
-    public static IReadOnlyList<EditOp> Plan(IReadOnlyList<SentryRoute> routes, NpcGuardType type, int postsPerRobot, CloneAssetOp zoneCopy, SpawnWeightList zoneRows, IEnumerable<string> taken)
+    public static IReadOnlyList<EditOp> Plan(IReadOnlyList<SentryRoute> routes, NpcGuardType type, int postsPerRobot, CloneAssetOp zoneCopy, SpawnWeightList zoneRows, IEnumerable<string> taken,
+        IReadOnlyList<SpawnPlace>? zones = null, IReadOnlyDictionary<string, string>? stockValues = null)
     {
         ArgumentNullException.ThrowIfNull(routes);
         ArgumentNullException.ThrowIfNull(type);
@@ -175,9 +214,31 @@ public static class NpcGuards
             }
         }
 
+        // As the game's NPC-only settings: one encounter at a time (a value the stock settings do not store is added).
+        foreach (var (path, kind, value) in NpcOnlyValues)
+        {
+            var old = stockValues?.GetValueOrDefault(path) ?? string.Empty;
+            if (!TunableValue.AreEqual(kind, old, value))
+            {
+                ops.Add(new SetAssetValueOp(zoneCopy.NewPrimary, export, path, kind.ToString(), old, value));
+            }
+        }
+
         var (min, max) = (new FVector(all.Min(p => p.X), all.Min(p => p.Y), all.Min(p => p.Z)), new FVector(all.Max(p => p.X), all.Max(p => p.Y), all.Max(p => p.Z)));
-        // A zone is an ellipse: through the corners of the posts' box (its half sizes times the square root of 2), and a margin.
         var center = (min + max) * 0.5f;
+
+        // The guard area as a sub-zone of the smallest stock zone that holds every post: the posts' box and a margin.
+        if ((zones ?? []).Where(z => z is { Kind: SpawnPlaceKind.Zone, Index: >= 0, Name: null } && all.All(p => SpawnChoices.ZonesAt([z], p).Count > 0))
+                .OrderBy(z => z.SizeX * z.SizeY).FirstOrDefault() is { } parent)
+        {
+            var reach = new FVector(MathF.Max(((max.X - min.X) * 0.5f) + ZoneMargin, MinZoneHalfSize), MathF.Max(((max.Y - min.Y) * 0.5f) + ZoneMargin, MinZoneHalfSize),
+                ((max.Z - min.Z) * 0.5f) + ZoneMargin);
+            ops.Add(new AddSubZoneOp(new ActorRef(SpawnPlaces.StaticDataPath, parent.ActorName), new SubZone(center - reach, center + reach, zoneCopy.NewPrimary, SubZonePriority)));
+            return ops;
+        }
+
+        // No stock zone there: a zone of its own. A zone is an ellipse: through the corners of the posts' box (its half sizes
+        // times the square root of 2), and a margin.
         var half = new FVector(MathF.Max(((max.X - min.X) * 0.5f * MathF.Sqrt(2f)) + ZoneMargin, MinZoneHalfSize), MathF.Max(((max.Y - min.Y) * 0.5f * MathF.Sqrt(2f)) + ZoneMargin, MinZoneHalfSize), 1f);
         ops.Add(new AddSpawnPlaceOp(Name(SpawnPlaceKind.Zone), SpawnPlaceKind.Zone, zoneCopy.NewPrimary,
             new TransformValue(center, FRotator.Zero, new FVector(half.X / 100f, half.Y / 100f, 1f)))); // a zone's size is its scale in metres

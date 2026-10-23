@@ -27,6 +27,36 @@ public sealed class ModulePagesTests
         Assert.Equal("2.5", TunableRowViewModel.Normalize(ScumStudio.Modding.Tuning.TunableKind.Float, "2,5"));
     }
 
+    /// <summary>
+    /// r40 review: a bag's Num rows is one byte in the game file. 256 used to be accepted, journaled, and at export it stopped
+    /// every edit of the item; the row now shows what fits before Apply.
+    /// </summary>
+    [Fact]
+    public void AWholeNumberTheGameFileCannotHoldIsAnErrorOnTheRow()
+    {
+        var rows = new TunableRowViewModel("/Game/Test/Bag_ES", new ScumStudio.Modding.Tuning.Tunable("EntityGridInventoryComponentSetup_0", "NumRows", ScumStudio.Modding.Tuning.TunableKind.UInt, "6")
+        {
+            Name = "NumRows",
+            TagType = "ByteProperty",
+        }, "6");
+        rows.Value = "255";
+        Assert.Null(rows.Error);
+        rows.Value = "256";
+        Assert.Equal(ScumStudio.App.Localization.Loc.F("Module.OutOfRange", "0", "255"), rows.Error);
+        rows.Value = "-1";
+        Assert.NotNull(rows.Error);
+
+        var count = new TunableRowViewModel("/Game/Test/X", new ScumStudio.Modding.Tuning.Tunable("Default__X_C", "Count", ScumStudio.Modding.Tuning.TunableKind.Int, "1")
+        {
+            Name = "Count",
+            TagType = "IntProperty",
+        }, "1");
+        count.Value = "-2147483648";
+        Assert.Null(count.Error);
+        count.Value = "2147483648";
+        Assert.Equal(ScumStudio.App.Localization.Loc.F("Module.OutOfRange", "-2147483648", "2147483647"), count.Error);
+    }
+
     [FixturesFact]
     public async Task WeaponsPageTunesClonesAndUndoes()
     {

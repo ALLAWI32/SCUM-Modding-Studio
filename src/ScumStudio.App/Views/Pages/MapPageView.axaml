@@ -382,6 +382,8 @@
                     <StackPanel Spacing="6" IsVisible="{Binding HolesEnabled}">
                       <TextBlock Text="{Tr Map.Hole.Title}" Classes="h3" />
                       <TextBlock Text="{Tr Map.Hole.Caption}" Classes="caption wrap" />
+                      <!-- pheidian: "Is there a reason for that and not every cell?": the reason, measured on the island's materials. -->
+                      <TextBlock x:Name="HoleWhyText" Text="{Tr Map.Hole.Why}" Classes="caption wrap" />
                       <StackPanel Orientation="Horizontal" Spacing="8">
                         <ToggleButton x:Name="HoleToolButton" Classes="ghost" Padding="8,4" IsChecked="{Binding HoleTool}" Content="{Tr Map.Hole.Tool}" ToolTip.Tip="{Tr Map.Hole.Tool.Tip}" />
                         <TextBlock Text="{Binding HoleCountText}" Classes="caption" VerticalAlignment="Center" />
@@ -435,6 +437,12 @@
                       <TextBlock Text="{Tr Map.Ground.Tip}" Classes="caption wrap" VerticalAlignment="Center" />
                       <Button Grid.Column="1" Classes="small" Content="{Tr Map.Ground}" Command="{Binding FitToGroundCommand}" VerticalAlignment="Center" ToolTip.Tip="{Tr Map.Ground.Tip}" />
                     </Grid>
+                    <!-- thezombie_97: "is it normal that the grass dissapears?": what the Map does not draw as the game does, said plainly. -->
+                    <Border Classes="hsep" />
+                    <StackPanel Spacing="4">
+                      <TextBlock Text="{Tr Map.NotDrawn.Title}" Classes="h3" />
+                      <TextBlock x:Name="NotDrawnText" Text="{Tr Map.NotDrawn.Caption}" Classes="caption wrap" />
+                    </StackPanel>
                   </StackPanel>
                 </Flyout>
               </Button.Flyout>
@@ -592,6 +600,7 @@
                       </TextBox.KeyBindings>
                     </TextBox>
                     <Button Classes="accent" Content="{Tr Map.AddInFront}" HorizontalAlignment="Right" Command="{Binding AddObjectFromTextCommand}" ToolTip.Tip="{Tr Map.AddInFront.Tip}" />
+                    <CheckBox x:Name="NoLootNewBox" Content="{Tr Map.AddObject.NoLoot}" IsChecked="{Binding NoLootForNewObjects}" ToolTip.Tip="{Tr Map.AddObject.NoLoot.Tip}" />
                     <!-- My models: the project's imported 3D models (the Craftables page's import, the same library), placed like any mesh -->
                     <Separator Margin="0,2" />
                     <TextBlock Text="{Tr Map.MyModels.Title}" Classes="h3" />
@@ -1335,13 +1344,16 @@
                 <StackPanel x:Name="GrassOptionPanel" Spacing="4" IsVisible="{Binding HasGrassOption}">
                   <Separator Margin="0,4" />
                   <CheckBox x:Name="ClearGrassBox" Content="{Tr Map.Grass.Clear}" IsChecked="{Binding ClearsGrass}" ToolTip.Tip="{Tr Map.Grass.Clear.Tip}" />
+                  <!-- "No loot inside" for placed objects (defolt_0999: disable loot in the objects you add) -->
+                  <CheckBox x:Name="NoLootBox" Content="{Tr Map.NoLoot}" IsChecked="{Binding IsNoLoot}" ToolTip.Tip="{Tr Map.NoLoot.Tip}" IsVisible="{Binding HasNoLootOption}" />
                 </StackPanel>
                 <!-- The loot editor (every crate, locker, safe, cabinet): lootable on/off and the container's loot presets -->
                 <StackPanel x:Name="LootEditorPanel" Spacing="4" IsVisible="{Binding HasLootEditor}">
                   <Separator Margin="0,4" />
                   <TextBlock Text="{Tr Map.Loot.Title}" Classes="h3" />
-                  <CheckBox x:Name="LootableBox" Content="{Tr Map.Loot.Lootable}" IsChecked="{Binding IsLootable}" ToolTip.Tip="{Tr Map.Loot.Lootable.Tip}" />
-                  <Expander x:Name="LootPresetsExpander" Header="{Tr Map.Loot.Presets}" IsExpanded="True" HorizontalAlignment="Stretch" ToolTip.Tip="{Tr Map.Loot.Presets.Tip}">
+                  <TextBlock x:Name="LootLockedNote" Text="{Tr Map.NoLoot.On}" Classes="caption" TextWrapping="Wrap" IsVisible="{Binding IsLootEditorLocked}" />
+                  <CheckBox x:Name="LootableBox" Content="{Tr Map.Loot.Lootable}" IsChecked="{Binding IsLootable}" ToolTip.Tip="{Tr Map.Loot.Lootable.Tip}" IsEnabled="{Binding !IsLootEditorLocked}" />
+                  <Expander x:Name="LootPresetsExpander" Header="{Tr Map.Loot.Presets}" IsExpanded="True" HorizontalAlignment="Stretch" ToolTip.Tip="{Tr Map.Loot.Presets.Tip}" IsEnabled="{Binding !IsLootEditorLocked}">
                     <StackPanel Spacing="4">
                       <ItemsControl ItemsSource="{Binding LootPresets}">
                         <ItemsControl.ItemTemplate>
@@ -1486,6 +1498,40 @@
               <c:GlyphIcon Kind="Icon.Download" IconSize="14" />
               <TextBlock Text="{Tr Export.Module.MapOnly}" />
             </StackPanel>
+          </Button>
+          <!-- Discord, pheidian: one sector back as the game has it, as one edit that Undo puts back (the map has no area selection) -->
+          <Button DockPanel.Dock="Bottom" x:Name="ResetSectorButton" Classes="ghost" Margin="8,4,8,0" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                  IsVisible="{Binding Session.HasProject}" ToolTip.Tip="{Tr Map.Reset.Tip}">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <c:GlyphIcon Kind="Icon.Undo" IconSize="14" />
+              <TextBlock Text="{Tr Map.Reset.Open}" />
+            </StackPanel>
+            <Button.Flyout>
+              <Flyout Placement="LeftEdgeAlignedBottom" Opened="OnResetSectorOpened">
+                <StackPanel x:Name="ResetSectorPanel" Spacing="10" Width="380">
+                  <TextBlock Text="{Tr Map.Reset.Title}" Classes="h3" />
+                  <TextBlock Text="{Tr Map.Reset.Caption}" Classes="caption wrap" />
+                  <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
+                    <TextBlock Text="{Tr Map.Reset.Sector}" Classes="caption" VerticalAlignment="Center" />
+                    <ComboBox Grid.Column="1" x:Name="ResetSectorBox" ItemsSource="{Binding ResetCells}" SelectedItem="{Binding ResetCell}" PlaceholderText="{Tr Map.LoadMode.Pick}"
+                              MinWidth="90" HorizontalAlignment="Left" ToolTip.Tip="{Tr Map.Reset.Sector.Tip}" />
+                  </Grid>
+                  <ItemsControl x:Name="ResetSectorLines" ItemsSource="{Binding ResetLines}">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="x:String">
+                        <TextBlock Text="{Binding}" Classes="wrap" FontSize="12.5" Margin="0,1" />
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                  <TextBlock x:Name="ResetSectorNote" Text="{Binding ResetNote}" Classes="caption wrap"
+                             IsVisible="{Binding ResetNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                  <!-- A TextBlock, not Content text: a Button would read the "_" of "A_0" as an access key and show "A0" -->
+                  <Button x:Name="RunResetSectorButton" Classes="accent" HorizontalAlignment="Right" Command="{Binding ResetSectorCommand}" ToolTip.Tip="{Tr Map.Reset.Run.Tip}">
+                    <TextBlock Text="{Binding ResetButtonText}" />
+                  </Button>
+                </StackPanel>
+              </Flyout>
+            </Button.Flyout>
           </Button>
           <Panel>
             <StackPanel IsVisible="{Binding !Session.HasProject}" Margin="16" Spacing="8" VerticalAlignment="Center">

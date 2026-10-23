@@ -236,7 +236,7 @@ public sealed partial class TunableRowViewModel : ObservableObject
     public bool IsOverridden => !TunableValue.AreEqual(Tunable.Kind, _committed, Tunable.Value);
 
     /// <summary>Validation message for the pending value, or null.</summary>
-    public string? Error => AllowsEmpty && Value.Trim().Length == 0 ? null : Validate(Tunable.Kind, Value, Tunable.Choices);
+    public string? Error => AllowsEmpty && Value.Trim().Length == 0 ? null : Validate(Tunable, Value);
 
     /// <summary>Sets the committed value (after an apply/undo) and resets the pending value to it.</summary>
     public void Commit(string committed)
@@ -250,6 +250,23 @@ public sealed partial class TunableRowViewModel : ObservableObject
 
     /// <summary>Normalized pending value (numbers in invariant form).</summary>
     public string NormalizedValue => AllowsEmpty && Value.Trim().Length == 0 ? string.Empty : Normalize(Tunable.Kind, Value);
+
+    /// <summary>
+    /// Why <paramref name="text"/> is not a valid value of <paramref name="tunable"/>, or null: also a whole number its game
+    /// file cannot hold (a bag's Num rows is one byte, at most 255; the export would refuse the item's edits).
+    /// </summary>
+    public static string? Validate(Tunable tunable, string text)
+    {
+        ArgumentNullException.ThrowIfNull(tunable);
+        if (Validate(tunable.Kind, text, tunable.Choices) is { } error)
+        {
+            return error;
+        }
+
+        return TunableValue.CheckRange(tunable, text) is not null && TunableValue.Range(tunable.TagType) is { } range
+            ? Localization.Loc.F("Module.OutOfRange", range.Min.ToString(CultureInfo.InvariantCulture), range.Max.ToString(CultureInfo.InvariantCulture))
+            : null;
+    }
 
     /// <summary>Why <paramref name="text"/> is not a valid value of <paramref name="kind"/>, or null.</summary>
     public static string? Validate(TunableKind kind, string text, IReadOnlyList<string> choices)

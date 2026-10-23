@@ -38,6 +38,7 @@ public sealed class NotificationService
     private readonly TimeSpan? _autoDismiss;
     private readonly ILogger? _logger;
     private readonly Dictionary<string, (ToastViewModel Toast, DateTime At, int Count)> _groups = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, ToastViewModel> _sticky = new(StringComparer.Ordinal);
 
     /// <summary>
     /// Creates the service; <paramref name="autoDismiss"/> null keeps toasts until closed. Success toasts last half of
@@ -104,6 +105,49 @@ public sealed class NotificationService
             ScheduleDismiss(shown);
         });
 
+    /// <summary>
+    /// Shows a toast that stays until it is closed: it never times out, and newer toasts push the others out first. It
+    /// replaces the toast of the same <paramref name="group"/> still on screen, so a repeated failure is one toast, not a
+    /// stack (Discord, O Piqueno: a refused export was a 12-second toast in the status bar).
+    /// </summary>
+    public ToastViewModel ShowSticky(string group, ToastSeverity severity, string title, string? message = null)
+    {
+        var toast = Create(severity, title, message);
+        _dispatcher.Invoke(() =>
+        {
+            var index = _sticky.TryGetValue(group, out var previous) ? Toasts.IndexOf(previous) : -1;
+            _sticky[group] = toast;
+            if (index >= 0)
+            {
+                Toasts[index] = toast;
+            }
+            else
+            {
+                Toasts.Add(toast);
+                Trim();
+            }
+        });
+
+        return toast;
+    }
+
+    /// <summary>Removes the toast of <see cref="ShowSticky"/>'s <paramref name="group"/> when it is still on screen.</summary>
+    public void DismissSticky(string group) => _dispatcher.Invoke(() =>
+    {
+        if (_sticky.Remove(group, out var toast))
+        {
+            Toasts.Remove(toast);
+        }
+    });
+
+    /// <summary>Marks <paramref name="exception"/> as shown in a toast already: <see cref="OperationRunner"/> then only logs it.</summary>
+    public static void MarkShown(Exception exception) => exception.Data[ShownKey] = true;
+
+    /// <summary>True when <see cref="MarkShown"/> marked <paramref name="exception"/>.</summary>
+    public static bool WasShown(Exception exception) => exception.Data.Contains(ShownKey);
+
+    private const string ShownKey = "ScumStudio.ToastShown";
+
     /// <summary>Shows an information toast.</summary>
     public ToastViewModel Info(string title, string? message = null) => Show(ToastSeverity.Info, title, message);
 
@@ -156,7 +200,7 @@ public sealed class NotificationService
     {
         while (Toasts.Count > MaxVisible)
         {
-            Toasts.RemoveAt(0);
+            Toasts.Remove(Toasts.FirstOrDefault(t => !_sticky.ContainsValue(t)) ?? Toasts[0]);
         }
     }
 

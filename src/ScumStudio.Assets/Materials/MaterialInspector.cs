@@ -56,6 +56,7 @@ public sealed class MaterialInspector
         var referenced = new List<string>();
 
         UObject? current = material;
+        string? basePath = null;
         Parameters master = new([], [], []);
         float? maskClip = null;
         float? clipOverride = null;
@@ -103,6 +104,7 @@ public sealed class MaterialInspector
 
             if (current is UMaterial baseMaterial)
             {
+                basePath = AssetPaths.NormalizeObjectPath(baseMaterial.GetPathName(), _catalog.ProjectName);
                 splineMeshes = baseMaterial.GetOrDefault<bool>("bUsedWithSplineMeshes");
                 landscapeOutput = baseMaterial.TryGetValue(out FStructFallback cached, "CachedExpressionData") && cached.GetOrDefault<bool>("bHasRuntimeVirtualTextureOutput");
                 if (!blendKnown)
@@ -150,8 +152,8 @@ public sealed class MaterialInspector
         var picked = Pick(own, left);
         var texList = Sorted(textures.Values);
         var vecList = Sorted(vectors.Values);
-        var baseColor = picked.BaseColor ?? referenced.FirstOrDefault(r => LooksLikeDiffuse(r) && !IsOverlay(r) && !IsEnginePlaceholder(r));
         var selfPath = AssetPaths.NormalizeObjectPath(material.GetPathName(), _catalog.ProjectName);
+        var baseColor = picked.BaseColor ?? PickReferenced(referenced, FolderOf(basePath ?? selfPath), FolderOf(selfPath));
         var trail = chain.Append(selfPath).Any(p => p.StartsWith(DirtRoadMaster, StringComparison.OrdinalIgnoreCase));
         return new MaterialInfo(material.Name, selfPath, chain,
             Sorted(scalars.Values), vecList, texList, baseColor, picked.Tint, referenced)
@@ -251,6 +253,72 @@ public sealed class MaterialInspector
     private static List<VectorParameter> Sorted(IEnumerable<VectorParameter> values) => [.. values.OrderBy(p => p.Name, StringComparer.OrdinalIgnoreCase)];
 
     private static List<TextureParameter> Sorted(IEnumerable<TextureParameter> values) => [.. values.OrderBy(p => p.Name, StringComparer.OrdinalIgnoreCase)];
+
+    /// <summary>
+    /// The colour map among a base material's hard-wired textures (its cooked <c>ReferencedTextures</c>), for a material
+    /// whose parameters name none. That list keeps the master's order, and the weather and landscape layers it blends over
+    /// the object (ice, rain, the precipitation target) come before the object's own maps: <c>M_Railroad</c> lists
+    /// <c>T_Ice_D</c> before its <c>T_Tracks_01_D</c>, and the railway was drawn near white (r39). Takes a colour map from
+    /// the instance's own folder (<paramref name="instanceFolder"/>), then from the base material's
+    /// (<paramref name="materialFolder"/>), then, as before, the first one that is no layer painted on top; null when only
+    /// weather layers are left (the surface colour is drawn).
+    /// </summary>
+    internal static string? PickReferenced(IReadOnlyList<string> referenced, string materialFolder, string? instanceFolder = null)
+    {
+        ArgumentNullException.ThrowIfNull(referenced);
+        var colours = referenced.Where(r => LooksLikeDiffuse(r) && !IsOverlay(r) && !IsEnginePlaceholder(r) && !IsWeatherLayer(r)).ToList();
+        foreach (var folder in (string?[])[instanceFolder, materialFolder])
+        {
+            if (!string.IsNullOrEmpty(folder) && colours.FirstOrDefault(r => r.StartsWith(folder + "/", StringComparison.OrdinalIgnoreCase)) is { } own)
+            {
+                return own;
+            }
+        }
+
+        return colours.FirstOrDefault();
+    }
+
+    /// <summary>
+    /// The weather and landscape layers SCUM's masters blend over an object (the landscape's ice, snow and rain, the weather
+    /// folder's raindrops and precipitation target): never the object's own colour.
+    /// </summary>
+    private static bool IsWeatherLayer(string path)
+    {
+        var leaf = Leaf(path);
+        return path.Contains("/Weather/", StringComparison.OrdinalIgnoreCase)
+               || (path.Contains("/Landscape/Textures/", StringComparison.OrdinalIgnoreCase) && (HasWord(leaf, "Ice") || HasWord(leaf, "Snow") || HasWord(leaf, "Rain")))
+               || leaf.StartsWith("T_Ice_", StringComparison.OrdinalIgnoreCase) || leaf.Contains("Raindrop", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// True when <paramref name="text"/> holds <paramref name="word"/> as a word of its own (<c>T_Ice_D</c>, <c>IceMask</c>,
+    /// <c>Ice Layer</c>), not inside another word (<c>Police</c>, <c>Office</c>, <c>Device</c>, <c>Terrain</c> for "Rain").
+    /// </summary>
+    private static bool HasWord(string text, string word)
+    {
+        for (var i = text.IndexOf(word, StringComparison.OrdinalIgnoreCase); i >= 0; i = text.IndexOf(word, i + 1, StringComparison.OrdinalIgnoreCase))
+        {
+            var end = i + word.Length;
+            var starts = i == 0 || !char.IsLetter(text[i - 1]) || (char.IsUpper(text[i]) && char.IsLower(text[i - 1]));
+            var ends = end == text.Length || !char.IsLetter(text[end]) || (char.IsUpper(text[end]) && char.IsLower(text[end - 1]));
+            if (starts && ends)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>The name after the last <c>/</c> or <c>.</c> of a path (a texture's object name), or the whole text.</summary>
+    private static string Leaf(string path) => path[(path.LastIndexOfAny(['/', '.']) + 1)..];
+
+    /// <summary>The folder of an object path (<c>/Game/A/B/M_X.M_X</c> → <c>/Game/A/B</c>), or empty.</summary>
+    private static string FolderOf(string objectPath)
+    {
+        var slash = objectPath.LastIndexOf('/');
+        return slash > 0 ? objectPath[..slash] : string.Empty;
+    }
 
     /// <summary>The engine's stand-in textures (DefaultDiffuse, DefaultTexture …): never an object's real colour.</summary>
     private static bool IsEnginePlaceholder(string texturePath) => texturePath.StartsWith("/Engine/EngineMaterials/", StringComparison.OrdinalIgnoreCase);
@@ -352,11 +420,15 @@ public sealed class MaterialInspector
         return Vector3.Max(rgb * (brightness?.Value ?? 1f), Vector3.Zero);
     }
 
-    /// <summary>Layers painted over the base (moss, dirt, snow, puddles): never the object's own colour.</summary>
+    /// <summary>
+    /// Layers painted over the base (moss, dirt, snow, ice, puddles): never the object's own colour. "Ice" counts as a word
+    /// of the name only, so a police car's or an office's colour map stays one (r39).
+    /// </summary>
     private static bool IsOverlay(string name) =>
         name.Contains("Overlay", StringComparison.OrdinalIgnoreCase) || name.Contains("Moss", StringComparison.OrdinalIgnoreCase)
         || name.Contains("Snow", StringComparison.OrdinalIgnoreCase) || name.Contains("Dirt", StringComparison.OrdinalIgnoreCase)
-        || name.Contains("Puddle", StringComparison.OrdinalIgnoreCase) || name.Contains("Dummy", StringComparison.OrdinalIgnoreCase);
+        || name.Contains("Puddle", StringComparison.OrdinalIgnoreCase) || name.Contains("Dummy", StringComparison.OrdinalIgnoreCase)
+        || HasWord(Leaf(name), "Ice");
 
     /// <summary>Picks the tint colour among vector parameters by <see cref="TintHints"/>.</summary>
     public static Vector4? PickTint(IReadOnlyList<VectorParameter> vectors)

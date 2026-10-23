@@ -96,6 +96,42 @@ public static partial class CraftablesPlanner
     /// <summary>Furniture template: recipe and base element.</summary>
     public const string FurnitureRecipe = Placeables + "/CR_Chair_Improvised_Wood";
 
+    /// <summary>
+    /// Large-building template recipe: <c>CR_Large_Log_Shed</c>, the game's own walk-in building (<c>BP_Base_Log_Shed_1</c>):
+    /// the placement values of a building rather than a chair (ground offset and distance 50 cm, floating traces drawn in
+    /// 10 cm, no placing over items, the base-building placement mask). Every placeable recipe of the game checks mesh
+    /// against mesh (<c>BoxOverlapFlags</c> 2, the chair's too), so this alone does not make a 15 m cabin placeable with the
+    /// player inside its ghost: <c>AddPlacementShrink</c> does, the way the game's own recipes avoid a false overlap. A
+    /// furniture craftable of <see cref="LargeBuildingMeters"/> and more copies it in place of the chair's recipe
+    /// (<see cref="UsesLargeBuildingRecipe"/>), and so does an element the game ships no recipe for (<see cref="ElementFamilies"/>).
+    /// </summary>
+    public const string LargeBuildingRecipe = Placeables + "/CR_Large_Log_Shed";
+
+    /// <summary>
+    /// True when <paramref name="craftable"/>'s recipe is copied from <see cref="LargeBuildingRecipe"/>: furniture of
+    /// <see cref="LargeBuildingMeters"/> and more, or an element the game ships no recipe for; never when the game lacks it.
+    /// </summary>
+    public static bool UsesLargeBuildingRecipe(AssetCatalog catalog, Craftable craftable)
+    {
+        ArgumentNullException.ThrowIfNull(catalog);
+        ArgumentNullException.ThrowIfNull(craftable);
+        var fits = craftable.Kind switch
+        {
+            CraftKind.Furniture => craftable.SizeMeters >= LargeBuildingMeters,
+            CraftKind.Element => ElementFamilies.Of(catalog, ElementSource(craftable))?.BorrowsRecipe == true,
+            _ => false,
+        };
+        return fits && catalog.PackageExists(PackageMap.Normalize(LargeBuildingRecipe));
+    }
+
+    /// <summary>
+    /// True when <paramref name="craftable"/>'s placement check is drawn in (<c>AddPlacementShrink</c>) and "Place in front" is left out:
+    /// whatever copies <see cref="LargeBuildingRecipe"/>, and a station of <see cref="LargeBuildingMeters"/> and more, which keeps the
+    /// workbench's recipe (a station's; review 3.5.1: the page hid "Place in front" for it while the export drew nothing in).
+    /// </summary>
+    public static bool DrawsPlacementIn(AssetCatalog catalog, Craftable craftable) =>
+        UsesLargeBuildingRecipe(catalog, craftable) || (craftable.Kind == CraftKind.Station && craftable.SizeMeters >= LargeBuildingMeters);
+
     /// <summary>Station template: recipe (its base element and item follow from it).</summary>
     public const string StationRecipe = Placeables + "/CR_Improvised_Workbench";
 
@@ -155,9 +191,11 @@ public static partial class CraftablesPlanner
     /// <paramref name="catalog"/> and writes nothing, so an export can run it before it writes any pak. Throws
     /// <see cref="CraftableExportException"/> for a placed craftable it can neither ship nor leave out: a new package path
     /// already exists (<see cref="CraftableConflictException"/>), its mesh is not one every player has, or none of its
-    /// ingredients is.
+    /// ingredients is. <paramref name="projectDirectory"/> is where models imported from 3D files are (<see cref="Craftable.Imported"/>):
+    /// their meshes are read from there. <paramref name="groups"/> are the project's ingredient groups (<see cref="CraftGroup"/>):
+    /// an ingredient that names one's tag is that group, made for the recipes that ask for it.
     /// </summary>
-    public static CraftablesPlan Plan(AssetCatalog catalog, IReadOnlyList<Craftable> craftables)
+    public static CraftablesPlan Plan(AssetCatalog catalog, IReadOnlyList<Craftable> craftables, string? projectDirectory = null, IReadOnlyList<CraftGroup>? groups = null)
     {
         ArgumentNullException.ThrowIfNull(catalog);
         ArgumentNullException.ThrowIfNull(craftables);
@@ -171,7 +209,7 @@ public static partial class CraftablesPlanner
         var skinless = new List<string>();
         var tokens = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var newLeaves = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase); // package name -> the craftable that has it
-        var pickedItems = new PickedItems(catalog);
+        var pickedItems = new PickedItems(catalog, groups ?? []);
         var pictures = new List<CraftPicture>();
 
         // Stations first, each after the station it needs: a recipe asks for a station's tag only when that station is
@@ -290,7 +328,7 @@ public static partial class CraftablesPlanner
                 }
 
                 AddEdits(catalog, craftable, plan, packages, edits);
-                AddBuildingEdits(catalog, craftable, plan, packages, edits, warnings);
+                AddBuildingEdits(catalog, craftable, plan, packages, edits, warnings, projectDirectory);
                 if (craftable.NeedsPower)
                 {
                     warnings.Add($"{craftable.Name}: \"needs electricity\" is kept but not exported: a station's power need is not a value of the game's data (native code).");
@@ -456,8 +494,16 @@ public static partial class CraftablesPlanner
                 result = element ?? throw new InvalidOperationException($"{craftable.Element?.Template ?? craftable.Source} is not a base element this version can clone");
                 break;
             default:
-                Add(FurnitureRecipe, "CR_" + token);
+                // A big one (a cabin-sized model) copies the game's large-building recipe, whose placement lets the player
+                // stand inside the ghost (LargeBuildingRecipe); the chair's element shows the mesh either way.
+                var furnitureRecipe = UsesLargeBuildingRecipe(catalog, craftable) ? LargeBuildingRecipe : FurnitureRecipe;
+                Add(furnitureRecipe, "CR_" + token);
                 Add(FurnitureElement, "BP_" + token);
+                if (furnitureRecipe != FurnitureRecipe && ProductPackage(catalog, furnitureRecipe) is { } shed)
+                {
+                    redirects.Add(new(shed, packages[1].Value)); // the copied shed recipe makes the chair element's clone
+                }
+
                 result = new CraftablePackages(craftable.Name, packages[0].Value, packages[1].Value, null, null);
                 break;
         }

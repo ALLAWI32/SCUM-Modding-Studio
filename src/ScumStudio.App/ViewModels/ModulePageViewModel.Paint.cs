@@ -791,12 +791,17 @@ public abstract partial class ModulePageViewModel
         }
 
         // One journal step for the whole paint: one project change (one reload of the panel), and one Ctrl+Z takes it all
-        // back (one entry per value reloaded the panel per value and undid an armour half: audit F229).
+        // back (one entry per value reloaded the panel per value and undid an armour half: audit F229). A value whose text
+        // only differs in form from the recorded one is no edit (the journal refuses "The value is unchanged" and would
+        // refuse the whole step with it; owner 2026-10-18): it is left out, and with nothing else to record the panel
+        // quietly goes back to what is recorded.
         var ops = Paints.SelectMany(p => p.Changes())
+            .Where(c => !TunableValue.AreEqual(c.Value.Tunable.Kind, c.Value.Committed, c.Text))
             .Select(c => (EditOp)new SetAssetValueOp(c.Value.Package, c.Value.Tunable.Export, c.Value.Tunable.Path, c.Value.Tunable.Kind.ToString(), c.Value.Committed, c.Text))
             .ToList();
         if (ops.Count == 0)
         {
+            DiscardPaint();
             return;
         }
 

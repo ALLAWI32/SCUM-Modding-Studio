@@ -115,6 +115,7 @@ public sealed partial class MapPageViewModel
         CopySelectedCommand.NotifyCanExecuteChanged();
         OnPropertyChanged(nameof(HasGroup));
         RefreshGrassOption();
+        RefreshNoLootOption();
     }
 
     /// <summary>The selection chip's Delete: the whole multi-selection (or all of a kind), like the Delete key.</summary>

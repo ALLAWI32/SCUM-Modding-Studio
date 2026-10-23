@@ -66,10 +66,15 @@ public sealed class NpcGuardsTests
         Assert.All(groups, g => Assert.Equal((NpcGuards.PostType, 3), (g.Setting, g.Points!.Count)));
         Assert.Equal(NpcGuards.Posts(routes[0].Path, 3), groups[0].PostsAt(groups[0].Transform));
 
-        // The guard zone's own settings: the zombie encounter weighs 0, the NPC one keeps its weight; the zone covers every post.
+        // The guard zone's own settings: the zombie encounter weighs 0, the NPC one keeps its weight, one encounter at a time
+        // (as the game's NPC-only settings; the stock settings do not store it); the zone covers every post. No stock zone
+        // was given, so it is a zone of its own (the fallback).
         Assert.Same(ZoneCopy, Assert.Single(ops.OfType<CloneAssetOp>()));
-        var weight = Assert.Single(ops.OfType<SetAssetValueOp>());
+        var weight = Assert.Single(ops.OfType<SetAssetValueOp>(), s => s.ValueKind == "Float");
         Assert.Equal((Copy, "MTZ_POI_Military_Base_Own", "EncounterData[0].EncounterWeight", "Float", "65", "0"), (weight.Package, weight.Export, weight.Path, weight.ValueKind, weight.Old, weight.New));
+        var single = Assert.Single(ops.OfType<SetAssetValueOp>(), s => s.ValueKind == "Bool");
+        Assert.Equal((Copy, "MTZ_POI_Military_Base_Own", "SingleEncounterPerZone", string.Empty, "true"), (single.Package, single.Export, single.Path, single.Old, single.New));
+        Assert.Empty(ops.OfType<AddSubZoneOp>());
         var zone = Assert.Single(ops.OfType<AddSpawnPlaceOp>(), a => a.Kind == SpawnPlaceKind.Zone);
         Assert.Equal(Copy, zone.Setting);
         var ellipse = SpawnPlaces.At(SpawnPlaceKind.Zone, zone.Setting, zone.Transform);
@@ -88,6 +93,53 @@ public sealed class NpcGuardsTests
         Assert.False(state.IsDeleted(robot));
         Assert.Empty(state.AddedActors);
         Assert.Empty(state.AssetClones);
+    }
+
+    /// <summary>
+    /// r39 (igor8802: "NPCs do not appear in the game"): where a stock threat zone holds every post, the guard area is a
+    /// sub-zone of the smallest one, priority 1, as the game's own NPC-only areas (<c>HTZ_Military_TV_Bunker_NPC</c>), not a
+    /// second zone laid inside the place's own zone (which no zone of the island does). A project's added zone, a removed one
+    /// and one that misses a post do not take it.
+    /// </summary>
+    [Fact]
+    public void TheGuardAreaIsASubZoneOfTheSmallestStockZoneThatHoldsEveryPost()
+    {
+        var robot = new ActorRef(Barracks, "SentrySpawner_0");
+        SentryRoute[] routes = [new(robot, [new FVector(-861946.6f, 503222.1f, 60305f), new FVector(-861985.8f, 508791.6f, 60305f)])];
+        SpawnPlace Zone(int index, float x, float y, float semiX, float semiY) =>
+            new(SpawnPlaceKind.Zone, index, new FTransform(FQuat.Identity, new FVector(x, y, 60856f), FVector.One), "MTZ_POI_Military_Base", semiX, semiY);
+        var barracks = Zone(222, -866634.6f, 526406.1f, 19694f, 31965f);
+        var island = Zone(5, -866634.6f, 526406.1f, 90000f, 90000f); // holds the posts too, but is larger
+        var beside = Zone(9, -861946.6f, 503222.1f, 1000f, 1000f); // holds only the first post
+        var added = Zone(-1, -866634.6f, 526406.1f, 9000f, 30000f) with { Name = "NewThreatZone_0001" };
+        var stored = new Dictionary<string, string> { ["SingleEncounterPerZone"] = "false" };
+
+        var ops = NpcGuards.Plan(routes, Guards, 3, ZoneCopy, Rows, [], [island, beside, added, barracks], stored);
+
+        Assert.DoesNotContain(ops.OfType<AddSpawnPlaceOp>(), a => a.Kind == SpawnPlaceKind.Zone);
+        var sub = Assert.Single(ops.OfType<AddSubZoneOp>());
+        Assert.Equal(new ActorRef(SpawnPlaces.StaticDataPath, "ThreatZone_00222"), sub.Zone);
+        Assert.Equal((Copy, NpcGuards.SubZonePriority), (sub.SubZone.Setting, sub.SubZone.Priority));
+        Assert.All(NpcGuards.Posts(routes[0].Path, 3), p => Assert.True(sub.SubZone.Contains(p), $"{p} not in {sub.SubZone}"));
+        // The posts' box and the margin (the route is 55.7 m long and straight): at least the smallest size across it.
+        Assert.True(MathF.Abs(sub.SubZone.Max.Y - sub.SubZone.Min.Y - (5569.5f + (2f * NpcGuards.ZoneMargin))) < 1f, sub.SubZone.ToString());
+        Assert.True(MathF.Abs(sub.SubZone.Max.X - sub.SubZone.Min.X - (2f * NpcGuards.MinZoneHalfSize)) < 1f, sub.SubZone.ToString());
+        Assert.True(MathF.Abs(sub.SubZone.Max.Z - sub.SubZone.Min.Z - (2f * NpcGuards.ZoneMargin)) < 1f, sub.SubZone.ToString());
+        var single = Assert.Single(ops.OfType<SetAssetValueOp>(), s => s.Path == "SingleEncounterPerZone");
+        Assert.Equal(("false", "true"), (single.Old, single.New)); // a stored value is changed, not added
+
+        // One step; its undo leaves no sub-zone behind.
+        var batch = new BatchOp("Robot out, NPC area in", ops);
+        var state = EditState.Replay([batch]);
+        Assert.Equal([(sub.Zone, sub.SubZone)], state.SubZones);
+        Assert.Equal([sub.SubZone], SpawnPlaces.WithEdits([barracks], state).Single(p => p.Kind == SpawnPlaceKind.Zone).SubZones);
+        state.Apply(batch.Inverse());
+        Assert.Empty(state.SubZones);
+        Assert.True(state.IsEmpty);
+
+        // The place's zone removed by the project: the next smallest that holds every post takes it.
+        var without = NpcGuards.Plan(routes, Guards, 3, ZoneCopy, Rows, [], SpawnPlaces.WithEdits([island, barracks], EditState.Replay([new DeleteActorOp(new ActorRef(SpawnPlaces.StaticDataPath, "ThreatZone_00222"))])));
+        Assert.Equal("ThreatZone_00005", Assert.Single(without.OfType<AddSubZoneOp>()).Zone.Actor);
     }
 
     [Fact]

@@ -16,6 +16,13 @@ namespace ScumStudio.Assets.Textures;
 /// </remarks>
 public static class TextureDecoder
 {
+    /// <summary>
+    /// What the decoder makes of a texture. Bump it with any change that alters the pixels <see cref="Decode"/> or
+    /// <see cref="DecodeForGpu"/> give (a format, a mip pick, virtual textures): the Assets thumbnails are keyed by it and
+    /// are then made again once (r39: 3.5.0 decoded streaming virtual textures, and 3.4.0's white tiles stayed cached).
+    /// </summary>
+    public const int Version = 1;
+
     /// <summary>Pixel formats decoded without CUE4Parse-Conversion's fallback.</summary>
     public static IReadOnlyList<EPixelFormat> NativeFormats { get; } =
     [

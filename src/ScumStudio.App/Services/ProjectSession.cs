@@ -6,6 +6,7 @@ using ScumStudio.App.ViewModels;
 using ScumStudio.Core.Abstractions;
 using ScumStudio.Level.Editing;
 using ScumStudio.Level.Projects;
+using ScumStudio.Level.World;
 
 namespace ScumStudio.App.Services;
 
@@ -159,12 +160,87 @@ public sealed partial class ProjectSession : ObservableObject, IDisposable
     /// <summary>Closes the open project.</summary>
     public void Close() => SetCurrent(null);
 
+    /// <summary>
+    /// Copies the project (or snapshot) in <paramref name="sourceDirectory"/> to a new project named <paramref name="newName"/>
+    /// in the projects folder and opens the copy (Discord, salvador.garcia: "a simple button to clone the current project").
+    /// The open project's manifest and notes are saved first, so the copy has what the page shows.
+    /// </summary>
+    /// <exception cref="IOException">A project of that name is already there.</exception>
+    public async Task<Project> DuplicateAsync(string sourceDirectory, string newName, IProgressSink? progress = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourceDirectory);
+        ArgumentException.ThrowIfNullOrWhiteSpace(newName);
+        SaveIfOpen(sourceDirectory);
+        var copy = await ProjectCopies.DuplicateAsync(sourceDirectory, _services.ProjectsFolder, newName, progress, cancellationToken: cancellationToken).ConfigureAwait(false);
+        _logger.LogInformation("Copied the project in {Source} to {Copy}.", sourceDirectory, copy);
+        return await OpenAsync(copy, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Saves a copy of the open project in its <c>snapshots</c> folder (see <see cref="ProjectCopies.SaveSnapshotAsync"/>).</summary>
+    /// <exception cref="InvalidOperationException">No project is open.</exception>
+    public async Task<ProjectSnapshot> SaveSnapshotAsync(string? name, IProgressSink? progress = null, CancellationToken cancellationToken = default)
+    {
+        var project = Current ?? throw new InvalidOperationException(Localization.Loc.T("History.NoProject"));
+        SaveIfOpen(project.DirectoryPath);
+        var snapshot = await ProjectCopies.SaveSnapshotAsync(project.DirectoryPath, name, progress, cancellationToken: cancellationToken).ConfigureAwait(false);
+        _logger.LogInformation("Saved snapshot {Snapshot} of {Name} ({Edits} edits, {Bytes} bytes).", snapshot.Path, project.Manifest.Name, snapshot.Edits, snapshot.Bytes);
+        return snapshot;
+    }
+
+    /// <summary>
+    /// Puts the snapshot <paramref name="snapshotDirectory"/> back as the open project: the project as it is now is saved as a
+    /// snapshot first (returned), then the project is closed, its files are replaced by the snapshot's and it opens again. When
+    /// the swap fails the project opens again as it was.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">No project is open.</exception>
+    public async Task<ProjectSnapshot> RestoreSnapshotAsync(string snapshotDirectory, string beforeName, IProgressSink? progress = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(snapshotDirectory);
+        var project = Current ?? throw new InvalidOperationException(Localization.Loc.T("History.NoProject"));
+        var directory = project.DirectoryPath;
+        var before = await SaveSnapshotAsync(beforeName, progress, cancellationToken).ConfigureAwait(false);
+        Close();
+        try
+        {
+            await ProjectCopies.RestoreAsync(directory, snapshotDirectory, progress, cancellationToken).ConfigureAwait(false);
+            _logger.LogInformation("Restored {Snapshot} into {Folder}; the state before is {Before}.", snapshotDirectory, directory, before.Path);
+        }
+        catch (Exception ex)
+        {
+            // The project is as it was (or the error says where its files are): open it again, but the restore's error is the
+            // one the user sees, never a failed reopen's.
+            _logger.LogWarning(ex, "Restoring {Snapshot} into {Folder} failed; the state before is {Before}.", snapshotDirectory, directory, before.Path);
+            try
+            {
+                await OpenAsync(directory, TimeSpan.FromSeconds(5), CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception reopen) when (reopen is not OutOfMemoryException)
+            {
+                _logger.LogWarning(reopen, "The project in {Folder} did not open again after the failed restore.", directory);
+            }
+
+            throw;
+        }
+
+        await OpenAsync(directory, TimeSpan.FromSeconds(5), CancellationToken.None).ConfigureAwait(false);
+        return before;
+    }
+
+    private void SaveIfOpen(string directory)
+    {
+        if (Current is { IsReadOnly: false } open && string.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(open.DirectoryPath)),
+                Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory)), PathComparison))
+        {
+            open.Save();
+        }
+    }
+
     /// <summary>Applies an edit to the open project.</summary>
     /// <exception cref="InvalidOperationException">No project is open, or the edit is invalid.</exception>
     public JournalEntry Apply(EditOp op)
     {
         var project = Current ?? throw new InvalidOperationException("No project is open.");
-        var entry = project.Apply(WithGrassDefault(op));
+        var entry = project.Apply(WithNoLootDefault(WithGrassDefault(op)));
         Refresh();
         return entry;
     }
@@ -183,16 +259,43 @@ public sealed partial class ProjectSession : ObservableObject, IDisposable
 
         var grass = created.Select(a => (EditOp)new SetClearGrassOp(a, null, false));
         return op is BatchOp batch ? batch with { Ops = [.. batch.Ops, .. grass] } : new BatchOp(op.Describe(), [op, .. grass]);
-
-        static IEnumerable<ActorRef> Created(EditOp op) => op switch
-        {
-            AddStaticMeshActorOp a => [a.Created],
-            AddBlueprintActorOp b => [b.Created],
-            DuplicateActorOp d => [d.Created],
-            BatchOp batch => batch.Ops.SelectMany(Created),
-            _ => [],
-        };
     }
+
+    /// <summary>
+    /// With "No loot inside new objects" on (the Map's Add object box), each object <paramref name="op"/> creates gets "No
+    /// loot inside" in the same journal step: one a copy carries it for already keeps it, and a placed item spawner (loot
+    /// itself) never gets it.
+    /// </summary>
+    private EditOp WithNoLootDefault(EditOp op)
+    {
+        if (!_services.Settings.Load().Ui.NoLootInNewObjects)
+        {
+            return op;
+        }
+
+        var carried = Flatten(op).OfType<SetNoLootOp>().Select(n => n.Target).ToHashSet(ActorRef.Comparer);
+        var spawners = Flatten(op).OfType<AddBlueprintActorOp>()
+            .Where(b => b.Item is not null || string.Equals(b.ClassPath, PlacedBlueprintIndex.WorldItemSpawnerClass, StringComparison.Ordinal))
+            .Select(b => b.Created).ToHashSet(ActorRef.Comparer);
+        var noLoot = Created(op).Where(a => !carried.Contains(a) && !spawners.Contains(a)).Select(a => (EditOp)new SetNoLootOp(a, false, true)).ToList();
+        if (noLoot.Count == 0)
+        {
+            return op;
+        }
+
+        return op is BatchOp batch ? batch with { Ops = [.. batch.Ops, .. noLoot] } : new BatchOp(op.Describe(), [op, .. noLoot]);
+
+        static IEnumerable<EditOp> Flatten(EditOp op) => op is BatchOp batch ? batch.Ops.SelectMany(Flatten) : [op];
+    }
+
+    private static IEnumerable<ActorRef> Created(EditOp op) => op switch
+    {
+        AddStaticMeshActorOp a => [a.Created],
+        AddBlueprintActorOp b => [b.Created],
+        DuplicateActorOp d => [d.Created],
+        BatchOp batch => batch.Ops.SelectMany(Created),
+        _ => [],
+    };
 
     /// <summary>Undoes the last edit; returns it or null.</summary>
     public JournalEntry? Undo()

@@ -6,6 +6,7 @@ using ScumStudio.Assets.Catalog;
 using ScumStudio.Level.Export;
 using ScumStudio.Level.Projects;
 using ScumStudio.Modding.Catalog;
+using ScumStudio.Modding.Cloning;
 using ScumStudio.Modding.Crafting;
 using ScumStudio.Modding.Tuning;
 using ScumStudio.Pak;
@@ -58,7 +59,7 @@ public sealed class CraftBuildPlaceRealTests
     }
 
     [PaksFact]
-    public void TheGameShipsNoRecipeForItsCabinsSoTheChairsIsBorrowed()
+    public void TheGameShipsNoRecipeForItsCabinsSoTheLargeLogShedsIsBorrowed()
     {
         using var catalog = Open();
         foreach (var leaf in new[] { "BP_Base_Cabin", "BP_Base_Cabin_02", "BP_Base_Cabin_03" })
@@ -66,9 +67,22 @@ public sealed class CraftBuildPlaceRealTests
             var family = ElementFamilies.Of(catalog, Elements + leaf);
             Assert.True(family is not null, ElementFamilies.WhyNot(catalog, Elements + leaf));
             Assert.True(family!.BorrowsRecipe, leaf);
-            Assert.Equal(CraftablesPlanner.FurnitureRecipe, family.Recipe);
+            Assert.Equal(CraftablesPlanner.LargeBuildingRecipe, family.Recipe); // the game's walk-in building's, not the chair's (3.5.0: always red)
             Assert.Equal(Elements + leaf, Assert.Single(family.Levels).Element);
         }
+
+        // Every placeable recipe of the game checks mesh against mesh (BoxOverlapFlags 2: the chair's as much as the shed's), so
+        // the shed's recipe alone does not make a cabin placeable; what it adds are a building's placement values.
+        var shed = TunableReader.Read(ModdableAssets.ReadPackage(catalog, PackageMap.Normalize(CraftablesPlanner.LargeBuildingRecipe)))
+            .Where(t => t.Export == "CR_Large_Log_Shed").ToDictionary(t => t.Path, StringComparer.Ordinal);
+        var chairRecipe = TunableReader.Read(ModdableAssets.ReadPackage(catalog, PackageMap.Normalize(CraftablesPlanner.FurnitureRecipe)))
+            .Where(t => t.Export == "CR_Chair_Improvised_Wood").ToDictionary(t => t.Path, StringComparer.Ordinal);
+        Assert.Equal("2", shed["BoxOverlapFlags"].Value); // EPlaceableActorBoxOverlapFlag::MeshVsMesh
+        Assert.Equal("2", chairRecipe["BoxOverlapFlags"].Value);
+        Assert.Equal("50", shed["GroundOffsetWhilePlacing"].Value);
+        Assert.Equal("50", shed["MaxDistanceFromGroundWhilePlacing"].Value);
+        Assert.False(chairRecipe.ContainsKey("GroundOffsetWhilePlacing"));
+        Assert.False(shed.ContainsKey("CollisionMeshScale")); // what the planner adds for a big building (the workbench's is 1, 1, 0.9)
 
         Assert.False(ElementFamilies.Of(catalog, Elements + "BP_Bed_Improvised")!.BorrowsRecipe); // its own CR_Bed_Improvised
 
@@ -154,51 +168,88 @@ public sealed class CraftBuildPlaceRealTests
     }
 
     /// <summary>
-    /// "Place in front" (experimental) on his cabin, as his file has it (Furniture) and as the game's cabin: only the recipe
-    /// changes (its new <c>PlacementLocationOffset</c>, 8.5 m along +X, read back by CUE4Parse from the pak); the element and
-    /// every other file are byte for byte those of the export without the switch, so everything of the element moves as one
-    /// with the placement point. 8.5 m is more than the cabin reaches from its pivot in any direction (7.61 m), so wherever
-    /// the game turns it, all of it starts beyond the aimed point. A chair-sized craftable with the switch on is untouched.
-    /// With <c>SCUMSTUDIO_PREVIEW_OUT</c>, a top and a side view of the real bounds before and after.
+    /// His cabin, as his file has it (Furniture, 15 m) and as the game's cabin, is placed with the game's Large Log Shed recipe
+    /// and its placement check drawn in (owner, 3.5.0: on the chair's it was always red, "Overlapping character": the game
+    /// centres the ghost on the aimed point, so inside the cabin its floor meets his feet, and every recipe checks mesh
+    /// against mesh). The copied recipe keeps the shed's placement values, makes his element, and gets the collision mesh
+    /// scaled and the box drawn in to 1.5 m around the pivot, the way the game's own wall lamps are. "Place in front"
+    /// (experimental) is left out with it (the game added that offset in world directions after finding the ground: the ghost
+    /// floated and did not turn with him). A mid-sized furniture craftable keeps the chair's recipe, where the switch still
+    /// writes the offset; a chair-sized one with the switch on is untouched. With <c>SCUMSTUDIO_PREVIEW_OUT</c>, a top and a
+    /// side view of the bounds.
     /// </summary>
     [PaksFact]
-    public async Task PlaceInFrontMovesOnlyTheRecipesPlacementPoint()
+    public async Task ABigBuildingIsPlacedWithTheLargeLogShedsRecipeAndPlaceInFrontIsLeftOut()
     {
         using var catalog = Open();
         var owner = Owners();
         var mesh = catalog.LoadFirstExport<CUE4Parse.UE4.Assets.Exports.StaticMesh.UStaticMesh>(owner.Mesh)!;
         var bounds = ScumStudio.Assets.Meshes.MeshExtractor.DescribeStaticMesh(mesh).Bounds;
         var reach = new[] { -bounds.Min.X, bounds.Max.X, -bounds.Min.Y, bounds.Max.Y }.Max(); // cm, horizontally from the pivot
-        Assert.InRange(reach, 750f, 770f); // the cabin is centred on its pivot: Y -761 .. 739
+        Assert.InRange(reach, 750f, 770f); // the cabin is centred on its pivot: Y -761 .. 739, so the player aims from inside it
         Assert.Equal(15f, owner.SizeMeters, 1);
-        Assert.Equal(8.5f, CraftablesPlanner.AutoInFrontMeters(owner.SizeMeters));
-        Assert.True(CraftablesPlanner.AutoInFrontMeters(owner.SizeMeters) * 100 - reach > 80, "all of it beyond the aimed point");
+        Assert.True(CraftablesPlanner.UsesLargeBuildingRecipe(catalog, owner));
 
         var dir = Path.Combine(Path.GetTempPath(), "scumstudio-infront-real-" + Guid.NewGuid().ToString("N"));
         try
         {
             var gameCabin = owner with { Kind = CraftKind.Element, Element = new ElementSettings { Template = Cabin }, Use = CraftUse.Build };
+            Assert.True(CraftablesPlanner.UsesLargeBuildingRecipe(catalog, gameCabin));
             foreach (var (label, cabin) in new[] { ("furniture", owner), ("game-cabin", gameCabin) })
             {
                 var off = await ExportAsync(catalog, Path.Combine(dir, label, "off"), ProjectSourceRole.Client, cabin);
-                var on = await ExportAsync(catalog, Path.Combine(dir, label, "on"), ProjectSourceRole.Client, cabin with { InFront = new InFrontSettings() });
-                var recipe = Placeables + "CR_SS_Base_Cabin_03";
-                var changed = ChangedFiles(off, on);
-                Assert.Equal(
-                    [StagedFile(recipe, ".uasset"), StagedFile(recipe, ".uexp")],
-                    changed.Where(f => !f.EndsWith("AssetRegistry.bin", StringComparison.OrdinalIgnoreCase)).Order(StringComparer.OrdinalIgnoreCase));
+                var on = await ExportAsync(catalog, Path.Combine(dir, label, "on"), ProjectSourceRole.Client, cabin with { InFront = new InFrontSettings(18f) });
+                Assert.Empty(ChangedFiles(off, on)); // the switch writes nothing where the shed's recipe places it
+                Assert.Contains(on.Warnings, w => w.Contains("Large Log Shed", StringComparison.Ordinal) && w.Contains("not written", StringComparison.Ordinal));
 
-                var read = Load(on, recipe + ".CR_SS_Base_Cabin_03");
-                var offset = read.GetOrDefault<CUE4Parse.UE4.Objects.Core.Math.FVector>("PlacementLocationOffset");
-                Assert.Equal((850f, 0f, 0f), (offset.X, offset.Y, offset.Z));
-                var before = Load(off, recipe + ".CR_SS_Base_Cabin_03");
-                Assert.Equal(before.GetOrDefault<FSoftObjectPath>("Product").AssetPathName.Text, read.GetOrDefault<FSoftObjectPath>("Product").AssetPathName.Text);
-                Assert.Equal(before.GetOrDefault<FText>("Caption").Text, read.GetOrDefault<FText>("Caption").Text);
+                var recipe = Placeables + "CR_SS_Base_Cabin_03";
+                var read = Load(off, recipe + ".CR_SS_Base_Cabin_03");
+                Assert.Equal((byte)2, read.GetOrDefault<byte>("BoxOverlapFlags")); // MeshVsMesh: the shed's, and every recipe's
+                Assert.Equal(50f, read.GetOrDefault<float>("GroundOffsetWhilePlacing"));
+                Assert.Equal(50f, read.GetOrDefault<float>("MaxDistanceFromGroundWhilePlacing"));
+                Assert.False(read.GetOrDefault<bool>("CanPlaceOverItems", true));
+                Assert.False(read.TryGetValue(out CUE4Parse.UE4.Objects.Core.Math.FVector _, "PlacementLocationOffset"));
+
+                // The check drawn in to 1.5 m around the pivot on every side (review 3.5.1: one inset from the longest reach,
+                // 6.11 m, crossed the faces over on the 5.6 m X sides): the collision mesh scaled per axis, each face of the box
+                // moved in to 1.5 m from the pivot, never past it.
+                var scale = read.GetOrDefault<CUE4Parse.UE4.Objects.Core.Math.FVector>("CollisionMeshScale");
+                Assert.Equal((MathF.Round(150 / MathF.Max(-bounds.Min.X, bounds.Max.X), 2), MathF.Round(150 / MathF.Max(-bounds.Min.Y, bounds.Max.Y), 2), 1f),
+                    (MathF.Round(scale.X, 2), MathF.Round(scale.Y, 2), scale.Z));
+                var insetMin = read.GetOrDefault<CUE4Parse.UE4.Objects.Core.Math.FVector>("BoundsExtensionWhilePlacingMin");
+                var insetMax = read.GetOrDefault<CUE4Parse.UE4.Objects.Core.Math.FVector>("BoundsExtensionWhilePlacingMax");
+                var box = (MinX: bounds.Min.X - insetMin.X, MaxX: bounds.Max.X + insetMax.X, MinY: bounds.Min.Y - insetMin.Y, MaxY: bounds.Max.Y + insetMax.Y);
+                Assert.True(box.MinX < box.MaxX && box.MinY < box.MaxY, $"the drawn-in box is inverted: {box}");
+                foreach (var face in new[] { -box.MinX, box.MaxX, -box.MinY, box.MaxY })
+                {
+                    Assert.InRange(face, 149.5f, 150.5f);
+                }
+
+                Assert.Equal((0f, 0f), (insetMin.Z, insetMax.Z));
+                Assert.Contains(off.Warnings, w => w.Contains("drawn in", StringComparison.Ordinal) && w.Contains("Base Cabin 03", StringComparison.Ordinal));
+                Assert.Equal(Elements + "BP_SS_Base_Cabin_03.BP_SS_Base_Cabin_03_C", read.GetOrDefault<FSoftObjectPath>("Product").AssetPathName.Text); // his element, not the shed
+                Assert.Equal("Base Cabin 03", read.GetOrDefault<FText>("Caption").Text);
                 Assert.Equal(
-                    "/Game/ConZ_Files/Blueprints/PlaceableActor/BP_PlaceableActorBaseBuilding.BP_PlaceableActorBaseBuilding_C", // the curtains' ghost actor
+                    "/Game/ConZ_Files/Blueprints/PlaceableActor/BP_PlaceableActorBaseBuilding.BP_PlaceableActorBaseBuilding_C",
                     read.GetOrDefault<FSoftObjectPath>("PlaceableActorClass").AssetPathName.Text);
-                Assert.False(before.TryGetValue(out CUE4Parse.UE4.Objects.Core.Math.FVector _, "PlacementLocationOffset"));
+                Assert.DoesNotContain(off.Assets, a => a.PackagePath.Contains("Log_Shed", StringComparison.OrdinalIgnoreCase)); // the shed itself is not shipped
+                Assert.DoesNotContain(catalog.GetExports(PackageMap.Normalize(CraftablesPlanner.LargeBuildingRecipe)), e => e.Name == "CR_SS_Base_Cabin_03");
             }
+
+            // A mid-sized furniture craftable (below 3 m) keeps the chair's recipe: the switch writes its offset there.
+            var bench = owner with { Name = "Bench", Token = "SS_Bench_Test", SizeMeters = 2.9f };
+            Assert.False(CraftablesPlanner.UsesLargeBuildingRecipe(catalog, bench));
+            var plainBench = await ExportAsync(catalog, Path.Combine(dir, "bench", "off"), ProjectSourceRole.Client, bench);
+            var movedBench = await ExportAsync(catalog, Path.Combine(dir, "bench", "on"), ProjectSourceRole.Client, bench with { InFront = new InFrontSettings(5f) });
+            var benchRecipe = Placeables + "CR_SS_Bench_Test";
+            Assert.Equal(
+                [StagedFile(benchRecipe, ".uasset"), StagedFile(benchRecipe, ".uexp")],
+                ChangedFiles(plainBench, movedBench).Where(f => !f.EndsWith("AssetRegistry.bin", StringComparison.OrdinalIgnoreCase)).Order(StringComparer.OrdinalIgnoreCase));
+            var moved = Load(movedBench, benchRecipe + ".CR_SS_Bench_Test");
+            var offset = moved.GetOrDefault<CUE4Parse.UE4.Objects.Core.Math.FVector>("PlacementLocationOffset");
+            Assert.Equal((500f, 0f, 0f), (offset.X, offset.Y, offset.Z));
+            Assert.Equal((byte)2, moved.GetOrDefault<byte>("BoxOverlapFlags")); // the chair's own
+            Assert.False(moved.TryGetValue(out CUE4Parse.UE4.Objects.Core.Math.FVector _, "CollisionMeshScale")); // not drawn in: below 3 m
 
             // A chair-sized craftable: the switch on writes nothing (0 m), every file as without it.
             var stool = owner with { Name = "Stool", Token = "SS_Stool_Test", Source = Chair, Mesh = CraftablesPlanner.MeshOf(catalog, Chair)!, SizeMeters = 0.9f };
@@ -219,6 +270,62 @@ public sealed class CraftBuildPlaceRealTests
                 Directory.Delete(dir, recursive: true);
             }
         }
+    }
+
+    /// <summary>
+    /// Review 3.5.1: two big buildings the draw-in missed. A model imported from a 3D file (its mesh is in the project's imports
+    /// folder, not the game's files) used the shed's recipe without the drawn-in check (the 3.5.0 complaint stayed), and a
+    /// station of 15 m hid "Place in front" in the page but still wrote a saved one, without the drawn-in check. The import is
+    /// a stand-in made without Unreal (the game's cabin mesh cloned to an import's path, as <c>MapModelsRealTests</c> does).
+    /// </summary>
+    [PaksFact]
+    public async Task AnImportedBigModelAndABigStationGetTheDrawnInCheckToo()
+    {
+        using var catalog = Open();
+        var owner = Owners();
+        using var temp = new ScumStudio.Tests.Level.LevelTempDirectory();
+        using var project = Project.Create(temp.Combine("Hall.ssproj"), "Hall");
+        var model = new ScumStudio.Level.Import.LibraryModel("SS_My_Hall", ScumStudio.Level.Import.UeCook.ImportsFolder + "/SS_My_Hall");
+        var source = PackageMap.Normalize(owner.Mesh);
+        Assert.True(catalog.TryGetPackageFile(source, out var file));
+        var (uasset, uexp, ubulk) = ProjectExporter.ReadPackageFiles(catalog, file);
+        var clone = PackageCloner.Clone(ScumStudio.Formats.Packages.CookedPackage.Parse(uasset, uexp, ubulk, source), source, new PackageMap([KeyValuePair.Create(source, model.MeshPackage)]));
+        var stem = Path.Combine(project.DirectoryPath, model.Folder, "SCUM", "Content", "ScumStudio", "Imports", model.Token, "SM_" + model.Token);
+        Directory.CreateDirectory(Path.GetDirectoryName(stem)!);
+        await clone.Bytes.WriteAsync(stem, ".uasset");
+        if (clone.UBulk is not null)
+        {
+            await File.WriteAllBytesAsync(stem + ".ubulk", clone.UBulk);
+        }
+
+        var hall = ScumStudio.App.ViewModels.CraftablesPageViewModel.DescribeModel(project.DirectoryPath, model)! with
+        {
+            Name = "My Hall", Token = "SS_My_Hall_Test", Kind = CraftKind.Furniture, Ingredients = owner.Ingredients,
+        };
+        Assert.InRange(hall.SizeMeters, 14f, 16f);
+        Assert.True(CraftablesPlanner.UsesLargeBuildingRecipe(catalog, hall));
+        var imported = await CraftablesExporter.ExportAsync(new CraftablesFile { Items = [hall], ProjectDirectory = project.DirectoryPath }, "MyMapMod", catalog,
+            new ExportOptions { OutputDirectory = temp.Combine("out-hall"), WritePak = true }, ProjectSourceRole.Client);
+        Assert.DoesNotContain(imported!.Warnings, w => w.Contains("not drawn in", StringComparison.Ordinal));
+        var hallRecipe = Load(imported, Placeables + "CR_SS_My_Hall_Test.CR_SS_My_Hall_Test");
+        var hallScale = hallRecipe.GetOrDefault<CUE4Parse.UE4.Objects.Core.Math.FVector>("CollisionMeshScale");
+        Assert.InRange(hallScale.X, 0.1f, 0.5f);
+        Assert.InRange(hallScale.Y, 0.1f, 0.5f);
+        Assert.True(hallRecipe.GetOrDefault<CUE4Parse.UE4.Objects.Core.Math.FVector>("BoundsExtensionWhilePlacingMin").X < -100, "the box is not drawn in");
+
+        // A 15 m station keeps the workbench's recipe (a station's), placed like a large building with its check drawn in; a
+        // saved "Place in front" is not written, as for big furniture (the page hides the switch for both).
+        var forge = owner with { Name = "Big Forge", Token = "SS_Big_Forge_Test", Kind = CraftKind.Station, InFront = new InFrontSettings(5f) };
+        Assert.False(CraftablesPlanner.UsesLargeBuildingRecipe(catalog, forge));
+        Assert.True(CraftablesPlanner.DrawsPlacementIn(catalog, forge));
+        var station = await ExportAsync(catalog, temp.Combine("out-forge"), ProjectSourceRole.Client, forge);
+        Assert.Contains(station.Warnings, w => w.Contains("Big Forge", StringComparison.Ordinal) && w.Contains("not written", StringComparison.Ordinal));
+        var forgeRecipe = Load(station, Placeables + "CR_SS_Big_Forge_Test.CR_SS_Big_Forge_Test");
+        Assert.False(forgeRecipe.TryGetValue(out CUE4Parse.UE4.Objects.Core.Math.FVector _, "PlacementLocationOffset"));
+        var forgeScale = forgeRecipe.GetOrDefault<CUE4Parse.UE4.Objects.Core.Math.FVector>("CollisionMeshScale");
+        Assert.InRange(forgeScale.X, 0.1f, 0.5f);
+        Assert.Equal(0.9f, forgeScale.Z, 3); // the workbench's own height scale is kept
+        Assert.True(forgeRecipe.GetOrDefault<CUE4Parse.UE4.Objects.Core.Math.FVector>("BoundsExtensionWhilePlacingMax").Y < -100, "the box is not drawn in");
     }
 
     /// <summary>The staged files of <paramref name="b"/> whose bytes differ from <paramref name="a"/>'s (or that only one has).</summary>

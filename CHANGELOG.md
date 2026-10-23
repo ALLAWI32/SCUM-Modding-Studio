@@ -3,6 +3,436 @@
 All notable changes are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [semantic versioning](https://semver.org/).
 
+## [3.6.0] - 2026-10-22
+
+### Added
+- **Ingredient groups of the project** (Discord, a user, 2026-10-21: "Can I do it? To create, change, and view groups of
+  ingredients"; a user: "maybe let us create new groups?"). Craftables page, step 3, "Ingredient groups of this
+  project": type a name, New group…, click the items that belong in it (several at once; a second click takes one out),
+  Use. The group is a new ingredient tag `CI_Group_<Name>` (never one the game has); Add ingredient… → Ingredient groups
+  puts it into any recipe of the project, which then accepts any of its items. Items… changes its items (its tag stays),
+  Delete removes it, refused while a recipe asks for it (the warning names the craftables). Each change is one Undo step.
+  On export, every item of a group a recipe asks for gets the tag in its entity setup, like an item's own new tag (shipped
+  in the Craftables pak, also for the game's own items: the panel says so); DLC items and items whose setup is another
+  mod's cannot join and are named. Checked on the game's files in both roles: the group's tag, each member's setup listing
+  it next to its own tags, the recipe asking for it.
+- **See what a group holds** (a user: "view groups of ingredients"): every ingredient that is a tag or a group shows
+  "Members: …" under it (all of them on hover), the game's groups from the game's files (CI_Group_Sewing_Kit: the sewing
+  kits), and the picker's group tiles name their items on hover.
+- **Reorder a recipe's ingredients** (a user, 2026-10-21: "I would also like to make it possible to rearrange places"):
+  up and down buttons on each ingredient; the recipe is written in that order, which is the order the game lists them in.
+- **Copy and paste a recipe's ingredients** (a user, 2026-10-20: "It's not enough to copy and paste the ingredients
+  here"): Copy and Paste in step 3 put one craftable's whole ingredient list (amounts, per-level amounts, tools, new tags)
+  into another's, one Undo step.
+- **"No loot inside" for placed objects** (Discord #feature-requests, a user: "It would be great if you could disable
+  loot in the objects you add"). A placed object (added, pasted, copied, a building from another level) has a "No loot
+  inside" box in the Map's properties panel, and the Add object box has "No loot inside new objects", which gives it to
+  every object added, pasted or copied from then on in the same undo step (placed item spawners excepted: they are
+  loot). The export empties the copy's searchable parts, the lockers and other child objects it carries (a police
+  station's eight weapon lockers), and its loot points on shelves and floors; parts whose model carries loot draw the
+  loot-free copy of the model. Copies and prefabs of such an object keep the setting. Child objects a level does
+  not store (made from their class when it loads) and fixed-item spawners (a workbench) stay as the game has them, and
+  the export report says so. Checked with the game's files, client and server cook: the Samobor police station placed with No
+  loot inside (29 searchable parts, 8 lockers, 34 loot points) reads back with no searchable part and no loot point, the
+  same station placed without it keeps all 29, and the level passes the package check. Locks on any door or gate (also
+  asked for) are not possible from a mod: the game's locks are its base-building logic and keycard data, not something a
+  placed door can be given.
+- **Copies of a project, and snapshots to go back to** (Discord #general, a user, 2026-10-20: "it might be
+  useful to have a feature that allows for cloning the current project - I've personally had to redo changes I was
+  working on ... or even just a simple button to clone the current project, which would allow us to manage versions").
+  A project was one folder and the only way back was Undo, one edit at a time. The Projects page has a new card,
+  *Copies and snapshots*: *Duplicate project* copies the open project (journal, notes, pictures, imported models and
+  mods, economy and craftables files) to a new project of its own in the projects folder and opens it; *Save a snapshot*
+  keeps a full copy inside the project (`snapshots\<date time> <name>`), listed with its time, edits and size; each
+  snapshot can be *Opened as a new project*, or *Restored* in place of the project (it asks first, and what you have now
+  is saved as a snapshot before, so nothing is lost). Plain folder copies: files keep their times (imported mods are read
+  oldest first, so a copy reads them in the same order); the lock file, the snapshots and a mod import that did not
+  finish are never copied. A copy exports under its own name: install only one of the two. A restore copies the
+  snapshot next to the project first, then swaps the entries by renaming them; a rename that another program (an
+  antivirus scan) blocks is tried again for about 1.5 s, and if it still fails what came in from the snapshot goes back
+  out and the project's own entries come back, so the project is as it was and the error says why. If even that is
+  impossible, the project's own files stay in `.restore-old` and the message names them; no later restore deletes them
+  (it refuses until they are moved back). Checked with unit tests (a copy of an open project, edits and undo state
+  included; a snapshot saved, listed, opened as a new project and restored; a restore that cannot copy leaves the
+  project as it was; a file held without delete sharing during the swap, which puts the project back exactly, without
+  the snapshot's extra files; a file held for a moment, which is waited for; an unfinished restore's files, which are
+  kept) and through the Projects page.
+- **Reset a sector to stock** (Discord #general, a user, 2026-10-19: "how do I revert one area back to default (one
+  sector, or part of sector)? ... so I dont loose all my progress now for the other sector"; he hand-edited the
+  project's journal). The Map's History panel has *Reset a sector to stock…*: pick a sector (D_4 top left … Z_0 bottom
+  right, as on the game's map), see what the project changed there by kind (deleted objects and trees, moved objects,
+  added / copied / pasted / painted / prefab objects, bends, replaced meshes, loot, grass and spawner settings, holes,
+  sub-zones), and take it all back as ONE edit of History, which Undo puts back exactly. A sector is its levels, plus
+  the island-wide data (spawn places …) that stands in it (an object of a D_2 level moved into C_1 is reset with D_2);
+  vehicle, item, craftable and economy edits stay, and so do imported mods (Projects → Imported mods), which are not
+  History edits: the panel says to remove one there. The map has no area selection, so a whole sector is the smallest
+  part (not part of a sector). Checked with unit tests on every
+  kind of edit, the undo and the journal read again, and through the Map page.
+- **Check my install** (Discord #bug-reports, 2026-10-18: a user, "clone item dont work ... cant spawn it with
+  command", with the Items and Craftables page paks installed and no Registry pak; a user, "works in single-player,
+  but it doesn't work for someone else or on a server, even after adding both files"). The game reads ONE list of its
+  assets (`AssetRegistry.bin`), from the pak it reads first: a missing Registry pak, an older pak of the same mod or
+  another mod's pak with its own list hides every new item, vehicle and recipe, and a server needs its own pak and
+  `-fileopenlog`. Nothing told the user which of these it was. The Projects page has a *Check my install* card, and
+  every export's message (Projects, Export mod on the Map, a page's Export) ends with its one-line summary. It reads the
+  game's and the server's `SCUM\Content\Paks\~mods` (Settings → Game folder, Server folder) and says in words which of
+  the project's paks are installed and the same as the last export, which are older, which the export has and `~mods`
+  lacks, a missing Registry pak with two or more page paks, the whole project's pak and page paks together, paks of the
+  mod under another number, other paks that load first and carry their own asset list (it reads each pak's index;
+  one it cannot open is named; for a project without clones or craftables this is only a note, as nothing of it can be
+  hidden), mod paks loose in `Paks`, the client pak on a server, a server pak without its `.sig` (the studio's recipe;
+  a server refusing a pak for a missing `.sig` was not seen in a log), and the fixed rules (`-fileopenlog`; every player
+  needs every Client file). `~mods` is read with its subfolders, as the engine mounts paks there too (a copied `Client`
+  folder loads): this mod's paks in a subfolder are named, and other mods' paks there count in the read order. The line
+  after an export checks the paks that export wrote: one missing from the game's `~mods` (or of another size) gives
+  "Not in the game's ~mods yet: copy every file of <folder> there", plus "delete this project's other paks there" when
+  the other install mode's paks are in `~mods`. It changes nothing. Checked with unit tests over small paks written for
+  the test (both install modes in both directions after an export, paks in subfolders and their order, a project
+  without new assets) and with a real export of two pages, the Registry pak and the whole project copied into a
+  temporary `~mods` (the whole project's pak just written beside the installed pages, the pages' folder copied into a
+  subfolder; and, with the dedicated server's files, a client pak on the server).
+
+### Fixes
+- **Another model on a vehicle part now sits where the part's own model was, at its size; the 3D view shows it at once**
+  (Discord #bug-reports, a user on 3.5.0: "I just replaced all four wheels with Zil wheels. When I saw that nothing had
+  changed in the editor, I decided to just check what it looked like in the game": a Rager clone with huge ZIL wheels, the
+  rear-left one lying flat behind the truck, the rear-right one standing up beside the bed). "Other model…" on the Parts tab
+  only swapped the part's model (`MeshSetup.Mesh`), and the game draws that model on the part's socket or wheel bone with
+  the model's own pivot, axes and size. The model the search "zil wheel" lists first, the ZIL-131 prop wheel
+  `ZIL131/Props/SM_Wheel_01`, has its pivot at the bottom of the tyre, its axle along X and is 117 cm across; the Rager's
+  wheels are centred on the wheel bone, axle along Y, 90.2 cm. So each ZIL wheel hung 58.6 cm off the axle, turned a
+  quarter the wrong way and 1.3 times too big, and it swung round the axle as the wheel turned: at the spawn the rear-right
+  one stood above its hub (it looked like a spare wheel in the bed), the rear-left one, a quarter turn on, lay flat behind
+  the hub. The 3D view drew the car from the game's files and never showed a changed model. Now the export also writes the
+  part's `MeshSetup.Offset` (a transform the game already uses on the Kinglet's weapon mounts) so the new model's bounds sit
+  centred on the game model's, scaled evenly to its largest size, and a wheel's axle is turned onto the game wheel's axle
+  (for the ZIL wheel on a Rager: turned 90°, scaled to 0.77, moved down 45 cm). This also fixes projects made with 3.5:
+  the next export fits the models they already have. A wheel still drives on the game's wheel size: its radius is the
+  wheel's own data (45 cm on the Rager), not the model, so a wheel model only changes the look, and the Parts panel says so.
+  The 3D view shows the new model fitted the same way as soon as it is chosen (the game's model hidden, Ctrl+Z puts it
+  back), clicking it picks the part, and the panel names the model ("Model: SM_Wheel_01, in place of the game's
+  SM_Rager_Wheel_FrontLeft …"). A model whose size cannot be read is refused with the reason. Parts added with "Add part…"
+  keep their model as placed. Checked on the game's files: a Rager clone with the four wheels swapped to the ZIL wheel
+  through the Vehicles page; in the exported wheels the ZIL wheel's real geometry lands on the Rager wheel's (same centre on
+  the bone to 0.01 mm, same 90.19 cm diameter, axle along Y), on the same bone, with the Rager's hit mesh; the dedicated
+  server's files give the same numbers. How the wheels look rolling in the game still needs a look in the game.
+- **An item given a new tag now counts in the game the way the game's own tags count their items** (Discord, a user,
+  2026-10-20: "it was working at some point but now only predefined ingredients will work"; a user's Book90 recipe with
+  plastic scissors as a tool and Car_Repair_Kit, both "New tag"). The export itself was complete, in both roles: on the
+  game's files (client 1.3.4 and the dedicated server) the Craftables page's pak and the whole project's Craftables pak
+  carry the recipe asking for `CI_SSI_Scissors_Plastic`, that tag, and the scissors' entity setup listing it; nothing in
+  this path changed between 3.4.0 and 3.5.1. What was wrong is what the new tag was copied from: `CI_Lead_Plate`, whose
+  `ConsumptionMethod` is `CICM_Uses` (count by uses). The game gives that method almost only to tags of items that have uses or
+  stack (69 of the 75 items behind its 32 such tags: glue, cement bags, arrows); 196 of its 238 tags store none (whole
+  items). Plastic scissors have no uses at all, so under a "uses" tag they most likely never counted: only the game's own
+  ingredients worked. A new tag is now a copy of `CI_Group_Glass` (whole items) for an item without uses and of
+  `CI_Group_Rope` (by uses, as before) for one with uses, as the game does, and both show the item and its name in the
+  crafting menu (the lead-plate copy showed neither). Every new tag also gets the asset-list record the game's own tags
+  have. The game itself was not started: what the files prove is in the report; the owner's test in the game is the last
+  step.
+- **"Only this item (new tag)" was greyed out for items newer than the studio's catalogue** (r40, found on the files): the
+  picker allowed a new tag only for items in the catalogue built from game 1.3.3.4, so the 10 items newer than it
+  (`Mutant_Jacket`, `Mutant_Pants`, the mutant hats, `Crow_Meat`, `Seagull_Meat`, `Fish_Carp_Radioactive`,
+  `Combat_Helmet_04_Event`) could not be given one, though the export would have made it. The game files decide now.
+- **The export report says what the craft mod needs when it changes items** (a user): a Craftables pak that gives
+  items a new tag replaces their entity setups; its report now names them and says that every player needs the pak, a server
+  the SERVER pak of the same export, and that another mod changing the same items and loading first takes the tags away
+  (then only the game's own ingredients work).
+- **Loot changed on the Map is the loot the game gives** (Discord #bug-reports, a user, 3.5: "default and custom loot
+  merged. it keeps both. that means all new and removed items will spawn"). A searchable object in SCUM (crate, locker,
+  desk, trash pile) gets its loot from `ExamineAssetData` entries, and the game finds them in two places: on the placed
+  object, which is all the studio wrote, and in the object's model itself (`SM_Locker_closed_Military` carries
+  `Examine_Wardrobe_Locker`, the tarp crates `Examine_Crate_Tarp_Camo` …). The model's entry stayed in the game, so a preset
+  taken out or replaced in the loot editor could keep spawning, and an object set to "not lootable" could still be
+  searched. The panel did not show that loot at all: of the searchable objects in 120 sampled levels, 3,277 have no loot
+  of their own and get all of it from their model, and the panel called them not lootable. The panel now shows the loot
+  the object gives (its own presets, else its model's), and the export writes a changed object the way the game's own
+  levels hold loot: its presets on the object plus a copy of its model without loot (`SM_X_NoLoot`, next to the game's
+  model, the same mesh data byte for byte; the export report lists these copies under "Loot"), or nothing on the object
+  when the wanted loot is exactly its model's. The tooltips say so in all ten languages. The game's own loot files
+  (`SCUM\Saved\Config\WindowsServer\Loot\...\Override`, single player `...\WindowsNoEditor\Loot\...`) are not involved:
+  they replace a preset or a loot group for the whole server, never one container, and the studio writes none of them;
+  the modding guide now describes the folders the game reads (a loot group's `ChildrenMergeMode` is `UpdateOrAdd` or
+  `Replace`; by the names, the first keeps the children a file does not list). Checked with the game's files: the locker, police closet and tarp crate models carry their
+  presets and their copies have the same LODs, vertices, triangles, materials, bounds and collision and no loot; a tarp
+  crate given a weapon-locker preset and a dumpster set to not lootable export with exactly that loot and a loot-free
+  model each, every other searchable object of the military base unchanged; the loot panel of that tarp crate shows
+  `Examine_Crate_Tarp_Camo`, and unticking Lootable exports it empty. What the game does when an object and its model
+  both carry loot is not in the files; with the copy that question no longer arises, an in-game search confirms it
+  (`#SetShouldPrintExamineSpawnerPresets true` prints the presets a search rolls).
+- **A bridge or anything built far out from where its pieces came from is now loaded from a kilometre away in the game,
+  not only up close** (Discord, a user, 2026-10-19: "I'm trying to build a skybridge that spans across the entire
+  map … Because all of my bridge segments are contained within a single Actor, the bridge is only visible up close and
+  disappears when viewed from a distance"). The game loads a level of the island only while you are within that level's
+  streaming distance of its area, and drops everything in it farther out: 20-50 m for interiors, 100-200 m for towns,
+  farms and bridges, 1,000 m for almost every terrain tile (one tile, Landscape_A_4_1, 500 m). Every copy the Map made
+  went into the level of what it was copied from (Extend, Paste with that object selected, Ctrl+D of a building's part),
+  so a bridge laid across the map stood in one small level, and a copy of a building's instanced part also kept that
+  part's own cull distance (60-100 m). The export then stretched that level's area over the whole bridge, so that whole
+  place loaded wherever the bridge went. Now the export writes each placed object that stands out of its level's reach
+  into the terrain tile under it, where the game keeps its own rocks, transmission towers and power poles: each piece in
+  the tile under it (several pieces can share a tile), loaded with that tile, with no cull distance of its own (as most
+  of the game's), and the game's LODs still apply. A copied part written there becomes an object of its own with the
+  part's mesh, materials, collision and loot (your loot setting of that part, when you changed it). Not yet checked in
+  the game: whether the game also hides small pieces sooner by their size (the island has a size-based cull volume; if
+  the game applies it, a 4 m slab would vanish at about 200 m, like the game's own pieces of that size). Objects within
+  reach of their level stay in it, as before (so something placed just outside an interior still shows only that near);
+  the project keeps everything where you placed it, and the export report lists what went where. The Map's properties
+  of a placed object, and of a copy of a building's part, now say which level it loads with and from how far ("In the
+  game"), in all ten languages. Not changed: copied buildings and other Blueprints stay in their level, and a far view
+  of what you built from beyond about 1 km (as the game shows its towns) is not done in this version: the game's far
+  models are one per place, and adding to them risks replacing the stock ones. Checked on the game's files: 24 slabs
+  laid as new objects and 24 as new instances of the C_0 nuclear plant's deck slabs, every 500 m for 11.5 km east across
+  five cells: before, all 48 in the plant's level, loaded only within 100 m, the plant's area stretched to 12 km; now
+  each in the terrain tile under it (20 tiles), loaded within 1,000 m, the plant's level untouched; the dedicated
+  server's cook places and names them the same way.
+- **Deleting objects you placed far away no longer keeps their level streaming in from out there** (Discord, a user,
+  2026-10-20: "after deleting the buildings I placed, the level's load/draw distance doesn't decrease—at least that's
+  the case in the Studio"). The Map loads a level also where the project placed or moved its objects, and a deleted
+  object stays in the project's journal (marked deleted, so Ctrl+Z brings it back); those were still counted. Deleted
+  ones are left out now. Checked with a unit test (the level's edit box after deleting and after undoing).
+- **A broken mesh in the game files no longer stops the Map view** (Discord, a user, 2026-10-22, running the studio
+  over SCUM 0.6 files: "Causes the streaming to pause and not load the LODs etc on areas", his console:
+  "Mesh 'SK_SentryRobot_01' is invalid: Index 0 is out of range for 0 vertices", in every frame). In those older files
+  the sentry robot's mesh has a level of detail with triangles but no vertices. The Map loaded it as the model of the
+  sentry pins and sent it to the graphics card in every frame, where it was refused, so every frame failed and the
+  streaming stopped. Now every mesh is checked where it is loaded: a level of detail that cannot be drawn is left out
+  (for a pin's model the finest level of detail is tried instead), a mesh with nothing drawable is not loaded at all (a
+  sentry pin then shows its plain shape), and the console says so once per mesh instead of once per frame. The 3D preview skips such a mesh the
+  same way. Checked with unit tests on an empty mesh, and on today's game files: the sentry robot still loads whole.
+- **The ground near the camera is the game's ground** (Discord, a user, 2026-10-20: "is there a way to see the actual
+  high poly landscape when you close in? To me it shows only the lowest LOD I think, and it doesnt match at all when
+  placing stuff on ground"). Whole-island and cell views load the landscape from every fourth point of the game's height
+  map (6 m apart), so up close ditches, banks, road cuts and bumps were smoothed away: measured on three tiles, that
+  ground is off the real one by 6-12 cm on average, by more than 25 cm on 3-13% of the ground and by up to 4 m at
+  banks, while the game draws every point (1.5 m apart) near the player. Now the landscape pieces near the camera are
+  rebuilt from every point of the height map as you fly (every second point a little farther out), within a budget per
+  quality (Performance about two pieces of 381 m, Balanced about six, High nine plus a second ring), and put back as
+  the camera leaves; their edges meet the coarser pieces next to them without gaps. Objects laid on the ground now sit
+  on it as they do in the game. Checked on the game's files: the rebuilt pieces hold every height point exactly and meet
+  their neighbours to 0.000 cm; on cell B_4 (86 levels, 156,000 placements, 1600 x 900, 4x anti-aliasing) a frame took
+  7.4 ms before and 7.9-8.0 ms with Balanced or High (no frame over 33 ms); the detail for the view is built and sent
+  in about 50 ms, a few milliseconds a frame in the app.
+- **The hole tool says why a hole shows only on green ground** (Discord, a user, 2026-10-21: "it's the green big cells
+  only that can be used? Is there a reason for that and not every cell?", and as a request: "Being able to delete part
+  of landscape with the hole tool - no matter where"). A hole is drawn by the landscape's hole material, which cuts the
+  ground where the hole layer is set. Each landscape piece draws through its own material compiled in the Unreal
+  editor for exactly its set of ground layers; only the pieces whose material was built with the hole layer (172 of the
+  island's 1,600) can show a hole, and a mod cannot compile a new one. Checked on the game's files: of the 1,426 pieces
+  without the layer, only 4 have a compiled hole material with their layers in their own tile, so holes everywhere are
+  not possible from a mod. The collision still opens anywhere (players fall through). The Landscape menu now gives the
+  reason, and the line under the toolbar on amber ground says that this piece has no hole layer and a mod cannot add
+  one, in all ten languages.
+- **The Map says what it does not draw as the game does** (Discord, a user, 2026-10-20: "is it normal that the
+  grass dissapears? ... please tell me how to fix this"). The game's short ground grass and flowers are scattered while
+  you play from the landscape's grass layers: about 255,000 of them within 100 m of a B_4 meadow, too many for the
+  studio to draw. The Map does not draw them, so meadows look bare there; they are in the game and your edits leave them
+  as they are (except Clear grass under an object you place). Objects drawn plain light grey are ones whose colour the
+  studio cannot read from the game's material; the game draws them in colour. The Landscape menu now says both ("Not
+  drawn as in the game"), and the Quality tooltip says the ground near the camera is drawn from every height point, in
+  all ten languages.
+- **The Projects page's export card no longer says to copy the pak into the game's Paks folder.** The game refuses mod
+  paks there; the line now names `SCUM\Content\Paks\~mods` and points at Check my install, in all ten languages.
+- **A plane's speed can be changed: its propeller's pull is on the Vehicles page** (Discord #modding-help, a user:
+  "I change the speed of the plane but does not apply while ranger and ww is ok"). A car goes faster with its engine (its
+  torque curve, RPM and gears), and the page offered the same values for the planes, but a plane does not fly on them:
+  none of its wheels is driven, so they only roll it on the ground. Read from the game's code (`SCUM.exe` and
+  `SCUMServer.exe` 1.3.4): each frame the game pushes a plane at its propeller with `_propellerForce` x throttle x (the
+  plane's `_maxVelocity` / its class default's), and `_maxVelocity` is the speed it cannot pass. No plane file stores
+  `_propellerForce` (the code's 180000 applies), so the page never listed it; and a new `_maxVelocity` in the plane's
+  file changes the class default as well, so it does not make the plane pull harder. The Kinglet Duster's and Mariner's
+  key values are now Propeller force (listed with the game's 180000, inherited from Airplane; a change writes it into the
+  plane's own defaults) and Max velocity, beside reverse taxiing, health, fuel and trade; the engine, gear and wheel values
+  stay under Key stats off. A note over the values says what each does (8332.5 cm/s = 300 km/h; to fly faster raise
+  Propeller force, and Max velocity too above 300 km/h), and one over a plane clone's engine part says the pull is not
+  there. Checked with the game's files: a Duster clone with twice the pull and 450 km/h has `_propellerForce` 360000 and
+  `_maxVelocity` 12500 in its class defaults (read back by CUE4Parse, the game's reader), in the client's and the
+  dedicated server's cook; the game's planes are not in the mod. How fast the clone flies only the game shows.
+- **What a bag holds is on the Items page: its rows, columns and weight limit** (a user: "I see some limits like
+  changing a backpack how much size have inside, load capacity"). A bag's (and a vest's, a pair of trousers') room is the
+  grid of its entity setup: `NumRows`, `NumColumns`, `MaxContainedWeight` (kg) and `HasContainedWeightLimit`. They were
+  listed only with Key stats off and only where the item's own file stores them: 195 of the game's 444 grids store their
+  size, a colour variant takes its parent's (`Backpack_02_02` from `Backpack_02_01`), and where no file stores a weight
+  limit the game's code holds the bag to 10 kg (the Improvised Courier Backpack: 6 x 6 cells, 10 kg). The four are now
+  key values of the Entity setup, stored or inherited (from the parent's grid, or the code's 1 x 1 cells, 10 kg and limit
+  on, read from its constructor), a change of an inherited one is written into the item's own grid, and a note says what
+  they are. Rows and columns are one byte each in the game file, so they take at most 255: the row says so before Apply
+  (the note too), and the CLI and the MCP tool refuse a bigger number; a whole number that does not fit its value in the
+  file is refused the same way on every page (it would have stopped every edit of the item at export). Checked with the
+  game's files: the Assault Backpack shows 14 x 8 and 50 kg, the variant 10 x 8 and 40 kg from its parent; 256 rows is an
+  error and nothing is recorded; clones made 255 x 10 with 100 kg and 8 x 255 with 25 kg have exactly that in their grids
+  (read back by CUE4Parse); the game's bags are not in the mod.
+- **Every item, weapon and vehicle of the game can be cloned, the M16A4 Premium too** (r39 diagnosis of a user's
+  thread: "a clone of Weapon_M16A4_Premium is not built at all"). In 3.5.1, 22 of the game's 2,823 items and weapons could
+  be cloned on their page and were then left out of the pak at export ("not created", in the report only): the M16A4
+  Premium, the Trench Gun and its parts, the DEagle .50, the SF19, the Hunter 85, the AS Val, its magazine and the VSS, the
+  Scout and Tang Dao knives, the .22 and .38 rounds, two Cruiser wheels and the improvised motorcycle wheel, the Mosin
+  bayonet, a cap, two log sheds and two fishing lines; and so were 3 of the 18 vehicles, the Cruiser and Dirtbike
+  motorbikes and the Tractor. Three causes: a numbered part of the family
+  (`MI_M16_Apocalypso_2`, which the game stores as the name `MI_M16_Apocalypso` with number 3) was renamed `…_v2`, which
+  changed that number, so the copy of a mesh that names its material by it refused (the material's slot name in the
+  mesh's own data, or two chance bytes in its vertex data); a material named in another case than its own file
+  (`MI_Scout_Met` and `MI_Scout_MEt`, one name to the game) was not renamed in the copy; and a numbered object of the
+  item's class (`LogShed_1_C_1`) was not renamed with it. A numbered part now keeps its number
+  (`<Clone>_MI_M16_Apocalypso_2`), a mesh's material slot names follow the material, names are matched in any case as the
+  game does, and a package path found by chance in a mesh's data no longer stops the copy. A clone that still could not
+  be built is refused when it is made, with the reason (Items, Weapons and Vehicles pages, the CLI and the MCP tool); it
+  was dropped at export. Checked with the game's files: the export builds a clone of each of the 2,841 items, weapons and
+  vehicles (the M16A4 Premium's also passes the package check); the M16A4 Premium's clone exports with its own skin mesh
+  wearing its own material and is registered so #SpawnItem finds it under its new name (no HiddenFromAdminCommands tag).
+  A clone made with 3.5.1 keeps building: each clone with a numbered part, planned as 3.5.1 planned it, builds whenever
+  3.5.1 built it, and those of the M16A4 Premium and the Trench Gun now build too; one whose numbered part got a `_v` name
+  can still be left out (the SF19's): the export's warning now says to remove it and clone again. A DLC item's clone may
+  still be refused by the game's own DLC check.
+- **Stickers from your own pictures: any PNG or JPG is kept the same way, and what cannot work says why** (owner: "the
+  external stickers, the PNG files, sometimes do not work when we put them"). Without his pictures the failing case was
+  not reproduced: 3.5.1 read all 16 kinds of picture tried (8-bit RGBA, RGB, 16-bit, palette, grey, grey with alpha,
+  interlaced, gamma and colour profile, 1 x 1, 300 x 200, 333 x 77, 8192 x 8192, CMYK JPG, progressive JPG, EXIF-turned JPG,
+  WebP named .png). What it did wrong: it kept the user's file as it was and read it again for every use, so a phone
+  photo came out sideways (its EXIF turn was not applied), an 8192 x 8192 picture was decoded whole for its 96-pixel tile
+  (256 MB) and again for the car, and a file that could not be used said only "cannot read". A picture is now kept as an
+  8-bit RGBA PNG of at most 2048 pixels (the size of the car's texture it is baked into), upright (a colour profile is
+  dropped, not converted: a wide-gamut picture can shift a little); what cannot work says what is wrong and what to do
+  (not a picture the studio reads, damaged, more than 8192 pixels on a side, fully transparent). The Add sticker dialog
+  offers every kind it reads (PNG, JPG, WebP, BMP, GIF, TGA, TIFF and SVG). A sticker added with 3.5.1 stays as it was
+  kept (a sideways photo stays sideways): add such a picture again. A sticker never ships as a texture of its own: Apply
+  decals bakes it into the clone's colour texture (the Rager's `T_Rager_Outer_D`: 2048 x 2048, DXT1, 12 mips) and colour
+  mask. Apply decals now also writes the colour texture of a material that has no colour mask, and a decal on a part
+  whose material Apply decals cannot write (not the clone's own, or without a colour texture: it shows in the studio and
+  never reaches the game) is named when it is put there and on Apply decals. Checked: the 16 kinds go through Add sticker
+  onto a car; on the game's files a Rager clone with one of each exports its colour texture in the game's format, size
+  and mips, decoded with the stickers in it.
+- **Map: "Robot out, NPC area in" writes the NPC area the way the game writes its own** (a user on Discord: "When
+  replacing robots with NPCs, NPCs do not appear in the game"). The robot was removed and the posts and the zone settings
+  were written correctly, for client and server, but the NPC area was a second threat zone laid inside the base's own zone,
+  something no zone of the island does (0 of 294 overlap); the base's zone most likely kept running as before, so the only
+  change in the game was the missing robot. The NPC area is now a sub-zone of the smallest threat zone of the island that
+  holds every post (on the barracks: `MTZ_POI_Military_Base`, zone 222), written as the island's NPC-only areas are
+  (`HTZ_Military_TV_Bunker_NPC`: one box, priority 1), and its own settings copy runs one encounter at a time as theirs
+  do; only where no threat zone covers the posts is it still a zone of its own. The Spawns page lists a zone's sub-zones on
+  its card. Exported page by page, the Map pak (robot removed) and the Spawns pak (posts, area, settings) now name each
+  other in their install notes. The panel says plainly what to expect, in every language: SCUM spawns 1 to 3 NPCs only
+  while a player walks into the area, 30 to 200 m ahead and out of view, then the area rests 20 to 30 minutes; they leave
+  with the players, a character under new-player protection (its first 2 hours on a server) gets none, they may bring
+  zombies, and there is never one NPC standing on each post (the button was "Replace with NPC guards"). Checked with the
+  game's files: the barracks export (client and server role; the server's island data is the same file) holds the same
+  294 zones, zone 222 one more sub-zone over the posts on the copy's settings, and the island data rebuilds byte for byte. Whether the game spawns the NPCs there only a game
+  test shows (walk towards the posts from about 150 m with a character older than 2 hours, then `#ListSpawnedArmedNPCs`).
+- **The ZIL trucks' tiles on the Assets page are painted again, not white** (Discord, a user, 3.5.0, passed on by the
+  owner: every "zil" tile white while the 3D view showed the truck textured). Their colour maps are streaming virtual
+  textures: 3.4.0 could not decode them and drew the tiles in the material's white surface colour, and 3.5.0, which
+  decodes them, kept the tiles under the same cache name and showed 3.4.0's white pictures on (any model or Blueprint
+  tile 3.4.0 had made of such a texture; the 3D view is never cached, so it was right). The thumbnail cache now names
+  each tile also by the version of the model loader and of the texture decoder, so an update that changes what a tile
+  looks like makes it again once; this one makes every tile again the first time it is shown. The tiles sit in one
+  folder per version (`cache\thumbnails\v7.2.1`), and what earlier versions left in the cache folder (5,300 pictures,
+  68 MB on the owner's PC) is deleted in the background.
+- **The railway is drawn with its sleepers and ballast, not white** (owner, 3.5.1: "the rails are white"): the track bed
+  of `RailRoad_01`, and the railway on the arch bridge `SM_RailBridge_Arch`, were near white in the Assets tile, the 3D
+  view and on the Map. Their material `M_Railroad` names no colour texture, so the studio looks among the textures the
+  material uses, and the first colour map there is the landscape's ice layer (`T_Ice_D`, which the game lays over the
+  track in winter), listed before the track's own `T_Tracks_01_D`. That look now takes a colour map from the material's
+  own folder first and never a weather layer (ice, snow, rain); an ice layer named as a texture parameter is no colour
+  either. Checked against all 16,137 materials of the game: exactly these two picks change (`M_Railroad` and its
+  instance `Mi_railRoad_01_PX`); no other material's colour or normal map moves, and the cliffs and rocks keep the
+  landscape's rock texture.
+- **A clone of an item the game hides from `#SpawnItem` can be spawned** (Discord 2026-10-18, a user's thread "'ak47_gold'
+  is not allowed to be spawned"; found while checking why): 246 of the game's items (Weapon_M16A4_Premium and the other
+  Premium weapons, Cal_84_AT4_HEAT, KitchenStove, Bear_Pow_01 …) store `_visibleToAdminCommands = false` in their class
+  defaults, cooked into the registry tag `HiddenFromAdminCommands`, and the game refuses `#SpawnItem` / `#SpawnVehicle` for
+  any record that carries it. The export copied every tag of the template, so a clone of such an item was refused however
+  well it was installed, and nothing said why. A clone is made to be spawned under its new name: its class defaults now say
+  true (listed among the export's applied values) and its own records carry no such tag; the template's record and the
+  clone's other packages (its entity setup) stay as the game has them. Checked on the game files with KitchenStove.
+  A DLC item's clone may still be refused by the game's own DLC check.
+- **After a page export without a server folder, the install line says that a dedicated server cannot use the client pak**
+  (Discord, a user: his clone worked in single player and not on his server; the server needs the Server folder's pak
+  in its `~mods` and `-fileopenlog`).
+
+## [3.5.1] - 2026-10-18
+
+### Fixes
+- **The in-app install step said the wrong folder** (Discord, queens_annes_revenge2072: "I tried putting the pak and sig in
+  the Paks folder but it told me to remove them"): step 3 under a clone's spawn command told users to copy the pak into
+  `SCUM\Content\Paks`; the game refuses paks there. It now says `SCUM\Content\Paks\~mods` (make the folder when it is
+  missing), in all ten languages.
+- **The Vehicles Textures tab no longer closes the app on a material with a cube map** (owner, 2026-10-19, his Rager
+  clone): a car material's reflection slot holds a cube map (`T_CubeMap_Dummy_01`), which the tab listed as a 2D texture
+  and then failed to load. Slots that hold no 2D texture are left out (no picture could replace them anyway).
+- **Spawns: the island map is now shown the way the game shows it** (D4 top-left, Z0 bottom-right: the game's map texture
+  turned 180 degrees, as the game's spawn screen draws it). It was upside down and mirrored; the spawn places, their
+  coordinates, the sector names and the exported mod were right all along (reported on Discord). On the turned map the
+  arrow keys still move a picked place the way they point on screen and its arrow points the way it faces.
+- **A placed object the game does not have no longer stops the whole export** (O Piqueno, 3.4.0: the package check
+  refused his Map project because A_3_TV_Base_Entrance imported `LakeWaterSurface_B_4`, a lake surface the game does not
+  have, neither the client nor the dedicated server; its lakes are `LakeWaterSurface_B_1`, `_B_2_4`, `_B_3_4`, `_C_1` …).
+  The Map's *Add object* box (and Ctrl+V with a copied path) took any `/Game/...` path as it was typed and placed it, and
+  the export wrote the import blindly (3.5.0 too). The box now says "Object not found" for a path the open game files
+  lack, and the export leaves such an actor out with a warning that names it and its mesh ("neither the game nor the mod
+  has the mesh …") and writes the pak. The package check stays as strict: an import the export itself would break still
+  stops the pak. Checked with the game's files: the same project now exports, its real lake in place.
+- **Every export lands in the mod's own folder, holding only what goes into the game** (owner: two cabins exported from
+  the Craftables page and then the whole project left four staging folders, loose notes and the same craftables twice in
+  his export folder, "it makes me dizzy"). The whole project's paks go to `<export folder>\<Mod>\Client` (and `\Server`),
+  a page's pak to `<export folder>\<Mod> - pages\Client`: the paks, their `.sig`, `export-report.md` and the economy file,
+  nothing else. The staged files and the exporter's own notes sit in a hidden `.work` folder beside them, and
+  `package-check.txt` appears next to the report only when the check stopped an export. One page pak alone no longer gets
+  a Registry pak beside it (it carries its own records; the Registry pak comes with the second page pak). The report now
+  starts with what to copy and where. A successful export tidies what earlier versions left loose in `<export folder>\Client`
+  (this mod's paks, the staging folders); another mod's paks stay, and an old pak the running game or server holds open
+  stays without turning the export into an error. A Craftables pak has its report too: a project of craftables only
+  writes the folder's `export-report.md` (over an earlier refusal's, naming an earlier export's project pak still there),
+  the Craftables page's pak its own, and beside the project's pak it adds its section to that pak's report. After a refusal
+  the Projects page's Open folder opens the mod's folder, where the report is.
+- **A big built craftable can be placed: the cabin's ghost can turn green** (owner, 3.5.0: "it is always red, Overlapping
+  character, I am standing inside it"). The game centres the placement ghost on the point you aim at, 2-3 m ahead, so a
+  15 m cabin surrounds you, its floor meets your feet, and the ghost overlaps you: every placeable recipe of the game checks
+  mesh against mesh. The game's own cure for a false overlap is to shrink what is checked (its wall lamps scale the collision
+  mesh to 0.6, the workbench to 0.9, the chair draws its box in 5 cm), and the export now does the same for a big building:
+  its collision mesh is scaled and each side of its box drawn in to 1.5 m from its middle (per side and per axis, so a
+  building longer than it is wide keeps a box), so you may stand inside the ghost; a rock or
+  a tree at its middle still refuses it, the ground traces keep the whole footprint, and what is built keeps its full
+  collision. A furniture craftable of 3 m and more, and an element the game ships no recipe for (its cabins), also copy the
+  game's Large Log Shed recipe instead of the chair's (a building's ground offset, no placing over items); the element, its
+  name, picture, ingredients and section stay yours. Only a game test shows the ghost green: the export log says so. *Place
+  in front* (experimental) is left out there: the game added that offset in world directions after finding the ground, so
+  the ghost floated in the air and did not turn with you (his test); it stays for mid-sized furniture only. A model imported
+  from a 3D file and a station of 3 m and more get the drawn-in check too (a station keeps the workbench's recipe). The Craftables
+  page also has **Export** in its header.
+- **A refused export no longer looks like nothing happened** (Discord, O Piqueno, 3.4.0: "the .pak file is not updating"):
+  the package check stopped his export, and 3.4.0 only said so in a 12-second toast in the status bar, left the earlier
+  pak, .sig and export-report.md in the folder and kept showing the earlier export on the Projects page. Now the report
+  is rewritten as NOT EXPORTED with the problems and says that the pak in the folder is the EARLIER export (its name and
+  the time it was written) and was NOT updated. A refused export never renames, moves or deletes that pak or its .sig, so
+  a mod already in a mods folder keeps working as it was. That holds for the server too: when only the server's pak is
+  refused (the client's passed), the earlier server paks stay in the Server folder, and a Craftables pak copied into the
+  server's mods folder stays there (until 3.5.0 both were deleted as no longer matching the new client pak; a server
+  Craftables pak that failed for another reason than the package check still removes the old copy there). The Projects
+  page shows the refusal with an Open package-check.txt button, and the error toast stays until it is closed. A refused
+  server pak shows the same way: the Last export card lists the client pak, then says the server pak was NOT written,
+  with its problems, its report and the Open package-check.txt button; the install line (Projects and Map pages, a
+  page's *Export this page*) no longer tells to set the Server folder (it is set), and its error toast stays too (it was
+  a 12-second warning saying no pak at all had been written). The Craftables and Registry paks' refusals have a report
+  of their own, and it goes with the pak when that pak is no longer wanted (every craftable removed or the Craftables
+  box unticked, no page pak left for the Registry pak), so the folder never says NOT EXPORTED about a pak that is gone. item-spawners.txt is written only after the pak, so
+  the next good export still names the spawners removed since the last good one.
+- **The server pak's install text says to start the server with `-fileopenlog`** (3.5.0 check on a real dedicated server,
+  build 25803875): the dedicated server refuses every pak in its `~mods` ("Pak file or matching sig file integrity
+  compromised") and quits within a second unless it is started with `-fileopenlog`; with it the same paks load. The
+  Install section of a server pak's export report (the whole project's and each page's) and the app's install line after
+  *Export this page* now say so, as the trader and economy notes already did.
+- **An export says when a vehicle's stickers are drawn but not in the pak** (owner: his cloned Rager showed its stickers in
+  the studio and none in the game). The Decals tab saves what you draw as you draw it, but the pak only gets the stickers
+  after *Apply decals* bakes them into the clone's own textures; he had painted the car and exported without it. Now every
+  export (the whole project, *Export this page*) names such a clone in a toast and in the report's warnings: "drawn but not
+  applied", or "changed after they were last applied" when the stickers moved after the last apply (pressing *Apply decals*
+  again clears it even when the stickers were nudged and put back; stickers applied and then all hidden are named too, the
+  pak still has them). The Arabic Decals tab also says stickers (ملصقات) instead of tattoos.
+- **Apply paint no longer fails over a value that did not change.** A paint value whose text only differed in form from the
+  recorded one (the colour picker dragged and brought back) made the journal refuse the whole paint with "The value is
+  unchanged" (owner, 2026-10-18). Such a value is left out; with nothing else to record the panel quietly goes back to what
+  is recorded, and after an apply that recorded the other values it no longer stays pending over it.
+
 ## [3.5.0] - 2026-10-17
 
 ### New

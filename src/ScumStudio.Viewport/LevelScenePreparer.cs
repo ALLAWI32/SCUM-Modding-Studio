@@ -1189,6 +1189,22 @@ public sealed class LevelScenePreparer
             }
 
             var (info, chain, editorOnly) = (loaded.Info!, loaded.Chain!, loaded.EditorOnly);
+
+            // A LOD whose indices point into no vertices (SK_SentryRobot_01 in SCUM 0.6 files) is nothing to draw: left out
+            // here, it never reaches the GPU, where it failed every frame of the map view and stopped the streaming.
+            var (lods, screenSizes, problem) = BrokenMeshes.Usable(chain);
+            if (problem is not null)
+            {
+                BrokenMeshes.Warn(_logger, meshPath, problem);
+            }
+
+            if (lods.Count == 0)
+            {
+                reason = "broken mesh data";
+                return false;
+            }
+
+            chain = problem is null ? chain : new MeshLodChain(lods, screenSizes);
             var materialTextures = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             var alphaCutoffs = new Dictionary<string, float>(StringComparer.OrdinalIgnoreCase);
             var tints = new Dictionary<string, Vector4>(StringComparer.OrdinalIgnoreCase);
@@ -1248,6 +1264,19 @@ public sealed class LevelScenePreparer
         catch (Exception) when (lod > 0)
         {
             chain = MeshExtractor.ExtractLods(obj, 0, options.MaxLods);
+        }
+
+        if (lod > 0 && BrokenMeshes.Usable(chain).Lods.Count == 0)
+        {
+            // A stand-in's coarser LOD read as nothing to draw (older game files): its finest LOD may still be whole.
+            try
+            {
+                chain = MeshExtractor.ExtractLods(obj, 0, options.MaxLods);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                // the first chain stays: TryLoadMesh reports it
+            }
         }
 
         return new LoadedMesh(null, info, chain, editorOnly);

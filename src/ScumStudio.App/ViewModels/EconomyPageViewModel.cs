@@ -381,8 +381,9 @@ public sealed partial class EconomyPageViewModel : PageViewModel, ISearchablePag
         try
         {
             var economy = _store.ForExport();
-            var server = economy.SaveTo(Path.Combine(folder, ProjectExporter.ServerFolderName), withNote: true);
-            economy.SaveTo(Path.Combine(folder, ProjectExporter.ClientFolderName), withNote: true);
+            var modName = _services.Projects.Current?.Manifest.Name ?? "Economy"; // the project's own folder, like its paks
+            var server = economy.SaveTo(ProjectExporter.ExportFolder(folder, modName, pages: false, Level.Projects.ProjectSourceRole.Server), withNote: true);
+            economy.SaveTo(ProjectExporter.ExportFolder(folder, modName, pages: false, Level.Projects.ProjectSourceRole.Client), withNote: true);
             LastExportPath = server;
             _services.Notifications.Success(Loc.T("Economy.Exported"), Loc.F("Economy.ExportedDetail", server));
             _services.Logger.LogInformation("Economy written to {Path} (copy it to the server's SCUM\\Saved\\Config\\WindowsServer).", server);

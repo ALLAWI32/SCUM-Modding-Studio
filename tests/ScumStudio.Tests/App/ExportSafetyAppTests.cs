@@ -1,3 +1,4 @@
+using ScumStudio.App.Localization;
 using ScumStudio.App.Services;
 using ScumStudio.App.ViewModels;
 using ScumStudio.Level.Export;
@@ -9,7 +10,8 @@ namespace ScumStudio.Tests.App;
 
 /// <summary>
 /// The export's client/server pairing (D12, D13, D19: Qraox, taishan_song) and Setup's game folder (D10, Markus6789): an
-/// old server pak never stays beside a new client pak, a Craftables pak built for one side only is named, the install
+/// old server pak never stays beside a new client pak (unless the package check refused the new server pak: a refused
+/// export never deletes a pak), a Craftables pak built for one side only is named, the install
 /// rule is said plainly, and the dedicated server's Paks folder is refused as the game's. The Map pastes lights and effects
 /// anywhere and says when a volume cannot go into another level (D15, seviscache).
 /// </summary>
@@ -29,7 +31,7 @@ public sealed class ExportSafetyAppTests : IDisposable
     [Fact]
     public void AnExportWithoutAServerPakRemovesTheOldServerPaks()
     {
-        var server = Path.Combine(_dir, ProjectExporter.ServerFolderName);
+        var server = ProjectExporter.ExportFolder(_dir, "Mod", pages: false, ProjectSourceRole.Server);
         Directory.CreateDirectory(server);
         string[] old = ["pakchunk900-Mod_P.pak", "pakchunk900-Mod_P.sig", "pakchunk901-ModCraftables_P.pak", "pakchunk901-ModCraftables_P.sig"];
         foreach (var file in old)
@@ -47,6 +49,79 @@ public sealed class ExportSafetyAppTests : IDisposable
         var removed = ModExportService.RemoveStaleServerPaks(_dir, "Mod", 900, [client]);
         Assert.Equal(new[] { "pakchunk900-Mod_P.pak", "pakchunk900-Mod_P.sig" }, removed.Select(Path.GetFileName));
         Assert.Empty(Directory.EnumerateFiles(server));
+    }
+
+    /// <summary>
+    /// 3.5.1 verify (owner, r38: a refused export never renames, moves or deletes a pak): the client pak passed and the package
+    /// check refused the server pak. The Server folder's NOT EXPORTED report names the earlier server pak, so it and every other
+    /// server pak stay, byte for byte under their own names.
+    /// </summary>
+    [Fact]
+    public void ARefusedServerPakKeepsEveryEarlierServerPak()
+    {
+        var server = ProjectExporter.ExportFolder(_dir, "Mod", pages: false, ProjectSourceRole.Server); // the mod's own Server folder (3.5.1 layout)
+        Directory.CreateDirectory(server);
+        string[] old = ["pakchunk900-Mod_P.pak", "pakchunk900-Mod_P.sig", "pakchunk901-ModCraftables_P.pak", "pakchunk901-ModCraftables_P.sig"];
+        for (var i = 0; i < old.Length; i++)
+        {
+            File.WriteAllBytes(Path.Combine(server, old[i]), [(byte)(i + 1), 9]);
+        }
+
+        var refused = new ModValidationException(new ValidationResult { Problems = ["/Game/A: an import the server does not have"] });
+        Assert.Empty(ModExportService.RemoveStaleServerPaks(_dir, "Mod", 900, [Result(ProjectSourceRole.Client, "Mod")], refused));
+        Assert.Equal(old.Order(StringComparer.OrdinalIgnoreCase), Directory.GetFiles(server).Select(f => Path.GetFileName(f)!).Order(StringComparer.OrdinalIgnoreCase));
+        for (var i = 0; i < old.Length; i++)
+        {
+            Assert.Equal(new byte[] { (byte)(i + 1), 9 }, File.ReadAllBytes(Path.Combine(server, old[i])));
+        }
+
+        // The same folder without a refusal: the old server paks go (so the folder above is the one the service looks at).
+        Assert.Equal(4, ModExportService.RemoveStaleServerPaks(_dir, "Mod", 900, [Result(ProjectSourceRole.Client, "Mod")]).Count);
+        Assert.Empty(Directory.EnumerateFiles(server));
+    }
+
+    /// <summary>
+    /// Review 3.5.1: the Craftables pak an earlier one-click export copied into the server's mods folder goes when this
+    /// export's server cook built none for a reason other than the package check (as in 3.5.0: an old server Craftables pak
+    /// beside the new client one, D12, D13), and stays when the package check refused a server pak (a refused export never
+    /// deletes a pak, owner r38). 950678b kept it whenever a client Craftables pak was built.
+    /// </summary>
+    [Fact]
+    public void TheServerModsCraftablesCopyGoesUnlessTheServerPakWasRefused()
+    {
+        var mods = Directory.CreateDirectory(Path.Combine(_dir, "server_mods")).FullName;
+        string[] copy = ["pakchunk901-ModCraftables_P.pak", "pakchunk901-ModCraftables_P.sig"];
+        void Write()
+        {
+            foreach (var file in copy)
+            {
+                File.WriteAllBytes(Path.Combine(mods, file), [7]);
+            }
+        }
+
+        var clientMain = Result(ProjectSourceRole.Client, "Mod");
+        var clientCraft = Result(ProjectSourceRole.Client, "Mod" + CraftablesExporter.Suffix, 901);
+        var serverMain = Result(ProjectSourceRole.Server, "Mod");
+        var serverCraft = Result(ProjectSourceRole.Server, "Mod" + CraftablesExporter.Suffix, 901);
+        var refused = new ModValidationException(new ValidationResult { Problems = ["/Game/A: an import the server does not have"] });
+
+        // The server's Craftables cook failed (an unreadable file, no refusal): the old copy no longer matches.
+        Write();
+        Assert.Equal(copy.Order(StringComparer.Ordinal), ModExportService.RemoveStaleServerModsCraftables(mods, "Mod", 900, new ModExportResults([clientMain, clientCraft, serverMain]))
+            .Select(f => Path.GetFileName(f)!).Order(StringComparer.Ordinal));
+
+        // Refused: it stays, byte for byte. So it does beside this export's own server Craftables pak and without any server cook.
+        Write();
+        Assert.Empty(ModExportService.RemoveStaleServerModsCraftables(mods, "Mod", 900, new ModExportResults([clientMain, clientCraft, serverMain], refused)));
+        Assert.Empty(ModExportService.RemoveStaleServerModsCraftables(mods, "Mod", 900, new ModExportResults([clientMain, clientCraft, serverMain, serverCraft])));
+        Assert.Empty(ModExportService.RemoveStaleServerModsCraftables(mods, "Mod", 900, new ModExportResults([clientMain, clientCraft])));
+        Assert.All(copy, f => Assert.Equal(new byte[] { 7 }, File.ReadAllBytes(Path.Combine(mods, f))));
+
+        // A server cook without craftables, or nothing left to build at all: it goes.
+        Assert.Equal(2, ModExportService.RemoveStaleServerModsCraftables(mods, "Mod", 900, new ModExportResults([clientMain, serverMain])).Count);
+        Write();
+        Assert.Equal(2, ModExportService.RemoveStaleServerModsCraftables(mods, "Mod", 900, ModExportResults.None).Count);
+        Assert.Empty(ModExportService.RemoveStaleServerModsCraftables(null, "Mod", 900, ModExportResults.None));
     }
 
     /// <summary>
@@ -96,6 +171,34 @@ public sealed class ExportSafetyAppTests : IDisposable
         Assert.Contains("pakchunk900-Mod_P.pak + pakchunk901-ModCraftables_P.pak", note, StringComparison.Ordinal);
         Assert.Contains(@"Paks\~mods", note, StringComparison.Ordinal);
         Assert.NotEqual(ModExportService.InstallNote([clientMain]), note);
+    }
+
+    /// <summary>
+    /// Review 3.5.1: the package check refused the server pak (the client's passed, the Server folder is set). The install rule
+    /// (Projects page, Map page) and a page's export line say that pak was NOT written, never to set the Server folder, and a
+    /// client Craftables pak without its server one is the refusal's to say, not a missing Server folder.
+    /// </summary>
+    [Fact]
+    public void ARefusedServerPakIsNotSaidAsAClientOnlyExport()
+    {
+        var clientMain = Result(ProjectSourceRole.Client, "Mod");
+        var clientCraft = Result(ProjectSourceRole.Client, "Mod" + CraftablesExporter.Suffix, 901);
+        var serverPak = Path.Combine(_dir, ProjectExporter.ServerFolderName, ProjectExporter.PakFileName("Mod", 900));
+        var refused = new ModValidationException(new ValidationResult { Problems = ["/Game/A: an import the server does not have"] }, null, serverPak, null);
+
+        var note = ModExportService.InstallNote([clientMain, clientCraft], refused);
+        Assert.Contains("pakchunk900-Mod_P.pak + pakchunk901-ModCraftables_P.pak", note, StringComparison.Ordinal);
+        Assert.Contains("pakchunk900-Mod_P.pak was NOT written", note, StringComparison.Ordinal);
+        Assert.DoesNotContain("Server folder", note, StringComparison.Ordinal);
+        Assert.Contains("Server folder", ModExportService.InstallNote([clientMain, clientCraft]), StringComparison.Ordinal); // no server cook at all
+
+        Assert.Empty(ModExportService.ParityProblems([clientMain, clientCraft], refused));
+        Assert.Single(ModExportService.ParityProblems([clientMain, clientCraft]));
+
+        var line = ModuleExportViewModel.Describe([clientMain], [], refused);
+        Assert.Contains("pakchunk900-Mod_P.pak was NOT written", line, StringComparison.Ordinal);
+        Assert.DoesNotContain(Loc.T("Export.Module.NoServer"), line, StringComparison.Ordinal);
+        Assert.Contains(Loc.T("Export.Module.NoServer"), ModuleExportViewModel.Describe([clientMain], []), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -150,7 +253,7 @@ public sealed class ExportSafetyAppTests : IDisposable
         Role = role,
         ModName = modName,
         StagingDirectory = Path.Combine(_dir, "staging"),
-        PakPath = Path.Combine(_dir, ProjectExporter.RoleFolder(role), ProjectExporter.PakFileName(modName, chunk)),
+        PakPath = Path.Combine(ProjectExporter.ExportFolder(_dir, modName, pages: false, role), ProjectExporter.PakFileName(modName, chunk)),
         Levels = [],
         Warnings = [],
     };

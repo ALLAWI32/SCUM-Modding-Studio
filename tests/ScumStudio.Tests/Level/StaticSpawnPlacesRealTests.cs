@@ -239,7 +239,7 @@ public sealed class StaticSpawnPlacesRealTests
             var refused = await Assert.ThrowsAsync<InvalidOperationException>(() => exporter.ExportAsync(state, "Places", server,
                 new ScumStudio.Level.Export.ExportOptions { OutputDirectory = dir, WritePak = false }, ScumStudio.Level.Projects.ProjectSourceRole.Server));
             Assert.Contains("VehicleSpawnPoints", refused.Message, StringComparison.Ordinal);
-            Assert.Contains("none of the removed, moved, re-chosen or copied stock places were written", refused.Message, StringComparison.Ordinal);
+            Assert.Contains("none of the removed, moved, re-chosen or copied stock places and no sub-zone of a stock zone were written", refused.Message, StringComparison.Ordinal);
         }
         finally
         {

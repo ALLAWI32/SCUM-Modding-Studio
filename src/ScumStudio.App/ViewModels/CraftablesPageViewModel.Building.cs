@@ -23,7 +23,8 @@ public sealed partial class CraftableRowViewModel
 
     /// <summary>The names whose values follow the kind and the element family.</summary>
     internal static readonly string[] BuildingNames =
-        [nameof(CanBeLikeGame), nameof(LikeGameText), nameof(BorrowsRecipe), nameof(BorrowedText), nameof(GameNeedsFlag), nameof(NeedsFlag), nameof(NeedsFlagStock), nameof(IsLargeTemplate)];
+        [nameof(CanBeLikeGame), nameof(LikeGameText), nameof(BorrowsRecipe), nameof(BorrowedText), nameof(GameNeedsFlag), nameof(NeedsFlag), nameof(NeedsFlagStock), nameof(IsLargeTemplate), nameof(LargeTemplateCaption),
+         nameof(InFrontOffered), nameof(PlaceInFront), nameof(InFrontSuggested)];
 
     /// <summary>The names of "Place in front".</summary>
     private static readonly string[] InFrontNames =
@@ -97,6 +98,12 @@ public sealed partial class CraftableRowViewModel
     /// <summary>A furniture or station craftable this large is placed like the game's large buildings (<see cref="CraftablesPlanner.LargeBuildingMeters"/>).</summary>
     public bool IsLargeTemplate => Kind is CraftKind.Furniture or CraftKind.Station && SizeMeters >= CraftablesPlanner.LargeBuildingMeters;
 
+    /// <summary>
+    /// What <see cref="IsLargeTemplate"/> means for it: furniture copies the Large Log Shed's recipe, a station keeps the workbench's
+    /// (a station's); both get the drawn-in placement check (review 3.5.1: the caption promised stations the shed's recipe).
+    /// </summary>
+    public string LargeTemplateCaption => Loc.T(Kind == CraftKind.Station ? "Craftables.Building.LargeStation" : "Craftables.Building.Large");
+
     /// <summary>The direction items of <see cref="InFrontAxisIndex"/>, in <see cref="InFrontAxis"/> order.</summary>
     public static IReadOnlyList<string> InFrontAxes { get; } = ["+X", "−X", "+Y", "−Y"];
 
@@ -106,7 +113,7 @@ public sealed partial class CraftableRowViewModel
     /// </summary>
     public bool PlaceInFront
     {
-        get => InFrontModel is not null;
+        get => InFrontOffered && InFrontModel is not null;
         set
         {
             if (value == PlaceInFront)
@@ -152,8 +159,15 @@ public sealed partial class CraftableRowViewModel
     /// <summary>"Automatic for its size: 8.5 m".</summary>
     public string InFrontAuto => Loc.F("Craftables.Building.InFront.Auto", CraftablesPlanner.AutoInFrontMeters(SizeMeters).ToString("0.#", CultureInfo.CurrentCulture));
 
-    /// <summary>Off, and large enough that the game's placement would surround the player.</summary>
-    public bool InFrontSuggested => !PlaceInFront && CraftablesPlanner.AutoInFrontMeters(SizeMeters) > 0;
+    /// <summary>
+    /// "Place in front" is offered only where nothing else keeps a big ghost off the player: not for large furniture and not
+    /// for an element built on the Large Log Shed's recipe (<see cref="CraftablesPlanner.LargeBuildingRecipe"/>: the ghost's
+    /// walls are checked, not its box, so the player may stand inside it).
+    /// </summary>
+    public bool InFrontOffered => !IsLargeTemplate && !BorrowsRecipe;
+
+    /// <summary>Offered, off, and large enough that the game's placement would surround the player.</summary>
+    public bool InFrontSuggested => InFrontOffered && !PlaceInFront && CraftablesPlanner.AutoInFrontMeters(SizeMeters) > 0;
 
     /// <summary>"Suggested for its size (15 m)".</summary>
     public string InFrontSuggestion => Loc.F("Craftables.Building.InFront.Suggested", SizeMeters.ToString("0.#", CultureInfo.CurrentCulture));

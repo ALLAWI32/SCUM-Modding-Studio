@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Globalization;
+using ScumStudio.Core.Mathematics;
 using ScumStudio.Formats.Packages;
 using ScumStudio.Formats.Properties;
 using ScumStudio.Modding.Cloning;
@@ -11,14 +12,21 @@ namespace ScumStudio.Modding.Tuning;
 /// (<c>MeshSetup.Mesh</c>, a soft path; a static mesh stays static and a skeletal one skeletal, because doors and hoods
 /// animate on their skeleton), the socket it hangs on (<c>ParentSocket</c>) and the slots of the parts it holds
 /// (<c>_slots</c>: a new slot is a copy of a donor slot that takes one new class). Edits: <c>#MeshSetup.Mesh</c>,
-/// <c>#ParentSocket</c>, <c>#Slots[n]</c> = <c>class path|donor slot</c> (n = the slot count: slots are only appended).
-/// A part added to the car is a rename-clone of a donor part of the same vehicle that carries no gameplay system
+/// <c>#ParentSocket</c>, <c>#Slots[n]</c> = <c>class path|donor slot</c> (n = the slot count: slots are only appended),
+/// <c>#MeshSetup.Offset</c> = where the model sits on the socket (<see cref="PartModelFit"/>: a new model in place of the
+/// game's). A part added to the car is a rename-clone of a donor part of the same vehicle that carries no gameplay system
 /// (<see cref="DefaultDonor"/>) under <see cref="CustomName"/>, given these edits.
 /// </summary>
 public static class VehicleAttachmentEdits
 {
     /// <summary>Path of the part's model.</summary>
     public const string MeshPath = "#MeshSetup.Mesh";
+
+    /// <summary>
+    /// Path of the transform between the part's socket and its model (<c>MeshSetup.Offset</c>, a tagged <c>Transform</c>;
+    /// value <see cref="PartModelFit.Format"/>).
+    /// </summary>
+    public const string OffsetPath = "#MeshSetup.Offset";
 
     /// <summary>Path of the socket the part hangs on.</summary>
     public const string SocketPath = "#ParentSocket";
@@ -33,7 +41,7 @@ public static class VehicleAttachmentEdits
     public const string DefaultDonor = "RoofRack";
 
     /// <summary>True for an edit this class writes.</summary>
-    public static bool IsEdit(string path) => path is MeshPath or SocketPath || path.StartsWith(SlotsPrefix, StringComparison.Ordinal);
+    public static bool IsEdit(string path) => path is MeshPath or OffsetPath or SocketPath || path.StartsWith(SlotsPrefix, StringComparison.Ordinal);
 
     /// <summary>The path of slot <paramref name="slot"/>.</summary>
     public static string SlotPath(int slot) => string.Create(CultureInfo.InvariantCulture, $"{SlotsPrefix}{slot}]");
@@ -47,6 +55,23 @@ public static class VehicleAttachmentEdits
     /// <summary>The part's model (<c>MeshSetup.Mesh</c> of its defaults), or null.</summary>
     public static string? MeshOf(CookedPackage attachment) =>
         Cdo(attachment) is var cdo && cdo >= 0 && Mesh(attachment.ReadProperties(cdo)) is { } soft && soft.AssetPath is { Length: > 0 } path && path != "None" ? path : null;
+
+    /// <summary>The part's <c>MeshSetup.Offset</c> as its defaults store it (absent members at their defaults), or null when they store none.</summary>
+    public static FTransform? OffsetOf(CookedPackage attachment)
+    {
+        ArgumentNullException.ThrowIfNull(attachment);
+        var cdo = Cdo(attachment);
+        if (cdo < 0 || (attachment.ReadProperties(cdo).Find("MeshSetup")?.Value as StructValue)?.Find("Offset")?.Value is not StructValue offset)
+        {
+            return null;
+        }
+
+        var q = offset.Find("Rotation")?.Value as QuatValue;
+        var t = offset.Find("Translation")?.Value as VectorValue;
+        var s = offset.Find("Scale3D")?.Value as VectorValue;
+        return new FTransform(q is null ? FQuat.Identity : new FQuat(q.X, q.Y, q.Z, q.W), t is null ? FVector.Zero : new FVector(t.X, t.Y, t.Z),
+            s is null ? FVector.One : new FVector(s.X, s.Y, s.Z));
+    }
 
     /// <summary>The socket (or bone) the part hangs on, or null when its defaults do not store one.</summary>
     public static string? ParentSocketOf(CookedPackage attachment) =>
@@ -151,6 +176,10 @@ public static class VehicleAttachmentEdits
                     ? Patch(payload, n.Offset, socket)
                     : VehicleSockets.Insert(payload, block.EndOffset - 8, VehicleSockets.NameTag(tables, "ParentSocket", socket));
             }
+            else if (edit.Path == OffsetPath)
+            {
+                payload = WriteOffset(attachment, tables, payload, Block(), value);
+            }
             else
             {
                 payload = AppendSlot(attachment, tables, payload, Block(), edit.Path, value);
@@ -168,6 +197,7 @@ public static class VehicleAttachmentEdits
             {
                 MeshPath => MeshOf(check) == value,
                 SocketPath => ParentSocketOf(check) == value,
+                OffsetPath => OffsetOf(check) is { } offset && offset.Equals(PartModelFit.Parse(value), 1e-4f),
                 _ => SlotIndex(edit.Path) is var s && s >= 0 && s < slots.Count && slots[s].SequenceEqual([value.Split('|')[0]]),
             };
             if (!ok)
@@ -183,6 +213,76 @@ public static class VehicleAttachmentEdits
     {
         VehicleSockets.WriteName(payload, offset, name);
         return payload;
+    }
+
+    /// <summary>
+    /// <c>MeshSetup.Offset</c> written whole (Rotation as a native Quat, Translation and Scale3D as Vectors, then None): an
+    /// offset the part has is replaced, a missing one is added before the end of <c>MeshSetup</c> (its size grows).
+    /// </summary>
+    private static byte[] WriteOffset(CookedPackage attachment, PackageTables tables, byte[] payload, PropertyBlock block, string value)
+    {
+        FTransform transform;
+        try
+        {
+            transform = PartModelFit.Parse(value);
+        }
+        catch (FormatException ex)
+        {
+            throw new InvalidOperationException($"{attachment.BasePath}: '{value}' is not a transform ({ex.Message}).", ex);
+        }
+
+        if (block.Find("MeshSetup") is not { Value: StructValue setup } tag)
+        {
+            throw new InvalidOperationException($"{attachment.BasePath}: the part has no MeshSetup.");
+        }
+
+        var (t, s) = (transform.Translation, transform.Scale3D);
+        byte[] members =
+        [
+            .. QuatTag(tables, "Rotation", transform.Rotation),
+            .. VehicleSockets.StructTag(tables, "Translation", "Vector", new System.Numerics.Vector3(t.X, t.Y, t.Z)),
+            .. VehicleSockets.StructTag(tables, "Scale3D", "Vector", new System.Numerics.Vector3(s.X, s.Y, s.Z)),
+            .. NameBytes(tables, "None"),
+        ];
+        if (setup.Find("Offset") is { Value: StructValue } offset)
+        {
+            payload = [.. payload.AsSpan(0, offset.ValueOffset), .. members, .. payload.AsSpan(offset.EndOffset)];
+            BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(offset.SizeFieldOffset), members.Length);
+            VehicleSockets.Add(payload, tag.SizeFieldOffset, members.Length - offset.Size);
+            return payload;
+        }
+
+        var header = new byte[49]; // name, StructProperty, size, array index, Transform, empty guid, no property guid
+        VehicleSockets.WriteName(header, 0, tables.Name("Offset"));
+        VehicleSockets.WriteName(header, 8, tables.Name("StructProperty"));
+        BinaryPrimitives.WriteInt32LittleEndian(header.AsSpan(16), members.Length);
+        VehicleSockets.WriteName(header, 24, tables.Name("Transform"));
+        byte[] whole = [.. header, .. members];
+        payload = VehicleSockets.Insert(payload, tag.EndOffset - 8, whole);
+        VehicleSockets.Add(payload, tag.SizeFieldOffset, whole.Length);
+        return payload;
+    }
+
+    /// <summary>A native Quat struct tag and its value (65 bytes).</summary>
+    private static byte[] QuatTag(PackageTables tables, string name, FQuat q)
+    {
+        var bytes = new byte[65];
+        VehicleSockets.WriteName(bytes, 0, tables.Name(name));
+        VehicleSockets.WriteName(bytes, 8, tables.Name("StructProperty"));
+        BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(16), 16);
+        VehicleSockets.WriteName(bytes, 24, tables.Name("Quat"));
+        BinaryPrimitives.WriteSingleLittleEndian(bytes.AsSpan(49), q.X);
+        BinaryPrimitives.WriteSingleLittleEndian(bytes.AsSpan(53), q.Y);
+        BinaryPrimitives.WriteSingleLittleEndian(bytes.AsSpan(57), q.Z);
+        BinaryPrimitives.WriteSingleLittleEndian(bytes.AsSpan(61), q.W);
+        return bytes;
+    }
+
+    private static byte[] NameBytes(PackageTables tables, string name)
+    {
+        var bytes = new byte[8];
+        VehicleSockets.WriteName(bytes, 0, tables.Name(name));
+        return bytes;
     }
 
     /// <summary>A copy of the donor slot, taking only the new class, at the end of <c>_slots</c> (array, inner tag and count resized).</summary>

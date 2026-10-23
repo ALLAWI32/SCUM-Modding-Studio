@@ -10,10 +10,11 @@ using ScumStudio.Level.Spawns;
 namespace ScumStudio.App.ViewModels;
 
 /// <summary>
-/// "Replace with NPC guards" on a selected sentry robot spawner (Discord igor8802: "when creating patrols at points of
-/// interest, the robots can be replaced with NPCs"). SCUM's armed NPCs cannot walk a route (see <see cref="NpcGuards"/>),
-/// so the panel says so and offers the closest thing: guard posts along the robot's route, in a guard zone of the chosen
-/// NPCs. One undo step; the export writes the level (the robot removed) and the island's spawn data for client and server.
+/// "Robot out, NPC area in" on a selected sentry robot spawner (Discord igor8802: "when creating patrols at points of
+/// interest, the robots can be replaced with NPCs"). SCUM's armed NPCs cannot walk a route or stand guard (see
+/// <see cref="NpcGuards"/>), so the panel says so and offers the closest thing: spawn posts along the robot's route in an
+/// NPC area of the chosen NPCs, a sub-zone of the place's own threat zone (r39). One undo step; the export writes the level
+/// (the robot removed) and the island's spawn data for client and server.
 /// </summary>
 public sealed partial class MapPageViewModel
 {
@@ -131,20 +132,25 @@ public sealed partial class MapPageViewModel
         var posts = GuardPosts;
         var planned = state.AssetClones.SelectMany(c => c.Packages.Select(p => p.New)).ToList();
         var taken = state.AddedActors.Keys.Where(a => SpawnPlaces.IsStaticData(a.Level)).Select(a => a.Actor).ToList();
+        var cached = ReferenceEquals(_spawnPlacesCatalog, catalog) ? _spawnPlaces : null;
         IsReplacingSentries = true;
         try
         {
-            var ops = await Task.Run(() =>
+            var (copy, rows, stockZones, stored) = await Task.Run(() =>
             {
                 var leaf = type.ZonePackage[(type.ZonePackage.LastIndexOf('/') + 1)..];
-                var copy = ZoneCopies.Plan(catalog, type.ZonePackage, ZoneCopies.SuggestName(leaf, ZoneCopies.Taken(catalog, planned)), planned);
-                var rows = SpawnChoices.ForZone(catalog, type.ZonePackage).FirstOrDefault(l => l.Level == 0)
+                var settings = ZoneCopies.Plan(catalog, type.ZonePackage, ZoneCopies.SuggestName(leaf, ZoneCopies.Taken(catalog, planned)), planned);
+                var weights = SpawnChoices.ForZone(catalog, type.ZonePackage).FirstOrDefault(l => l.Level == 0)
                     ?? throw new ArgumentException($"{leaf}: its encounters cannot be read.");
-                return NpcGuards.Plan(routes, type, posts, copy, rows, taken);
+                var zones = (cached ?? SpawnPlaces.ReadFrom(catalog)).Where(p => p.Kind == SpawnPlaceKind.Zone).ToList();
+                return (settings, weights, zones, NpcGuards.StoredNpcOnlyValues(catalog, type.ZonePackage));
             }).ConfigureAwait(true);
+
+            // The guard area goes into the place's own threat zone as the project has it (moved, removed), as a sub-zone.
+            var ops = NpcGuards.Plan(routes, type, posts, copy, rows, taken, SpawnPlaces.WithEdits(stockZones, state), stored);
             var entry = _services.Projects.Apply(new BatchOp(Loc.F("Map.Guards.Batch", targets.Count, type.Name), ops));
             _services.Notifications.Success(Loc.T("Map.Guards.Title"), Loc.F("Map.Guards.Done", targets.Count, routes.Sum(r => NpcGuards.Posts(r.Path, posts).Count), type.Name));
-            _services.Logger.LogInformation("Replaced {Count} sentry robot(s) with NPC guards: {Edit}", targets.Count, entry.Op.Describe());
+            _services.Logger.LogInformation("Replaced {Count} sentry robot(s) with an NPC area: {Edit}", targets.Count, entry.Op.Describe());
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or IOException or FormatException or InvalidDataException)
         {

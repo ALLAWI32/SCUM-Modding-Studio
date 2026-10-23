@@ -49,6 +49,9 @@
           </Border>
           <ToggleButton x:Name="CraftStockTab" IsChecked="{Binding IsStockOpen}" Content="{Tr Craftables.Stock}" ToolTip.Tip="{Tr Craftables.Stock.Tip}" />
           <Button x:Name="CraftUndoButton" Classes="ghost" Command="{Binding UndoCommand}" Content="{Tr Craftables.Undo}" ToolTip.Tip="{Tr Craftables.Undo.Tip}" />
+          <!-- The page's Export up here too (owner: "an Export option at the top, like the Map's menu"), the same command as step 6 -->
+          <Button x:Name="CraftExportHeaderButton" Classes="accent" Command="{Binding PageExport.ExportCommand}" IsVisible="{Binding HasProject}"
+                  Content="{Tr Craftables.Step.Export.Button}" ToolTip.Tip="{Tr Export.Module.Button.Tip}" />
         </StackPanel>
       </Grid>
     </Border>
@@ -290,9 +293,10 @@
                                        ToolTip.Tip="{Tr Craftables.Building.RepairCost.Tip}" />
                         <TextBlock Text="{Binding RepairCostStock}" Classes="caption" VerticalAlignment="Center" />
                       </StackPanel>
-                      <TextBlock x:Name="CraftLargeBuilding" Text="{Tr Craftables.Building.Large}" Classes="caption wrap" IsVisible="{Binding IsLargeTemplate}" ToolTip.Tip="{Tr Craftables.Building.Large.Tip}" />
-                      <!-- Place in front (experimental): its recipe's PlacementLocationOffset moves the ghost and what is built together -->
-                      <StackPanel Orientation="Horizontal" Spacing="10">
+                      <TextBlock x:Name="CraftLargeBuilding" Text="{Binding LargeTemplateCaption}" Classes="caption wrap" IsVisible="{Binding IsLargeTemplate}" ToolTip.Tip="{Tr Craftables.Building.Large.Tip}" />
+                      <!-- Place in front (experimental): its recipe's PlacementLocationOffset moves the placement point; not offered where the
+                           Large Log Shed's recipe places it (the player may stand inside that ghost) -->
+                      <StackPanel Orientation="Horizontal" Spacing="10" IsVisible="{Binding InFrontOffered}">
                         <CheckBox x:Name="CraftPlaceInFront" IsChecked="{Binding PlaceInFront}" Content="{Tr Craftables.Building.InFront}" ToolTip.Tip="{Tr Craftables.Building.InFront.Tip}" />
                         <TextBlock Text="{Binding InFrontSuggestion}" Classes="caption" VerticalAlignment="Center" IsVisible="{Binding InFrontSuggested}" />
                       </StackPanel>
@@ -345,6 +349,11 @@
                         <TextBlock Text="{Tr Craftables.Step.Ingredients}" Classes="h3" VerticalAlignment="Center" />
                       </StackPanel>
                       <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="6" HorizontalAlignment="Right">
+                        <!-- igor8802: copy a recipe's ingredients and paste them into another craftable's (one Undo step) -->
+                        <Button x:Name="CraftCopyIngredients" Classes="ghost" Content="{Tr Craftables.Ingredients.Copy}" ToolTip.Tip="{Tr Craftables.Ingredients.Copy.Tip}"
+                                Command="{Binding $parent[UserControl].((vm:CraftablesPageViewModel)DataContext).CopyIngredientsCommand}" />
+                        <Button x:Name="CraftPasteIngredients" Classes="ghost" Content="{Tr Craftables.Ingredients.Paste}" ToolTip.Tip="{Tr Craftables.Ingredients.Paste.Tip}"
+                                Command="{Binding $parent[UserControl].((vm:CraftablesPageViewModel)DataContext).PasteIngredientsCommand}" />
                         <Button x:Name="CraftAddIngredientButton" Classes="accent" Content="{Tr Craftables.Step.AddIngredient}" ToolTip.Tip="{Tr Craftables.AddIngredient.Tip}"
                                 Command="{Binding $parent[UserControl].((vm:CraftablesPageViewModel)DataContext).PickIngredientCommand}" />
                       </StackPanel>
@@ -368,7 +377,7 @@
                       <ItemsControl.ItemTemplate>
                         <DataTemplate x:DataType="vm:IngredientRowViewModel">
                           <StackPanel Spacing="2" Margin="0,3">
-                          <Grid ColumnDefinitions="Auto,*,110,Auto,Auto,Auto,Auto" ColumnSpacing="8">
+                          <Grid ColumnDefinitions="Auto,*,110,Auto,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="8">
                             <Border Grid.Column="0" Classes="craftThumb">
                               <Panel DataContext="{Binding Picture}" x:DataType="vm:IngredientTileViewModel">
                                 <c:GlyphIcon Kind="{Binding IconKey}" IconSize="22" HorizontalAlignment="Center" VerticalAlignment="Center"
@@ -391,7 +400,19 @@
                             <Button Grid.Column="5" Classes="ghost" Content="{Tr Craftables.Ingredient.Change}" ToolTip.Tip="{Tr Craftables.Ingredient.Change.Tip}"
                                     Command="{Binding $parent[UserControl].((vm:CraftablesPageViewModel)DataContext).ChangeIngredientCommand}" CommandParameter="{Binding}" />
                             <Button Grid.Column="6" Classes="ghost" Content="{Tr Craftables.RemoveIngredient}" Command="{Binding RemoveCommand}" ToolTip.Tip="{Tr Craftables.RemoveIngredient.Tip}" />
+                            <!-- igor8802: "rearrange places": the game lists the ingredients in the recipe's order -->
+                            <Button Grid.Column="7" x:Name="CraftIngredientUp" Classes="ghost small" IsEnabled="{Binding CanMoveUp}" ToolTip.Tip="{Tr Craftables.Ingredient.Up.Tip}" VerticalAlignment="Center"
+                                    Command="{Binding $parent[UserControl].((vm:CraftablesPageViewModel)DataContext).MoveIngredientUpCommand}" CommandParameter="{Binding}">
+                              <c:GlyphIcon Kind="Icon.ChevronDown" IconSize="14" RenderTransform="rotate(180deg)" />
+                            </Button>
+                            <Button Grid.Column="8" x:Name="CraftIngredientDown" Classes="ghost small" IsEnabled="{Binding CanMoveDown}" ToolTip.Tip="{Tr Craftables.Ingredient.Down.Tip}" VerticalAlignment="Center"
+                                    Command="{Binding $parent[UserControl].((vm:CraftablesPageViewModel)DataContext).MoveIngredientDownCommand}" CommandParameter="{Binding}">
+                              <c:GlyphIcon Kind="Icon.ChevronDown" IconSize="14" />
+                            </Button>
                           </Grid>
+                          <!-- The items that count as this tag or group (igor8802: "view groups of ingredients") -->
+                          <TextBlock x:Name="CraftIngredientMembers" Text="{Binding MembersText}" Classes="caption wrap" Margin="64,0,0,0" IsVisible="{Binding HasMembers}"
+                                     ToolTip.Tip="{Binding MembersTip}" />
                           <Panel Margin="64,0,0,0" IsVisible="{Binding PerLevel}">
                             <p:SkillLevelsEditor DataContext="{Binding Levels}" />
                           </Panel>
@@ -402,6 +423,40 @@
                       </ItemsControl.ItemTemplate>
                     </ItemsControl>
                     <TextBlock x:Name="CraftLevelsNote" Text="{Tr Craftables.Levels.Note}" Classes="caption wrap" />
+
+                    <!-- The project's ingredient groups (igor8802: "create, change, and view groups of ingredients"): any recipe of the
+                         project can ask for one; the export gives its tag to each of its items. -->
+                    <Expander x:Name="CraftGroupsPanel" HorizontalAlignment="Stretch" ToolTip.Tip="{Tr Craftables.Groups.Tip}"
+                              Header="{Binding $parent[UserControl].((vm:CraftablesPageViewModel)DataContext).GroupsTitle}">
+                      <StackPanel Spacing="8">
+                        <TextBlock x:Name="CraftGroupsHint" Text="{Tr Craftables.Groups.Hint}" Classes="caption wrap" />
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                          <TextBox x:Name="CraftGroupName" Width="240" Watermark="{Tr Craftables.Groups.Name.Watermark}" ToolTip.Tip="{Tr Craftables.Groups.Name.Tip}"
+                                   Text="{Binding $parent[UserControl].((vm:CraftablesPageViewModel)DataContext).NewGroupName}" />
+                          <Button x:Name="CraftGroupNew" Content="{Tr Craftables.Groups.New}" ToolTip.Tip="{Tr Craftables.Groups.New.Tip}"
+                                  Command="{Binding $parent[UserControl].((vm:CraftablesPageViewModel)DataContext).NewGroupCommand}" />
+                        </StackPanel>
+                        <ItemsControl x:Name="CraftGroupList" ItemsSource="{Binding $parent[UserControl].((vm:CraftablesPageViewModel)DataContext).Groups}">
+                          <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:CraftGroupRowViewModel">
+                              <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8" Margin="0,3">
+                                <StackPanel Grid.Column="0" Spacing="2">
+                                  <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" VerticalAlignment="Center" />
+                                    <TextBlock Text="{Binding Tag}" Classes="caption mono" VerticalAlignment="Center" />
+                                  </StackPanel>
+                                  <TextBlock Text="{Binding MembersText}" Classes="caption wrap" ToolTip.Tip="{Binding MembersTip}" />
+                                </StackPanel>
+                                <Button Grid.Column="1" Classes="ghost" VerticalAlignment="Center" Content="{Tr Craftables.Groups.Edit}" ToolTip.Tip="{Tr Craftables.Groups.Edit.Tip}"
+                                        Command="{Binding $parent[UserControl].((vm:CraftablesPageViewModel)DataContext).EditGroupCommand}" CommandParameter="{Binding}" />
+                                <Button Grid.Column="2" Classes="ghost" VerticalAlignment="Center" Content="{Tr Craftables.Groups.Delete}" ToolTip.Tip="{Tr Craftables.Groups.Delete.Tip}"
+                                        Command="{Binding $parent[UserControl].((vm:CraftablesPageViewModel)DataContext).DeleteGroupCommand}" CommandParameter="{Binding}" />
+                              </Grid>
+                            </DataTemplate>
+                          </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                      </StackPanel>
+                    </Expander>
                   </StackPanel>
                 </Border>
 

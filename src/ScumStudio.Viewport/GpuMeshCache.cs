@@ -388,7 +388,7 @@ public sealed class GpuMeshCache
                     }
                     catch (ArgumentException)
                     {
-                        // an invalid mesh: the upload packs it again and reports it as before
+                        // an invalid mesh (the preparer leaves those out, BrokenMeshes): the upload packs it again and reports it
                     }
 
                     Packed.Enqueue((asset, packed));

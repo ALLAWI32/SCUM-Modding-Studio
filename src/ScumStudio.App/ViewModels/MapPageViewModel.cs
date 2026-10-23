@@ -870,6 +870,7 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
         OnPropertyChanged(nameof(DeleteAllOfMeshTip));
         OnPropertyChanged(nameof(DeleteAllOfClassTip));
         RefreshGrassOption();
+        RefreshNoLootOption();
         RefreshGuardsOption();
     }
 
@@ -1214,7 +1215,11 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
             ? string.Equals(p.PackagePath, package, StringComparison.OrdinalIgnoreCase)
             : AssetsPageViewModel.IsObjectClass(p.ClassName) && p.PackagePath.EndsWith("/" + name, StringComparison.OrdinalIgnoreCase));
         package ??= known.PackagePath;
-        if (package is null)
+
+        // A pasted /Game/... path is taken as given: the game's paks must have it, or the export would write an import that
+        // points at nothing and the package check would stop the whole pak (O Piqueno, 3.4.0: LakeWaterSurface_B_4). A loose
+        // folder may be a partial slice of the game and is not judged, as in the export.
+        if (package is null || (_services.Workspace is { IsLoose: false, Catalog: { } opened } && !opened.PackageExists(package)))
         {
             _services.Notifications.Warning(Localization.Loc.T("Map.ObjectNotFound"), Localization.Loc.F("Map.ObjectNotFoundDetail", name));
             return false;
@@ -1394,8 +1399,11 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
             return map;
         });
 
-    private IReadOnlyList<PropertyRow> DescribeSelected(ActorItemViewModel item) =>
-        DescribeActor(item, RootWorldOf(item, CurrentRootTransform(item)));
+    private IReadOnlyList<PropertyRow> DescribeSelected(ActorItemViewModel item)
+    {
+        var world = RootWorldOf(item, CurrentRootTransform(item));
+        return WithInGameRow(item, DescribeActor(item, world), world.Translation);
+    }
 
     private static string Fmt3(float x, float y, float z, string format) =>
         string.Create(CultureInfo.InvariantCulture, $"{x.ToString(format, CultureInfo.InvariantCulture)}, {y.ToString(format, CultureInfo.InvariantCulture)}, {z.ToString(format, CultureInfo.InvariantCulture)}");
@@ -2275,7 +2283,18 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
             summary += Localization.Loc.T("Map.NoServerPak");
         }
 
-        summary += " · " + ModExportService.InstallNote(results);
+        summary += " · " + ModExportService.InstallNote(results, results.ServerRefused);
+        if (await InstallCheckService.ToastLineAsync(_services, project!, written: InstallCheckService.ClientPaks(results)).ConfigureAwait(true) is { } installLine)
+        {
+            summary += " · " + installLine; // Check my install, in one line
+        }
+
+        // A refused server pak (its error toast stays): the players' pak is ready, the server's is not (review 3.5.1).
+        if (results.ServerRefused is not null)
+        {
+            _services.Notifications.Warning(Localization.Loc.T("Map.ModReady"), summary);
+            return;
+        }
 
         _services.Notifications.Success(Localization.Loc.T("Map.ModReady"), summary);
     }

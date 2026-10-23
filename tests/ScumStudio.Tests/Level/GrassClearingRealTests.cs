@@ -81,9 +81,11 @@ public sealed class GrassClearingRealTests(Xunit.Abstractions.ITestOutputHelper 
         Assert.True(level.Report.ClearedGrassSamples > 0);
         Assert.Equal(0, level.Report.DeletedInstances); // the bushes stay (3.2 hotfix: foliage as cooked)
 
-        // The footprint as the export saw it: the bridge as written into the farm level.
+        // The footprint as the export saw it: the bridge as written. The meadow is out of the farm's reach (200 m), so the bridge
+        // went into the meadow's own terrain tile (FarPlacement), the tile this test reads.
+        Assert.Equal(new ActorRef(Tile, add.NewName), Assert.Single(result.FarPlaced).To);
         using var written = AssetCatalog.OpenLoose(result.StagingDirectory);
-        var bridge = LevelDocument.Load(new Cue4ParseLevelReader(written, new Cue4ParseLevelReaderOptions { ExpandBlueprintComponents = false, ExpandChildActors = false }), Farm)
+        var bridge = LevelDocument.Load(new Cue4ParseLevelReader(written, new Cue4ParseLevelReaderOptions { ExpandBlueprintComponents = false, ExpandChildActors = false }), Tile)
             .Actors.Single(a => a.Name == add.NewName);
         var bounds = new BendSupport(catalog);
         var footprints = GrassClearing.Footprints(bridge, m => bounds.Describe(m)?.Bounds);
@@ -127,7 +129,7 @@ public sealed class GrassClearingRealTests(Xunit.Abstractions.ITestOutputHelper 
 
         var stockPackage = ModdableAssets.ReadPackage(catalog, Tile);
         var writtenPackage = ModdableAssets.ReadPackage(written, Tile);
-        Assert.Equal(stockPackage.Exports.Count, writtenPackage.Exports.Count);
+        Assert.Equal(stockPackage.Exports.Count + 2, writtenPackage.Exports.Count); // the bridge's actor and mesh component, appended
         for (var e = 0; e < stockPackage.Exports.Count; e++)
         {
             if (stockPackage.GetExportClassName(e) != "LandscapeComponent")

@@ -76,7 +76,14 @@ public sealed record InstanceArrayHint(string Actor, string Component, IReadOnly
 /// The new mesh's <c>BodySetupGuid</c>, written over a spline piece's <c>CachedMeshBodySetupGuid</c> when the component
 /// stores one (with the old guid the game would rebuild the piece's collision from the mesh and lose it); null leaves it.
 /// </param>
-public sealed record MeshPatch(string Actor, string? Component, string StaticMesh, FGuid? MeshBodySetupGuid = null);
+public sealed record MeshPatch(string Actor, string? Component, string StaticMesh, FGuid? MeshBodySetupGuid = null)
+{
+    /// <summary>
+    /// True when <see cref="StaticMesh"/> is the loot-free copy of the mesh the component draws (see <see cref="MeshLoot"/>):
+    /// the same model, so its painted materials stay and the far models keep it.
+    /// </summary>
+    public bool IsLootFreeCopy { get; init; }
+}
 
 /// <summary>What <see cref="LevelPackageEditor"/> changes in one level package.</summary>
 public sealed record LevelEditRequest
@@ -684,8 +691,8 @@ public static partial class LevelPackageEditor
             block = PropertyReader.ReadPayload(package, payload, names);
 
             // The new mesh is drawn with its own materials: the old mesh's OverrideMaterials address the old mesh's slots
-            // (a gravel road's end material on an asphalt piece), so the tag goes.
-            if (block.Find("OverrideMaterials") is { } overrides)
+            // (a gravel road's end material on an asphalt piece), so the tag goes. A loot-free copy is the same model: they stay.
+            if (!patch.IsLootFreeCopy && block.Find("OverrideMaterials") is { } overrides)
             {
                 payload = [.. payload[..overrides.Offset], .. payload[overrides.EndOffset..]];
                 block = PropertyReader.ReadPayload(package, payload, names);
@@ -932,7 +939,7 @@ public static partial class LevelPackageEditor
     {
         var label = $"{patch.Actor}{(patch.Component is null ? string.Empty : "." + patch.Component)}.{patch.Array}";
         var actorIndex = FindLevelActor(exports, names, levelIndex + 1, patch.Actor) - 1;
-        var exportIndex = actorIndex < 0 ? -1 : patch.Component is null ? actorIndex : FindChild(exports, names, actorIndex + 1, patch.Component) - 1;
+        var exportIndex = actorIndex < 0 ? -1 : patch.Component is null ? actorIndex : FindComponentPath(package, exports, data, names, actorIndex + 1, patch.Component) - 1;
         if (exportIndex < 0)
         {
             warnings.Add($"'{label}': {(actorIndex < 0 ? "the actor" : "the component")} is not stored in the level package; its spawn points were not written.");

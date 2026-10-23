@@ -102,11 +102,20 @@ public sealed class DecalDesignItem : ObservableObject
         {
             if (await _picture!().ConfigureAwait(true) is { } png)
             {
-                _thumbnail = await Task.Run(() => new Bitmap(png)).ConfigureAwait(true);
+                // Decoded at the grid's size: a sticker of 2048 pixels (or one kept whole by an older version) is no 16 MB bitmap per tile.
+                _thumbnail = await Task.Run(() =>
+                {
+                    var info = SixLabors.ImageSharp.Image.Identify(png);
+                    using var stream = File.OpenRead(png);
+                    return info.Width >= info.Height
+                        ? Bitmap.DecodeToWidth(stream, Math.Min(info.Width, ThumbnailSize * 2))
+                        : Bitmap.DecodeToHeight(stream, Math.Min(info.Height, ThumbnailSize * 2));
+                }).ConfigureAwait(true);
                 OnPropertyChanged(nameof(Thumbnail));
             }
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException or NotSupportedException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException or NotSupportedException
+                                       or SixLabors.ImageSharp.ImageFormatException)
         {
             // no picture: the name stays
         }

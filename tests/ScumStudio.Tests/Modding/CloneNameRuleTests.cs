@@ -38,16 +38,24 @@ public sealed class CloneNameRuleTests
         Assert.Equal("/Game/A/X2", CloneFamilyPlanner.PlanItem(catalog, "/Game/A/Weapon_X", "X2", includePaint: false).NewPrimary);
     }
 
+    /// <summary>
+    /// r40: a numbered member keeps its FName number (only its text is renamed, in place, so references the studio cannot
+    /// read follow it); before, its copy ended in <c>_v&lt;number&gt;</c>, the number changed, and 13 families of the game
+    /// (the M16A4 Premium's skin, the Trench Gun's mesh) could not be cloned.
+    /// </summary>
     [Theory]
-    [InlineData("SK_Winchester_1897", "Weapon_M1887", "Weapon_M1887_Gold", "Weapon_M1887_Gold_SK_Winchester_v1897")]
-    [InlineData("MI_Trench_Gun_1897", "Trench_Gun", "Riot_Gun", "MI_Riot_Gun_v1897")]
-    [InlineData("SK_SF19_2", "SF19", "SF20", "SK_SF20_v2")]
+    [InlineData("SK_Winchester_1897", "Weapon_M1887", "Weapon_M1887_Gold", "Weapon_M1887_Gold_SK_Winchester_1897")]
+    [InlineData("MI_Trench_Gun_1897", "Trench_Gun", "Riot_Gun", "MI_Riot_Gun_1897")]
+    [InlineData("SK_SF19_2", "SF19", "SF20", "SK_SF20_2")]
+    [InlineData("MI_M16_Apocalypso_2", "Weapon_M16A4_Premium", "M16Gold", "M16Gold_MI_M16_Apocalypso_2")]
+    [InlineData("SM_LogShed_1", "LogShed_1", "Shed", "Shed_SM_LogShed_1")]
     [InlineData("WolfsWagen_ES", "WolfsWagen", "Hunter", "Hunter_ES")]
-    public void AMembersNewLeafNeverSplits(string leaf, string token, string newToken, string expected)
+    [InlineData("MI_Cal_22_01", "Cal_22", "Cal22Gold", "MI_Cal22Gold_01")]
+    public void AMembersNewLeafKeepsItsNumber(string leaf, string token, string newToken, string expected)
     {
         var renamed = CloneFamilyPlanner.RenameLeaf(leaf, token, newToken);
         Assert.Equal(expected, renamed);
-        Assert.Equal(0, FNameRef.Split(renamed).Number);
+        Assert.Equal(FNameRef.Split(leaf).Number, FNameRef.Split(renamed).Number);
     }
 
     [Fact]

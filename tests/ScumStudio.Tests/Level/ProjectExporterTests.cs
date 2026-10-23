@@ -131,7 +131,7 @@ public sealed class ProjectExporterTests
 
         Assert.Equal(ProjectSourceRole.Client, result.Role);
         Assert.Equal("My_Mod", result.ModName);
-        Assert.Equal(Path.Combine(temp.Combine("out"), "Client", "pakchunk900-My_Mod_P.pak"), result.PakPath);
+        Assert.Equal(Path.Combine(temp.Combine("out"), "My_Mod", "Client", "pakchunk900-My_Mod_P.pak"), result.PakPath); // the mod's own folder
         Assert.True(File.Exists(result.PakPath));
         Assert.Null(result.SigPath);
         var sigWarning = Assert.Single(result.Warnings);
@@ -284,6 +284,37 @@ public sealed class ProjectExporterTests
         Assert.Equal(SyntheticLevels.RockPackage + ".SM_Rock", add.StaticMesh);
         Assert.Equal(TransformValue.Identity, add.Transform);
         Assert.Empty(request.Copies);
+    }
+
+    /// <summary>
+    /// O Piqueno (3.4.0): a placed mesh the game does not have (a pasted path, a project made against another build) was
+    /// written as an import that points at nothing, and the package check stopped the whole export. The plan leaves the
+    /// actor out and says why; without the game files to ask, every mesh is taken as the game's.
+    /// </summary>
+    [Fact]
+    public void LeavesOutAPlacedMeshTheGameDoesNotHave()
+    {
+        using var temp = new LevelTempDirectory();
+        SyntheticLevels.WriteContent(temp.Path, withBlueprintPackage: true);
+        using var catalog = AssetCatalog.OpenLoose(temp.Path);
+        var document = LevelDocument.Load(new Cue4ParseLevelReader(catalog), LevelPath);
+        const string Missing = "/Game/ConZ_Files/Landscape/Lake/LakeWaterSurface_B_4.LakeWaterSurface_B_4";
+
+        var state = new EditState();
+        state.Apply(new AddStaticMeshActorOp(LevelPath, "SM_Added_1", SyntheticLevels.RockPackage + ".SM_Rock", TransformValue.Identity));
+        var lake = new AddStaticMeshActorOp(LevelPath, "LakeWaterSurface_B_4_Added", Missing, TransformValue.Identity);
+        state.Apply(lake);
+        state.Apply(new BendActorOp(lake.Created, 0f, 20f)); // bent too: still the one line, no "exported straight"
+
+        var warnings = new List<string>();
+        var request = ProjectExporter.PlanLevel(state, LevelPath, document, warnings, null, null, meshExists: mesh => mesh != Missing);
+        Assert.Equal("SM_Added_1", Assert.Single(request.StaticMeshAdds).NewName);
+        var warning = Assert.Single(warnings);
+        Assert.Contains("LakeWaterSurface_B_4_Added", warning, StringComparison.Ordinal);
+        Assert.Contains("neither the game nor the mod has the mesh " + Missing, warning, StringComparison.Ordinal);
+
+        // Without the game files (tests, a plan on its own) nothing is left out.
+        Assert.Equal(2, ProjectExporter.PlanLevel(state, LevelPath, document, []).StaticMeshAdds.Count);
     }
 
     [Fact]

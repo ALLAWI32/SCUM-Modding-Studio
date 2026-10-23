@@ -84,6 +84,13 @@ public sealed record Tunable(string Export, string Path, TunableKind Kind, strin
     /// </summary>
     public string? InheritedFrom { get; init; }
 
+    /// <summary>
+    /// The property's tag type in the game file (<c>ByteProperty</c>, <c>IntProperty</c>, <c>UInt16Property</c> …) when the
+    /// reader knows it, else null. A whole number must fit it: a bag's <c>NumRows</c> is a ByteProperty, 0 to 255
+    /// (<see cref="TunableValue.CheckRange"/>).
+    /// </summary>
+    public string? TagType { get; init; }
+
     /// <summary>Stable key within a package: <c>Export|Path</c>.</summary>
     public string Key => Export + "|" + Path;
 }
@@ -141,6 +148,48 @@ public static class TunableValue
         "false" or "0" or "no" or "off" => false,
         _ => throw new FormatException($"'{text}' is not true/false."),
     };
+
+    /// <summary>
+    /// The smallest and largest whole number a property of tag type <paramref name="tagType"/> holds (a ByteProperty 0 to 255,
+    /// an IntProperty a signed 32-bit number …), or null for a type that is not a whole number or not known.
+    /// </summary>
+    public static (Int128 Min, Int128 Max)? Range(string? tagType) => tagType switch
+    {
+        "ByteProperty" => (byte.MinValue, byte.MaxValue),
+        "Int8Property" => (sbyte.MinValue, sbyte.MaxValue),
+        "Int16Property" => (short.MinValue, short.MaxValue),
+        "UInt16Property" => (ushort.MinValue, ushort.MaxValue),
+        "IntProperty" => (int.MinValue, int.MaxValue),
+        "UInt32Property" => (uint.MinValue, uint.MaxValue),
+        "Int64Property" => (long.MinValue, long.MaxValue),
+        "UInt64Property" => (ulong.MinValue, ulong.MaxValue),
+        _ => null,
+    };
+
+    /// <summary>
+    /// Why <paramref name="text"/> cannot be written as the whole number <paramref name="tunable"/> is: not a whole number, or
+    /// outside what its <see cref="Tunable.TagType"/> holds (a bag's <c>NumRows</c> takes 0 to 255). Null when it fits, or when
+    /// the value is not a whole number of a known size. The export writes the value in that size; a value that does not fit
+    /// would stop every edit of the package.
+    /// </summary>
+    public static string? CheckRange(Tunable tunable, string text)
+    {
+        ArgumentNullException.ThrowIfNull(tunable);
+        ArgumentNullException.ThrowIfNull(text);
+        if (tunable.Kind is not (TunableKind.Int or TunableKind.UInt) || Range(tunable.TagType) is not { } range)
+        {
+            return null;
+        }
+
+        if (!Int128.TryParse(text.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var value))
+        {
+            return $"'{text}' is not a whole number.";
+        }
+
+        return value < range.Min || value > range.Max
+            ? string.Create(CultureInfo.InvariantCulture, $"{tunable.Name} takes a whole number from {range.Min} to {range.Max} (a {tunable.TagType} in the game file); '{text.Trim()}' does not fit.")
+            : null;
+    }
 
     /// <summary>True when two value texts mean the same value of <paramref name="kind"/> (numeric compare for numbers).</summary>
     public static bool AreEqual(TunableKind kind, string a, string b)

@@ -159,6 +159,73 @@ public sealed class MaterialPickTests
     }
 
     [Fact]
+    public void TheWeatherLayerIsNeverTheReferencedFallback()
+    {
+        // r39 (owner: "the rails are white"): M_Railroad names no colour texture parameter, and its hard-wired textures list
+        // the weather layers (rain, ice) before the track's own maps. The first '_D' of them, the landscape's ice, was taken:
+        // the railway was drawn near white in the Assets tile, the 3D view and on the Map.
+        const string rails = "/Game/ConZ_Files/Models/Rails/RailRoad_01";
+        const string tracks = rails + "/T_Tracks_01_D.T_Tracks_01_D";
+        string[] weather =
+        [
+            "/Game/ConZ_Files/Weather/Textures/RT_PrecipitationMask.RT_PrecipitationMask",
+            "/Game/ConZ_Files/Weather/Textures/T_RainDrops.T_RainDrops",
+            "/Game/ConZ_Files/Weather/Textures/T_RaindropsAmountMask.T_RaindropsAmountMask",
+            "/Game/ConZ_Files/Landscape/Textures/T_Grass_Randomization.T_Grass_Randomization",
+            "/Game/ConZ_Files/Landscape/Textures/T_Ice_D.T_Ice_D",
+            "/Game/ConZ_Files/Landscape/Textures/T_Ice_N.T_Ice_N",
+        ];
+        string[] referenced = [.. weather, tracks, rails + "/T_Tracks_01_N.T_Tracks_01_N", rails + "/T_Tracks_01_H.T_Tracks_01_H"]; // M_Railroad's cooked list
+        Assert.Equal(tracks, MaterialInspector.PickReferenced(referenced, rails));
+
+        // An instance in another folder finds the track through its base material's folder; a colour map in the
+        // instance's own folder comes first.
+        Assert.Equal(tracks, MaterialInspector.PickReferenced(referenced, rails, "/Game/ConZ_Files/Materials/Instances"));
+        Assert.Equal("/Game/M/Own/T_Own_D.T_Own_D", MaterialInspector.PickReferenced([.. referenced, "/Game/M/Own/T_Own_D.T_Own_D"], rails, "/Game/M/Own"));
+
+        // The landscape's own colour maps stay colours: Mi_Cliff_01 (cooked list as the game has it) is drawn with the
+        // landscape's T_Rocks_D, like 78 cliffs and rocks of the game (D06); only its weather layers are left out.
+        string[] cliff =
+        [
+            "/Game/ConZ_Files/Textures/Basic/T_CheckerColor_Dummy_01.T_CheckerColor_Dummy_01",
+            "/Game/ConZ_Files/Materials/Snow/T_SnowTexture.T_SnowTexture",
+            "/Game/ConZ_Files/Materials/Snow/T_Snow_Mask.T_Snow_Mask",
+            "/Game/ConZ_Files/Materials/Snow/T_WhiteNoise.T_WhiteNoise",
+            "/Game/ConZ_Files/Landscape/Textures/T_Rocks_D.T_Rocks_D",
+            "/Game/ConZ_Files/Landscape/Textures/T_Rocks_N.T_Rocks_N",
+            "/Game/ConZ_Files/Textures/Basic/T_FlatNormal_Dummy_01.T_FlatNormal_Dummy_01",
+            "/Game/ConZ_Files/Textures/Basic/T_AOMEO_Dummy_Mask.T_AOMEO_Dummy_Mask",
+            "/Game/ConZ_Files/Landscape/Textures/T_Rocks_H.T_Rocks_H",
+            "/Game/ConZ_Files/Landscape/Rocks/T_Rock_Detail_N.T_Rock_Detail_N",
+            "/Game/ConZ_Files/Textures/Basic/T_FlatWhiteColor_Dummy_01.T_FlatWhiteColor_Dummy_01",
+            "/Game/ConZ_Files/Textures/Basic/T_FlatWhiteLinearColor_Dummy_01.T_FlatWhiteLinearColor_Dummy_01",
+            "/Game/ConZ_Files/Weather/Textures/RT_PrecipitationMask.RT_PrecipitationMask",
+            "/Game/ConZ_Files/Weather/Textures/T_Rain_DryPattern.T_Rain_DryPattern",
+        ];
+        Assert.Equal("/Game/ConZ_Files/Landscape/Textures/T_Rocks_D.T_Rocks_D", MaterialInspector.PickReferenced(cliff, "/Game/ConZ_Files/Landscape/Rocks/Cliff_01"));
+
+        // No colour map in the material's folders: the first one that is no weather layer, as before.
+        Assert.Equal("/Game/M/Shared/T_Concrete_D.T_Concrete_D",
+            MaterialInspector.PickReferenced([.. weather, "/Game/M/Shared/T_Concrete_D.T_Concrete_D", "/Game/M/Shared/T_Brick_D.T_Brick_D"], "/Game/M/Elsewhere"));
+
+        // Only weather layers: none, the surface colour is drawn.
+        Assert.Null(MaterialInspector.PickReferenced(weather, rails));
+        Assert.Null(MaterialInspector.PickReferenced(["/Game/ConZ_Files/Landscape/Textures/T_Snow_02_D.T_Snow_02_D", "/Game/X/T_Ice_Cracks_D.T_Ice_Cracks_D"], "/Game/Y"));
+
+        // "Ice" and "Rain" are words, not letters inside one: an office's, a police car's or a terrain's colour map stays one.
+        Assert.Equal("/Game/B/T_Office_Wall_D.T_Office_Wall_D",
+            MaterialInspector.PickReferenced(["/Game/ConZ_Files/Landscape/Textures/T_Ice_D.T_Ice_D", "/Game/B/T_Office_Wall_D.T_Office_Wall_D"], "/Game/Y"));
+        Assert.Equal("/Game/V/T_Police_Car_D.T_Police_Car_D", MaterialInspector.PickReferenced(["/Game/V/T_Police_Car_D.T_Police_Car_D"], "/Game/Y"));
+        Assert.Equal("/Game/ConZ_Files/Landscape/Textures/T_Terrain_Rock_D.T_Terrain_Rock_D",
+            MaterialInspector.PickReferenced(["/Game/ConZ_Files/Landscape/Textures/T_Ice_D.T_Ice_D", "/Game/ConZ_Files/Landscape/Textures/T_Terrain_Rock_D.T_Terrain_Rock_D"], "/Game/Y"));
+
+        // An ice layer named as a texture parameter is no colour either (it matched the "Texture" hint).
+        Assert.Null(MaterialInspector.PickTexture([T("Ice Texture", "T_Ice_D"), T("IceNormal", "T_Ice_N")]));
+        Assert.Equal("/Game/T/T_Crate_D.T_Crate_D", MaterialInspector.PickTexture([T("Ice Texture", "T_Ice_D"), T("Diffuse", "T_Crate_D")]));
+        Assert.Null(MaterialInspector.PickNormal([T("IceNormal", "T_Ice_N")]));
+    }
+
+    [Fact]
     public void EmissiveAndSubsurfaceTintsAreNoSurfaceColour()
     {
         // With the snow layer gone, untextured masters (SCUM spells it 'Emisive') and road sides ('SS Color') drew black.

@@ -33,6 +33,7 @@ public sealed class WhiteMaterialsRealTests(ITestOutputHelper output)
         var undecodable = new ConcurrentBag<string>();
         var unpicked = new ConcurrentBag<string>();
         var mispicked = new ConcurrentBag<string>();
+        var weatherPicked = new ConcurrentBag<string>();
         var inspected = 0;
         var textured = 0;
         var virtualTextures = 0;
@@ -69,6 +70,13 @@ public sealed class WhiteMaterialsRealTests(ITestOutputHelper output)
                     mispicked.Add($"{path}: picked '{info.Textures.FirstOrDefault(t => t.TexturePath == colour)?.Name}' = {colour[(colour.LastIndexOf('/') + 1)..]} beside '{own.Name}' = {own.TexturePath[(own.TexturePath.LastIndexOf('/') + 1)..]}");
                 }
 
+                // r39: the landscape's ice, snow or rain layer taken for the colour while the material's own folder (or its
+                // base material's) holds a colour map: the railway drew T_Ice_D instead of its T_Tracks_01_D.
+                if (IsWeatherLayer(colour) && OwnColourMap(path, info) is { } ownMap)
+                {
+                    weatherPicked.Add($"{path}: {colour[(colour.LastIndexOf('/') + 1)..]} beside {ownMap[(ownMap.LastIndexOf('/') + 1)..]}");
+                }
+
                 return;
             }
 
@@ -79,8 +87,8 @@ public sealed class WhiteMaterialsRealTests(ITestOutputHelper output)
             }
         });
 
-        output.WriteLine($"r37: {inspected} of {materials.Count} materials inspected, {textured} textured ({virtualTextures} virtual textures decoded); drawn plain white: {undecodable.Count} with a colour texture that does not decode, {unpicked.Count} with a colour map not picked; {mispicked.Count} draw another map beside their own colour map");
-        foreach (var line in undecodable.Order().Take(30).Concat(unpicked.Order().Take(30)).Concat(mispicked.Order().Take(60)))
+        output.WriteLine($"r37: {inspected} of {materials.Count} materials inspected, {textured} textured ({virtualTextures} virtual textures decoded); drawn plain white: {undecodable.Count} with a colour texture that does not decode, {unpicked.Count} with a colour map not picked; {mispicked.Count} draw another map beside their own colour map; r39: {weatherPicked.Count} draw a weather layer beside their own colour map");
+        foreach (var line in undecodable.Order().Take(30).Concat(unpicked.Order().Take(30)).Concat(weatherPicked.Order().Take(30)).Concat(mispicked.Order().Take(60)))
         {
             output.WriteLine(line);
         }
@@ -88,6 +96,7 @@ public sealed class WhiteMaterialsRealTests(ITestOutputHelper output)
         Assert.True(inspected > 1000, $"only {inspected} materials inspected");
         Assert.True(virtualTextures > 100, $"only {virtualTextures} virtual textures decoded");
         Assert.Empty(undecodable);
+        Assert.Empty(weatherPicked);
         Assert.True(unpicked.Count <= 10, $"{unpicked.Count} materials draw white beside a colour map");
         Assert.DoesNotContain(mispicked, l => l.Contains("picked 'Utility", StringComparison.Ordinal) || l.Contains("Emblem", StringComparison.Ordinal));
     }
@@ -117,6 +126,41 @@ public sealed class WhiteMaterialsRealTests(ITestOutputHelper output)
         Assert.True(lumas.Average() is > 20 and < 235, $"mean {lumas.Average():0.0}");
         Assert.Equal(64 * 64 * 16, gpu.CompressedMips![0].Length); // DXT5: 64x64 blocks of 16 bytes
         Assert.Equal(2, gpu.CompressedMips.Count); // 256 and 128: the mips at least one tile wide
+    }
+
+    /// <summary>
+    /// r39 (owner: "the rails are white"): the railway's track bed (RailRoad_01, the Railroad slot of SM_RailBridge_Arch) is
+    /// drawn with its own sleepers and ballast, not with the landscape's ice layer that M_Railroad lists first.
+    /// </summary>
+    [PaksFact]
+    public void TheRailwayIsDrawnWithItsTrackTexture()
+    {
+        using var catalog = AssetCatalog.OpenPaks(RealPaks.Folder!, new AssetCatalogOptions { AesKey = AesKeyText.FromEnvironmentOrStore() });
+        var inspector = new MaterialInspector(catalog);
+        foreach (var material in new[] { "/Game/ConZ_Files/Models/Rails/RailRoad_01/Mi_railRoad_01_PX", "/Game/ConZ_Files/Models/Rails/RailRoad_01/M_Railroad" })
+        {
+            var info = inspector.Inspect(material);
+            output.WriteLine($"{material}: {info.BaseColorTexture}");
+            Assert.Contains(info.ReferencedTextures, t => t.EndsWith("/Landscape/Textures/T_Ice_D.T_Ice_D", StringComparison.OrdinalIgnoreCase));
+            Assert.EndsWith("/RailRoad_01/T_Tracks_01_D.T_Tracks_01_D", info.BaseColorTexture, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    /// <summary>A landscape weather layer: under <c>/Landscape/Textures/</c> with Ice, Snow or Rain in its name (not "Terrain").</summary>
+    private static bool IsWeatherLayer(string texturePath)
+    {
+        var name = texturePath[(texturePath.LastIndexOf('/') + 1)..];
+        return texturePath.Contains("/Landscape/Textures/", StringComparison.OrdinalIgnoreCase)
+               && (name.Contains("Ice", StringComparison.Ordinal) || name.Contains("Snow", StringComparison.Ordinal) || name.Contains("Rain", StringComparison.Ordinal));
+    }
+
+    /// <summary>A colour map (named <c>_D</c> …) in the folder of the material at <paramref name="packagePath"/> or of its base material, or null.</summary>
+    private static string? OwnColourMap(string packagePath, MaterialInfo info)
+    {
+        var folders = new[] { packagePath, info.ParentChain.LastOrDefault() ?? packagePath }.Select(p => p[..Math.Max(p.LastIndexOf('/'), 0)] + "/").Distinct().ToList();
+        return info.ReferencedTextures.Concat(info.Textures.Select(t => t.TexturePath))
+            .FirstOrDefault(t => MaterialInspector.LooksLikeDiffuse(t) && !t.Contains("Dummy", StringComparison.OrdinalIgnoreCase)
+                                 && folders.Any(f => t.StartsWith(f, StringComparison.OrdinalIgnoreCase)));
     }
 
     private static string? Decode(AssetCatalog catalog, string texturePath, ref int virtualTextures)

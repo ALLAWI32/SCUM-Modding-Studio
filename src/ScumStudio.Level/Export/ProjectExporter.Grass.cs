@@ -175,7 +175,9 @@ public sealed partial class ProjectExporter
                 };
                 if (previous >= 0)
                 {
-                    levels[previous] = levels[previous] with { Report = merged with { RemovedActors = levels[previous].Report.RemovedActors, PatchedTransforms = levels[previous].Report.PatchedTransforms } };
+                    // The tile as this export wrote it keeps its report (the placed meshes FarPlacement put there among its
+                    // added actors); only the grass is added to it.
+                    levels[previous] = levels[previous] with { Report = levels[previous].Report with { ClearedGrassSamples = cleared, DeletedInstances = merged.DeletedInstances } };
                 }
                 else
                 {

@@ -84,10 +84,22 @@ public sealed class ModValidationException : InvalidOperationException
 {
     /// <summary>Creates the exception for <paramref name="result"/>; <paramref name="listPath"/> is the file with every problem, when one was written.</summary>
     public ModValidationException(ValidationResult result, string? listPath = null)
-        : base(Describe(result, listPath))
+        : this(result, listPath, null, null)
+    {
+    }
+
+    /// <summary>
+    /// The exception of a refused export once the folder says so (<see cref="ProjectExporter.WriteRefusal"/>): <paramref name="pakPath"/>
+    /// is the pak that was not written, <paramref name="reportPath"/> the NOT EXPORTED report written in place of the export
+    /// report (null when it could not be written). The earlier pak and .sig in the folder are never renamed, moved or deleted.
+    /// </summary>
+    public ModValidationException(ValidationResult result, string? listPath, string? pakPath, string? reportPath, Exception? inner = null)
+        : base(Describe(result, listPath, reportPath), inner)
     {
         Result = result;
         ListPath = listPath;
+        PakPath = pakPath;
+        ReportPath = reportPath;
     }
 
     /// <summary>What was found.</summary>
@@ -96,12 +108,19 @@ public sealed class ModValidationException : InvalidOperationException
     /// <summary>The file listing every problem (<see cref="ModPackageValidator.ListFileName"/> next to the staging folder), or null.</summary>
     public string? ListPath { get; }
 
-    private static string Describe(ValidationResult result, string? listPath)
+    /// <summary>The pak the export would have written (it was not), or null.</summary>
+    public string? PakPath { get; }
+
+    /// <summary>The NOT EXPORTED report written where the export's report goes, or null.</summary>
+    public string? ReportPath { get; }
+
+    private static string Describe(ValidationResult result, string? listPath, string? reportPath)
     {
         const int Shown = 25;
         var lines = result.Problems.Take(Shown).Select(p => "- " + p);
         var more = result.Problems.Count > Shown ? $"\n... and {result.Problems.Count - Shown} more" + (listPath is null ? "." : $" (all of them: {listPath}).") : string.Empty;
-        return $"The mod was not packed: the package check found {result.Problems.Count} problem(s) that could crash the game or the server "
+        return (reportPath is null ? string.Empty : $"{ProjectExporter.NotExported} - see {reportPath}\n")
+               + $"The mod was not packed: the package check found {result.Problems.Count} problem(s) that could crash the game or the server "
                + $"(loading, playing, leaving or closing). No pak was written. Please send the list to the ScumStudio team.\n"
                + string.Join('\n', lines) + more;
     }

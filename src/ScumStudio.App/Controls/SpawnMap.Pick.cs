@@ -198,7 +198,7 @@ public sealed partial class SpawnMap
             }
 
             var world = MarkerWorld(index);
-            var yaw = MarkerYaw(index) * Math.PI / 180;
+            var yaw = IslandMap.ScreenYaw(MarkerYaw(index)) * Math.PI / 180;
             return WorldToScreen(world.X, world.Y) + (new Vector(Math.Cos(yaw), Math.Sin(yaw)) * 22);
         }
     }
@@ -216,7 +216,9 @@ public sealed partial class SpawnMap
         var world = MarkerWorld(index);
         var centre = WorldToScreen(world.X, world.Y);
         var step = coarse ? TurnDegrees : FineTurnDegrees;
-        var facing = Math.Round(Math.Atan2(at.Y - centre.Y, at.X - centre.X) * 180 / Math.PI / step) * step;
+
+        // The picture is turned 180 degrees (IslandMap.ScreenYaw): the yaw is the cursor's direction on screen less a half turn.
+        var facing = Math.Round(((Math.Atan2(at.Y - centre.Y, at.X - centre.X) * 180 / Math.PI) - 180) / step) * step;
         _turn = UeMath.NormalizeAxis((float)facing - MarkerYaw(index));
         InvalidateVisual();
     }
@@ -248,13 +250,14 @@ public sealed partial class SpawnMap
                 Hold(id, key);
                 var step = fine ? FineNudgeCm : coarse ? CoarseNudgeCm : NudgeCm;
 
-                // The picture's axes are the world's (IslandMap: U = X, V = Y): right is +X, down is +Y.
+                // The arrow moves the place that way on the picture, which is turned like the game's map (IslandMap): left
+                // is +X, right -X, up +Y, down -Y.
                 _nudge += key switch
                 {
-                    Key.Left => new Vector2(-step, 0),
-                    Key.Right => new Vector2(step, 0),
-                    Key.Up => new Vector2(0, -step),
-                    _ => new Vector2(0, step),
+                    Key.Left => new Vector2(step, 0),
+                    Key.Right => new Vector2(-step, 0),
+                    Key.Up => new Vector2(0, step),
+                    _ => new Vector2(0, -step),
                 };
                 InvalidateVisual();
                 return true;
@@ -335,7 +338,7 @@ public sealed partial class SpawnMap
         var world = MarkerWorld(index) + (keys ? _nudge : Vector2.Zero);
         var (from, at) = (WorldToScreen(marker.X, marker.Y), WorldToScreen(world.X, world.Y));
         var accent = Token("AccentBrush");
-        var yaw = (MarkerYaw(index) + (keys ? _turn : 0f)) * Math.PI / 180;
+        var yaw = IslandMap.ScreenYaw(MarkerYaw(index) + (keys ? _turn : 0f)) * Math.PI / 180;
         var moving = Distance(from, at) > 0.5;
         if (moving)
         {
@@ -383,7 +386,9 @@ public sealed partial class SpawnMap
             return;
         }
 
+        // The view's world corners, smallest first (the picture is turned: the screen's top left is the larger X and Y).
         var (a, b) = (ScreenToWorld(default), ScreenToWorld(new Point(bounds.Width, bounds.Height)));
+        (a, b) = (Vector2.Min(a, b), Vector2.Max(a, b));
         var pen = new Pen(Translucent(Token("TextBrush"), 0.14), 1);
         for (var x = Math.Ceiling(a.X / stepCm) * stepCm; x <= b.X; x += stepCm)
         {

@@ -3,6 +3,7 @@ using ScumStudio.Assets.Catalog;
 using ScumStudio.Core.Abstractions;
 using ScumStudio.Core.Games;
 using ScumStudio.Level.Economy;
+using ScumStudio.Level.Editing;
 using ScumStudio.Level.Export;
 using ScumStudio.Level.Projects;
 using ScumStudio.Modding.Crafting;
@@ -12,7 +13,7 @@ namespace ScumStudio.App.Services;
 
 /// <summary>What the Export card asks for.</summary>
 /// <param name="Project">The open project.</param>
-/// <param name="OutputFolder">Folder that receives <c>Client/</c> (and <c>Server/</c>).</param>
+/// <param name="OutputFolder">Folder that receives the mod's own folder, <c>&lt;Mod&gt;/Client</c> (and <c>/Server</c>).</param>
 /// <param name="ModName">Pak name (default: the project name).</param>
 /// <param name="IncludeServer">Also build the server pak from the configured server Paks folder.</param>
 /// <param name="PakChunkIndex">The <c>pakchunkNNN</c> number.</param>
@@ -25,6 +26,24 @@ public sealed record ModExportRequest(
 {
     /// <summary>Also build the Craftables pak (<see cref="CraftablesExporter"/>) when the project has craftables.</summary>
     public bool IncludeCraftables { get; init; } = true;
+}
+
+/// <summary>
+/// The paks one export wrote (one result per pak, the client's first) and, when the package check refused a server pak after
+/// the client's passed, that refusal (<see cref="ServerRefused"/>): the Server folder then keeps every earlier server pak and
+/// its report says NOT EXPORTED, so what the app says next must not read as a client-only export (review 3.5.1).
+/// </summary>
+public sealed class ModExportResults : System.Collections.ObjectModel.ReadOnlyCollection<ExportResult>
+{
+    /// <summary>Wraps <paramref name="results"/> and the server's refusal, if any.</summary>
+    public ModExportResults(IList<ExportResult> results, ModValidationException? serverRefused = null)
+        : base(results) => ServerRefused = serverRefused;
+
+    /// <summary>No pak was written (nothing was left to build).</summary>
+    public static ModExportResults None => new(Array.Empty<ExportResult>());
+
+    /// <summary>The package check's refusal of a server pak of this export (its NOT EXPORTED report is in the Server folder), or null.</summary>
+    public ModValidationException? ServerRefused { get; }
 }
 
 /// <summary>
@@ -61,10 +80,11 @@ public static class ModExportService
     /// <summary>
     /// Exports the client pak and optionally the server pak; returns one result per cook. With nothing to build (a
     /// craftables-only project whose craftables were all removed, or left out by the unticked box) it only removes the
-    /// Craftables pak an earlier export left in the output folder and returns no result.
+    /// Craftables pak an earlier export left in the output folder and returns no result. A server pak the package check
+    /// refused is in <see cref="ModExportResults.ServerRefused"/> (its toast stays until it is closed).
     /// </summary>
     /// <exception cref="InvalidOperationException">No catalog, no edits, or the server folder is missing.</exception>
-    public static async Task<IReadOnlyList<ExportResult>> ExportAsync(
+    public static async Task<ModExportResults> ExportAsync(
         AppServices services, ModExportRequest request, IProgressSink progress, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(services);
@@ -86,25 +106,25 @@ public static class ModExportService
         if (request.Project.State.IsEmpty && craftables.IsEmpty)
         {
             var removed = new[] { ProjectSourceRole.Client, ProjectSourceRole.Server }
-                .SelectMany(role => CraftablesExporter.RemoveStale(Path.Combine(Path.GetFullPath(request.OutputFolder), ProjectExporter.RoleFolder(role)), modName, request.PakChunkIndex))
+                .SelectMany(role => CraftablesExporter.RemoveStale(ProjectExporter.ExportFolder(request.OutputFolder, modName, pages: false, role), modName, request.PakChunkIndex))
                 .ToList();
             services.Logger.LogInformation("Nothing to build for {Name}; removed {Count} old Craftables file(s).", modName, removed.Count);
             if (ExportEconomyOnly(services, request, out var unreadable) is { } written)
             {
                 services.Notifications.Success(Localization.Loc.T("Economy.Exported"), Localization.Loc.F("Economy.ExportedDetail", written));
-                return [];
+                return ModExportResults.None;
             }
 
             if (unreadable is not null)
             {
                 services.Notifications.Error(Localization.Loc.T("Economy.NotExported"), unreadable);
-                return [];
+                return ModExportResults.None;
             }
 
             services.Notifications.Info(Localization.Loc.T("Projects.Exported"), removed.Count > 0
                 ? Localization.Loc.F("Export.CraftablesRemoved", string.Join(", ", removed.Select(Path.GetFileName)))
                 : Localization.Loc.T("Export.NothingYet"));
-            return [];
+            return ModExportResults.None;
         }
 
         // Collision check: pieces the game's logs say got no collision since the last export are exported straight.
@@ -138,6 +158,10 @@ public static class ModExportService
                 ? options with { LeaveOutEconomy = true, Warnings = [.. options.Warnings, ProjectExporter.EconomyUnreadable(error)] }
                 : options with { Economy = services.Economy.ForExport() };
         }
+
+        // Decals drawn in the Decals tab but not baked into their clone's textures are not in the pak: the report, the
+        // Projects page and a toast name the clone (owner, 2026-10-18: his Rager's stickers showed in the studio, not in the game).
+        options = options with { Warnings = [.. options.Warnings, .. WarnDecals(services, request.Project.DirectoryPath, request.Project.State)] };
         var exporter = new ProjectExporter(services.Logger);
         var results = new List<ExportResult>(4);
 
@@ -165,34 +189,46 @@ public static class ModExportService
             // Its registry keeps the project pak's records: the package check finds their packages in that pak.
             var craftOptions = main is null ? roleOptions : roleOptions with { Elsewhere = CraftablesExporter.ProjectPakPackages(main, source) };
             if (await CraftablesExporter.ExportAsync(craftables, modName, source, craftOptions, role, CraftablesExporter.StagedRegistry(main),
-                    services.Logger, cancellationToken).ConfigureAwait(false) is { } crafted)
+                    services.Logger, cancellationToken, alone: main is null).ConfigureAwait(false) is { } crafted)
             {
                 results.Add(crafted);
             }
         }
 
         progress.Report(Localization.Loc.T("Export.ClientPak"), 0, 0);
-        await ExportRole(catalog, ProjectSourceRole.Client, options).ConfigureAwait(false);
+        services.Notifications.DismissSticky(RefusalToastGroup); // an earlier refusal's toast: this export says what it does
+        try
+        {
+            await ExportRole(catalog, ProjectSourceRole.Client, options).ConfigureAwait(false);
+        }
+        catch (ModValidationException refused)
+        {
+            ShowRefusal(services, refused);
+            throw;
+        }
+
         CollisionDoctor.Exported(request.Project);
         if (results[0].SolidPieces > 0)
         {
             services.Notifications.Info(Localization.Loc.T("Collision.Title"), Localization.Loc.F("Collision.Solid", results[0].SolidPieces));
         }
 
+        ModValidationException? serverRefused = null;
         if (request.IncludeServer)
         {
-            await ExportServerAsync(services, options, ownNames, progress, ExportRole, results, ProjectExporter.StagingFolderName, catalog).ConfigureAwait(false);
+            serverRefused = await ExportServerAsync(services, options, ownNames, progress, ExportRole, results, ProjectExporter.StagingFolderName, catalog).ConfigureAwait(false);
         }
 
-        // A server pak an earlier export left beside this new client pak no longer matches it (D12, D13): it goes.
-        var stale = RemoveStaleServerPaks(request.OutputFolder, modName, request.PakChunkIndex, results);
+        // A server pak an earlier export left beside this new client pak no longer matches it (D12, D13): it goes, unless the
+        // package check refused this export's server pak (every earlier server pak then stays as it is).
+        var stale = RemoveStaleServerPaks(request.OutputFolder, modName, request.PakChunkIndex, results, serverRefused);
         if (stale.Count > 0)
         {
             services.Logger.LogInformation("Removed {Count} old server file(s): {Files}", stale.Count, string.Join(", ", stale));
             services.Notifications.Warning(Localization.Loc.T("Export.ServerSkipped"), Localization.Loc.F("Export.StaleServerPak", string.Join(", ", stale.Select(Path.GetFileName))));
         }
 
-        foreach (var problem in ParityProblems(results))
+        foreach (var problem in ParityProblems(results, serverRefused))
         {
             services.Notifications.Warning(Localization.Loc.T("Export.ParityTitle"), problem);
         }
@@ -211,7 +247,7 @@ public static class ModExportService
         }
 
         services.Logger.LogInformation("Exported {Name}: {Count} pak(s) to {Folder}.", results[0].ModName, results.Count, request.OutputFolder);
-        return results;
+        return new ModExportResults(results, serverRefused);
     }
 
     /// <summary>
@@ -219,8 +255,9 @@ public static class ModExportService
     /// <paramref name="exportRole"/> on them. The client paks are written by now: a server problem is a warning, never a
     /// failure. The cooks of the pak staged in <paramref name="mainStaging"/> are compared (levels, clones). The server's game files
     /// read <paramref name="overlays"/> (null: the mods the pak carries), as the client's read the project's imported mods.
+    /// Returns the package check's refusal of a server pak (its NOT EXPORTED report is in the Server folder), or null.
     /// </summary>
-    private static async Task ExportServerAsync(AppServices services, ExportOptions options, IReadOnlyList<string> ownNames, IProgressSink progress,
+    private static async Task<ModValidationException?> ExportServerAsync(AppServices services, ExportOptions options, IReadOnlyList<string> ownNames, IProgressSink progress,
         Func<AssetCatalog, ProjectSourceRole, ExportOptions, Task> exportRole, List<ExportResult> results, string mainStaging, AssetCatalog clientCatalog,
         IReadOnlyList<string>? overlays = null)
     {
@@ -231,7 +268,7 @@ public static class ModExportService
             services.Notifications.Warning(Localization.Loc.T("Export.ServerSkipped"), string.IsNullOrWhiteSpace(configured)
                 ? Localization.Loc.T("Export.NoServerFolder")
                 : Localization.Loc.F("Export.ServerNoCook", configured));
-            return;
+            return null;
         }
 
         if (!string.Equals(Path.GetFullPath(serverFolder), Path.GetFullPath(configured!), StringComparison.OrdinalIgnoreCase))
@@ -278,11 +315,23 @@ public static class ModExportService
             services.Notifications.Warning(Localization.Loc.T("Export.ServerSkipped"),
                 Localization.Loc.F("Export.ServerNoStub", ex.Events, ex.FirstEvent ?? string.Empty, ex.Reason));
         }
+        catch (ModValidationException refused)
+        {
+            // The package check refused a server pak: the earlier server paks stay as they are (owner, r38: a refused export never
+            // renames, moves or deletes a pak; someone exporting straight into a server's mods folder keeps the mod that works).
+            // The Server folder then holds an old server pak under this export's new client pak: the error toast stays until it
+            // is closed, as for a refused client pak (review 3.5.1: a 12-second warning whose text said no pak was written).
+            services.Logger.LogWarning("The package check refused the server pak {Pak}: {Message}", refused.PakPath ?? "-", refused.Message);
+            ShowRefusal(services, refused, Localization.Loc.T("Export.ServerRefused"));
+            return refused;
+        }
         catch (Exception ex) when (ex is InvalidOperationException or IOException or InvalidDataException)
         {
             services.Logger.LogWarning("The server pak was not built: {Message}", ex.Message);
             services.Notifications.Warning(Localization.Loc.T("Export.ServerSkipped"), ex.Message);
         }
+
+        return null;
     }
 
     /// <summary>Why the page <paramref name="module"/> cannot be exported as its own mod right now, or null when it can.</summary>
@@ -318,10 +367,10 @@ public static class ModExportService
     /// Exports one page's changes as a mod of its own (<see cref="ModuleExport"/>): its pak for the client and, when the server
     /// Paks folder holds the stock server cook, for the server (each with a copied stock .sig), then the Registry pak of every
     /// page pak in the output folder. The Economy page writes its <c>EconomyOverride.json</c> (a server file, no pak). Every
-    /// pak passes the package check first. Returns one result per pak written.
+    /// pak passes the package check first. Returns one result per pak written, and the server's refusal (if any).
     /// </summary>
     /// <exception cref="InvalidOperationException">Nothing to export for the page, no catalog, or the package check refused the client pak.</exception>
-    public static async Task<IReadOnlyList<ExportResult>> ExportModuleAsync(
+    public static async Task<ModExportResults> ExportModuleAsync(
         AppServices services, Project project, ExportModule module, string outputFolder, bool includeServer, IProgressSink progress, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(services);
@@ -338,7 +387,7 @@ public static class ModExportService
             if (ExportEconomyOnly(services, request, out var unreadable) is { } written)
             {
                 services.Notifications.Success(Localization.Loc.T("Economy.Exported"), Localization.Loc.F("Economy.ExportedDetail", written));
-                return [];
+                return ModExportResults.None;
             }
 
             throw new InvalidOperationException(unreadable ?? Localization.Loc.F("Export.Module.Nothing", ModuleLabel(module)));
@@ -349,6 +398,7 @@ public static class ModExportService
         await services.Workspace.UseModsAsync(services.Workspace.ModFolders, ownNames, progress, cancellationToken).ConfigureAwait(false);
         var catalog = services.Workspace.Catalog!;
         var state = ModuleExport.StateOf(project.State, module);
+        var decalWarnings = WarnDecals(services, project.DirectoryPath, state); // this page's clones whose decals are not in the pak
         var options = new ExportOptions
         {
             OutputDirectory = outputFolder,
@@ -358,6 +408,7 @@ public static class ModExportService
             Mods = module == ExportModule.Map ? ProjectMods.Folders(project.DirectoryPath) : [], // imported mods are the map's
             LeaveOutEconomy = true, // the Economy page exports it
             Elsewhere = ModuleExport.Elsewhere(project.State, module, modName, ProjectExporter.DefaultPakChunkIndex),
+            GoesWith = ModuleExport.GoesWith(project.State, module, modName, ProjectExporter.DefaultPakChunkIndex),
         };
         if (module == ExportModule.Map)
         {
@@ -385,14 +436,18 @@ public static class ModExportService
                 }
                 else
                 {
-                    results.Add(await exporter.ExportAsync(state, modName, source, roleOptions, role, new StepProgress(progress), cancellationToken).ConfigureAwait(false));
+                    // The decal warnings go into the page pak's report, not the Registry pak's.
+                    var pakOptions = decalWarnings.Count == 0 ? roleOptions : roleOptions with { Warnings = [.. roleOptions.Warnings, .. decalWarnings] };
+                    results.Add(await exporter.ExportAsync(state, modName, source, pakOptions, role, new StepProgress(progress), cancellationToken).ConfigureAwait(false));
                 }
             }
-            catch (Exception ex) when (role == ProjectSourceRole.Server && ex is InvalidOperationException or IOException or InvalidDataException)
+            catch (Exception ex) when (role == ProjectSourceRole.Server && ex is not ModValidationException && ex is InvalidOperationException or IOException or InvalidDataException)
             {
                 // The client's page pak is new: the server's from an earlier export no longer matches it (D12, D13; review 3.5.0).
-                // It goes, and the server's Registry pak is written again without it, before the problem is reported.
-                stale.AddRange(RemoveModulePak(Path.Combine(Path.GetFullPath(outputFolder), ProjectExporter.RoleFolder(role)), modName, module));
+                // It goes, and the server's Registry pak is written again without it, before the problem is reported. A pak the
+                // package check refused is not built either, but the earlier one and the Registry pak stay as they are (owner, r38:
+                // a refused export never renames, moves or deletes a pak).
+                stale.AddRange(RemoveModulePak(ProjectExporter.ExportFolder(outputFolder, modName, pages: true, role), modName, module));
                 if (await ModuleExport.WriteRegistryPakAsync(modName, source, roleOptions, role, services.Logger, cancellationToken, project.State).ConfigureAwait(false) is { } kept)
                 {
                     results.Add(kept);
@@ -410,32 +465,51 @@ public static class ModExportService
         }
 
         progress.Report(Localization.Loc.F("Export.Module.Client", ModuleLabel(module)), 0, 0);
-        await ExportRole(catalog, ProjectSourceRole.Client, options).ConfigureAwait(false);
+        services.Notifications.DismissSticky(RefusalToastGroup);
+        try
+        {
+            await ExportRole(catalog, ProjectSourceRole.Client, options).ConfigureAwait(false);
+        }
+        catch (ModValidationException refused)
+        {
+            ShowRefusal(services, refused);
+            throw;
+        }
+
+        ModValidationException? serverRefused = null;
         if (includeServer)
         {
             // The server reads the project's imported mods like the client's game files do (review 3.5.0: a page's edit of a
             // package a mod changes was built on the mod's copy for the client and the game's for the server); only the Map's
             // pak carries them.
-            await ExportServerAsync(services, options, ownNames, progress, ExportRole, results, ModuleExport.StagingFolder(module), catalog,
+            serverRefused = await ExportServerAsync(services, options, ownNames, progress, ExportRole, results, ModuleExport.StagingFolder(module), catalog,
                 ProjectMods.Folders(project.DirectoryPath)).ConfigureAwait(false);
         }
 
-        // Without a server cook this time, the server's page pak from an earlier export no longer matches the new client one.
-        if (!results.Any(r => r.Role == ProjectSourceRole.Server))
+        // Without a server cook this time, the server's page pak from an earlier export no longer matches the new client one
+        // (one the package check refused stays as it is).
+        if (serverRefused is null && !results.Any(r => r.Role == ProjectSourceRole.Server))
         {
-            var serverFolder = Path.Combine(Path.GetFullPath(outputFolder), ProjectExporter.RoleFolder(ProjectSourceRole.Server));
+            var serverFolder = ProjectExporter.ExportFolder(outputFolder, modName, pages: true, ProjectSourceRole.Server);
             if (RemoveModulePak(serverFolder, modName, module) is { Count: > 0 } removed)
             {
                 stale.AddRange(removed);
 
-                // The server's Registry pak holds that pak's records: it goes too when no other page pak is left beside it.
-                if (!ModuleExport.PakModules.Any(m => File.Exists(Path.Combine(serverFolder, ModuleExport.PakFileName(modName, m, ProjectExporter.DefaultPakChunkIndex)))))
+                // The server's Registry pak holds that pak's records: it goes too when fewer than two page paks are left beside it
+                // (one page pak carries its own records, as WriteRegistryPakAsync has it; review 3.5.1), with its refusal report.
+                if (ModuleExport.PakModules.Count(m => File.Exists(Path.Combine(serverFolder, ModuleExport.PakFileName(modName, m, ProjectExporter.DefaultPakChunkIndex)))) < 2)
                 {
                     var registry = Path.Combine(serverFolder, ModuleExport.RegistryPakFileName(modName, ProjectExporter.DefaultPakChunkIndex));
                     foreach (var file in new[] { registry, ScumStudio.Pak.Writing.SigCopier.GetSigPath(registry) }.Where(File.Exists))
                     {
                         File.Delete(file);
                         stale.Add(file);
+                    }
+
+                    var refusal = Path.Combine(serverFolder, ModuleExport.RegistryReportFileName);
+                    if (ProjectExporter.IsRefusalReport(refusal))
+                    {
+                        File.Delete(refusal);
                     }
                 }
             }
@@ -447,12 +521,12 @@ public static class ModExportService
             services.Notifications.Warning(Localization.Loc.T("Export.ServerSkipped"), Localization.Loc.F("Export.StaleServerPak", string.Join(", ", stale.Select(Path.GetFileName))));
         }
 
-        foreach (var problem in ParityProblems(results))
+        foreach (var problem in ParityProblems(results, serverRefused))
         {
             services.Notifications.Warning(Localization.Loc.T("Export.ParityTitle"), problem);
         }
 
-        var clientFolder = Path.Combine(Path.GetFullPath(outputFolder), ProjectExporter.ClientFolderName);
+        var clientFolder = ProjectExporter.ExportFolder(outputFolder, modName, pages: true, ProjectSourceRole.Client);
         foreach (var (above, abovePak, count, example) in ModuleExport.HiddenBy(clientFolder, modName, module, catalog.ProjectName))
         {
             services.Notifications.Warning(Localization.Loc.T("Export.Module.HiddenTitle"),
@@ -460,7 +534,26 @@ public static class ModExportService
         }
 
         services.Logger.LogInformation("Exported the {Module} page of {Name}: {Count} pak(s) to {Folder}.", module, modName, results.Count, outputFolder);
-        return results;
+        return new ModExportResults(results, serverRefused);
+    }
+
+    /// <summary>Toast group of <see cref="ShowRefusal"/>: a refused export again replaces the toast still on screen.</summary>
+    public const string RefusalToastGroup = "export-refused";
+
+    /// <summary>
+    /// The package check refused a pak: a toast that stays until it is closed says which pak was not written and where the
+    /// report and the problems are (Discord, O Piqueno, 3.4.0: a 12-second toast in the status bar, and the folder kept the
+    /// earlier pak and report as if they were this export's). <paramref name="title"/> is the toast's title (default: the
+    /// client's, no pak was written at all).
+    /// </summary>
+    private static void ShowRefusal(AppServices services, ModValidationException refused, string? title = null)
+    {
+        services.Logger.LogInformation("The package check refused {Pak}: {Problems} problem(s); report {Report}, list {List}.",
+            refused.PakPath ?? "the pak", refused.Result.Problems.Count, refused.ReportPath ?? "-", refused.ListPath ?? "-");
+        services.Notifications.ShowSticky(RefusalToastGroup, ToastSeverity.Error, title ?? Localization.Loc.T("Export.Refused"),
+            Localization.Loc.F("Export.RefusedDetail", refused.Result.Problems.Count, Path.GetFileName(refused.PakPath) ?? string.Empty,
+                refused.ReportPath ?? refused.ListPath ?? string.Empty));
+        NotificationService.MarkShown(refused);
     }
 
     /// <summary>Deletes the page's pak (and its .sig) in <paramref name="roleDirectory"/>; returns the deleted files.</summary>
@@ -482,7 +575,7 @@ public static class ModExportService
     /// <paramref name="defaultFolder"/>), the server paks too when the server Paks folder holds the stock server cook, and the
     /// server paks (pak + sig) copied into the server mods folder of the Settings. Returns the results and the files copied.
     /// </summary>
-    public static async Task<(IReadOnlyList<ExportResult> Results, IReadOnlyList<string> Installed)> QuickExportModuleAsync(
+    public static async Task<(ModExportResults Results, IReadOnlyList<string> Installed)> QuickExportModuleAsync(
         AppServices services, Project project, ExportModule module, string defaultFolder, IProgressSink progress, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(services);
@@ -517,6 +610,22 @@ public static class ModExportService
         }
 
         return (results, installed);
+    }
+
+    /// <summary>
+    /// The export warnings for the clones of <paramref name="state"/> whose decals are not baked into their textures
+    /// (<see cref="DecalChecks.Pending"/>), with one toast naming them; empty when every drawn decal is applied.
+    /// </summary>
+    internal static IReadOnlyList<string> WarnDecals(AppServices services, string projectDirectory, EditState state)
+    {
+        var pending = DecalChecks.Pending(projectDirectory, state);
+        if (pending.Count > 0)
+        {
+            services.Notifications.Warning(Localization.Loc.T("Export.DecalsPending"),
+                Localization.Loc.F("Export.DecalsPendingDetail", string.Join(", ", pending.Select(p => p.Clone))));
+        }
+
+        return DecalChecks.Warnings(pending);
     }
 
     /// <summary>
@@ -589,9 +698,9 @@ public static class ModExportService
             return null;
         }
 
-        var output = Path.GetFullPath(request.OutputFolder);
-        var server = economy.SaveTo(Path.Combine(output, ProjectExporter.ServerFolderName), withNote: true);
-        economy.SaveTo(Path.Combine(output, ProjectExporter.ClientFolderName), withNote: true);
+        var modName = request.ModName ?? request.Project.Manifest.Name;
+        var server = economy.SaveTo(ProjectExporter.ExportFolder(request.OutputFolder, modName, pages: false, ProjectSourceRole.Server), withNote: true);
+        economy.SaveTo(ProjectExporter.ExportFolder(request.OutputFolder, modName, pages: false, ProjectSourceRole.Client), withNote: true);
         services.Logger.LogInformation("Economy written to {Path} (an economy-only project).", server);
         return server;
     }
@@ -599,13 +708,16 @@ public static class ModExportService
     /// <summary>
     /// Deletes the server paks (and their signatures) of <paramref name="modName"/> that an earlier export left in
     /// <c>&lt;root&gt;/Server</c> when this export built no server pak of that kind (<paramref name="results"/>): a server pak
-    /// beside a newer client pak no longer matches it. Returns the deleted files.
+    /// beside a newer client pak no longer matches it. With <paramref name="serverRefused"/> (the package check refused a server
+    /// pak of this export) nothing goes: a refused export never renames, moves or deletes a pak (owner, r38), and the Server
+    /// folder's NOT EXPORTED report names the earlier pak. Returns the deleted files.
     /// </summary>
-    public static IReadOnlyList<string> RemoveStaleServerPaks(string root, string modName, int pakChunkIndex, IReadOnlyList<ExportResult> results)
+    public static IReadOnlyList<string> RemoveStaleServerPaks(string root, string modName, int pakChunkIndex, IReadOnlyList<ExportResult> results,
+        ModValidationException? serverRefused = null)
     {
         ArgumentNullException.ThrowIfNull(results);
-        var server = Path.Combine(Path.GetFullPath(root), ProjectExporter.RoleFolder(ProjectSourceRole.Server));
-        if (!Directory.Exists(server) || !results.Any(r => r.Role == ProjectSourceRole.Client))
+        var server = ProjectExporter.ExportFolder(root, modName, pages: false, ProjectSourceRole.Server);
+        if (serverRefused is not null || !Directory.Exists(server) || !results.Any(r => r.Role == ProjectSourceRole.Client))
         {
             return [];
         }
@@ -633,22 +745,30 @@ public static class ModExportService
 
     /// <summary>
     /// The install rule of an export in the user's language (D13, D19): every player needs the client paks, the server the
-    /// server paks, and both restart.
+    /// server paks, and both restart. With <paramref name="serverRefused"/> (the package check refused a server pak of this
+    /// export) it says that pak was NOT written, never to set the Server folder (it is set; review 3.5.1).
     /// </summary>
-    public static string InstallNote(IReadOnlyList<ExportResult> results)
+    public static string InstallNote(IReadOnlyList<ExportResult> results, ModValidationException? serverRefused = null)
     {
         ArgumentNullException.ThrowIfNull(results);
         static string Paks(IEnumerable<ExportResult> of) => string.Join(" + ", of.Select(r => Path.GetFileName(r.PakPath)).OfType<string>());
         var client = Paks(results.Where(r => r.Role == ProjectSourceRole.Client));
         var server = Paks(results.Where(r => r.Role == ProjectSourceRole.Server));
+        if (serverRefused is not null)
+        {
+            return Localization.Loc.F("Export.ParityServerRefused", client, Path.GetFileName(serverRefused.PakPath) ?? ProjectExporter.RoleFolder(ProjectSourceRole.Server));
+        }
+
         return server.Length > 0 ? Localization.Loc.F("Export.Parity", client, server) : Localization.Loc.F("Export.ParityClientOnly", client);
     }
 
     /// <summary>
     /// What is wrong with the pairing of an export's paks, in the user's language: a Craftables pak built for one cook only
-    /// (D13, D19: the server then does not know the recipes, and placed craftables can change).
+    /// (D13, D19: the server then does not know the recipes, and placed craftables can change). A server Craftables pak missing
+    /// because the package check refused a server pak (<paramref name="serverRefused"/>) is that refusal's to say, not a
+    /// missing Server folder.
     /// </summary>
-    public static IReadOnlyList<string> ParityProblems(IReadOnlyList<ExportResult> results)
+    public static IReadOnlyList<string> ParityProblems(IReadOnlyList<ExportResult> results, ModValidationException? serverRefused = null)
     {
         ArgumentNullException.ThrowIfNull(results);
         static ExportResult? Crafted(IReadOnlyList<ExportResult> all, ProjectSourceRole role) =>
@@ -657,7 +777,7 @@ public static class ModExportService
         var server = Crafted(results, ProjectSourceRole.Server);
         if (client is not null && server is null)
         {
-            return [Localization.Loc.F("Export.CraftablesServerMissing", Path.GetFileName(client.PakPath) ?? client.ModName)];
+            return serverRefused is not null ? [] : [Localization.Loc.F("Export.CraftablesServerMissing", Path.GetFileName(client.PakPath) ?? client.ModName)];
         }
 
         return server is not null && client is null ? [Localization.Loc.F("Export.CraftablesClientMissing", Path.GetFileName(server.PakPath) ?? server.ModName)] : [];
@@ -701,7 +821,7 @@ public static class ModExportService
     /// the server Paks folder holds the stock server cook, and both copied (pak + sig) into the client/server mods folders
     /// set in Settings, so they are ready to load. Returns the results and the files copied into the mods folders.
     /// </summary>
-    public static async Task<(IReadOnlyList<ExportResult> Results, IReadOnlyList<string> Installed)> QuickExportAsync(
+    public static async Task<(ModExportResults Results, IReadOnlyList<string> Installed)> QuickExportAsync(
         AppServices services, Project project, string defaultFolder, IProgressSink progress, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(services);
@@ -732,14 +852,8 @@ public static class ModExportService
             }
         }
 
-        // The server mods folder loses a Craftables pak copied by an earlier export when this one built none (none at all:
-        // nothing was left to build).
         var serverMods = services.Settings.Load().ServerModsOutputFolder;
-        if (!string.IsNullOrWhiteSpace(serverMods) && Directory.Exists(serverMods) && (results.Count == 0 || results.Any(r => r.Role == ProjectSourceRole.Server))
-            && !results.Any(r => r.Role == ProjectSourceRole.Server && r.ModName == ProjectExporter.SanitizeModName(project.Manifest.Name) + CraftablesExporter.Suffix))
-        {
-            CraftablesExporter.RemoveStale(serverMods, project.Manifest.Name, request.PakChunkIndex);
-        }
+        RemoveStaleServerModsCraftables(serverMods, project.Manifest.Name, request.PakChunkIndex, results);
 
         // No server pak this time, but an earlier one sits in the server's mods folder: it no longer matches the new client
         // pak. That folder is the server's, so it is only named, never emptied.
@@ -755,6 +869,29 @@ public static class ModExportService
         }
 
         return (results, installed);
+    }
+
+    /// <summary>
+    /// After a one-click export: deletes from the server's mods folder <paramref name="serverMods"/> the Craftables pak (and its
+    /// .sig) an earlier export copied there when this export, with a server cook (or with nothing to build at all), built no
+    /// server Craftables pak, as <see cref="RemoveStaleServerPaks"/> does in the Server folder (D12, D13: an old server
+    /// Craftables pak beside a new client one). When the package check refused a server pak
+    /// (<see cref="ModExportResults.ServerRefused"/>) the copy stays: a refused export never deletes a pak (owner, r38). A
+    /// server Craftables pak that failed for another reason is no refusal: the copy goes, as in 3.5.0 (review 3.5.1).
+    /// Returns the deleted files.
+    /// </summary>
+    public static IReadOnlyList<string> RemoveStaleServerModsCraftables(string? serverMods, string modName, int pakChunkIndex, ModExportResults results)
+    {
+        ArgumentNullException.ThrowIfNull(results);
+        var craftables = ProjectExporter.SanitizeModName(modName) + CraftablesExporter.Suffix;
+        if (string.IsNullOrWhiteSpace(serverMods) || !Directory.Exists(serverMods) || results.ServerRefused is not null
+            || (results.Count > 0 && !results.Any(r => r.Role == ProjectSourceRole.Server))
+            || results.Any(r => r.Role == ProjectSourceRole.Server && r.ModName == craftables))
+        {
+            return [];
+        }
+
+        return CraftablesExporter.RemoveStale(serverMods, modName, pakChunkIndex);
     }
 
     private sealed class StepProgress(IProgressSink sink) : IProgress<string>

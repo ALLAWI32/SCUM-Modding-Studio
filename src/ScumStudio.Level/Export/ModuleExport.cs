@@ -97,6 +97,9 @@ public static class ModuleExport
     /// <summary>The page pak's report inside the role folder.</summary>
     public static string ReportFileName(ExportModule module) => "export-report-" + module.ToString().ToLowerInvariant() + ".md";
 
+    /// <summary>The report a refused Registry pak writes (a written one has none: the page paks' reports describe it).</summary>
+    public const string RegistryReportFileName = "export-report-registry.md";
+
     /// <summary>
     /// The page a vehicle/item package belongs to: a clone's packages go with its kind (a zone copy that a placed object on
     /// the map uses goes with the Map, like the NPC guards that made it), else the package's folder (vehicles, weapons and
@@ -284,6 +287,23 @@ public static class ModuleExport
         return package => map.GetValueOrDefault(package);
     }
 
+    /// <summary>
+    /// The other page paks <paramref name="module"/>'s pak only works with although none of its packages names theirs: sentry
+    /// robots replaced with NPCs (<see cref="Spawns.NpcGuards"/>) are a Map edit (each robot removed from its level) and
+    /// Spawns edits (the NPC posts, the NPC area and its settings). The Map pak alone only removes the robots; the Spawns pak
+    /// alone adds the NPCs while the robots stay. Empty for the other pages and for a project without such an edit.
+    /// </summary>
+    public static IReadOnlyList<string> GoesWith(EditState state, ExportModule module, string modName, int baseChunk)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        var guards = state.DeletedActors.Any(a => !Spawns.SpawnPlaces.IsStaticData(a.Level) && a.Actor.StartsWith(Spawns.NpcGuards.SpawnerName, StringComparison.OrdinalIgnoreCase))
+            && state.NewSpawnPlaces.Any(p => p.Kind == Spawns.SpawnPlaceKind.CharacterGroup);
+        return !guards ? []
+            : module == ExportModule.Map ? [PakFileName(modName, ExportModule.Spawns, baseChunk)]
+            : module == ExportModule.Spawns ? [PakFileName(modName, ExportModule.Map, baseChunk)]
+            : [];
+    }
+
     /// <summary>The packages under <paramref name="staging"/> (another pak of the same export) mapped to <paramref name="pakName"/>.</summary>
     public static Func<string, string?> ShippedBy(string staging, string projectName, string pakName)
     {
@@ -296,12 +316,12 @@ public static class ModuleExport
     {
         ArgumentNullException.ThrowIfNull(needs);
         var side = role == ProjectSourceRole.Server
-            ? $"This is the SERVER pak {pakName}, one page of the project: it goes into the dedicated server's mods folder, and every player needs the CLIENT pak of the same name in the game's Paks\\~mods."
-            : $"This is the CLIENT pak {pakName}, one page of the project: every player needs it in the game's Paks\\~mods, and a server needs the SERVER pak of the same name in its mods folder.";
+            ? $"SERVER files of one page of the project ({pakName}). Copy every .pak and .sig in this folder into the dedicated server's SCUM\\Content\\Paks\\~mods and start the server with -fileopenlog (without it the server refuses every mod pak and stops). Every player needs the CLIENT folder of the same export in the game's SCUM\\Content\\Paks\\~mods."
+            : $"CLIENT files of one page of the project ({pakName}). Copy every .pak and .sig in this folder into the game's SCUM\\Content\\Paks\\~mods on every player's PC. A server with this mod needs the SERVER folder of the same export in its SCUM\\Content\\Paks\\~mods, started with -fileopenlog.";
         var registry = registryPakName.Length == 0 ? string.Empty
-            : $" Copy {registryPakName} the same way (client and server) whenever you install two or more page paks of this project: the game reads only one list of assets (AssetRegistry.bin, the highest pak's), and that pak's list holds the new assets of every page pak in this folder.";
+            : $" {registryPakName} is in this folder whenever two or more pages of the project were exported: copy it with them (the game reads only one list of assets, the highest pak's, and that pak's list holds the new assets of every page pak here).";
         var needed = needs.Count == 0 ? string.Empty : " It uses what " + string.Join(", ", needs) + " adds: install that pak too.";
-        return side + registry + needed + " Do not install the whole-project pak of the same project with its page paks (they would hold the same changes twice). Restart the game and the server after copying.";
+        return side + registry + needed + " Never install the whole project's folder of the same project together with its page paks (they would hold the same changes twice). Restart the game and the server after copying.";
     }
 
     /// <summary>
@@ -319,7 +339,7 @@ public static class ModuleExport
         ArgumentNullException.ThrowIfNull(catalog);
         ArgumentNullException.ThrowIfNull(options);
         logger ??= NullLogger.Instance;
-        var roleDirectory = Path.Combine(Path.GetFullPath(options.OutputDirectory), ProjectExporter.RoleFolder(role));
+        var roleDirectory = ProjectExporter.ExportFolder(options.OutputDirectory, modName, pages: true, role);
         var pakPath = Path.Combine(roleDirectory, RegistryPakFileName(modName, options.PakChunkIndex));
         var warnings = new List<string>(options.Warnings);
         var sources = new List<(string Source, AssetRegistryFile Registry)>();
@@ -349,15 +369,20 @@ public static class ModuleExport
         }
 
         var tables = state is not null && tablePaks >= 2 ? TradeTable(state, catalog, present, shippedBy, warnings) : [];
-        var staging = Path.Combine(roleDirectory, RegistryStagingFolder);
-        if (sources.Count == 0 && tables.Count == 0)
+        var staging = Path.Combine(ProjectExporter.WorkFolder(roleDirectory), RegistryStagingFolder);
+
+        // One page pak alone carries the game's records plus its own: a Registry pak would repeat it (owner, 3.5.0: two
+        // cabins gave three 48 MB paks). It is written once a second page pak is there.
+        if (sources.Count <= 1 && tables.Count == 0)
         {
             foreach (var file in new[] { pakPath, SigCopier.GetSigPath(pakPath) }.Where(File.Exists))
             {
                 File.Delete(file);
-                logger.LogInformation("Registry pak: removed {File} (no page pak adds a record).", file);
+                logger.LogInformation("Registry pak: removed {File} ({Reason}).", file, sources.Count == 0 ? "no page pak adds a record" : "one page pak carries its own records");
             }
 
+            // No Registry pak is wanted now: an earlier refusal's NOT EXPORTED report would name a pak that is gone (review 3.5.1).
+            ProjectExporter.ClearRefusal(Path.Combine(roleDirectory, RegistryReportFileName));
             return null;
         }
 
@@ -400,7 +425,19 @@ public static class ModuleExport
             assets.Add(new ExportedAsset(table.PackagePath, virtualPath, false));
         }
 
-        var validation = ProjectExporter.Validate(staging, catalog, options with { Elsewhere = p => shippedBy.GetValueOrDefault(p) }, null, cancellationToken);
+        // Refused, it says so in its own report; the earlier Registry pak stays as it is, like every pak a refused export finds.
+        var refusalReport = Path.Combine(roleDirectory, RegistryReportFileName);
+        ValidationResult? validation;
+        try
+        {
+            validation = ProjectExporter.Validate(staging, catalog, options with { Elsewhere = p => shippedBy.GetValueOrDefault(p) }, null, cancellationToken, listDirectory: roleDirectory);
+        }
+        catch (ModValidationException refused)
+        {
+            throw ProjectExporter.WriteRefusal(refused, ProjectExporter.SanitizeModName(modName) + "-" + RegistryName, role, refusalReport, options.WritePak ? pakPath : null, warnings);
+        }
+
+        ProjectExporter.ClearRefusal(refusalReport);
         string? sigPath = null;
         if (options.WritePak)
         {

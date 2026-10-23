@@ -68,6 +68,10 @@ internal sealed class IngredientFixture : IDisposable
         Write(RecipeIngredients.TagFolder + "/CI_Lead_Plate", Tag("CI_Lead_Plate", LeadPlate, "Lead plate"));
         Write(RecipeIngredients.TagFolder + "/CI_Group_Rifles", Tag("CI_Group_Rifles", null, "Rifles"));
         Write(RecipeIngredients.TagFolder + "/CI_Weapon_M16", Tag("CI_Weapon_M16", M16, "M16"));
+
+        // The templates of a new tag (r40): whole items (the default consumption method) and items with uses.
+        Write(CraftablesPlanner.ItemTagTemplate, Tag("CI_Group_Glass", LeadPlate, "Glass"));
+        Write(CraftablesPlanner.UsesTagTemplate, Tag("CI_Group_Rope", LeadPlate, "Rope"));
         Write(Recipe, ItemRecipe());
         Catalog = AssetCatalog.OpenLoose(Root);
     }

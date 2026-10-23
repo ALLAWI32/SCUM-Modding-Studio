@@ -115,7 +115,8 @@ public sealed partial class StudioTools
             "Clones a stock vehicle or item under a new name (journaled): items copy the item and its _ES; vehicles copy the whole " +
             "family (entity setup, item container, anim/physics assets, curves, mount slots, attachments, manual spawn presets) while " +
             "meshes and textures stay shared. The clone is registered in AssetRegistry.bin at export, so #SpawnItem <newName> or " +
-            "#SpawnVehicle BPC_<newName> finds it. 'caption' sets its in-game name.",
+            "#SpawnVehicle BPC_<newName> finds it. 'caption' sets its in-game name. A clone the export could not build is refused " +
+            "with the reason.",
             ToolSchema.Object()
                 .String("template", "Stock asset name or path (Weapon_RPK-74, BPC_WolfsWagen, Copper_Coins, …).", required: true)
                 .String("newName", "Items: the new asset name (Weapon_RPK-74_Gold). Vehicles: the new token (Hunter → BPC_Hunter). Letters, digits, _ and -, not ending in _<number>, which the engine reads as an FName number (Hunter2 or Hunter_v2, not Hunter_2).", required: true)
@@ -196,6 +197,12 @@ public sealed partial class StudioTools
                 continue;
             }
 
+            if (TunableValue.CheckRange(tunable, normalized) is { } outOfRange)
+            {
+                failed.Add($"{key}: {outOfRange}");
+                continue;
+            }
+
             var current = project.State.GetAssetValue(path, tunable.Export, tunable.Path)?.Current ?? tunable.Value;
             var op = new SetAssetValueOp(path, tunable.Export, tunable.Path, tunable.Kind.ToString(), current, normalized);
             if (project.State.Validate(op) is { } error)
@@ -234,6 +241,11 @@ public sealed partial class StudioTools
         catch (ArgumentException ex)
         {
             return Task.FromResult(McpToolResult.Error(ex.Message));
+        }
+
+        if (ScumStudio.Modding.AssetModBuilder.WhyNotBuilt(catalog, plan) is { } why)
+        {
+            return Task.FromResult(McpToolResult.Error($"The clone cannot be built, so the pak would not have it: {why}"));
         }
 
         var op = new CloneAssetOp(asset.Kind.ToString().ToLowerInvariant(), template, plan.NewPrimary, plan.Packages.Select(p => new PackagePair(p.Key, p.Value)).ToList());

@@ -4,7 +4,9 @@ using ScumStudio.App.Localization;
 using ScumStudio.Assets.Catalog;
 using ScumStudio.Core.Mathematics;
 using ScumStudio.Level.Editing;
+using ScumStudio.Level.Export;
 using ScumStudio.Level.Model;
+using ScumStudio.Level.World;
 
 namespace ScumStudio.App.ViewModels;
 
@@ -15,16 +17,21 @@ public sealed record LootPresetRow(string Path, string Name);
 
 /// <summary>
 /// The loot editor (owner: "every crate, locker, safe, cabinet: Lootable on/off and what it can contain"). A player
-/// searches a mesh through its component's <c>ExamineAssetData</c> entries (one loot preset each, e.g.
-/// <c>Examine_Weapon_Locker_Lockpick_Weapon</c>); the editor shows the selected container's presets (their groups and
-/// items appear under "What can spawn here"), turns it into decoration (no entries) or back, and swaps or adds presets.
-/// Every change is a <see cref="SetLootOp"/>; copies carry the loot (see <see cref="LootOf(ActorItemViewModel, ComponentRecord)"/>).
+/// searches a mesh through <c>ExamineAssetData</c> entries (one loot preset each, e.g.
+/// <c>Examine_Weapon_Locker_Lockpick_Weapon</c>): the component's own, and the mesh asset's own, which the game reads too
+/// (redriver6155, 3.5: "default and custom loot merged. it keeps both"). The editor shows the loot the selected container
+/// gives (its own presets, else its model's), turns it into decoration (no entries) or back, and swaps or adds presets;
+/// the export makes that exactly what the game gives (see <see cref="MeshLoot"/>). Every change is a <see cref="SetLootOp"/>;
+/// copies carry the loot (see <see cref="LootOf(ActorItemViewModel, ComponentRecord)"/>). A placed object can also have
+/// "No loot inside" as a whole (<see cref="SetNoLootOp"/>: its parts, the lockers it carries, its loot points).
 /// </summary>
 public sealed partial class MapPageViewModel
 {
     private const string PresetsFolder = "/Game/ConZ_Files/Items/SpawnerPresets2/";
     private IReadOnlyList<LootPresetRow>? _lootChoices;
+    private (AssetCatalog Catalog, MeshLoot Loot)? _meshLoot;
     private bool _syncingLoot;
+    private bool _syncingNoLoot;
 
     /// <summary>True when the selection is a searchable container (or a mesh part that was or can be one).</summary>
     [ObservableProperty]
@@ -41,6 +48,32 @@ public sealed partial class MapPageViewModel
     /// <summary>The preset picked in the "add" box.</summary>
     [ObservableProperty]
     private LootPresetRow? _selectedLootChoice;
+
+    /// <summary>True when the selection has an object the project placed (not an item spawner): "No loot inside" applies.</summary>
+    [ObservableProperty]
+    private bool _hasNoLootOption;
+
+    /// <summary>On: the export takes every loot out of the selected placed objects (see <see cref="SetNoLootOp"/>).</summary>
+    [ObservableProperty]
+    private bool _isNoLoot;
+
+    /// <summary>True when the loot editor's object has "No loot inside" (the editor is then read-only).</summary>
+    [ObservableProperty]
+    private bool _isLootEditorLocked;
+
+    /// <summary>The Add object box's default: objects added, pasted or copied from now on get "No loot inside".</summary>
+    public bool NoLootForNewObjects
+    {
+        get => _services.Settings.Load().Ui.NoLootInNewObjects;
+        set
+        {
+            if (value != NoLootForNewObjects)
+            {
+                _services.UpdateSettings(s => s with { Ui = s.Ui with { NoLootInNewObjects = value } });
+                OnPropertyChanged();
+            }
+        }
+    }
 
     /// <summary>Every examine preset of the game (<c>SpawnerPresets2/**/Examine_*</c>), by name.</summary>
     public IReadOnlyList<LootPresetRow> LootChoices => _lootChoices ??= ReadLootChoices();
@@ -62,9 +95,26 @@ public sealed partial class MapPageViewModel
             .ToList();
     }
 
+    /// <summary>The loot a mesh asset carries itself (read once per mesh of the open game files).</summary>
+    private MeshLootInfo MeshLootOf(string? mesh)
+    {
+        if (string.IsNullOrEmpty(mesh) || _services.Workspace.Catalog is not { } catalog)
+        {
+            return MeshLootInfo.None;
+        }
+
+        if (_meshLoot is not { } known || !ReferenceEquals(known.Catalog, catalog))
+        {
+            _meshLoot = known = (catalog, MeshLoot.FromCatalog(catalog));
+        }
+
+        return known.Loot.Of(mesh);
+    }
+
     /// <summary>
     /// The mesh component the editor edits, with the name the journal uses (null = the actor's root): the selected part, or
-    /// the actor's first searchable mesh (a locker's, a crate's); a plain mesh actor's own mesh.
+    /// the actor's first searchable mesh (a locker's, a crate's: its own presets, or for a container or mesh actor its
+    /// model's); a plain mesh actor's own mesh.
     /// </summary>
     private (ActorItemViewModel Item, string? Component, ComponentRecord Record)? LootTarget()
     {
@@ -79,8 +129,10 @@ public sealed partial class MapPageViewModel
         }
 
         var root = item.Actor.Root;
-        var searchable = item.Actor.Components.FirstOrDefault(c => c.LootPresets.Count > 0 && !c.IsSynthesized);
-        if (searchable is not null && (item.Actor.IsItemContainer || item.Actor.Kind == ActorKind.StaticMeshActor || item.IsAdded))
+        var small = item.Actor.IsItemContainer || item.Actor.Kind == ActorKind.StaticMeshActor;
+        var searchable = item.Actor.Components.FirstOrDefault(c => c.LootPresets.Count > 0 && !c.IsSynthesized)
+                         ?? (small ? item.Actor.Components.FirstOrDefault(c => c.IsStaticMeshComponent && !c.IsSynthesized && MeshLootOf(c.StaticMeshPath).HasExamineData) : null);
+        if (searchable is not null && (small || item.IsAdded))
         {
             return (item, ReferenceEquals(searchable, root) || searchable.Name == root?.Name ? null : searchable.Name, searchable);
         }
@@ -88,19 +140,31 @@ public sealed partial class MapPageViewModel
         return item.Actor.Kind == ActorKind.StaticMeshActor && root is { IsSynthesized: false } r ? (item, null, r) : null;
     }
 
-    /// <summary>The loot a component has now: the journal's setting, an added mesh's carried loot, or what the level stores.</summary>
-    private LootSetting CurrentLoot(ActorItemViewModel item, string? component, ComponentRecord record)
+    /// <summary>The loot a component has now (see <see cref="LootNow"/>).</summary>
+    private LootSetting CurrentLoot(ActorItemViewModel item, string? component, ComponentRecord record) => LootNow(item, component, record).Loot;
+
+    /// <summary>
+    /// The loot a component has now: none with "No loot inside", the journal's setting, an added mesh's carried loot, a
+    /// duplicate's source's setting, the presets the level stores on it, else its model's own (<c>FromMesh</c>: what the
+    /// mesh asset gives, nothing of the component's).
+    /// </summary>
+    private (LootSetting Loot, bool FromMesh) LootNow(ActorItemViewModel item, string? component, ComponentRecord record)
     {
         if (_services.Projects.Current?.State is { } state)
         {
+            if (state.IsNoLoot(item.Reference))
+            {
+                return (new LootSetting(false, []), false);
+            }
+
             if (state.GetLoot(item.Reference, component) is { } set)
             {
-                return set;
+                return (set, false);
             }
 
             if (item.IsAdded && state.AddedActors.GetValueOrDefault(item.Reference) is AddStaticMeshActorOp { Loot: { } carried })
             {
-                return new LootSetting(carried.Count > 0, carried);
+                return (new LootSetting(carried.Count > 0, carried), false);
             }
 
             // A duplicate with no loot of its own gets its source's in the export (a copy made before copies carried their
@@ -108,19 +172,25 @@ public sealed partial class MapPageViewModel
             // stock loot keeps that as its own (see EditState's SetLootOp), so it does not come back here.
             if (item.IsAdded && state.AddedActors.GetValueOrDefault(item.Reference) is DuplicateActorOp duplicate && state.GetLoot(duplicate.Source, component) is { } inherited)
             {
-                return inherited;
+                return (inherited, false);
             }
         }
 
-        return new LootSetting(record.LootPresets.Count > 0, record.LootPresets);
+        if (record.LootPresets.Count > 0)
+        {
+            return (new LootSetting(true, record.LootPresets), false);
+        }
+
+        var mesh = MeshLootOf(_services.Projects.Current?.State.GetMeshOverride(item.Reference, component) ?? record.StaticMeshPath);
+        return (new LootSetting(mesh.Presets.Count > 0, mesh.Presets), mesh.HasExamineData);
     }
 
     /// <summary>The loot a copy of <paramref name="record"/> carries (null = none of its own: only what its mesh asset has).</summary>
     private IReadOnlyList<string>? LootOf(ActorItemViewModel item, ComponentRecord record)
     {
         var component = ReferenceEquals(record, item.Actor.Root) || record.Name == item.Actor.Root?.Name ? null : record.Name;
-        var loot = CurrentLoot(item, component, record);
-        return loot.Lootable ? (loot.Presets.Count > 0 ? loot.Presets : null) : [];
+        var (loot, fromMesh) = LootNow(item, component, record);
+        return fromMesh ? null : loot.Lootable ? (loot.Presets.Count > 0 ? loot.Presets : null) : [];
     }
 
     /// <summary>Shows the selection's loot (called with the selection's other panels).</summary>
@@ -133,12 +203,14 @@ public sealed partial class MapPageViewModel
             {
                 var loot = CurrentLoot(target.Item, target.Component, target.Record);
                 HasLootEditor = true;
+                IsLootEditorLocked = _services.Projects.Current?.State.IsNoLoot(target.Item.Reference) == true;
                 IsLootable = loot.Lootable;
                 LootPresets = loot.Presets.Select(p => new LootPresetRow(p, PresetName(p))).ToList();
             }
             else
             {
                 HasLootEditor = false;
+                IsLootEditorLocked = false;
                 IsLootable = false;
                 LootPresets = [];
             }
@@ -147,6 +219,8 @@ public sealed partial class MapPageViewModel
         {
             _syncingLoot = false;
         }
+
+        RefreshNoLootOption();
     }
 
     partial void OnIsLootableChanged(bool value)
@@ -203,6 +277,13 @@ public sealed partial class MapPageViewModel
             return;
         }
 
+        if (_services.Projects.Current?.State.IsNoLoot(target.Item.Reference) == true)
+        {
+            _services.Notifications.Info(Loc.T("Map.Loot.Title"), Loc.T("Map.NoLoot.On"));
+            RefreshLootEditor();
+            return;
+        }
+
         try
         {
             var entry = _services.Projects.Apply(new SetLootOp(target.Item.Reference, target.Component, old, next));
@@ -211,6 +292,65 @@ public sealed partial class MapPageViewModel
         catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or IOException)
         {
             _services.Notifications.Error(Loc.T("Map.Loot.Title"), ex.Message);
+        }
+
+        RefreshLootEditor();
+        ShowSpawnInfo(SelectedActor);
+    }
+
+    /// <summary>The selected objects "No loot inside" applies to: placed ones, not deleted, not item spawners.</summary>
+    private List<ActorItemViewModel> NoLootTargets()
+    {
+        if (_services.Projects.Current?.State is null)
+        {
+            return [];
+        }
+
+        IEnumerable<ActorItemViewModel> items = HasGroup
+            ? GroupItems().Where(g => g.Instance is null).Select(g => g.Item)
+            : SelectedActor is { } selected ? [selected] : [];
+        return items.Where(i => i.IsAdded && !i.IsDeleted && !string.Equals(i.Actor.ClassPath, PlacedBlueprintIndex.WorldItemSpawnerClass, StringComparison.Ordinal))
+            .Distinct().ToList();
+    }
+
+    /// <summary>Shows the selection's "No loot inside" (with the loot editor).</summary>
+    private void RefreshNoLootOption()
+    {
+        _syncingNoLoot = true;
+        try
+        {
+            var targets = NoLootTargets();
+            var state = _services.Projects.Current?.State;
+            HasNoLootOption = targets.Count > 0;
+            IsNoLoot = state is not null && targets.Count > 0 && targets.All(t => state.IsNoLoot(t.Reference));
+        }
+        finally
+        {
+            _syncingNoLoot = false;
+        }
+    }
+
+    partial void OnIsNoLootChanged(bool value)
+    {
+        if (_syncingNoLoot || _services.Projects.Current?.State is not { } state)
+        {
+            return;
+        }
+
+        var ops = NoLootTargets().Where(t => state.IsNoLoot(t.Reference) != value)
+            .Select(t => (EditOp)new SetNoLootOp(t.Reference, !value, value))
+            .ToList();
+        if (ops.Count > 0)
+        {
+            try
+            {
+                var entry = _services.Projects.Apply(ops.Count == 1 ? ops[0] : new BatchOp(Loc.T("Map.NoLoot"), ops));
+                _services.Notifications.Info(Loc.T("Map.Loot.Title"), entry.Op.Describe());
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or IOException)
+            {
+                _services.Notifications.Error(Loc.T("Map.Loot.Title"), ex.Message);
+            }
         }
 
         RefreshLootEditor();

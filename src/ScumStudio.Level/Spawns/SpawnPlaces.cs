@@ -53,6 +53,9 @@ public sealed record SpawnPlace(SpawnPlaceKind Kind, int Index, FTransform Trans
     /// <summary>A <see cref="SpawnPlaceKind.CharacterGroup"/>'s posts (world space, centimetres; the first is where it stands); empty for other kinds.</summary>
     public IReadOnlyList<FVector> Points { get; init; } = [];
 
+    /// <summary>A <see cref="SpawnPlaceKind.Zone"/>'s sub-zones (the game's, then the project's); empty for other kinds.</summary>
+    public IReadOnlyList<Editing.SubZone> SubZones { get; init; } = [];
+
     /// <summary>The name of the place's actor in the map's document (<c>VehicleSpawn_00123</c>, <c>NewVehicleSpawn_0001</c>).</summary>
     public string ActorName => Name ?? SpawnPlaces.ActorName(Kind, Index);
 }
@@ -210,7 +213,7 @@ public static class SpawnPlaces
                     : null;
             case SpawnPlaceKind.Zone:
                 return TransformOf(item, "_transform") is { } zt
-                    ? new SpawnPlace(kind, index, zt, ImportName(Member(item, "_zoneData")?.Value), Float(item, "_semiXAxisSize"), Float(item, "_semiYAxisSize"))
+                    ? new SpawnPlace(kind, index, zt, ImportName(Member(item, "_zoneData")?.Value), Float(item, "_semiXAxisSize"), Float(item, "_semiYAxisSize")) { SubZones = SubZonesOf(item) }
                     : null;
             case SpawnPlaceKind.CharacterGroup:
                 var posts = GroupPosts(item);
@@ -330,8 +333,13 @@ public static class SpawnPlaces
             }
 
             var edited = state.GetTransformOverride(actor) is { } value
-                ? At(place.Kind, place.Group, value, place.Transform.Scale3D) with { Index = place.Index, Points = MovePosts(place.Points, place.Transform, value.ToTransform()) }
+                ? At(place.Kind, place.Group, value, place.Transform.Scale3D) with { Index = place.Index, Points = MovePosts(place.Points, place.Transform, value.ToTransform()), SubZones = place.SubZones }
                 : place;
+            if (place.Kind == SpawnPlaceKind.Zone && state.SubZones.Where(s => Editing.ActorRef.Comparer.Equals(s.Zone, actor)).Select(s => s.SubZone).ToList() is { Count: > 0 } added)
+            {
+                edited = edited with { SubZones = [.. edited.SubZones, .. added] };
+            }
+
             result.Add(SpawnChoices.PropertyOf(place.Kind) is { } property && state.GetSpawnChoice(actor, property) is { } choice
                 ? edited with { Group = SettingName(choice) }
                 : edited);
@@ -399,6 +407,15 @@ public static class SpawnPlaces
         var leaf = setting[(setting.LastIndexOf('/') + 1)..];
         return leaf[(leaf.IndexOf('.') + 1)..];
     }
+
+    /// <summary>A zone's sub-zones as stored (<c>_subZoneData</c>: the box around each one's boxes, its settings and priority).</summary>
+    private static IReadOnlyList<Editing.SubZone> SubZonesOf(StructValue zone) =>
+        Member(zone, "_subZoneData")?.Value is ArrayValue { Items.Count: > 0 } subs
+            ? subs.Items.OfType<StructValue>().Select(s => Member(s, "SubZoneBox")?.Value is BoxValue box
+                    ? new Editing.SubZone(new FVector(box.Min.X, box.Min.Y, box.Min.Z), new FVector(box.Max.X, box.Max.Y, box.Max.Z), ImportName(Member(s, "EncounterZoneData")?.Value),
+                        Member(s, "SubZonePriority")?.Value is IntValue p ? p.Value : 0)
+                    : null).OfType<Editing.SubZone>().ToList()
+            : [];
 
     /// <summary>The posts of a group of zombie / NPC points (its <c>SpawnTransforms</c>), in stored order.</summary>
     internal static List<FTransform> GroupPosts(StructValue item) =>

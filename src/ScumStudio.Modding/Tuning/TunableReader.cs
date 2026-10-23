@@ -217,6 +217,7 @@ public static class TunableReader
             Name = tag.Name,
             ExportClass = className,
             Group = fullGroup,
+            TagType = tag.Type,
         };
 
         switch (tag.Value)

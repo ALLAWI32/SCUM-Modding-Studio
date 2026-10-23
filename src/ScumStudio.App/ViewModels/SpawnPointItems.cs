@@ -56,6 +56,7 @@ public sealed partial class SpawnPointViewModel : ObservableObject
     {
         OnPropertyChanged(nameof(KindText));
         OnPropertyChanged(nameof(CoordinatesText));
+        OnPropertyChanged(nameof(SubZonesText));
     }
 
     /// <summary>The kind's icon.</summary>
@@ -63,6 +64,18 @@ public sealed partial class SpawnPointViewModel : ObservableObject
 
     /// <summary>"X 1234.56 m · Y -567.80 m · Z 12.30 m · 90°".</summary>
     public string CoordinatesText => Loc.F("Spawns.Point.Where", Metres(Value.Location.X), Metres(Value.Location.Y), Metres(Value.Location.Z), Value.Rotation.Yaw.ToString("0.#", CultureInfo.CurrentCulture));
+
+    /// <summary>
+    /// A threat zone's sub-zones (boxes inside it with settings of their own: the game's, then the project's, such as the NPC
+    /// area of a replaced robot), by settings, how many and their priority: "Sub-zones …: HTZ_Military_TV_Bunker_NPC ×3 (1)".
+    /// Empty when it has none.
+    /// </summary>
+    public string SubZonesText => Place.SubZones.Count == 0 ? string.Empty
+        : Loc.F("Spawns.Point.SubZones", string.Join(", ", Place.SubZones.GroupBy(s => (Name: SpawnPlaces.SettingName(s.Setting), s.Priority))
+            .Select(g => string.Create(CultureInfo.InvariantCulture, $"{g.Key.Name} ×{g.Count()} ({g.Key.Priority})"))));
+
+    /// <summary>It is a threat zone with sub-zones.</summary>
+    public bool HasSubZones => Place.SubZones.Count > 0;
 
     /// <summary>What it can spawn instead (vehicle groups, zone settings, biomes); empty for a zombie / NPC point.</summary>
     public IReadOnlyList<string> Choices { get; }

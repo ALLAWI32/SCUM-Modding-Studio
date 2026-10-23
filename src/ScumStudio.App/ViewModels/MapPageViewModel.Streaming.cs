@@ -174,7 +174,10 @@ public sealed partial class MapPageViewModel
 
     /// <summary>
     /// Per level, the box around the places of the actors the project added there or moved (world positions from the
-    /// journal). A place under 500 m from the world origin is taken as relative to a parent and left out.
+    /// journal). A place under 500 m from the world origin is taken as relative to a parent and left out, and so is what the
+    /// project deleted since: cwhedgehog (Discord, 2026-10-20) deleted the buildings he had placed far out and the level
+    /// still loaded from out there ("the level's load/draw distance doesn't decrease"), because a deleted copy stays in the
+    /// journal's added actors (only marked deleted, so Ctrl+Z brings it back).
     /// </summary>
     internal static Dictionary<string, (FVector Min, FVector Max)> EditedBounds(EditState state)
     {
@@ -183,7 +186,7 @@ public sealed partial class MapPageViewModel
         {
             // ponytail: a place relative to a parent (a bridge's fence copy) cannot be told apart without the level; such
             // copies stay near their parent, inside the level's own bounds.
-            if (value is not { } v || v.Location.Size2D() < 50_000f)
+            if (value is not { } v || v.Location.Size2D() < 50_000f || state.IsDeleted(actor))
             {
                 return;
             }

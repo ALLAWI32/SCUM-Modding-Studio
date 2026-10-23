@@ -246,7 +246,23 @@ public sealed record CraftablesFile
         init => RecipeOverrides = value ?? [];
     }
 
-    /// <summary>Nothing to export: no craftable and no recipe override.</summary>
+    /// <summary>
+    /// The project's ingredient groups (<see cref="CraftGroup"/>): a recipe of the project may ask for any of them; the export
+    /// gives each group's tag to its members, for the groups a recipe asks for.
+    /// </summary>
+    [JsonIgnore]
+    public IReadOnlyList<CraftGroup> Groups { get; init; } = [];
+
+    // Stored only when there is one, like the overrides.
+    [JsonInclude]
+    [JsonPropertyName(nameof(Groups))]
+    private IReadOnlyList<CraftGroup>? StoredGroups
+    {
+        get => Groups.Count == 0 ? null : Groups;
+        init => Groups = value ?? [];
+    }
+
+    /// <summary>Nothing to export: no craftable and no recipe override (a group alone ships nothing: no recipe asks for it).</summary>
     [JsonIgnore]
     public bool IsEmpty => Items.Count == 0 && RecipeOverrides.Count == 0;
 

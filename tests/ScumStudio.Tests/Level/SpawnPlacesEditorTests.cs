@@ -37,6 +37,27 @@ public sealed class SpawnPlacesEditorTests
 
     private static TransformValue At(float x, float y, float z, float yaw = 0f, float sx = 1f, float sy = 1f) => new(new FVector(x, y, z), new FRotator(0f, yaw, 0f), new FVector(sx, sy, 1f));
 
+    /// <summary>
+    /// r39: a sub-zone is written only into a zone that stores a sub-zone list, laid out as a whole stock sub-zone (the real
+    /// island's: <c>SentryGuardsRealTests</c>). Here zone 1 stores no list and zone 0's one sub-zone lacks members: neither
+    /// changes, and the export says why.
+    /// </summary>
+    [Fact]
+    public void ASubZoneNeedsTheZonesListAndAWholeStockSubZone()
+    {
+        var package = SyntheticStaticData.Build();
+        var area = new SubZone(new FVector(19000, 29000, 400), new FVector(21000, 31000, 900), SyntheticStaticData.Village);
+        var zone1 = new ActorRef(SpawnPlaces.StaticDataPath, SpawnPlaces.ActorName(SpawnPlaceKind.Zone, 1));
+
+        var (after, report, warnings) = Export(package, With(new AddSubZoneOp(Zone0, area), new AddSubZoneOp(zone1, area)));
+
+        Assert.Equal(0, report.SubZones);
+        Assert.Contains(warnings, w => w.Contains("ThreatZone_00001", StringComparison.Ordinal) && w.Contains("no sub-zone list", StringComparison.Ordinal));
+        Assert.Contains(warnings, w => w.Contains("ThreatZone_00000", StringComparison.Ordinal) && w.Contains("every member", StringComparison.Ordinal));
+        Assert.Equal(SyntheticStaticData.Items(package, SpawnPlaceKind.Zone), SyntheticStaticData.Items(after, SpawnPlaceKind.Zone));
+        Assert.Single(SpawnPlaces.Read(after).Single(p => p is { Kind: SpawnPlaceKind.Zone, Index: 0 }).SubZones);
+    }
+
     [Fact]
     public void NewVehiclePlaceGetsItsOwnGroupNotTheTemplates()
     {

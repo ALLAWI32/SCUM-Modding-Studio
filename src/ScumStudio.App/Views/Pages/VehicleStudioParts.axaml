@@ -9,6 +9,7 @@
       <TextBlock Text="{Tr Studio.Parts.Caption}" Classes="caption wrap" TextWrapping="Wrap" />
       <TextBlock Text="{Binding StudioPartName}" Classes="h2" TextTrimming="CharacterEllipsis" />
       <TextBlock Text="{Binding StudioPartNote}" Classes="muted wrap" TextWrapping="Wrap" IsVisible="{Binding StudioPartNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+      <TextBlock Text="{Binding StudioPartModel}" Classes="caption wrap" TextWrapping="Wrap" IsVisible="{Binding StudioPartModel, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
 
       <Border Classes="segmented" HorizontalAlignment="Left">
         <StackPanel Orientation="Horizontal">

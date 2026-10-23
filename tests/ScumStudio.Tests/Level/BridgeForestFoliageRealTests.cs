@@ -68,12 +68,15 @@ public sealed class BridgeForestFoliageRealTests(Xunit.Abstractions.ITestOutputH
         var after = LevelDocument.Load(new Cue4ParseLevelReader(written), Tile);
         var stockPackage = ModdableAssets.ReadPackage(catalog, Tile);
         var writtenPackage = ModdableAssets.ReadPackage(written, Tile);
-        Assert.Equal(stockPackage.Exports.Count, writtenPackage.Exports.Count);
+        // The forest is far out of the road works' reach (its level streams within 50 m): the bridge went into the forest's
+        // own terrain tile (FarPlacement), its actor and mesh component appended behind the tile's cooked exports.
+        Assert.Equal(Tile, Assert.Single(result.FarPlaced).To.Level);
+        Assert.DoesNotContain(result.Levels, l => l.PackagePath == Host);
+        Assert.Equal(stockPackage.Exports.Count + 2, writtenPackage.Exports.Count);
         output.WriteLine($"far models: {string.Join(", ", result.FarModels)}");
         output.WriteLine($"tile stock:   {TileInfo(stockPackage)}");
         output.WriteLine($"tile written: {TileInfo(writtenPackage)}");
         output.WriteLine($"host stock:   {TileInfo(ModdableAssets.ReadPackage(catalog, Host))}");
-        output.WriteLine($"host written: {TileInfo(ModdableAssets.ReadPackage(written, Host))}");
         var level = Assert.Single(result.Levels, l => l.PackagePath == Tile);
         Assert.True(level.Report.ClearedGrassSamples > 0, "the grass under the bridge was not cleared");
         Assert.Equal(0, level.Report.DeletedInstances);

@@ -140,6 +140,12 @@ internal sealed class ItemCommands : ICommandModule
                     return 2;
                 }
 
+                if (TunableValue.CheckRange(tunable, parse.GetValueForArgument(value)) is { } outOfRange)
+                {
+                    logger.LogError("{Error}", outOfRange);
+                    return 2;
+                }
+
                 var current = proj.State.GetAssetValue(path, tunable.Export, tunable.Path)?.Current ?? tunable.Value;
                 var op = new SetAssetValueOp(path, tunable.Export, tunable.Path, tunable.Kind.ToString(), current, parse.GetValueForArgument(value));
                 if (proj.State.Validate(op) is { } error)
@@ -195,6 +201,12 @@ internal sealed class ItemCommands : ICommandModule
                 catch (ArgumentException ex)
                 {
                     logger.LogError("{Message}", ex.Message);
+                    return 2;
+                }
+
+                if (Modding.AssetModBuilder.WhyNotBuilt(catalog, plan) is { } why)
+                {
+                    logger.LogError("The clone cannot be built, so the pak would not have it: {Reason}", why);
                     return 2;
                 }
 

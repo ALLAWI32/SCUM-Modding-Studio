@@ -82,6 +82,32 @@ public sealed class SpawnMapTests(ITestOutputHelper output)
     }
 
     [AvaloniaFact]
+    public void TheIslandIsShownAsTheGameShowsIt()
+    {
+        // Discord 2026-10-17, "the map is inverted": the game's spawn screen shows its map texture turned 180 degrees, D4 at
+        // the top left and Z0 at the bottom right; +X runs to the left and +Y up.
+        var (window, map) = Show(SpawnMapTool.Sector);
+        var topLeft = map.WorldToScreen(IslandMap.MinCm + IslandMap.SizeCm, IslandMap.MinCm + IslandMap.SizeCm);
+        var bottomRight = map.WorldToScreen(IslandMap.MinCm, IslandMap.MinCm);
+        Assert.True(topLeft.X < bottomRight.X && topLeft.Y < bottomRight.Y, $"{topLeft} .. {bottomRight}");
+        var fifth = (bottomRight.X - topLeft.X) / 5;
+
+        Click(window, topLeft + new Vector(fifth / 2, fifth / 2));
+        Assert.Equal(SpawnArea.Cell(MapCell.Parse("D_4")), map.Area);
+        Click(window, topLeft + new Vector(fifth * 1.5, fifth / 2));
+        Assert.Equal(SpawnArea.Cell(MapCell.Parse("D_3")), map.Area);
+        Click(window, topLeft + new Vector(fifth / 2, fifth * 1.5));
+        Assert.Equal(SpawnArea.Cell(MapCell.Parse("C_4")), map.Area);
+        Click(window, bottomRight - new Vector(fifth / 2, fifth / 2));
+        Assert.Equal(SpawnArea.Cell(MapCell.Parse("Z_0")), map.Area);
+
+        var origin = map.WorldToScreen(0f, 0f);
+        Assert.True(map.WorldToScreen(10_000f, 0f).X < origin.X, "+X is to the left");
+        Assert.True(map.WorldToScreen(0f, 10_000f).Y < origin.Y, "+Y is up");
+        window.Close();
+    }
+
+    [AvaloniaFact]
     public void RectangleDrawThenHandleDragResizes()
     {
         var (window, map) = Show(SpawnMapTool.Rectangle);

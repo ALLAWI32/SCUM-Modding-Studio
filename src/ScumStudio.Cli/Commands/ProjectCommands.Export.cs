@@ -16,7 +16,7 @@ internal sealed partial class ProjectCommands
     {
         var dir = ProjectArgument();
         var output = new Option<string>(["--output", "-o"],
-            $"Output folder: <out>/{ProjectExporter.ClientFolderName}/pakchunkNNN-<Name>_P.pak (+ .sig, export-report.md, staging/) and <out>/{ProjectExporter.ServerFolderName}/... when a server source is known.")
+            $"Output folder: <out>/<Name>/{ProjectExporter.ClientFolderName}/pakchunkNNN-<Name>_P.pak (+ .sig and export-report.md; the staged files in a hidden {ProjectExporter.WorkFolderName} folder) and <out>/<Name>/{ProjectExporter.ServerFolderName}/... when a server source is known.")
         {
             IsRequired = true,
         };
@@ -26,7 +26,7 @@ internal sealed partial class ProjectCommands
         var name = new Option<string?>(["--name", "-n"], "Mod name for the pak file name (default: the project name; letters, digits, _ and - are kept).");
         var pakIndex = new Option<int>("--pak-index", () => ProjectExporter.DefaultPakChunkIndex, "pakchunk number of the mod pak.");
         var sig = new Option<string?>("--sig", $"Stock .sig to copy next to the pak (default: {Pak.Writing.SigCopier.DefaultStockSigName} or another stock .sig found in the source Paks folder).");
-        var noPak = new Option<bool>("--no-pak", "Only write the staged loose files (staging/SCUM/Content/...), do not pack.");
+        var noPak = new Option<bool>("--no-pak", $"Only write the staged loose files ({ProjectExporter.WorkFolderName}/staging/SCUM/Content/..., printed as 'staging'), do not pack.");
         var noCraftables = new Option<bool>("--no-craftables", "Skip the Craftables pak (pakchunk<N+1>-<Name>Craftables_P.pak) even when the project has craftables.");
         var aes = new Option<string?>(["--aes", "-a"], $"AES-256 key (64 hex chars) for encrypted stock paks. Prefer the {AesKeyText.EnvironmentVariable} environment variable.");
         var command = new Command("export", "Rewrite every edited level (deleted actors, moved actors) and pack pakchunkNNN-<Name>_P.pak for the client and, with a server source, for the server.")
@@ -93,7 +93,7 @@ internal sealed partial class ProjectCommands
                         : await exporter.ExportAsync(project, catalog, options with { BendMeshes = meshes.Describe }, role, null, ctx.GetCancellationToken()).ConfigureAwait(false);
                     var crafted = await CraftablesExporter.ExportAsync(craftables, options.ModName ?? project.Manifest.Name, catalog,
                         options with { ModelPictures = pictures.Render, Elsewhere = result is null ? null : CraftablesExporter.ProjectPakPackages(result, catalog) }, role,
-                        CraftablesExporter.StagedRegistry(result), logger, ctx.GetCancellationToken()).ConfigureAwait(false);
+                        CraftablesExporter.StagedRegistry(result), logger, ctx.GetCancellationToken(), alone: result is null).ConfigureAwait(false);
                     foreach (var exported in new[] { result, crafted }.OfType<ExportResult>())
                     {
                         PrintExport(exported);
@@ -127,7 +127,7 @@ internal sealed partial class ProjectCommands
 
     private static Command BuildValidate()
     {
-        var staging = new Argument<string>("staging", "An export's staging folder (<out>/Client/staging or <out>/Server/staging) or an unpacked mod.");
+        var staging = new Argument<string>("staging", $"An export's staging folder (<out>/<Name>/Client/{ProjectExporter.WorkFolderName}/staging, printed by 'project export') or an unpacked mod.");
         var source = new Option<string>(["--source", "-s"], "The game files the mod is for: the Paks folder of the game (client) or of the dedicated server.") { IsRequired = true };
         var aes = new Option<string?>(["--aes", "-a"], $"AES-256 key (64 hex chars) for encrypted stock paks. Prefer the {AesKeyText.EnvironmentVariable} environment variable.");
         var command = new Command("validate", "Read every staged package back against the game's own copy and list what could crash the game or the server (the check every export runs before it packs).")

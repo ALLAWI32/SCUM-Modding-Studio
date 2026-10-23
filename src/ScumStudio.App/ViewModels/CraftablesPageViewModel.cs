@@ -75,7 +75,7 @@ public sealed partial class CraftablesPageViewModel : PageViewModel, IDisposable
     /// <summary>The craftable being edited.</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasSelection))]
-    [NotifyCanExecuteChangedFor(nameof(RemoveCommand), nameof(SuggestRecipeCommand), nameof(AddIngredientCommand))]
+    [NotifyCanExecuteChangedFor(nameof(RemoveCommand), nameof(SuggestRecipeCommand), nameof(AddIngredientCommand), nameof(CopyIngredientsCommand), nameof(PasteIngredientsCommand))]
     private CraftableRowViewModel? _selectedItem;
 
     /// <summary>Search text of the Add box.</summary>
@@ -132,7 +132,12 @@ public sealed partial class CraftablesPageViewModel : PageViewModel, IDisposable
     public IReadOnlyList<string> Stations { get; private set; } = [string.Empty];
 
     /// <summary>The file as the page shows it (tests).</summary>
-    public CraftablesFile File => new() { Items = Items.Select(i => i.ToModel()).ToList(), RecipeOverrides = RecipeOverrides.Select(r => r.ToModel()).ToList() };
+    public CraftablesFile File => new()
+    {
+        Items = Items.Select(i => i.ToModel()).ToList(),
+        RecipeOverrides = RecipeOverrides.Select(r => r.ToModel()).ToList(),
+        Groups = Groups.Select(g => g.ToModel()).ToList(),
+    };
 
     /// <summary>Adds the static mesh or Blueprint at <paramref name="packagePath"/> (the Assets page's "Make craftable").</summary>
     public async Task AddAsync(string packagePath)
@@ -652,6 +657,7 @@ public sealed partial class CraftablesPageViewModel : PageViewModel, IDisposable
         }
 
         ShowStock(file);
+        ShowGroups(file);
         _loading = false;
         _lastSaved = File.ToJson();
         RefreshStations();
@@ -734,6 +740,7 @@ public sealed partial class CraftableRowViewModel : ThumbnailItem
         _output = (decimal)craftable.Power.Output;
         _fuel = (decimal)craftable.Power.FuelPerMinute;
         _dayOnly = craftable.Power.DayOnly;
+        Ingredients.CollectionChanged += (_, _) => UpdateIngredientPlaces();
         SetIngredients(craftable.Ingredients);
         RefreshSections();
         _quiet = false;
@@ -1115,7 +1122,7 @@ public sealed partial class CraftableRowViewModel : ThumbnailItem
             CraftKind.Power => CraftablesPlanner.PowerRecipe,
             CraftKind.Item => _itemTemplate,
             CraftKind.Element when Element is { } element => element.Family.Recipe, // the game element's own recipe and section
-            _ => CraftablesPlanner.FurnitureRecipe,
+            _ => IsLargeTemplate ? CraftablesPlanner.LargeBuildingRecipe : CraftablesPlanner.FurnitureRecipe, // a big one copies the Large Log Shed's
         };
         var fallback = template is null ? null : CraftCategories.DefaultFor(ToModel(), _categories, template);
         var placeable = IsBuilding;

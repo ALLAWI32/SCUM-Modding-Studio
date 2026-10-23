@@ -340,6 +340,8 @@ public partial class MapPageView : UserControl
         _viewModel?.RefreshMyModels();
     }
 
+    private void OnResetSectorOpened(object? sender, EventArgs e) => _viewModel?.PrepareSectorReset();
+
     /// <summary>First press: to the object picked before, camera on it. Second press: back to the object and view before.</summary>
     private void JumpToLastObject()
     {

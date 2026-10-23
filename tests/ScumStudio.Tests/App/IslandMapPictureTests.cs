@@ -41,7 +41,44 @@ public sealed class IslandMapPictureTests : IDisposable
         Assert.Equal(first, second);
         Assert.Equal(1, _decodes);
         Assert.True(IslandMapPicture.IsCompletePng(first.PngPath!));
-        Assert.Equal("islandmap-", Path.GetFileName(first.PngPath)![..10]);
+        Assert.StartsWith("islandmap-turned-", Path.GetFileName(first.PngPath), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task TheGamePictureIsTurnedAsTheGamesSpawnScreenShowsIt()
+    {
+        // The game's spawn screen draws the map texture turned 180 degrees: the cached picture's pixel (x, y) is the
+        // texture's (w-1-x, h-1-y). A texture 48 x 32 with red growing to the right and green down.
+        var (w, h) = (48, 32);
+        var rgba = new byte[w * h * 4];
+        for (var i = 0; i < w * h; i++)
+        {
+            (rgba[i * 4], rgba[(i * 4) + 1], rgba[(i * 4) + 2], rgba[(i * 4) + 3]) = ((byte)(i % w * 5), (byte)(i / w * 7), 160, 255);
+        }
+
+        var expected = (byte[])rgba.Clone();
+        var texture = new TextureImage("IslandMap", w, h, rgba, "PF_B8G8R8A8", 0, w, h, true, false);
+        var result = await Make().GetAsync(new IslandMapPicture.GamePicture("pak|IslandMap|1", () => texture), CancellationToken.None);
+
+        Assert.Equal(IslandMapSource.Game, result.Source);
+        var shown = ImageFiles.Load(result.PngPath!);
+        Assert.Equal((w, h), (shown.Width, shown.Height));
+        for (var y = 0; y < h; y++)
+        {
+            for (var x = 0; x < w; x++)
+            {
+                var (at, from) = (((y * w) + x) * 4, ((((h - 1 - y) * w) + (w - 1 - x)) * 4));
+                Assert.True(shown.Rgba.AsSpan(at, 4).SequenceEqual(expected.AsSpan(from, 4)), $"pixel ({x}, {y})");
+            }
+        }
+    }
+
+    [Fact]
+    public void TurnHalfwayKeepsEachPixelWhole()
+    {
+        byte[] rgba = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+        byte[] turned = [9, 10, 11, 12, 5, 6, 7, 8, 1, 2, 3, 4];
+        Assert.Equal(turned, IslandMapPicture.TurnHalfway(rgba));
     }
 
     [Fact]
@@ -107,7 +144,7 @@ public sealed class IslandMapPictureTests : IDisposable
         var corner = Pixel(rgba, size, 2, 2);
         Assert.Equal(81, landPixels); // every pixel of the square is land, no holes between the corners
         Assert.True(corner.B > corner.R, $"sea is blue: {corner}");
-        Assert.InRange(u, 0.0, 0.2); // A_0 is at the picture's left edge
+        Assert.InRange(u, 0.8, 1.0); // A_0 is at the picture's right edge (the game's A0 button is the right one of its row)
     }
 
     public void Dispose()

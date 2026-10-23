@@ -18,7 +18,7 @@ say what you did just before (left the server, pressed Alt+F4, closed from the m
 
 ## Also send
 
-- The export report of your mod: `export-report.md` in the export folder's `Client` (and `Server`) folder.
+- The export report of your mod: `export-report.md` in the mod's own folder inside the export folder: `<Mod>\Client` (and `<Mod>\Server`), or `<Mod> - pages\Client` for a page's pak.
 - Which paks are installed: the names of every `pakchunk...` file you added to the game's `Paks` folder (and the server's).
 
 The files only contain the game's own log and crash data (no passwords). Post them in the ScumStudio Discord bug channel.

@@ -332,6 +332,7 @@
                               HorizontalAlignment="Stretch" ToolTip.Tip="{Tr Spawns.Point.Spawns.Tip}" />
                   </Grid>
                   <TextBlock Classes="caption wrap" Text="{Tr Spawns.Point.FromZone}" IsVisible="{Binding Point.SpawnsFromZone, FallbackValue=False}" />
+                  <TextBlock x:Name="PointSubZones" Classes="caption" TextWrapping="Wrap" Text="{Binding Point.SubZonesText, FallbackValue=''}" IsVisible="{Binding Point.HasSubZones, FallbackValue=False}" />
                   <Grid ColumnDefinitions="*,*,*,*" RowDefinitions="Auto,Auto" ColumnSpacing="6" RowSpacing="2">
                     <TextBlock Text="{Tr Spawns.Point.X}" Classes="caption" />
                     <TextBlock Grid.Column="1" Text="{Tr Spawns.Point.Y}" Classes="caption" />

@@ -25,6 +25,39 @@ public static class InheritedValues
     ];
 
     /// <summary>
+    /// Values of the game's C++ classes that no file stores, whose default the game's own code sets (read from the
+    /// constructor in <c>SCUM.exe</c> and <c>SCUMServer.exe</c>, SCUM 1.3.4, 2026-10-22). The planes (<c>BPC_Kinglet_Duster</c>,
+    /// <c>BPC_Kinglet_Mariner</c>, parent <c>/Script/SCUM.Airplane</c>) store <c>_maxVelocity</c> (8332.5 cm/s, 300 km/h) but not
+    /// <c>_propellerForce</c>, the pull of the propeller: the constructor sets it to 180000, and each frame the game pushes the
+    /// plane forward at the propeller with <c>_propellerForce</c> x throttle x (this plane's <c>_maxVelocity</c> / its class
+    /// default's), and none above <c>_airplaneHeightToStallInMeters</c> (r40, Discord unknownskill: "I change the speed of the
+    /// plane but it does not apply"; the wheels' engine values move nothing in the air).
+    /// </summary>
+    public static IReadOnlyList<(string Class, string Name, TunableKind Kind, string Default)> NativeDefaults { get; } =
+    [
+        ("/Script/SCUM.Airplane", "_propellerForce", TunableKind.Float, "180000"),
+    ];
+
+    /// <summary>The grid inventory of an entity setup: what a bag, a vest or a pair of trousers holds.</summary>
+    public const string GridInventory = "/Script/SCUM.EntityGridInventoryComponentSetup";
+
+    /// <summary>
+    /// Values of a default subobject of an entity setup's class defaults (its <see cref="GridInventory"/>, 444 of the game's
+    /// item setups have one) that the subobject takes from its parent's copy or from the game's code when it does not store
+    /// them, with the tag type the game files prove and the default the constructor sets (SCUM 1.3.4: 1 x 1 cells and a weight
+    /// limit of 10). 195 of the 444 store <c>NumRows</c>: a colour variant (<c>Backpack_02_02_ES</c>) takes its grid from its
+    /// parent (<c>Backpack_02_01_ES</c>), and the Improvised Courier Backpack stores 6 x 6 but no weight, so it holds the
+    /// code's 10 (r40, Discord unknownskill: "changing a backpack, how much size it has inside, load capacity").
+    /// </summary>
+    public static IReadOnlyList<(string Class, string Name, TunableKind Kind, string TagType, string Default)> SubobjectNative { get; } =
+    [
+        (GridInventory, "NumRows", TunableKind.UInt, "ByteProperty", "1"),
+        (GridInventory, "NumColumns", TunableKind.UInt, "ByteProperty", "1"),
+        (GridInventory, "MaxContainedWeight", TunableKind.Float, "FloatProperty", "10"),
+        (GridInventory, "HasContainedWeightLimit", TunableKind.Bool, "BoolProperty", "true"),
+    ];
+
+    /// <summary>
     /// Base element values a craftable's clone may get without its template storing them (the Craftables export only; the
     /// value pages do not list them), each with the type the game files prove (SCUM 1.3.3, 333 base elements): 31 store
     /// <c>_canBePlacedWithoutFlag</c> true (BoolProperty, so the C++ default is false: a flag is needed), 71
@@ -43,12 +76,29 @@ public static class InheritedValues
 
     /// <summary>
     /// Values of a placed thing's recipe (a data asset of the native <c>PlaceableCraftingRecipe</c>, SDK build 149664) a copy
-    /// of the chair's recipe may get without storing them (the Craftables export only): <c>PlacementLocationOffset</c>, a
-    /// Vector struct that 2 recipes of the game store (the Woodland pack's curtains: -5, 0, 20 and 0, 0, -30).
+    /// of a game recipe may get without storing them (the Craftables export only), all Vector structs the game's own recipes
+    /// store: <c>PlacementLocationOffset</c> (2 recipes, the Woodland pack's curtains: -5, 0, 20 and 0, 0, -30),
+    /// <c>CollisionMeshScale</c> (the ghost's collision mesh, scaled about its pivot: wall lamps 0.6, the workbench 1, 1, 0.9,
+    /// so a thing placed against a wall or the ground does not count as overlapping it) and
+    /// <c>BoundsExtensionWhilePlacingMin</c>/<c>Max</c> (the chair's and the bed's -5, -5, 0: its box drawn in 5 cm).
     /// </summary>
     public static IReadOnlyList<(string Class, string Name, TunableKind Kind)> RecipeNative { get; } =
     [
         ("/Script/SCUM.PlaceableCraftingRecipe", "PlacementLocationOffset", TunableKind.Vector),
+        ("/Script/SCUM.PlaceableCraftingRecipe", "CollisionMeshScale", TunableKind.Vector),
+        ("/Script/SCUM.PlaceableCraftingRecipe", "BoundsExtensionWhilePlacingMin", TunableKind.Vector),
+        ("/Script/SCUM.PlaceableCraftingRecipe", "BoundsExtensionWhilePlacingMax", TunableKind.Vector),
+    ];
+
+    /// <summary>
+    /// Values of a zone's settings (a data asset of the native <c>EncounterZoneData</c>) a copy of the game's settings may get
+    /// without storing them (the export only): <c>SingleEncounterPerZone</c>, a BoolProperty the game's NPC-only sub-zone
+    /// settings store true (<c>HTZ_Military_TV_Bunker_NPC</c>, <c>HTZ_Military_TV_Bunker_Abandoned_NPC</c>) and the others
+    /// leave out (false): one encounter at a time in the zone. The NPC area of a replaced robot takes it (r39).
+    /// </summary>
+    public static IReadOnlyList<(string Class, string Name, TunableKind Kind)> ZoneNative { get; } =
+    [
+        ("/Script/SCUM.EncounterZoneData", "SingleEncounterPerZone", TunableKind.Bool),
     ];
 
     /// <summary>The tag type written for each kind; other kinds are not offered.</summary>
@@ -71,8 +121,8 @@ public static class InheritedValues
     /// <param name="package">A Blueprint package (an item, its entity setup, a clone of either).</param>
     /// <param name="readPackage">Reads a parent package by its package path, or returns null when it cannot.</param>
     /// <param name="elementValues">
-    /// Also the <see cref="ElementNative"/> values, and for a recipe (a data asset, no Blueprint class) the
-    /// <see cref="RecipeNative"/> ones (the Craftables export writes them).
+    /// Also the <see cref="ElementNative"/> values, and for a recipe or a zone's settings (data assets, no Blueprint class)
+    /// the <see cref="RecipeNative"/> and <see cref="ZoneNative"/> ones (the exports write them).
     /// </param>
     public static IReadOnlyList<Tunable> Read(CookedPackage package, Func<string, CookedPackage?> readPackage, bool elementValues = false)
     {
@@ -89,20 +139,25 @@ public static class InheritedValues
         var group = TunableReader.FriendlyExport(export);
         var seen = new HashSet<string>(StoredNames(package, own.Cdo), StringComparer.OrdinalIgnoreCase);
         var result = new List<Tunable>();
-        Tunable Make(string name, TunableKind kind, string value, string parent) => new(export, name, kind, value)
+        Tunable Make(string name, TunableKind kind, string value, string parent, string? tagType = null) => new(export, name, kind, value)
         {
             Name = name,
             ExportClass = className,
             Group = group,
             InheritedFrom = parent,
+            TagType = tagType ?? TagTypes.GetValueOrDefault(kind),
         };
 
         var super = package.GetFullPath(package.Exports[own.Class].SuperIndex);
+        var parents = new List<(string Class, CookedPackage Package, int Cdo)>();
+        var reachesCode = false;
         for (var depth = 0; depth < 16 && super.Length > 0; depth++)
         {
             if (super.StartsWith("/Script/", StringComparison.Ordinal))
             {
                 result.AddRange(Native.Concat(elementValues ? ElementNative : []).Where(n => n.Class == super && seen.Add(n.Name)).Select(n => Make(n.Name, n.Kind, string.Empty, super)));
+                result.AddRange(NativeDefaults.Where(n => n.Class == super && seen.Add(n.Name)).Select(n => Make(n.Name, n.Kind, n.Default, super)));
+                reachesCode = true;
                 break;
             }
 
@@ -116,11 +171,69 @@ public static class InheritedValues
             {
                 if (tag.ArrayIndex == 0 && KindOf(tag) is { } kind && seen.Add(tag.Name))
                 {
-                    result.Add(Make(tag.Name, kind, Describe(tag), super));
+                    result.Add(Make(tag.Name, kind, Describe(tag), super, tag.Type));
                 }
             }
 
+            parents.Add((super, parent, theirs.Cdo));
             super = parent.GetFullPath(parent.Exports[theirs.Class].SuperIndex);
+        }
+
+        result.AddRange(SubobjectValues(package, own.Cdo, keys, parents, reachesCode));
+        return result;
+    }
+
+    /// <summary>
+    /// The <see cref="SubobjectNative"/> values each default subobject of the CDO (a <see cref="GridInventory"/>) does not
+    /// store: its parents' copy of the same subobject (nearest first), then the game's code when the chain reaches it.
+    /// </summary>
+    private static List<Tunable> SubobjectValues(CookedPackage package, int cdo, string[] keys, List<(string Class, CookedPackage Package, int Cdo)> parents, bool reachesCode)
+    {
+        var result = new List<Tunable>();
+        for (var i = 0; i < package.Exports.Count; i++)
+        {
+            var cls = package.GetFullPath(package.Exports[i].ClassIndex);
+            var natives = SubobjectNative.Where(n => n.Class == cls).ToList();
+            if (natives.Count == 0 || package.Exports[i].OuterIndex != cdo + 1)
+            {
+                continue;
+            }
+
+            var name = package.Exports[i].ObjectName.Format(package.Names);
+            var seen = new HashSet<string>(StoredNames(package, i), StringComparer.OrdinalIgnoreCase);
+            Tunable Make(string property, TunableKind kind, string value, string from, string tagType) => new(keys[i], property, kind, value)
+            {
+                Name = property,
+                ExportClass = package.GetExportClassName(i),
+                Group = TunableReader.FriendlyExport(keys[i]),
+                InheritedFrom = from,
+                TagType = tagType,
+            };
+
+            foreach (var (parentClass, parent, parentCdo) in parents)
+            {
+                var theirs = Enumerable.Range(0, parent.Exports.Count).FirstOrDefault(j => parent.Exports[j].OuterIndex == parentCdo + 1
+                    && string.Equals(parent.Exports[j].ObjectName.Format(parent.Names), name, StringComparison.OrdinalIgnoreCase)
+                    && parent.GetFullPath(parent.Exports[j].ClassIndex) == cls, -1);
+                if (theirs < 0)
+                {
+                    continue;
+                }
+
+                foreach (var tag in parent.ReadProperties(theirs).Properties)
+                {
+                    var k = natives.FindIndex(n => n.Name == tag.Name);
+                    if (tag.ArrayIndex == 0 && k >= 0 && seen.Add(tag.Name))
+                    {
+                        result.Add(Make(tag.Name, natives[k].Kind, Describe(tag), parentClass, natives[k].TagType));
+                    }
+                }
+            }
+
+            if (reachesCode)
+            {
+                result.AddRange(natives.Where(n => seen.Add(n.Name)).Select(n => Make(n.Name, n.Kind, n.Default, cls, n.TagType)));
+            }
         }
 
         return result;
@@ -159,7 +272,8 @@ public static class InheritedValues
         foreach (var group in values.GroupBy(v => v.Value.Export, StringComparer.Ordinal))
         {
             var exportIndex = Array.IndexOf(keys, group.Key);
-            if (exportIndex < 0 || !(group.Key.StartsWith("Default__", StringComparison.Ordinal) || group.All(v => IsDataAssetValue(package, exportIndex, v.Value))))
+            if (exportIndex < 0 || !(group.Key.StartsWith("Default__", StringComparison.Ordinal)
+                                     || group.All(v => IsDataAssetValue(package, exportIndex, v.Value) || SubobjectTagType(package, exportIndex, v.Value) is not null)))
             {
                 throw new InvalidOperationException($"{package.BasePath}: '{group.Key}' is not this package's class defaults.");
             }
@@ -174,7 +288,8 @@ public static class InheritedValues
             var tags = new List<byte>();
             foreach (var (value, text) in group)
             {
-                if (value.InheritedFrom is null || !TagTypes.TryGetValue(value.Kind, out var type) || value.Path.Contains('.') || value.Path.Contains('['))
+                var type = SubobjectTagType(package, exportIndex, value) ?? (TagTypes.TryGetValue(value.Kind, out var known) ? known : null);
+                if (value.InheritedFrom is null || type is null || value.Path.Contains('.') || value.Path.Contains('['))
                 {
                     throw new InvalidOperationException($"{package.BasePath}: '{value.Path}' is not an inherited value that can be written.");
                 }
@@ -184,7 +299,7 @@ public static class InheritedValues
                     throw new InvalidOperationException($"{package.BasePath}: '{value.Path}' is stored already; change it as a stored value.");
                 }
 
-                tags.AddRange(Tag(Name(value.Path), Name(type), value.Kind, text, Name));
+                tags.AddRange(Tag(Name(value.Path), Name(type), type, value.Kind, text, Name));
             }
 
             var payload = payloads[exportIndex];
@@ -225,7 +340,7 @@ public static class InheritedValues
         for (var i = 0; i < package.Exports.Count; i++)
         {
             var cls = package.Exports[i].OuterIndex == 0 ? package.GetFullPath(package.Exports[i].ClassIndex) : string.Empty;
-            var natives = RecipeNative.Where(n => n.Class == cls).ToList();
+            var natives = RecipeNative.Concat(ZoneNative).Where(n => n.Class == cls).ToList();
             if (natives.Count == 0)
             {
                 continue;
@@ -238,16 +353,33 @@ public static class InheritedValues
                 ExportClass = package.GetExportClassName(i),
                 Group = TunableReader.FriendlyExport(keys[i]),
                 InheritedFrom = cls,
+                TagType = TagTypes.GetValueOrDefault(n.Kind),
             }));
         }
 
         return result;
     }
 
+    /// <summary>
+    /// The tag type of a <see cref="SubobjectNative"/> value of the default subobject <paramref name="exportIndex"/> (outer:
+    /// the class defaults, class: the value's), or null.
+    /// </summary>
+    private static string? SubobjectTagType(CookedPackage package, int exportIndex, Tunable value)
+    {
+        var outer = package.Exports[exportIndex].OuterIndex;
+        if (value.InheritedFrom is null || outer <= 0 || !package.ResolveName(package.Exports[outer - 1].ObjectName).StartsWith("Default__", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var cls = package.GetFullPath(package.Exports[exportIndex].ClassIndex);
+        return SubobjectNative.FirstOrDefault(n => n.Class == cls && n.Name == value.Path && n.Kind == value.Kind).TagType;
+    }
+
     /// <summary>A <see cref="RecipeNative"/> value of the top-level data asset export <paramref name="exportIndex"/>.</summary>
     private static bool IsDataAssetValue(CookedPackage package, int exportIndex, Tunable value) =>
         package.Exports[exportIndex].OuterIndex == 0 && value.InheritedFrom == package.GetFullPath(package.Exports[exportIndex].ClassIndex)
-        && RecipeNative.Any(n => n.Class == value.InheritedFrom && n.Name == value.Path && n.Kind == value.Kind);
+        && RecipeNative.Concat(ZoneNative).Any(n => n.Class == value.InheritedFrom && n.Name == value.Path && n.Kind == value.Kind);
 
     /// <summary>The package's Blueprint class export and its CDO (<c>Default__X_C</c>), or null.</summary>
     private static (int Class, int Cdo)? FindClass(CookedPackage package, string? className = null)
@@ -294,6 +426,7 @@ public static class InheritedValues
         FloatValue f => TunableValue.Format(f.Value),
         DoubleValue d => d.Value.ToString("R", System.Globalization.CultureInfo.InvariantCulture),
         IntValue v => v.Value.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        ByteValue v => v.Value.ToString(System.Globalization.CultureInfo.InvariantCulture),
         BoolValue b => b.Value ? "true" : "false",
         var v => v.ToString() ?? string.Empty,
     };
@@ -303,7 +436,7 @@ public static class InheritedValues
     /// guid], no property guid, value). An enum's text is <c>EnumName::Value</c>
     /// (<c>EConZPlacementHeightType::HighestPointHeight</c>), its value that FName; a Vector is "x, y, z" (3 floats).
     /// </summary>
-    private static byte[] Tag(FNameRef name, FNameRef type, TunableKind kind, string text, Func<string, FNameRef> nameOf)
+    private static byte[] Tag(FNameRef name, FNameRef type, string typeName, TunableKind kind, string text, Func<string, FNameRef> nameOf)
     {
         byte[] value;
         byte? flag = null;
@@ -313,6 +446,11 @@ public static class InheritedValues
         {
             switch (kind)
             {
+                case TunableKind.UInt when typeName == "ByteProperty":
+                    // A plain byte (a grid's NumRows): the tag names no enum (None), the value is one byte.
+                    enumName = nameOf("None");
+                    value = [byte.Parse(text.Trim(), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture)];
+                    break;
                 case TunableKind.Vector:
                     var xyz = TunableValue.ParseFloats(text, 3);
                     if (!xyz.All(float.IsFinite))

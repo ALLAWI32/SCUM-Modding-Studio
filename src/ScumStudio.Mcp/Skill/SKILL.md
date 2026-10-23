@@ -70,7 +70,7 @@ designer sitting next to the owner: small steps, look at the result, explain wha
 
 ## Export
 
-- `export_mod` builds `Client\pakchunk<N>-<Name>_P.pak` (+ `.sig`, `export-report.md`) and, with `includeServer`,
+- `export_mod` builds `<Name>\Client\pakchunk<N>-<Name>_P.pak` (+ `.sig`, `export-report.md`) and, with `includeServer`,
   the server pak. Read the report back to the user: which levels/items changed, warnings.
 - Tell the user where the files are; installing them is the user's step (their own launcher/server setup).
 

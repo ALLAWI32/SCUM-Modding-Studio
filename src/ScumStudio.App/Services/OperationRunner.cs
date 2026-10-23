@@ -77,7 +77,11 @@ public sealed partial class OperationRunner : ObservableObject
         catch (Exception ex)
         {
             _logger.LogError(ex, "{Operation} failed: {Message}", title, ex.Message);
-            _notifications.Error(Localization.Loc.F("Status.FailedTitle", title), ex.Message);
+            if (!NotificationService.WasShown(ex)) // e.g. a refused export: its own toast stays until closed
+            {
+                _notifications.Error(Localization.Loc.F("Status.FailedTitle", title), ex.Message);
+            }
+
             End(generation, Localization.Loc.F("Status.Failed", title));
             return (false, default);
         }

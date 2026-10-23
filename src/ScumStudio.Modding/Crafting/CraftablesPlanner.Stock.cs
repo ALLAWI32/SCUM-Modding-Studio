@@ -12,10 +12,11 @@ public static partial class CraftablesPlanner
     /// copy) and whose slots are still the ones it was set on becomes a stock override (<see cref="AssetModRequest.RecipeAmounts"/>,
     /// <see cref="CraftablesPlan.StockOverrides"/>); any other is left out with a warning.
     /// </summary>
-    public static CraftablesPlan PlanWithStockRecipes(AssetCatalog catalog, IReadOnlyList<Craftable> craftables, IReadOnlyList<StockRecipeOverride> recipeOverrides)
+    public static CraftablesPlan PlanWithStockRecipes(AssetCatalog catalog, IReadOnlyList<Craftable> craftables, IReadOnlyList<StockRecipeOverride> recipeOverrides, string? projectDirectory = null,
+        IReadOnlyList<CraftGroup>? groups = null)
     {
         ArgumentNullException.ThrowIfNull(recipeOverrides);
-        var plan = Plan(catalog, craftables);
+        var plan = Plan(catalog, craftables, projectDirectory, groups);
         if (recipeOverrides.Count == 0)
         {
             return plan;

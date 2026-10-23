@@ -212,6 +212,48 @@ public sealed class CraftIngredientPickerTests
         Assert.DoesNotContain(ui, threads);
     }
 
+    /// <summary>
+    /// r40: a project group's items are picked together (igor8802: "create, change, and view groups of ingredients"): each click
+    /// adds an item or takes it out again, the groups are not listed, Use gives them in click order and Cancel nothing.
+    /// </summary>
+    [Fact]
+    public async Task AGroupsItemsArePickedTogether()
+    {
+        var picker = await PickerAsync();
+        var many = picker.PickManyAsync("Metal", [LeadPlate]);
+        Assert.True(picker.IsMulti && picker.IsOpen);
+        Assert.Equal(Loc.F("Craftables.Picker.GroupTitle", "Metal"), picker.TitleText);
+        Assert.DoesNotContain(picker.Roots, r => r.Title == Loc.T("Craftables.Picker.Groups"));
+        Assert.True(Tile(picker, LeadPlate).IsSelected);
+        picker.SelectCommand.Execute(Tile(picker, Rifle));
+        picker.SelectCommand.Execute(Tile(picker, Apple));
+        picker.SelectCommand.Execute(Tile(picker, Apple)); // out again
+        Assert.Equal(Loc.F("Craftables.Picker.Picked", 2), picker.PickedText);
+
+        picker.Query = "rags"; // only the group CI_Group_Rags has it: nothing to pick here
+        await Until(() => picker.ResultText == Loc.F("Assets.NoMatch", "rags"));
+        picker.Query = string.Empty;
+        picker.OkCommand.Execute(null);
+        Assert.Equal([LeadPlate, Rifle], await many);
+
+        var cancelled = picker.PickManyAsync("Metal", []);
+        Assert.False(picker.OkCommand.CanExecute(null)); // a group needs an item
+        picker.CancelCommand.Execute(null);
+        Assert.Null(await cancelled);
+
+        // One ingredient again: the groups are back, the project's first, each tile naming its items.
+        picker.SetProjectGroups([new IngredientGroup("CI_Group_Mine", "Mine", null, [LeadPlate, Rag], IsProject: true)]);
+        _ = picker.PickAsync();
+        Assert.False(picker.IsMulti);
+        picker.SelectedCategory = picker.Roots.Single(r => r.Title == Loc.T("Craftables.Picker.Groups"));
+        Assert.Equal(Groups().Count + 1, picker.SelectedCategory!.Count);
+        var mine = picker.Tiles[0];
+        Assert.Equal(("Mine", "CI_Group_Mine", LeadPlate), (mine.Name, mine.Group, mine.PicturePath));
+        Assert.True(mine.IsProjectGroup);
+        Assert.Contains(Loc.F("Craftables.Group.Members", "Lead_Plate, Rag"), mine.Tip, StringComparison.Ordinal);
+        Assert.Equal(Loc.T("Craftables.Ingredient.Badge.Group"), picker.Tiles.Single(t => t.Group == "CI_Group_Rags").GroupBadge);
+    }
+
     /// <summary>How the fake game knows its items: the rifle and the lead plate have their own tag, a rag only its group.</summary>
     private static IngredientLookup Resolve(string item) => item switch
     {

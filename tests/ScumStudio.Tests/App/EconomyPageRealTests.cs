@@ -99,10 +99,10 @@ public sealed class EconomyPageRealTests
 
             // Export: the file for the server next to the paks.
             economy.ExportCommand.Execute(null);
-            Assert.Equal(Path.Combine(ctx.Combine("exports"), "Server", EconomyOverride.FileName), economy.LastExportPath);
+            Assert.Equal(Path.Combine(ctx.Combine("exports"), "Economy", "Server", EconomyOverride.FileName), economy.LastExportPath); // the project's own folder
             var written = EconomyOverride.Parse(File.ReadAllText(economy.LastExportPath!));
             Assert.Equal(12345, written.Find("A_3_Armory_1", "Weapon_AK47")?.PurchasePrice);
-            Assert.True(File.Exists(Path.Combine(ctx.Combine("exports"), "Client", EconomyOverride.FileName)));
+            Assert.True(File.Exists(Path.Combine(ctx.Combine("exports"), "Economy", "Client", EconomyOverride.FileName)));
             HeadlessUi.SaveScreenshot(window, "economy-category");
         }
         finally

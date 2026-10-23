@@ -752,7 +752,7 @@ public static partial class LevelPackageEditor
     /// <paramref name="payload"/> with an object array property (<c>int32 count</c> + one <c>int32</c> package index per
     /// element) holding <paramref name="items"/> instead; the tag's size follows.
     /// </summary>
-    private static byte[] WriteObjectArray(byte[] payload, PropertyTag tag, IReadOnlyList<int> items)
+    internal static byte[] WriteObjectArray(byte[] payload, PropertyTag tag, IReadOnlyList<int> items)
     {
         var value = new byte[4 + 4 * items.Count];
         BinaryPrimitives.WriteInt32LittleEndian(value, items.Count);

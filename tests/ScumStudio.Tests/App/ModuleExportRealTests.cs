@@ -54,22 +54,35 @@ public sealed class ModuleExportRealTests(ITestOutputHelper output)
                 : await exporter.ExportAsync(ModuleExport.StateOf(project.State, module), Name, catalog, own, ProjectSourceRole.Client);
             Assert.NotNull(result);
             paks[module] = result;
-            Assert.Empty(ModuleExport.HiddenBy(Path.Combine(options.OutputDirectory, ProjectExporter.ClientFolderName), Name, module, catalog.ProjectName));
+            Assert.Empty(ModuleExport.HiddenBy(ProjectExporter.ExportFolder(options.OutputDirectory, Name, pages: true, ProjectSourceRole.Client), Name, module, catalog.ProjectName));
 
             // Every page pak: its own name and chunk, a .sig, and the package check passed.
             Assert.Equal(ModuleExport.PakFileName(Name, module, options.PakChunkIndex), Path.GetFileName(result.PakPath));
             Assert.True(File.Exists(result.PakPath) && File.Exists(result.SigPath), module.ToString());
             Assert.True(result.Validation is { Passed: true }, string.Join('\n', result.Validation?.Problems ?? ["not checked"]));
 
-            // The Registry pak is written again after every page export, and checked like every pak.
+            // The Registry pak is written again after every page export, and checked like every pak; the first page pak alone
+            // carries its own records, so none is written for it (owner, 3.5.0: one page gave a second 48 MB pak).
             var registryPak = await ModuleExport.WriteRegistryPakAsync(Name, catalog, own, ProjectSourceRole.Client, state: project.State);
+            if (paks.Count == 1)
+            {
+                Assert.Null(registryPak);
+                Assert.False(File.Exists(Path.Combine(Path.GetDirectoryName(result.PakPath)!, ModuleExport.RegistryPakFileName(Name, options.PakChunkIndex))));
+                continue;
+            }
+
             Assert.NotNull(registryPak);
             Assert.True(registryPak.Validation is { Passed: true }, string.Join('\n', registryPak.Validation?.Problems ?? ["not checked"]));
             Assert.True(File.Exists(registryPak.PakPath) && File.Exists(registryPak.SigPath));
         }
 
-        // Each page pak holds only its page's packages, and its own registry carries its own records (it works alone).
-        var client = Path.Combine(options.OutputDirectory, ProjectExporter.ClientFolderName);
+        // Each page pak holds only its page's packages, and its own registry carries its own records (it works alone). They sit
+        // in the project's "- pages" folder with nothing else: the paks, their signatures, the reports (and the hidden work folder).
+        var client = ProjectExporter.ExportFolder(options.OutputDirectory, Name, pages: true, ProjectSourceRole.Client);
+        Assert.All(Directory.GetFileSystemEntries(client), entry => Assert.True(
+            Path.GetExtension(entry) is ".pak" or ".sig" or ".md" || Path.GetFileName(entry) == ProjectExporter.WorkFolderName, entry));
+        Assert.True(new DirectoryInfo(Path.Combine(client, ProjectExporter.WorkFolderName)).Attributes.HasFlag(FileAttributes.Hidden));
+        Assert.False(Directory.Exists(Path.Combine(options.OutputDirectory, ProjectExporter.ClientFolderName)), "nothing loose under the output folder");
         var contents = paks.ToDictionary(p => p.Key, p => ModuleExport.ReadPak(p.Value.PakPath!, catalog.ProjectName));
         Assert.Contains(rager.NewPrimary, contents[ExportModule.Vehicles].Packages);
         Assert.DoesNotContain(ak.NewPrimary, contents[ExportModule.Vehicles].Packages);
@@ -177,9 +190,11 @@ public sealed class ModuleExportRealTests(ITestOutputHelper output)
         Assert.NotNull(ModExportService.ModuleBlocker(ctx.Services, project, ExportModule.Weapons)); // nothing on that page
 
         var (results, _) = await ModExportService.QuickExportModuleAsync(ctx.Services, project, ExportModule.Vehicles, ctx.Combine("unused"), ScumStudio.Core.Abstractions.ProgressSink.Null);
-        Assert.Equal(["pakchunk912-Garage-Vehicles_P.pak", "pakchunk919-Garage-Registry_P.pak"], results.Select(r => Path.GetFileName(r.PakPath)));
+        // One page pak alone needs no Registry pak (its own registry carries its records); it sits in the project's "- pages" folder.
+        Assert.Equal(["pakchunk912-Garage-Vehicles_P.pak"], results.Select(r => Path.GetFileName(r.PakPath)));
         Assert.All(results, r => Assert.True(r.Validation is { Passed: true } && File.Exists(r.SigPath), r.ModName));
-        Assert.StartsWith(ctx.Combine("exports"), results[0].PakPath, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(ProjectExporter.ExportFolder(ctx.Combine("exports"), "Garage", pages: true, ProjectSourceRole.Client), Path.GetDirectoryName(results[0].PakPath));
+        Assert.False(File.Exists(Path.Combine(Path.GetDirectoryName(results[0].PakPath)!, "pakchunk919-Garage-Registry_P.pak")));
         Assert.DoesNotContain(Directory.GetFiles(Path.GetDirectoryName(results[0].PakPath)!), f => f.EndsWith("EconomyOverride.json", StringComparison.OrdinalIgnoreCase));
 
         var text = ModuleExportViewModel.Describe(results, []);
@@ -257,13 +272,17 @@ public sealed class ModuleExportRealTests(ITestOutputHelper output)
         // The whole project in one export, then every page on its own; a refused pak is listed, not the end of the run.
         var written = new List<ExportResult>();
         var refused = new List<string>();
-        async Task Export(string what, Func<Task<IReadOnlyList<ExportResult>>> export)
+        async Task Export(string what, Func<Task<ModExportResults>> export)
         {
             try
             {
                 var results = await export();
                 written.AddRange(results);
                 output.WriteLine($"{what}: {string.Join(", ", results.Select(r => Path.GetFileName(r.PakPath)))}");
+                if (results.ServerRefused is { } server)
+                {
+                    refused.Add($"{what} (server): {server.Result.Problems.Count} problem(s), e.g. {string.Join(" | ", server.Result.Problems.Take(3))}");
+                }
             }
             catch (ModValidationException ex)
             {

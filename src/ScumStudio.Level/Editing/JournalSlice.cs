@@ -367,6 +367,7 @@ public static class JournalSlice
             AddBlueprintActorOp bp => new[] { bp.ClassPath, bp.Item },
             AddStaticMeshActorOp add => [add.StaticMesh],
             ReplaceMeshOp mesh => [mesh.New],
+            AddSubZoneOp sub => [sub.SubZone.Setting], // its own copy of zone settings
             _ => [],
         };
         foreach (var path in used.OfType<string>())

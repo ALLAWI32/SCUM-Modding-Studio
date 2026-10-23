@@ -74,6 +74,7 @@ public static class PackageCloner
             names.Add(own.All(r => wanted[r].Number == r.Number && string.Equals(wanted[r].Text, first, StringComparison.Ordinal)) ? first : old[i]);
         }
 
+        KeepCaseVariantsApart(old, names);
         var warnings = new List<string>();
         var payloads = FollowPayloadNames(source, oldPackagePath, map, names, byIndex, warnings);
         var duplicate = names.GroupBy(n => n, StringComparer.Ordinal).FirstOrDefault(g => g.Count() > 1);
@@ -150,13 +151,23 @@ public static class PackageCloner
     {
         var old = source.Names;
         var layouts = Enumerable.Range(0, source.Exports.Count).Select(e => NameLayout.Read(source, e)).ToArray();
+        // FNames compare in any case: a case variant of the new name (KeepCaseVariantsApart) reads as it.
         bool Reads(string text, int index, int number) =>
-            string.Equals(new FNameRef(0, number).Format([text]), Display(map.RemapFName(old[index], number)), StringComparison.Ordinal);
+            string.Equals(new FNameRef(0, number).Format([text]), Display(map.RemapFName(old[index], number)), StringComparison.OrdinalIgnoreCase);
 
         var numbers = map.Objects.Keys.Concat(map.Packages.Keys).Select(k => FNameRef.Split(k).Number).Append(0).ToHashSet();
         for (var i = 0; i < old.Count; i++)
         {
             var index = i;
+            if (IsBarePackagePath(old[i]))
+            {
+                // A bare package path is an FName of the header (a package import, the package's own name); data the reader
+                // cannot decode (a mesh's or a material's native part) names objects, not packages, so a pair of it found there
+                // is chance (r40: the first name of SK_M16_Apocalypso with number 3, twice in its 2.6 MB of mesh data, refused
+                // the M16A4 Premium's clone). Decoded names (a NameProperty, a soft path) are still rewritten below.
+                continue;
+            }
+
             var tried = numbers.Concat(header[i].Select(r => r.Number)).Distinct().ToList();
             bool Wrong(string text, int number) => !Reads(text, index, number) && layouts.Any(l => l.HoldsUndecoded(index, number));
             if (!tried.Any(n => Wrong(names[index], n)))
@@ -201,6 +212,41 @@ public static class PackageCloner
     }
 
     private static string Display((string Text, int Number) name) => new FNameRef(0, name.Number).Format([name.Text]);
+
+    /// <summary>
+    /// Two entries of one FName in different case (the game's <c>CannedCatfood</c> holds <c>CannedCatfood_C</c> and
+    /// <c>CannedCatFood_C</c>; the wooden club's mesh <c>MI_Wooden_Club</c> and <c>MI_Wooden_CLub</c>) are renamed to one new name.
+    /// The engine compares FNames in any case, so they stay one name, but the table needs two texts: each keeps its own case
+    /// where the new text holds the old one (<c>X_MI_Wooden_CLub</c>), or differs from the first in the case of one letter.
+    /// </summary>
+    private static void KeepCaseVariantsApart(IReadOnlyList<string> old, List<string> names)
+    {
+        var taken = new HashSet<string>(names, StringComparer.Ordinal);
+        foreach (var group in Enumerable.Range(0, names.Count).GroupBy(i => names[i], StringComparer.Ordinal).Where(g => g.Count() > 1).ToList())
+        {
+            var members = group.ToList();
+            if (!members.All(i => string.Equals(old[i], old[members[0]], StringComparison.OrdinalIgnoreCase) && !string.Equals(names[i], old[i], StringComparison.Ordinal)))
+            {
+                continue; // two different names: the clone is refused below
+            }
+
+            foreach (var i in members.Skip(1))
+            {
+                var text = names[i];
+                var at = text.IndexOf(old[i], StringComparison.OrdinalIgnoreCase);
+                var candidate = at >= 0 ? string.Concat(text.AsSpan(0, at), old[i], text.AsSpan(at + old[i].Length)) : text;
+                for (var k = 0; !taken.Add(candidate) && k < text.Length; k++)
+                {
+                    candidate = char.IsLetter(text[k]) ? string.Concat(text.AsSpan(0, k), char.IsUpper(text[k]) ? char.ToLowerInvariant(text[k]).ToString() : char.ToUpperInvariant(text[k]).ToString(), text.AsSpan(k + 1)) : candidate;
+                }
+
+                names[i] = candidate;
+            }
+        }
+    }
+
+    /// <summary>A package path with no object part (<c>/Game/A/MI_X</c>, not <c>/Game/A/MI_X.MI_X</c>).</summary>
+    private static bool IsBarePackagePath(string name) => name.StartsWith('/') && name.IndexOf('.') < 0 && name.IndexOf(':') < 0;
 
     private static int GetOrAdd(List<string> names, string text)
     {
@@ -254,7 +300,42 @@ public static class PackageCloner
                 layout._undecoded.Add((0, layout._data.Length));
             }
 
+            layout.AddMaterialSlotNames(package);
             return layout;
+        }
+
+        /// <summary>
+        /// A mesh's native part lists its materials as (material, slot name): the import of a material followed by an FName
+        /// that is that material's own name (<c>SK_Winchester_1897</c>: material MI_Trench_Gun_1897, slot MI_Trench_Gun_1897;
+        /// the Hunter 85's slot MI_Hunter_85). Such a slot name is a name of the material, decoded here, so it follows the
+        /// material's rename like the import (r40: the Trench Gun's, the Hunter 85's and the Trench Gun parts' clones were
+        /// refused for it). Anything else in those bytes stays undecoded.
+        /// </summary>
+        private void AddMaterialSlotNames(CookedPackage package)
+        {
+            var span = _data.Span;
+            foreach (var (start, end) in _undecoded.ToList())
+            {
+                for (var at = Math.Max(0, start); at + 12 <= Math.Min(end, span.Length); at++)
+                {
+                    var index = BinaryPrimitives.ReadInt32LittleEndian(span[at..]);
+                    if (index >= 0 || index < -package.Imports.Count)
+                    {
+                        continue;
+                    }
+
+                    var import = package.Imports[-index - 1];
+                    var cls = package.ResolveName(import.ClassName);
+                    if (!cls.StartsWith("Material", StringComparison.Ordinal)
+                        || BinaryPrimitives.ReadInt32LittleEndian(span[(at + 4)..]) != import.ObjectName.Index
+                        || BinaryPrimitives.ReadInt32LittleEndian(span[(at + 8)..]) != import.ObjectName.Number)
+                    {
+                        continue;
+                    }
+
+                    Slots.Add(at + 4);
+                }
+            }
         }
 
         /// <summary>True when the raw pair (index, number) overlaps bytes the reader could not decode.</summary>

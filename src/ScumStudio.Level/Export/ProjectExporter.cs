@@ -8,6 +8,7 @@ using ScumStudio.Core.Mathematics;
 using ScumStudio.Formats.Packages;
 using ScumStudio.Level.Economy;
 using ScumStudio.Level.Editing;
+using ScumStudio.Level.Import;
 using ScumStudio.Level.Model;
 using ScumStudio.Level.Projects;
 using ScumStudio.Level.Reading;
@@ -22,7 +23,7 @@ namespace ScumStudio.Level.Export;
 /// <summary>Settings of one <see cref="ProjectExporter"/> run.</summary>
 public sealed record ExportOptions
 {
-    /// <summary>Output folder; the exporter writes into <c>&lt;OutputDirectory&gt;/Client</c> or <c>/Server</c>.</summary>
+    /// <summary>Output folder; the exporter writes into the mod's own folder there, <c>&lt;OutputDirectory&gt;/&lt;Mod&gt;/Client</c> or <c>/Server</c> (<see cref="ExportFolder"/>).</summary>
     public required string OutputDirectory { get; init; }
 
     /// <summary>Mod name used in the pak file name (default: the project name), sanitized by <see cref="ProjectExporter.SanitizeModName"/>.</summary>
@@ -113,6 +114,13 @@ public sealed record ExportOptions
     public Func<string, string?>? Elsewhere { get; init; }
 
     /// <summary>
+    /// Other paks of the same project this page's pak only works with although none of its packages names theirs (sentry
+    /// robots replaced with NPCs: <see cref="ModuleExport.GoesWith"/>). Its install note names them as it names
+    /// <see cref="ValidationResult.Needs"/>.
+    /// </summary>
+    public IReadOnlyList<string> GoesWith { get; init; } = [];
+
+    /// <summary>
     /// The server cook: the client's game files, for the package check (<see cref="ValidationOptions.Client"/>: a dedicated
     /// server cook leaves out what only players' games use). Null for the client cook.
     /// </summary>
@@ -194,6 +202,12 @@ public sealed record ExportResult
     /// <summary>What the package check found (null when <see cref="ExportOptions.Validate"/> was off).</summary>
     public ValidationResult? Validation { get; init; }
 
+    /// <summary>
+    /// The placed meshes this export wrote into the terrain tile under them instead of the level they were placed into (they
+    /// stand out of that level's reach; see <see cref="FarPlacement"/>).
+    /// </summary>
+    public IReadOnlyList<FarPlacement.Move> FarPlaced { get; init; } = [];
+
     /// <summary>Total actors removed across levels.</summary>
     public int RemovedActorCount => Levels.Sum(l => l.Report.RemovedActors.Count);
 
@@ -231,6 +245,12 @@ public sealed partial class ProjectExporter
 
     /// <summary>The client cook's spawn place lists and edited places, read by its export and checked by the server's that follows (audit F281).</summary>
     internal Spawns.SpawnPlacesReference? ClientSpawnReference { get; set; }
+
+    /// <summary>
+    /// True to write every placed mesh into the level it was placed into, as 3.5.1 did (no <see cref="FarPlacement"/>): the
+    /// before/after measurement of the real-file tests only.
+    /// </summary>
+    internal bool KeepPlacedInTheirLevel { get; init; }
 
     /// <summary>Creates an exporter.</summary>
     public ProjectExporter(ILogger? logger = null)
@@ -331,8 +351,11 @@ public sealed partial class ProjectExporter
             ClientSpawnReference = null;
         }
 
-        var roleDirectory = Path.Combine(Path.GetFullPath(options.OutputDirectory), RoleFolder(role));
-        var staging = Path.Combine(roleDirectory, module is { } part ? ModuleExport.StagingFolder(part) : StagingFolderName);
+        // The mod's own folder holds what is copied into the game; the staged files sit in its hidden work folder (Layout).
+        var roleDirectory = ExportFolder(options.OutputDirectory, modName, module is not null, role);
+        var work = WorkFolder(roleDirectory);
+        var carriedNotes = CarryOldNotes(options.OutputDirectory, role, work);
+        var staging = Path.Combine(work, module is { } part ? ModuleExport.StagingFolder(part) : StagingFolderName);
         ResetDirectory(staging);
 
         // Instances are read so instance edits can be located and verified in PerInstanceSMData.
@@ -347,10 +370,17 @@ public sealed partial class ProjectExporter
         var warnings = new List<string>(options.Warnings);
         var solidPieces = 0;
 
+        // A placed mesh out of its level's reach goes into the terrain tile under it (FarPlacement); the levels of added
+        // instances are read for that now and kept for the rewrite below.
+        var farDocuments = new Dictionary<string, LevelDocument?>(StringComparer.OrdinalIgnoreCase);
+        var (farState, farMoves) = KeepPlacedInTheirLevel ? (state, Array.Empty<FarPlacement.Move>()) : PlaceFar(state, catalog, options.ClientCatalog, reader, farDocuments, warnings, cancellationToken);
+        state = farState;
+
         // Imported 3D models placed on the map are read from the project's imports folder, not the game's files.
         var models = new ModelCarry(options.ProjectDirectory);
         var modelMeshes = models.Describe(Import.ModelLibrary.UsedOnMap(state));
-        var gameMeshes = options.BendMeshes ?? new BendSupport(catalog).Describe;
+        var stockMeshes = options.BendMeshes ?? new BendSupport(catalog).Describe;
+        Func<string, BendMesh?> gameMeshes = mesh => stockMeshes(MeshLoot.StockPath(mesh)); // a loot-free copy is its stock mesh's shape
         Func<string, BendMesh?> bendMeshes = modelMeshes.Count == 0 ? gameMeshes : mesh => modelMeshes.TryGetValue(mesh, out var model) ? model : gameMeshes(mesh);
         var undrawn = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
         bool Undrawn(string mesh) => undrawn.TryGetValue(mesh, out var known) ? known : undrawn[mesh] = IsWorldGridOnly(catalog, mesh);
@@ -400,10 +430,23 @@ public sealed partial class ProjectExporter
                 + "(copied rocks and trees twice, \"already exists\" and \"not in the level's actor list\" lines). Remove it from the project's imported mods and export again.");
         }
 
+        // A placed mesh is created only when the package check will find it (ModPackageValidator.CheckImports): the game's files
+        // with the imported mods read over them, the project's own models, another pak of the project, or for the server's cook
+        // the client's files (a client-only asset). Only paks say what the game has: a loose folder may be a partial slice of
+        // it (a test's synthetic level, a map slice), and is not judged.
+        Func<string, bool>? meshExists = catalog.Provider is CUE4Parse.FileProvider.Vfs.IVfsFileProvider { MountedVfs.Count: > 0 }
+            ? mesh => ModelLibrary.IsModelMesh(mesh) || catalog.PackageExists(mesh) || options.ClientCatalog?.PackageExists(mesh) == true
+                      || options.Elsewhere?.Invoke(AssetPaths.SplitObjectPath(mesh).PackagePath) is not null
+            : null;
         var traders = PlanTraders(state, catalog, SourcePackage, SourceDocument, warnings);
         var placedMeshes = new List<PlacedMesh>();
+
+        // The loot the meshes of this cook carry themselves: a component whose loot is written draws a loot-free copy of a
+        // mesh with loot of its own (built after the levels from the same cook's mesh).
+        var meshLoot = MeshLoot.FromCatalog(catalog);
+
         // The changed levels are read side by side first; the loop takes each one (or the error reading it threw) in order.
-        var ahead = reader.ReadAhead(state.ChangedLevels.Where(l => !Spawns.SpawnPlaces.IsStaticData(l) && catalog.TryGetPackageFile(l, out _)).ToList(), cancellationToken);
+        var ahead = reader.ReadAhead(state.ChangedLevels.Where(l => !Spawns.SpawnPlaces.IsStaticData(l) && !farDocuments.ContainsKey(l) && catalog.TryGetPackageFile(l, out _)).ToList(), cancellationToken);
         foreach (var level in state.ChangedLevels)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -424,7 +467,8 @@ public sealed partial class ProjectExporter
             LevelDocument? document = null;
             try
             {
-                document = ahead.TryGetValue(level, out var read) ? read.Value : LevelDocument.Load(reader, level, cancellationToken);
+                document = farDocuments.TryGetValue(level, out var known) && known is not null ? known
+                    : ahead.TryGetValue(level, out var read) ? read.Value : LevelDocument.Load(reader, level, cancellationToken);
             }
             catch (Exception ex) when (ex is InvalidDataException or IOException or InvalidOperationException or NotSupportedException)
             {
@@ -436,7 +480,7 @@ public sealed partial class ProjectExporter
             packageCache[level] = package;
             documentCache[level] = document;
 
-            var request = models.Keep(level, PlanLevel(state, level, document, warnings, SourcePackage, SourceDocument, bendMeshes, options.StraightPieces, traders, Undrawn), warnings);
+            var request = models.Keep(level, PlanLevel(state, level, document, warnings, SourcePackage, SourceDocument, bendMeshes, options.StraightPieces, traders, Undrawn, meshExists, meshLoot), warnings);
             if (request.IsEmpty)
             {
                 warnings.Add($"{level}: no exportable change; skipped.");
@@ -474,7 +518,7 @@ public sealed partial class ProjectExporter
             placed.Add((level, target + extension, new HashSet<string>(
                 request.StaticMeshAdds.Select(a => a.NewName).Concat(request.Copies.Select(c => c.NewName)).Concat(request.ForeignCopies.Select(c => c.NewName))
                     .Concat(request.Transforms.Select(t => t.Actor)).Concat(request.Instances.Select(i => i.Actor)).Concat(request.InstanceAdds.Select(a => a.Actor))
-                    .Concat(request.SplinePatches.Select(s => s.Actor)).Concat(request.SpawnPoints.Select(s => s.Actor)).Concat(request.Meshes.Select(m => m.Actor)),
+                    .Concat(request.SplinePatches.Select(s => s.Actor)).Concat(request.SpawnPoints.Select(s => s.Actor)).Concat(request.Meshes.Where(m => !m.IsLootFreeCopy).Select(m => m.Actor)),
                 StringComparer.OrdinalIgnoreCase)));
 
             warnings.AddRange(report.Warnings.Select(w => $"{level}: {w}"));
@@ -482,6 +526,13 @@ public sealed partial class ProjectExporter
             levels.Add(new ExportedLevel(level, virtualPath, report));
             _logger.LogInformation("{Level}: {Before} -> {After} actors, {Removed} removed, {Transforms} transform(s) written.",
                 level, report.ActorsBefore, report.ActorsAfter, report.RemovedActors.Count, report.PatchedTransforms.Count);
+        }
+
+        // The loot-free copies of the meshes the written levels now draw instead (loot replaced or taken out).
+        var lootFreeMeshes = await WriteLootFreeMeshesAsync(catalog, meshLoot, staging, warnings, cancellationToken).ConfigureAwait(false);
+        if (lootFreeMeshes.Count > 0)
+        {
+            _logger.LogInformation("Loot-free mesh copies: {Count}.", lootFreeMeshes.Count);
         }
 
         var volumes = new List<GrassClearing.Volume>();
@@ -521,7 +572,7 @@ public sealed partial class ProjectExporter
         }
 
         // Vehicles and items: clones (renamed families) and stored-value edits, plus the merged AssetRegistry.bin.
-        var assets = new List<ExportedAsset>(spawnPlaces);
+        var assets = new List<ExportedAsset>(spawnPlaces.Concat(lootFreeMeshes));
         var registered = new List<RegisteredAsset>();
         var assetValues = new List<(string, string, string, string)>();
         var writeRegistry = false;
@@ -589,19 +640,35 @@ public sealed partial class ProjectExporter
 
         // Every staged package is in place (levels, vehicles, imported mods): the server's sound events become its stubs.
         var stubbed = await StubEventsAsync(staging, catalog, options, role, warnings, cancellationToken).ConfigureAwait(false);
-        var removedSpawners = ItemSpawnersGone(state, roleDirectory, documentCache, warnings);
+
+        // The list of placed item spawners (in the hidden work folder) is written once the pak is: a refused export leaves
+        // the last good export's list.
+        var removedSpawners = ItemSpawnersGone(state, work, documentCache, warnings, out var placedSpawners);
+        var pakTarget = Path.Combine(roleDirectory, module is { } own ? ModuleExport.PakFileName(modName, own, options.PakChunkIndex) : PakFileName(modName, options.PakChunkIndex));
+        var reportPath = Path.Combine(roleDirectory, module is { } reported ? ModuleExport.ReportFileName(reported) : ReportFileName);
 
         // Every staged package is read back against the game's own before anything is packed: a pak the game could trip
         // over (loading, playing, leaving a server, closing the game) is never written (owner 2026-10-16). It runs after
-        // the server's stubs are written, so it checks the packages that go into the pak.
-        var validation = Validate(staging, catalog, options, progress, cancellationToken, carriedPackages);
+        // the server's stubs are written, so it checks the packages that go into the pak. Refused, the report says NOT
+        // EXPORTED and names the earlier pak, which stays as it is (Discord, O Piqueno: the old pak and report looked like this export's).
+        ValidationResult? validation;
+        try
+        {
+            validation = Validate(staging, catalog, options, progress, cancellationToken, carriedPackages, roleDirectory);
+        }
+        catch (ModValidationException refused)
+        {
+            // The earlier pak and .sig are never renamed, moved or deleted (an export into a server's mods folder keeps the mod that works).
+            throw WriteRefusal(refused, module is null ? modName : ModuleExport.ModName(modName, module.Value), role, reportPath, options.WritePak ? pakTarget : null, warnings);
+        }
+
         warnings.AddRange(validation?.Notes ?? []);
 
         string? pakPath = null;
         string? sigPath = null;
         if (options.WritePak)
         {
-            pakPath = Path.Combine(roleDirectory, module is { } own ? ModuleExport.PakFileName(modName, own, options.PakChunkIndex) : PakFileName(modName, options.PakChunkIndex));
+            pakPath = pakTarget;
             progress?.Report($"Packing {Path.GetFileName(pakPath)}");
             var writer = new PakWriter(new PakWriterOptions { Compression = options.Compression, IncludeAssetRegistry = writeRegistry }, _logger);
             await writer.WriteFromDirectoryAsync(staging, pakPath, null, cancellationToken).ConfigureAwait(false);
@@ -616,6 +683,8 @@ public sealed partial class ProjectExporter
                 sigPath = SigCopier.Copy(sigSource, pakPath, overwrite: true, _logger);
             }
         }
+
+        WriteItemSpawners(work, placedSpawners, warnings);
 
         // The economy goes next to the pak: the server reads it from its config folder (see the report). The game's traders
         // whose trade posts are deleted lose their sections (the outpost levels with deletions were read above).
@@ -647,19 +716,33 @@ public sealed partial class ProjectExporter
             StubbedEvents = stubbed,
             RemovedItemSpawners = removedSpawners,
             Validation = validation,
+            FarPlaced = farMoves,
         };
-        var reportPath = Path.Combine(roleDirectory, module is { } reported ? ModuleExport.ReportFileName(reported) : ReportFileName);
-        await File.WriteAllTextAsync(reportPath, BuildReport(result, catalog, module, module is null ? null : ModuleExport.RegistryPakFileName(modName, options.PakChunkIndex)), new UTF8Encoding(false), cancellationToken).ConfigureAwait(false);
+        await File.WriteAllTextAsync(reportPath, BuildReport(result, catalog, module, module is null ? null : ModuleExport.RegistryPakFileName(modName, options.PakChunkIndex), goesWith: options.GoesWith), new UTF8Encoding(false), cancellationToken).ConfigureAwait(false);
+
+        // What an export before 3.5.1 left loose beside the mod's folder goes now that this one's pak is written (a staging-only
+        // run, --no-pak, keeps the only pak the user has). The old Craftables pak is the Craftables pak's of this export to replace.
+        foreach (var old in options.WritePak ? RemoveOldLayout(options.OutputDirectory, modName, options.PakChunkIndex, role, keepCraftables: module is null) : [])
+        {
+            _logger.LogInformation("Removed {Path} (an export before 3.5.1 left it loose in the output folder).", old);
+        }
+
+        if (options.WritePak && carriedNotes)
+        {
+            DropOldNotes(options.OutputDirectory, role); // this mod's work folder has them now
+        }
+
         return result with { ReportPath = reportPath };
     }
 
     /// <summary>
     /// Runs <see cref="ModPackageValidator"/> over <paramref name="staging"/> (unless <see cref="ExportOptions.Validate"/> is
     /// off) and throws <see cref="ModValidationException"/> when it found anything; the pak is then not written.
-    /// <paramref name="carried"/> names the packages carried from imported mods as their authors made them.
+    /// <paramref name="carried"/> names the packages carried from imported mods as their authors made them. The list of problems
+    /// is written to <paramref name="listDirectory"/> (the mod's folder, where the report is; default: beside the staging folder).
     /// </summary>
     internal static ValidationResult? Validate(string staging, AssetCatalog catalog, ExportOptions options, IProgress<string>? progress, CancellationToken cancellationToken,
-        IReadOnlyDictionary<string, string>? carried = null)
+        IReadOnlyDictionary<string, string>? carried = null, string? listDirectory = null)
     {
         if (!options.Validate)
         {
@@ -672,7 +755,7 @@ public sealed partial class ProjectExporter
             Client = options.ClientCatalog,
             Carried = carried ?? new Dictionary<string, string>(),
         }, cancellationToken, options.Elsewhere);
-        var list = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(staging))!, ModPackageValidator.ListFileName);
+        var list = Path.Combine(listDirectory ?? Path.GetDirectoryName(Path.GetFullPath(staging))!, ModPackageValidator.ListFileName);
         if (result.Passed)
         {
             File.Delete(list); // an earlier export's list
@@ -689,7 +772,7 @@ public sealed partial class ProjectExporter
     /// </summary>
     private static void CollectFarCuts(LevelDocument document, LevelEditRequest request, Func<string, BendMesh?> meshes, List<CutBox> cuts, List<FarModels.Candidate> proxies)
     {
-        var gone = new HashSet<string>(request.DeleteActors.Concat(request.Transforms.Select(t => t.Actor)).Concat(request.Meshes.Select(m => m.Actor)), StringComparer.OrdinalIgnoreCase);
+        var gone = new HashSet<string>(request.DeleteActors.Concat(request.Transforms.Select(t => t.Actor)).Concat(request.Meshes.Where(m => !m.IsLootFreeCopy).Select(m => m.Actor)), StringComparer.OrdinalIgnoreCase);
         foreach (var actor in document.Actors)
         {
             if (gone.Contains(actor.Name))
@@ -861,10 +944,22 @@ public sealed partial class ProjectExporter
     /// True for a mesh the game never draws (every material the editor's WorldGridMaterial: a lake's top, a helper shape); such
     /// a part never keeps an actor whose drawn parts are all deleted. Null: every visible mesh counts.
     /// </param>
+    /// <param name="meshExists">
+    /// True when the game files (or the project's own models) have a mesh object path. A placed mesh the game does not have
+    /// (a <c>/Game/...</c> path pasted into the Map's Add object box, a project made against another build of SCUM) is not
+    /// created and a warning names it; the import would otherwise point at nothing and the package check would stop the
+    /// whole export (O Piqueno, 3.4.0: <c>LakeWaterSurface_B_4</c>). Null: every mesh is taken as the game's.
+    /// </param>
+    /// <param name="meshLoot">
+    /// The loot the meshes carry themselves (see <see cref="MeshLoot"/>): a component whose loot is written gets the loot-free
+    /// copy of its mesh where that mesh carries loot (the copies asked for are built by the export). Null: loot is written
+    /// on the components only, as before 3.6.0.
+    /// </param>
     public static LevelEditRequest PlanLevel(
         EditState state, string level, LevelDocument? document, List<string> warnings,
         Func<string, CookedPackage?>? sourcePackages, Func<string, LevelDocument?>? sourceDocuments, Func<string, BendMesh?>? bendMeshes = null,
-        IReadOnlyCollection<ActorRef>? straightPieces = null, TraderExportPlan? traders = null, Func<string, bool>? undrawnMesh = null)
+        IReadOnlyCollection<ActorRef>? straightPieces = null, TraderExportPlan? traders = null, Func<string, bool>? undrawnMesh = null,
+        Func<string, bool>? meshExists = null, MeshLoot? meshLoot = null)
     {
         ArgumentNullException.ThrowIfNull(state);
         ArgumentException.ThrowIfNullOrWhiteSpace(level);
@@ -902,6 +997,12 @@ public sealed partial class ProjectExporter
                     break;
                 case AddStaticMeshActorOp meshActor:
                     var addedMesh = state.GetMeshOverride(added) ?? meshActor.StaticMesh; // replaced since it was added
+                    if (meshExists?.Invoke(addedMesh) == false)
+                    {
+                        warnings.Add($"{added}: neither the game nor the mod has the mesh {addedMesh}, so the actor was not created (the game would draw nothing there). Delete it, or place the object again from Assets.");
+                        break;
+                    }
+
                     if (FarModels.IsFarViewMesh(addedMesh))
                     {
                         warnings.Add($"{added}: {addedMesh} is a far-view model (low detail, blurred, merged with what stood around it, no collision); delete it and copy the real building instead.");
@@ -1155,6 +1256,10 @@ public sealed partial class ProjectExporter
                 }
             }
         }
+
+        // Placed objects with no loot inside, then every loot write against the loot its mesh carries itself.
+        var lootMeshes = PlanNoLoot(state, level, document, sourceDocuments, deleted, meshLoot, loot, spawnPoints, warnings);
+        loot = SettleLoot(state, level, document, sourceDocuments, meshLoot, lootMeshes, loot, meshPatches, warnings);
 
         PlanCopyParts(state, level, warnings, meshAdds, transforms);
         // What a sentry spawner spawns (the Map's spawn editor); a same-level copy carries its source's choice.
@@ -1496,6 +1601,8 @@ public sealed partial class ProjectExporter
             var added = state.AddedActors.GetValueOrDefault(actor);
             switch (added)
             {
+                case AddStaticMeshActorOp when !meshAdds.Exists(a => string.Equals(a.NewName, actor.Actor, StringComparison.OrdinalIgnoreCase)):
+                    continue; // left out above (a mesh neither the game nor the mod has), and named in the warnings
                 case AddStaticMeshActorOp meshActor:
                     mesh = state.GetMeshOverride(actor) ?? meshActor.StaticMesh;
                     transform = state.GetAddedTransform(actor) ?? meshActor.Transform;
@@ -1736,7 +1843,7 @@ public sealed partial class ProjectExporter
         Directory.CreateDirectory(Path.GetDirectoryName(target)!);
         await bytes.WriteAsync(target, virtualPath[dot..], cancellationToken).ConfigureAwait(false);
         warnings.AddRange(report.Warnings.Select(w => $"Spawn places: {w}"));
-        _logger.LogInformation("Spawn places: {Deleted} removed, {Moved} moved, {Added} copied, {Created} new.", report.Deleted, report.Moved, report.Added, report.Created);
+        _logger.LogInformation("Spawn places: {Deleted} removed, {Moved} moved, {Added} copied, {Created} new, {SubZones} sub-zone(s) added.", report.Deleted, report.Moved, report.Added, report.Created, report.SubZones);
         return new ExportedAsset(Spawns.SpawnPlaces.StaticDataPath, virtualPath, false);
     }
 
@@ -1751,7 +1858,11 @@ public sealed partial class ProjectExporter
         var edits = state.AssetValueOverrides
             .GroupBy(v => v.Package, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => (IReadOnlyList<TunableEdit>)g.Select(v => new TunableEdit(v.Export, v.Path, v.Current)).ToList(), StringComparer.OrdinalIgnoreCase);
-        return new AssetModRequest(clones, edits) { Replacements = new Dictionary<string, string>(state.AssetReplacements, StringComparer.OrdinalIgnoreCase) };
+        return new AssetModRequest(clones, edits)
+        {
+            Replacements = new Dictionary<string, string>(state.AssetReplacements, StringComparer.OrdinalIgnoreCase),
+            FreeModels = state.AssetClones.Where(c => c.Kind == VehicleAttachmentEdits.PartKind).Select(c => c.NewPrimary).ToList(),
+        };
     }
 
     private static void ResetDirectory(string directory)
@@ -1764,22 +1875,56 @@ public sealed partial class ProjectExporter
         Directory.CreateDirectory(directory);
     }
 
-    private static string BuildReport(ExportResult result, AssetCatalog catalog, ExportModule? module = null, string? registryPak = null)
+    /// <summary>
+    /// The export report of <paramref name="result"/>: what to install first, then the details. <paramref name="craftables"/>: the
+    /// Craftables pak's report (no levels; its packages are the craftables'). <paramref name="goesWith"/>: the other page paks a
+    /// page's pak only works with (<see cref="ExportOptions.GoesWith"/>), named with those its packages need.
+    /// </summary>
+    internal static string BuildReport(ExportResult result, AssetCatalog catalog, ExportModule? module = null, string? registryPak = null, bool craftables = false, IReadOnlyList<string>? goesWith = null)
     {
         var sb = new StringBuilder();
         sb.Append("# ").Append(result.ModName).Append(" — ").Append(result.Role).AppendLine(" export");
         sb.AppendLine();
+
+        // What to copy comes first (owner: "just the pak, correct"); the details follow for whoever needs them.
+        sb.AppendLine("## Install");
+        sb.AppendLine();
+        sb.Append("- Files: ").AppendLine(result.PakPath is null ? "(no pak written: staged files only)"
+            : Path.GetFileName(result.PakPath) + (result.SigPath is null ? " (copy a stock .sig next to it)" : " + " + Path.GetFileName(result.SigPath)));
+        if (result.EconomyPath is not null)
+        {
+            sb.Append("- Economy: ").Append(Path.GetFileName(result.EconomyPath)).AppendLine(" goes to the server's SCUM\\Saved\\Config\\WindowsServer (see its README).");
+        }
+
+        sb.AppendLine();
+        sb.AppendLine(module is not null
+            ? ModuleExport.InstallNote(result.Role, Path.GetFileName(result.PakPath) ?? result.ModName, registryPak ?? string.Empty,
+                [.. (result.Validation?.Needs ?? []).Concat(goesWith ?? []).Distinct(StringComparer.OrdinalIgnoreCase)])
+            : InstallNote(result.Role));
+        if (craftables && CraftablesExporter.TaggedSetupsNote(result) is { } tagged)
+        {
+            sb.AppendLine();
+            sb.AppendLine(tagged);
+        }
+
+        sb.AppendLine();
+        sb.AppendLine("## Details");
+        sb.AppendLine();
         sb.Append("- Source: ").AppendLine(catalog.DisplayName);
-        sb.Append("- Levels rewritten: ").Append(result.Levels.Count.ToString(CultureInfo.InvariantCulture))
-            .Append(", actors removed: ").Append(result.RemovedActorCount.ToString(CultureInfo.InvariantCulture))
-            .Append(", transforms written: ").AppendLine(result.PatchedTransformCount.ToString(CultureInfo.InvariantCulture));
-        sb.Append("- Vehicle/item packages: ").Append(result.Assets.Count.ToString(CultureInfo.InvariantCulture))
+        if (!craftables)
+        {
+            sb.Append("- Levels rewritten: ").Append(result.Levels.Count.ToString(CultureInfo.InvariantCulture))
+                .Append(", actors removed: ").Append(result.RemovedActorCount.ToString(CultureInfo.InvariantCulture))
+                .Append(", transforms written: ").AppendLine(result.PatchedTransformCount.ToString(CultureInfo.InvariantCulture));
+        }
+
+        sb.Append(craftables ? "- Craftables packages: " : "- Vehicle/item packages: ").Append(result.Assets.Count.ToString(CultureInfo.InvariantCulture))
             .Append(" (").Append(result.Assets.Count(a => a.IsClone).ToString(CultureInfo.InvariantCulture)).Append(" new), values written: ")
             .Append(result.AssetValues.Count.ToString(CultureInfo.InvariantCulture)).Append(", registry records added: ")
             .AppendLine(result.Registered.Count.ToString(CultureInfo.InvariantCulture));
         sb.Append("- Pak: ").AppendLine(result.PakPath ?? "(not written)");
         sb.Append("- Signature: ").AppendLine(result.SigPath ?? "(none — copy a stock .sig next to the pak)");
-        sb.Append("- Staging: ").AppendLine(result.StagingDirectory);
+        sb.Append("- Work files (hidden): ").AppendLine(result.StagingDirectory);
         if (result.FarModels.Count > 0)
         {
             sb.AppendLine();
@@ -1791,8 +1936,25 @@ public sealed partial class ProjectExporter
             }
         }
 
-        sb.AppendLine();
-        sb.AppendLine("## Levels");
+        if (result.FarPlaced.Count > 0)
+        {
+            sb.AppendLine();
+            sb.AppendLine("## Placed far from their level");
+            sb.AppendLine();
+            sb.AppendLine("The game loads a level only near its area. These stand out of their level's reach, so each went into the terrain tile under it, which the game loads within its streaming distance (1 km for almost every tile; the project keeps them where they were). The game's LODs still apply; not yet checked in the game: whether it also hides small pieces sooner by their size.");
+            sb.AppendLine();
+            foreach (var move in result.FarPlaced)
+            {
+                sb.Append("- ").AppendLine(move.Describe());
+            }
+        }
+
+        if (!craftables)
+        {
+            sb.AppendLine();
+            sb.AppendLine("## Levels");
+        }
+
         foreach (var level in result.Levels)
         {
             var r = level.Report;
@@ -1822,12 +1984,26 @@ public sealed partial class ProjectExporter
             }
         }
 
-        if (result.Assets.Count > 0)
+        var lootCopies = result.Assets.Where(a => MeshLoot.IsCopy(a.PackagePath)).ToList();
+        if (lootCopies.Count > 0)
         {
             sb.AppendLine();
-            sb.AppendLine("## Vehicles and items");
+            sb.AppendLine("## Loot");
             sb.AppendLine();
-            foreach (var asset in result.Assets)
+            sb.AppendLine("The game also reads loot from a searchable object's model, so a change written on the object alone can leave the model's loot spawning. "
+                          + "Objects whose loot this project changed or took out draw these copies of their model, which carry no loot: they look the same and give only the loot set in the studio.");
+            foreach (var asset in lootCopies)
+            {
+                sb.Append("- New: ").AppendLine(asset.VirtualPath);
+            }
+        }
+
+        if (result.Assets.Count > lootCopies.Count)
+        {
+            sb.AppendLine();
+            sb.AppendLine(craftables ? "## Craftables" : "## Vehicles and items");
+            sb.AppendLine();
+            foreach (var asset in result.Assets.Except(lootCopies))
             {
                 sb.Append("- ").Append(asset.IsClone ? "New: " : "Overridden: ").AppendLine(asset.VirtualPath);
             }
@@ -1868,12 +2044,6 @@ public sealed partial class ProjectExporter
             }
         }
 
-        sb.AppendLine();
-        sb.AppendLine("## Install");
-        sb.AppendLine();
-        sb.AppendLine(module is not null
-            ? ModuleExport.InstallNote(result.Role, Path.GetFileName(result.PakPath) ?? result.ModName, registryPak ?? string.Empty, result.Validation?.Needs ?? [])
-            : InstallNote(result.Role));
         AppendTraderReport(sb, result);
         if (result.Warnings.Count > 0)
         {

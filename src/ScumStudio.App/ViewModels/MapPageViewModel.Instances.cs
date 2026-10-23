@@ -303,6 +303,10 @@ public sealed partial class MapPageViewModel
         else if (state?.IsAdded(RefOf(sel)) == true)
         {
             rows.Add(new PropertyRow(Localization.Loc.T("Map.Row.State"), Localization.Loc.T("Map.State.AddedInstance")));
+            if (InstanceInGameRow(World, TerrainTiles, state!, sel.Item.Reference, sel.Item.Actor, sel.Component, t.Translation) is { } inGame)
+            {
+                rows.Add(inGame); // the reporter's Ctrl+D of a part: where the export puts it and from how far the game loads it
+            }
         }
         else if (state?.GetInstanceOverride(RefOf(sel)) is not null)
         {

@@ -193,7 +193,7 @@ public sealed class CraftablesPakSafetyTests : IDisposable
     {
         // A Craftables export that builds nothing stops with every reason and leaves the pak players already have.
         var output = Path.Combine(_dir, "out");
-        var role = Path.Combine(output, ProjectExporter.RoleFolder(ProjectSourceRole.Client));
+        var role = ProjectExporter.ExportFolder(output, "MyMod", pages: false, ProjectSourceRole.Client);
         Directory.CreateDirectory(role);
         var pak = Path.Combine(role, CraftablesExporter.PakFileName("MyMod", 900));
         File.WriteAllText(pak, "old");
@@ -211,7 +211,7 @@ public sealed class CraftablesPakSafetyTests : IDisposable
             ],
         };
 
-        var staged = Path.Combine(role, CraftablesExporter.StagingFolderName, "SCUM", "AssetRegistry.bin");
+        var staged = Path.Combine(role, ProjectExporter.WorkFolderName, CraftablesExporter.StagingFolderName, "SCUM", "AssetRegistry.bin");
         Directory.CreateDirectory(Path.GetDirectoryName(staged)!);
         File.WriteAllText(staged, "old");
 

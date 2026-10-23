@@ -46,7 +46,6 @@ public sealed class CopyCollisionRealTests
         // CopiedTreeRealTests reads the grown array back).
         var (foliage, instance) = map.AllActors.SelectMany(a => a.Actor.InstanceTransforms.Select(i => (Item: a, Instance: i)))
             .First(x => x.Instance.StaticMeshPath?.EndsWith(".CupressusTall_01", StringComparison.Ordinal) == true);
-        var source = foliage.Actor.FindComponent(instance.ComponentName)!;
         map.SelectedInstanceKey = InstanceKey.Of(foliage.SelectableId, instance.ComponentName, instance.InstanceIndex);
         map.SelectedActorId = foliage.SelectableId;
         map.DuplicateSelectedCommand.Execute(null);
@@ -54,7 +53,9 @@ public sealed class CopyCollisionRealTests
         Assert.Equal(instance.ComponentName, copy.Target.Component);
 
         // A mesh-actor copy made by an older version (no profile recorded) of the same tree: repaired to the standing-tree profile.
-        var at = source.WorldTransform.Translation + new ScumStudio.Core.Mathematics.FVector(500f, 0f, 0f);
+        // Beside the tree (the foliage component itself sits at the world's origin, out of this tile's reach: such a copy would
+        // go into the terrain tile there, FarPlacement).
+        var at = instance.WorldTransform.Translation + new ScumStudio.Core.Mathematics.FVector(500f, 0f, 0f);
         var old = new AddStaticMeshActorOp(Level, "CupressusTall_01_Old", instance.StaticMeshPath!, new ScumStudio.Level.Model.TransformValue(at, new ScumStudio.Core.Mathematics.FRotator(0f, 0f, 0f), ScumStudio.Core.Mathematics.FVector.One));
         ctx.Services.Projects.Apply(old);
 

@@ -319,6 +319,34 @@ public sealed class AppViewModelTests
     }
 
     [Fact]
+    public async Task AStickyToastStaysIsReplacedByItsGroupAndOutlivesTheCap()
+    {
+        // Discord, O Piqueno (3.4.0): a refused export was a 12-second toast in the status bar.
+        var notifications = new NotificationService(new InlineUiDispatcher(), TimeSpan.FromMilliseconds(20));
+        var first = notifications.ShowSticky("export-refused", ToastSeverity.Error, "Mod NOT exported", "41 problems");
+        var second = notifications.ShowSticky("export-refused", ToastSeverity.Error, "Mod NOT exported", "2 problems");
+        Assert.Same(second, Assert.Single(notifications.Toasts)); // a refusal again replaces it, never a stack
+        Assert.DoesNotContain(first, notifications.Toasts);
+        for (var i = 0; i < NotificationService.MaxVisible + 2; i++)
+        {
+            notifications.Info("t" + i);
+        }
+
+        Assert.Contains(second, notifications.Toasts); // newer toasts push the others out first
+        Assert.Equal(NotificationService.MaxVisible, notifications.Toasts.Count);
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (notifications.Toasts.Count > 1 && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(20);
+        }
+
+        await Task.Delay(100);
+        Assert.Same(second, Assert.Single(notifications.Toasts)); // the others timed out, it did not
+        second.CloseCommand!.Execute(null);
+        Assert.Empty(notifications.Toasts);
+    }
+
+    [Fact]
     public void ToastLifetimesFollowTheSeverityAndBurstsCoalesce()
     {
         var notifications = new NotificationService(new InlineUiDispatcher(), TimeSpan.FromSeconds(6));

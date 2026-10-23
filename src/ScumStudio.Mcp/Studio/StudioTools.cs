@@ -163,19 +163,19 @@ public sealed partial class StudioTools
         { Title = "Redo" };
 
         yield return new McpTool("export_mod",
-            "Builds the mod from the project's applied edits: '<outputFolder>/Client/pakchunk<N>-<Name>_P.pak' (+ .sig copied from " +
+            "Builds the mod from the project's applied edits: '<outputFolder>/<Name>/Client/pakchunk<N>-<Name>_P.pak' (+ .sig copied from " +
             "a stock pak when available, + export-report.md) with the rewritten levels, changed/cloned vehicle and item packages and " +
             "the merged AssetRegistry.bin; with includeServer also the server pak from the server's Paks folder. The user copies " +
             "the pak and .sig into SCUM\\Content\\Paks.",
             ToolSchema.Object()
-                .String("outputFolder", "Folder that receives Client/ (and Server/).", required: true)
+                .String("outputFolder", "Folder that receives the mod's own folder <modName>/ with Client/ (and Server/) inside.", required: true)
                 .String("modName", "Pak name (default: the project name).")
                 .Boolean("includeServer", "Also build the server pak (needs the server Paks folder configured / given as a project source).")
                 .Integer("pakChunkIndex", "The pakchunk number (default 900; higher loads later).", minimum: 1, maximum: 9999)
                 .Build(),
             async (call, ct) =>
             {
-                RequireProject();
+                var project = RequireProject();
                 var options = new ExportOptions
                 {
                     OutputDirectory = call.RequireString("outputFolder"),
@@ -200,7 +200,7 @@ public sealed partial class StudioTools
                         registryRecordsAdded = r.Registered.Count,
                         warnings = r.Warnings,
                     }),
-                }).WithSummary("Exported " + string.Join(", ", results.Select(r => r.PakPath is null ? "(staged files only)" : Path.GetFileName(r.PakPath))) + " to " + options.OutputDirectory);
+                }).WithSummary("Exported " + string.Join(", ", results.Select(r => r.PakPath is null ? "(staged files only)" : Path.GetFileName(r.PakPath))) + " to " + ProjectExporter.ModFolder(options.OutputDirectory, options.ModName ?? project.Manifest.Name, pages: false));
             })
         { Title = "Export mod pak", OpenWorld = true };
     }

@@ -25,9 +25,11 @@ public sealed partial class EditState
     private readonly Dictionary<(ActorRef Actor, string Component), MeshOverride> _meshes = new(TransformKeyComparer.Instance);
     private readonly Dictionary<(ActorRef Actor, string Component), (LootSetting Base, LootSetting Current)> _loot = new(TransformKeyComparer.Instance);
     private readonly Dictionary<ActorRef, bool> _grass = new(ActorRef.Comparer);
+    private readonly HashSet<ActorRef> _noLoot = new(ActorRef.Comparer);
     private readonly HashSet<(ActorRef Actor, string Component)> _deletedComponents = new(TransformKeyComparer.Instance);
     private readonly Dictionary<(ActorRef Actor, string Property), string> _choices = new(TransformKeyComparer.Instance);
     private readonly List<TerrainHole> _holes = [];
+    private readonly List<(ActorRef Zone, SubZone SubZone)> _subZones = [];
 
     // The new spawn places of _added, for readers on another thread: replaced on every change, never changed.
     private volatile AddSpawnPlaceOp[] _newPlaces = [];
@@ -36,7 +38,10 @@ public sealed partial class EditState
     public bool IsEmpty =>
         _deletedActors.Count == 0 && _deletedInstances.Count == 0 && _transforms.Count == 0 && _instanceTransforms.Count == 0 && _added.Count == 0
         && _addedInstances.Count == 0 && _clones.Count == 0 && _values.Count == 0 && _replacements.Count == 0 && _bends.Count == 0 && _segmentSways.Count == 0 && _spawnPoints.Count == 0
-        && _meshes.Count == 0 && _loot.Count == 0 && _deletedComponents.Count == 0 && _choices.Count == 0 && _holes.Count == 0;
+        && _meshes.Count == 0 && _loot.Count == 0 && _deletedComponents.Count == 0 && _choices.Count == 0 && _holes.Count == 0 && _subZones.Count == 0;
+
+    /// <summary>Sub-zones added to stock threat zones (see <see cref="AddSubZoneOp"/>), oldest first.</summary>
+    public IReadOnlyList<(ActorRef Zone, SubZone SubZone)> SubZones => _subZones;
 
     /// <summary>Holes cut into the landscape (see <see cref="TerrainHoleOp"/>), oldest first. Not in <see cref="ChangedLevels"/>: the export cuts them after the levels.</summary>
     public IReadOnlyList<TerrainHole> TerrainHoles => _holes;
@@ -72,6 +77,12 @@ public sealed partial class EditState
 
     /// <summary>True when the export clears the grass under the actor: as set, else on for an actor the project added.</summary>
     public bool ClearsGrass(ActorRef actor) => GetClearGrass(actor) ?? IsAdded(actor);
+
+    /// <summary>True when the placed actor has "No loot inside" (see <see cref="SetNoLootOp"/>).</summary>
+    public bool IsNoLoot(ActorRef actor) => _noLoot.Contains(actor);
+
+    /// <summary>The placed actors with "No loot inside" (see <see cref="SetNoLootOp"/>).</summary>
+    public IReadOnlyCollection<ActorRef> NoLootActors => _noLoot;
 
     /// <summary>Deleted actors (pristine or added).</summary>
     public IReadOnlyCollection<ActorRef> DeletedActors => _deletedActors;
@@ -144,6 +155,7 @@ public sealed partial class EditState
             .Concat(_loot.Keys.Select(k => k.Actor.Level))
             .Concat(_deletedComponents.Select(k => k.Actor.Level))
             .Concat(_choices.Keys.Select(k => k.Actor.Level))
+            .Concat(_subZones.Select(s => s.Zone.Level))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(l => l, StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -284,12 +296,25 @@ public sealed partial class EditState
             case SetSpawnChoiceOp choice:
                 return _deletedActors.Contains(choice.Target) ? $"{choice.Target} is deleted."
                     : GetSpawnChoice(choice.Target, choice.Property) != choice.Old ? $"{choice.Target}: what it spawns is not as expected (edit is out of date)." : null;
+            case AddSubZoneOp add:
+                return SpawnPlaces.ParseName(add.Zone.Actor) is not { Kind: SpawnPlaceKind.Zone } || !SpawnPlaces.IsStaticData(add.Zone.Level)
+                    ? $"{add.Zone} is not a threat zone of the island data (only those hold sub-zones)."
+                    : _deletedActors.Contains(add.Zone) ? $"{add.Zone} is deleted."
+                    : string.IsNullOrWhiteSpace(add.SubZone.Setting) ? "A sub-zone needs its zone settings."
+                    : !IsSaneBox(add.SubZone) ? "The sub-zone's box is not usable (each corner a number on the island, the lower one below the upper one)."
+                    : IndexOfSubZone(add.Zone, add.SubZone) >= 0 ? $"{add.Zone} already has this sub-zone." : null;
+            case RemoveSubZoneOp remove:
+                return IndexOfSubZone(remove.Zone, remove.SubZone) >= 0 ? null : $"{remove.Zone} has no such sub-zone.";
             case TerrainHoleOp hole:
                 return hole.Hole.Validate()
                        ?? (hole.Cut == _holes.Contains(hole.Hole) ? $"The {hole.Hole} is {(hole.Cut ? "already cut" : "not cut")}." : null);
             case SetClearGrassOp grass:
                 return _deletedActors.Contains(grass.Target) ? $"{grass.Target} is deleted."
                     : GetClearGrass(grass.Target) != grass.Old ? $"{grass.Target}: the grass setting is not as expected (edit is out of date)." : null;
+            case SetNoLootOp noLoot:
+                return _deletedActors.Contains(noLoot.Target) ? $"{noLoot.Target} is deleted."
+                    : !_added.ContainsKey(noLoot.Target) ? $"{noLoot.Target} is not an object the project placed; take the loot out of its searchable parts one by one instead."
+                    : IsNoLoot(noLoot.Target) != noLoot.Old ? $"{noLoot.Target}: the loot setting is not as expected (edit is out of date)." : null;
             case SetTransformOp set:
                 if (_deletedActors.Contains(set.Target))
                 {
@@ -521,6 +546,7 @@ public sealed partial class EditState
                 }
 
                 _grass.Remove(remove.Target);
+                _noLoot.Remove(remove.Target);
                 break;
             case ReplaceMeshOp mesh:
                 var meshKey = (mesh.Target, mesh.Component ?? string.Empty);
@@ -576,8 +602,25 @@ public sealed partial class EditState
                 }
 
                 break;
+            case SetNoLootOp noLoot:
+                if (noLoot.New)
+                {
+                    _noLoot.Add(noLoot.Target);
+                }
+                else
+                {
+                    _noLoot.Remove(noLoot.Target);
+                }
+
+                break;
             case SetTransformOp set:
                 SetOverride(_transforms, (set.Target, set.Component ?? string.Empty), set.Old, set.New);
+                break;
+            case AddSubZoneOp add:
+                _subZones.Add((add.Zone, add.SubZone));
+                break;
+            case RemoveSubZoneOp remove:
+                _subZones.RemoveAt(IndexOfSubZone(remove.Zone, remove.SubZone));
                 break;
             case TerrainHoleOp hole:
                 if (hole.Cut)
@@ -693,6 +736,7 @@ public sealed partial class EditState
         copy._deletedActors.UnionWith(_deletedActors);
         copy._deletedInstances.UnionWith(_deletedInstances);
         copy._deletedComponents.UnionWith(_deletedComponents);
+        copy._noLoot.UnionWith(_noLoot);
         Copy(_transforms, copy._transforms);
         Copy(_instanceTransforms, copy._instanceTransforms);
         Copy(_added, copy._added);
@@ -706,6 +750,7 @@ public sealed partial class EditState
         Copy(_grass, copy._grass);
         Copy(_choices, copy._choices);
         copy._holes.AddRange(_holes);
+        copy._subZones.AddRange(_subZones);
         CopyAssets(copy);
         return copy;
 
@@ -749,6 +794,8 @@ public sealed partial class EditState
         lines.AddRange(_spawnPoints.Select(p => FormattableString.Invariant(
             $"spawn-points {Key(p.Key.Actor)}.{p.Key.Component.ToLowerInvariant()}.{p.Key.Array.ToLowerInvariant()} {p.Value.Base.Count} -> {p.Value.Current.Count}: {string.Join(" ", p.Value.Current.Select(x => $"{x.Source}@{x.Local}"))}")));
         lines.AddRange(_meshes.Select(m => $"mesh {Key(m.Key.Actor)}.{m.Key.Component.ToLowerInvariant()} {m.Value.Base} -> {m.Value.Current}"));
+        lines.AddRange(_subZones.Select(s => $"sub-zone {Key(s.Zone)} {s.SubZone}"));
+        lines.AddRange(_noLoot.Select(a => "no-loot " + Key(a)));
         lines.AddRange(DescribeAssets());
         lines.Sort(StringComparer.Ordinal);
         var sb = new StringBuilder();
@@ -769,6 +816,13 @@ public sealed partial class EditState
         : components.Count == 0 ? "No component given."
         : components.Any(string.IsNullOrWhiteSpace) ? "A component needs a name."
         : Duplicates(components, StringComparer.OrdinalIgnoreCase).FirstOrDefault();
+
+    private int IndexOfSubZone(ActorRef zone, SubZone subZone) =>
+        _subZones.FindIndex(s => ActorRef.Comparer.Equals(s.Zone, zone) && s.SubZone == subZone);
+
+    private static bool IsSaneBox(SubZone s) =>
+        new[] { s.Min.X, s.Min.Y, s.Min.Z, s.Max.X, s.Max.Y, s.Max.Z }.All(v => float.IsFinite(v) && MathF.Abs(v) <= MaxCoordinate)
+        && s.Min.X <= s.Max.X && s.Min.Y <= s.Max.Y && s.Min.Z <= s.Max.Z;
 
     private string? ValidateNewActor(ActorRef created)
     {

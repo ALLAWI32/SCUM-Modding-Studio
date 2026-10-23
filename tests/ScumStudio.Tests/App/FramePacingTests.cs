@@ -41,7 +41,20 @@ public sealed class FramePacingTests(ITestOutputHelper output)
         {
             // An even 60: about 16.7 ms a tick, and hardly a tick late by a whole frame.
             Assert.True(after.MeanMs is > 15.5 and < 18.0 && after.LateShare < 0.05, $"with the hold: {after}");
-            Assert.True(before.LateShare > after.LateShare * 2 || Math.Abs(before.MeanMs - FrameMs) > 1.5, $"without the hold the ticks were already even: {before}");
+
+            // Without the hold the ticks are uneven only while no other program holds the fine clock (a browser, Steam's web
+            // helper or a game often does): the hold is shown to help only then. Verify 3.5.1, Steam open: one late tick in 90
+            // decided the old comparison (2 % without, 1 % with, both p95 within 2 ms of a frame) and failed one solo run in two.
+            var coarse = before.P95OffMs > 4 || before.LateShare >= 0.05 || Math.Abs(before.MeanMs - FrameMs) > 1.5;
+            if (coarse)
+            {
+                Assert.True(before.LateShare > after.LateShare * 2 || before.P95OffMs > after.P95OffMs * 2 || Math.Abs(before.MeanMs - FrameMs) > 1.5,
+                    $"the hold did not make the ticks more even: without {before}; with {after}");
+            }
+            else
+            {
+                output.WriteLine("Without the hold the ticks were already even (another program holds the fine clock): no comparison.");
+            }
         }
     }
 

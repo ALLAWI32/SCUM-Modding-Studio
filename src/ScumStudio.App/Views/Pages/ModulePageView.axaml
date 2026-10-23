@@ -252,6 +252,10 @@
                   </ToggleButton>
                 </Grid>
 
+                <!-- What these values do in the game where it is not plain: a plane's speed, what a bag holds (r40). -->
+                <TextBlock x:Name="ValuesNote" DockPanel.Dock="Top" Text="{Binding ValuesNote}" IsVisible="{Binding HasValuesNote}" Classes="caption wrap"
+                           Margin="14,0,14,6" />
+
                 <Border DockPanel.Dock="Bottom" Padding="12,8" BorderThickness="0,1,0,0" BorderBrush="{DynamicResource StrokeSubtleBrush}">
                   <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
                     <TextBlock Grid.Column="0" Text="{Binding ValuesSummary}" Classes="caption" VerticalAlignment="Center" TextWrapping="Wrap" />

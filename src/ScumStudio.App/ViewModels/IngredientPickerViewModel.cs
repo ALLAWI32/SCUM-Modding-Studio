@@ -19,11 +19,45 @@ public enum ItemTagState
     NoTag,
 }
 
-/// <summary>An ingredient group of the game (a <c>CI_*</c> tag) as the picker shows it.</summary>
+/// <summary>An ingredient group of the game (a <c>CI_*</c> tag), or of the project, as the picker shows it.</summary>
 /// <param name="Tag">Its name (<c>CI_Group_Rags</c>).</param>
-/// <param name="Caption">The game's caption for it (<c>ClassRepresentativeCaption</c>), or null.</param>
+/// <param name="Caption">The game's caption for it (<c>ClassRepresentativeCaption</c>), or the project group's name; or null.</param>
 /// <param name="Representative">The item the game shows for it (<c>UIClassRepresentative</c>, package path), or null.</param>
-public sealed record IngredientGroup(string Tag, string? Caption, string? Representative);
+/// <param name="Members">The items that count as it (package paths), when known.</param>
+/// <param name="IsProject">A group of the project (<see cref="CraftGroup"/>), made by the export.</param>
+public sealed record IngredientGroup(string Tag, string? Caption, string? Representative, IReadOnlyList<string>? Members = null, bool IsProject = false)
+{
+    /// <summary>"Members: Rags, Cloth strip … and 12 more", or null when the members are not known.</summary>
+    public string? MembersText => GroupMembers.Text(Members);
+}
+
+/// <summary>The members of an ingredient group as the page writes them.</summary>
+public static class GroupMembers
+{
+    /// <summary>How many names <see cref="Text"/> writes before "and N more".</summary>
+    public const int Shown = 8;
+
+    /// <summary>"Members: A, B, C" (by asset name), "Members: A … and 4 more", "No member", or null for an unknown list.</summary>
+    public static string? Text(IReadOnlyList<string>? members)
+    {
+        if (members is null)
+        {
+            return null;
+        }
+
+        if (members.Count == 0)
+        {
+            return Loc.T("Craftables.Group.NoMembers");
+        }
+
+        var names = string.Join(", ", members.Take(Shown).Select(m => m[(m.LastIndexOf('/') + 1)..]));
+        return members.Count > Shown ? Loc.F("Craftables.Group.MembersMore", names, members.Count - Shown) : Loc.F("Craftables.Group.Members", names);
+    }
+
+    /// <summary>Every member by asset name, one per line (the hover text).</summary>
+    public static string? Full(IReadOnlyList<string>? members) =>
+        members is null || members.Count == 0 ? null : string.Join(Environment.NewLine, members.Select(m => m[(m.LastIndexOf('/') + 1)..]));
+}
 
 /// <summary>How the game knows a picked item.</summary>
 /// <param name="State">Own tag, groups only or none.</param>
@@ -36,10 +70,12 @@ public sealed record IngredientLookup(ItemTagState State, string? Tag, IReadOnly
 /// <param name="Items">Inventory items the catalogue knows (with their category) and the ones it does not (imported mods).</param>
 /// <param name="Groups">The game's ingredient groups.</param>
 /// <param name="Resolve">How the game knows an item (package path).</param>
+/// <param name="WhyNotMember">Why an item cannot be a member of a project group (no entity setup of the game's own), or null when it can; null: every item can.</param>
 public sealed record IngredientSource(
     Func<(IReadOnlyList<(DumpPackage Package, PackageEntry Entry)> Known, IReadOnlyList<PackageEntry> Other)> Items,
     Func<IReadOnlyList<IngredientGroup>> Groups,
-    Func<string, IngredientLookup> Resolve);
+    Func<string, IngredientLookup> Resolve,
+    Func<string, string?>? WhyNotMember = null);
 
 /// <summary>The picker's answer: an item of the game or an ingredient group, with its amount.</summary>
 /// <param name="Item">The item (package path), or null for a group.</param>
@@ -73,6 +109,9 @@ public sealed partial class IngredientPickerViewModel : ViewModelBase
     private CancellationTokenSource? _searchCts;
     private CancellationTokenSource? _resolveCts;
     private TaskCompletionSource<IngredientPick?>? _answer;
+    private TaskCompletionSource<IReadOnlyList<string>?>? _answerMany;
+    private readonly List<string> _picked = [];
+    private IReadOnlyList<IngredientGroup> _projectGroups = [];
     private decimal _amount = 1;
 
     /// <summary>Creates the picker; <paramref name="pictures"/> makes an item's 3D picture.</summary>
@@ -167,6 +206,35 @@ public sealed partial class IngredientPickerViewModel : ViewModelBase
     /// <summary>A badge is shown.</summary>
     public bool HasBadge => BadgeText is not null;
 
+    /// <summary>
+    /// Picking the items of a project group (<see cref="PickManyAsync"/>): a click adds an item or takes it away again, and
+    /// Use returns all of them; the ingredient groups are not listed.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsSingle), nameof(TitleText), nameof(HintText))]
+    [NotifyCanExecuteChangedFor(nameof(OkCommand))]
+    private bool _isMulti;
+
+    /// <summary>The name of the group whose items are picked.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(TitleText))]
+    private string _groupName = string.Empty;
+
+    /// <summary>One ingredient is picked (amount, tool, new tag).</summary>
+    public bool IsSingle => !IsMulti;
+
+    /// <summary>"Pick an ingredient", or "Items of the group …".</summary>
+    public string TitleText => IsMulti ? Loc.F("Craftables.Picker.GroupTitle", GroupName) : Loc.T("Craftables.Picker.Title");
+
+    /// <summary>What to do here.</summary>
+    public string HintText => IsMulti ? Loc.T("Craftables.Picker.GroupHint") : Loc.T("Craftables.Picker.Hint");
+
+    /// <summary>The items picked for the group, in the order they were clicked.</summary>
+    public IReadOnlyList<string> Picked => _picked;
+
+    /// <summary>"3 items in the group".</summary>
+    public string PickedText => Loc.F("Craftables.Picker.Picked", _picked.Count);
+
     /// <summary>Completes when the last <see cref="Load"/> finished (tests).</summary>
     public Task LoadCompletion { get; private set; } = Task.CompletedTask;
 
@@ -194,7 +262,9 @@ public sealed partial class IngredientPickerViewModel : ViewModelBase
     public Task<IngredientPick?> PickAsync(IngredientPick? current = null)
     {
         _answer?.TrySetResult(null);
+        _answerMany?.TrySetResult(null);
         _answer = new TaskCompletionSource<IngredientPick?>();
+        SetMulti(false);
         Amount = current?.Amount ?? 1;
         IsTool = current?.IsTool ?? false;
         AddTag = current?.AddTag ?? false;
@@ -212,15 +282,57 @@ public sealed partial class IngredientPickerViewModel : ViewModelBase
         return _answer.Task;
     }
 
+    /// <summary>
+    /// Opens the picker for the items of the project group <paramref name="groupName"/>, with <paramref name="current"/> picked;
+    /// completes with every item picked (in click order), or null on Cancel.
+    /// </summary>
+    public Task<IReadOnlyList<string>?> PickManyAsync(string groupName, IReadOnlyList<string> current)
+    {
+        ArgumentNullException.ThrowIfNull(current);
+        _answer?.TrySetResult(null);
+        _answerMany?.TrySetResult(null);
+        _answerMany = new TaskCompletionSource<IReadOnlyList<string>?>();
+        GroupName = groupName;
+        _picked.Clear();
+        _picked.AddRange(current.Distinct(StringComparer.OrdinalIgnoreCase));
+        Selected = null;
+        Lookup = null;
+        SetMulti(true);
+        NotifyPicked();
+        IsOpen = true;
+        return _answerMany.Task;
+    }
+
+    /// <summary>The project's groups, listed before the game's (the page gives them after each change).</summary>
+    public void SetProjectGroups(IReadOnlyList<IngredientGroup> groups)
+    {
+        ArgumentNullException.ThrowIfNull(groups);
+        _projectGroups = groups;
+        if (Roots.Count > 0)
+        {
+            BuildRoots();
+        }
+    }
+
     /// <summary>The lists as <see cref="Load"/> gives them; builds the category tree (tests call it with their own lists).</summary>
     internal void Show(IReadOnlyList<(DumpPackage Package, PackageEntry Entry)> items, IReadOnlyList<PackageEntry> other, IReadOnlyList<IngredientGroup> groups)
     {
         (_items, _other, _groups) = (items, other, groups);
-        string[] roots = [.. AssetsPageViewModel.PickUpRoots, .. items.Select(i => Root(i.Package.Node)).Distinct().Except(AssetsPageViewModel.PickUpRoots)];
-        var known = AssetsPageViewModel.CategoryGroup(Loc.T("Assets.Group.PickUp"), roots, items.Select(i => i.Package));
-        _groupsNode = new ObjectCategoryNode(Loc.T("Craftables.Picker.Groups"), [], [], groups.Count) { Match = _ => false };
-        _otherNode = other.Count > 0 ? new ObjectCategoryNode(Loc.T("Craftables.Gallery.Other"), [], [], other.Count) { Match = _ => false } : null;
-        Roots = _otherNode is null ? [known, _groupsNode] : [known, _groupsNode, _otherNode];
+        BuildRoots();
+    }
+
+    /// <summary>The project's groups, then the game's.</summary>
+    private IReadOnlyList<IngredientGroup> AllGroups => [.. _projectGroups, .. _groups];
+
+    // The tree: the pick-up categories, the groups (not while a group's items are picked) and the items of mods.
+    private void BuildRoots()
+    {
+        string[] roots = [.. AssetsPageViewModel.PickUpRoots, .. _items.Select(i => Root(i.Package.Node)).Distinct().Except(AssetsPageViewModel.PickUpRoots)];
+        var known = AssetsPageViewModel.CategoryGroup(Loc.T("Assets.Group.PickUp"), roots, _items.Select(i => i.Package));
+        _groupsNode = new ObjectCategoryNode(Loc.T("Craftables.Picker.Groups"), [], [], AllGroups.Count) { Match = _ => false };
+        _otherNode = _other.Count > 0 ? new ObjectCategoryNode(Loc.T("Craftables.Gallery.Other"), [], [], _other.Count) { Match = _ => false } : null;
+        IReadOnlyList<ObjectCategoryNode?> list = IsMulti ? [known, _otherNode] : [known, _groupsNode, _otherNode];
+        Roots = list.OfType<ObjectCategoryNode>().ToList();
         SelectedCategory = known;
         if (!string.IsNullOrWhiteSpace(Query))
         {
@@ -232,8 +344,43 @@ public sealed partial class IngredientPickerViewModel : ViewModelBase
         }
     }
 
-    /// <summary>The group of <paramref name="tag"/> as the game lists it, or null.</summary>
-    internal IngredientGroup? GroupOf(string tag) => _groups.FirstOrDefault(g => string.Equals(g.Tag, tag, StringComparison.OrdinalIgnoreCase));
+    // Switches between one ingredient and a group's items; the tree is built again when the lists are read.
+    private void SetMulti(bool multi)
+    {
+        var changed = IsMulti != multi;
+        IsMulti = multi;
+        if (changed && (_items.Count > 0 || _other.Count > 0 || _groups.Count > 0))
+        {
+            BuildRoots();
+        }
+        else if (changed)
+        {
+            RefreshTiles();
+        }
+    }
+
+    // The shown tiles again (a group's items: each picked one highlighted).
+    private void RefreshTiles()
+    {
+        if (!string.IsNullOrWhiteSpace(Query))
+        {
+            _ = SearchAsync(Query);
+        }
+        else
+        {
+            ShowCategory(SelectedCategory);
+        }
+    }
+
+    private void NotifyPicked()
+    {
+        OnPropertyChanged(nameof(Picked));
+        OnPropertyChanged(nameof(PickedText));
+        OkCommand.NotifyCanExecuteChanged();
+    }
+
+    /// <summary>The group of <paramref name="tag"/> as the project or the game lists it, or null.</summary>
+    internal IngredientGroup? GroupOf(string tag) => AllGroups.FirstOrDefault(g => string.Equals(g.Tag, tag, StringComparison.OrdinalIgnoreCase));
 
     private async Task LoadAsync(IngredientSource source)
     {
@@ -285,7 +432,8 @@ public sealed partial class IngredientPickerViewModel : ViewModelBase
 
         if (ReferenceEquals(category, _groupsNode))
         {
-            Show(_groups.Take(max).Select(GroupTile), Loc.F(_groups.Count == 1 ? "Assets.Objects.One" : "Assets.Objects.Many", _groups.Count, category.Title));
+            var groups = AllGroups;
+            Show(groups.Take(max).Select(GroupTile), Loc.F(groups.Count == 1 ? "Assets.Objects.One" : "Assets.Objects.Many", groups.Count, category.Title));
             return;
         }
 
@@ -314,7 +462,7 @@ public sealed partial class IngredientPickerViewModel : ViewModelBase
             }
 
             var entries = _items.Select(i => i.Entry).Concat(_other).ToList();
-            var groups = _groups;
+            var groups = IsMulti ? [] : AllGroups; // a group's items are items, never another group
             var (items, found, total) = await Task.Run(() =>
             {
                 var (matches, count) = AssetsPageViewModel.Filter(entries, text, AssetsPageViewModel.MaxListed);
@@ -339,17 +487,42 @@ public sealed partial class IngredientPickerViewModel : ViewModelBase
     }
 
     private IngredientTileViewModel ItemTile(PackageEntry entry) =>
-        new(entry.Name, string.Join('/', entry.PackagePath.Split('/').SkipLast(1).TakeLast(2)), entry.PackagePath, null, entry.PackagePath, _pictures);
+        new(entry.Name, string.Join('/', entry.PackagePath.Split('/').SkipLast(1).TakeLast(2)), entry.PackagePath, null, entry.PackagePath, _pictures)
+        {
+            IsSelected = IsMulti && _picked.Contains(entry.PackagePath, StringComparer.OrdinalIgnoreCase),
+        };
 
     private IngredientTileViewModel GroupTile(IngredientGroup group) =>
-        new(group.Caption is { Length: > 0 } caption ? caption : group.Tag, group.Tag, null, group.Tag, group.Representative, _pictures);
+        new(group.Caption is { Length: > 0 } caption ? caption : group.Tag, group.Tag, null, group.Tag, group.Representative ?? group.Members?.FirstOrDefault(), _pictures,
+            GroupMembers.Text(group.Members), group.IsProject);
 
-    /// <summary>Picks a tile; an item's tags are read on a worker.</summary>
+    /// <summary>Picks a tile; an item's tags are read on a worker. Picking a group's items, a click adds the item or takes it away.</summary>
     [RelayCommand]
     private void Select(IngredientTileViewModel? tile)
     {
         if (tile is null)
         {
+            return;
+        }
+
+        if (IsMulti)
+        {
+            if (tile.Item is { } member)
+            {
+                var at = _picked.FindIndex(p => string.Equals(p, member, StringComparison.OrdinalIgnoreCase));
+                if (at >= 0)
+                {
+                    _picked.RemoveAt(at);
+                }
+                else
+                {
+                    _picked.Add(member);
+                }
+
+                tile.IsSelected = at < 0;
+                NotifyPicked();
+            }
+
             return;
         }
 
@@ -403,11 +576,17 @@ public sealed partial class IngredientPickerViewModel : ViewModelBase
     }
 
     /// <summary>A group, an item with a tag, or an item that gets one of its own.</summary>
-    private bool CanOk() => Selected is { } tile && !IsResolving && (tile.IsGroup || Lookup is { Tag: not null } || (AddTag && CanAddTag));
+    private bool CanOk() => IsMulti ? _picked.Count > 0 : Selected is { } tile && !IsResolving && (tile.IsGroup || Lookup is { Tag: not null } || (AddTag && CanAddTag));
 
     [RelayCommand(CanExecute = nameof(CanOk))]
     private void Ok()
     {
+        if (IsMulti)
+        {
+            CloseMany([.. _picked]);
+            return;
+        }
+
         if (Selected is not { } tile)
         {
             return;
@@ -422,7 +601,11 @@ public sealed partial class IngredientPickerViewModel : ViewModelBase
     }
 
     [RelayCommand]
-    private void Cancel() => Close(null);
+    private void Cancel()
+    {
+        Close(null);
+        CloseMany(null);
+    }
 
     private void Close(IngredientPick? pick)
     {
@@ -432,20 +615,29 @@ public sealed partial class IngredientPickerViewModel : ViewModelBase
         _answer = null;
         answer?.TrySetResult(pick);
     }
+
+    private void CloseMany(IReadOnlyList<string>? picked)
+    {
+        IsOpen = false;
+        var answer = _answerMany;
+        _answerMany = null;
+        answer?.TrySetResult(picked);
+    }
 }
 
 /// <summary>The badge an ingredient shows: how the recipe asks for it.</summary>
 internal static class Badges
 {
-    /// <summary>"Own tag", "Group only", "New tag", "No tag" or "Group"; null while unknown.</summary>
-    public static string? Text(bool isGroup, IngredientLookup? lookup, bool addTag) => Key(isGroup, lookup, addTag) is { } key ? Loc.T(key) : null;
+    /// <summary>"Own tag", "Group only", "New tag", "No tag", "Group" or "Project group"; null while unknown.</summary>
+    public static string? Text(bool isGroup, IngredientLookup? lookup, bool addTag, bool projectGroup = false) =>
+        Key(isGroup, lookup, addTag, projectGroup) is { } key ? Loc.T(key) : null;
 
     /// <summary>What <see cref="Text"/> means for this ingredient.</summary>
-    public static string? Tip(bool isGroup, IngredientLookup? lookup, bool addTag) =>
-        Key(isGroup, lookup, addTag) is { } key ? Loc.F(key + ".Tip", lookup?.Tag ?? string.Empty) : null;
+    public static string? Tip(bool isGroup, IngredientLookup? lookup, bool addTag, bool projectGroup = false) =>
+        Key(isGroup, lookup, addTag, projectGroup) is { } key ? Loc.F(key + ".Tip", lookup?.Tag ?? string.Empty) : null;
 
-    private static string? Key(bool isGroup, IngredientLookup? lookup, bool addTag) =>
-        isGroup ? "Craftables.Ingredient.Badge.Group"
+    private static string? Key(bool isGroup, IngredientLookup? lookup, bool addTag, bool projectGroup) =>
+        isGroup ? (projectGroup ? "Craftables.Ingredient.Badge.ProjectGroup" : "Craftables.Ingredient.Badge.Group")
         : lookup is null ? null
         : lookup.State == ItemTagState.OwnTag ? "Craftables.Ingredient.Badge.OwnTag"
         : addTag && lookup.CanAddTag ? "Craftables.Ingredient.Badge.NewTag"
@@ -459,17 +651,32 @@ public sealed class IngredientTileViewModel : ThumbnailItem
     private readonly Func<string, CancellationToken, Task<Bitmap?>> _pictures;
     private bool _isSelected;
 
-    /// <summary>Creates the tile; <paramref name="picturePath"/> is the item whose 3D picture it shows.</summary>
-    public IngredientTileViewModel(string name, string detail, string? item, string? group, string? picturePath, Func<string, CancellationToken, Task<Bitmap?>> pictures)
+    /// <summary>
+    /// Creates the tile; <paramref name="picturePath"/> is the item whose 3D picture it shows, <paramref name="note"/> a line
+    /// added to its hover text (a group's members), <paramref name="isProjectGroup"/> marks a group of the project.
+    /// </summary>
+    public IngredientTileViewModel(string name, string detail, string? item, string? group, string? picturePath, Func<string, CancellationToken, Task<Bitmap?>> pictures,
+        string? note = null, bool isProjectGroup = false)
     {
         Name = name;
         Detail = detail;
         Item = item;
         Group = group;
         PicturePath = picturePath;
+        Note = note;
+        IsProjectGroup = isProjectGroup;
         _pictures = pictures;
         (IconKey, Tint) = AssetIcons.ForClass("Blueprint");
     }
+
+    /// <summary>A line under the tile's hover text (a group's members), or null.</summary>
+    public string? Note { get; }
+
+    /// <summary>A group of the project, made by the export (not one of the game's).</summary>
+    public bool IsProjectGroup { get; }
+
+    /// <summary>The group badge: "Group", or "Project group".</summary>
+    public string GroupBadge => Loc.T(IsProjectGroup ? "Craftables.Ingredient.Badge.ProjectGroup" : "Craftables.Ingredient.Badge.Group");
 
     /// <summary>Item name or the group's caption.</summary>
     public string Name { get; }
@@ -489,8 +696,8 @@ public sealed class IngredientTileViewModel : ThumbnailItem
     /// <summary>The item whose picture is shown, or null.</summary>
     public string? PicturePath { get; }
 
-    /// <summary>The item's package path or the group's tag (the tile's hover text).</summary>
-    public string Tip => (Item ?? Group) ?? Name;
+    /// <summary>The item's package path or the group's tag (the tile's hover text), and the <see cref="Note"/>.</summary>
+    public string Tip => ((Item ?? Group) ?? Name) + (Note is { } note ? Environment.NewLine + note : string.Empty);
 
     /// <summary>Icon resource key (while there is no picture).</summary>
     public string IconKey { get; }

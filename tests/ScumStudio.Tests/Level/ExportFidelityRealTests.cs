@@ -54,9 +54,15 @@ public sealed class ExportFidelityRealTests
         project.Apply(op);
 
         var result = await new ProjectExporter().ExportAsync(project, catalog, new ExportOptions { OutputDirectory = temp.Combine("out"), WritePak = false });
-        // The farm, and the coast's landscape tile with the grass under the new rock cleared (on for every placed object).
-        var level = Assert.Single(result.Levels, l => l.PackagePath == Farm);
-        Assert.Contains(result.Levels, l => l.PackagePath != Farm && l.Report.ClearedGrassSamples > 0);
+        // The coast is out of the farm's reach (the game loads the farm only within 200 m of its area): the rock goes into the
+        // coast's terrain tile (FarPlacement), which also gets the grass under it cleared (on for every placed object); the farm
+        // is not rewritten.
+        var move = Assert.Single(result.FarPlaced);
+        Assert.Equal(op.Created, move.From);
+        Assert.DoesNotContain(result.Levels, l => l.PackagePath == Farm);
+        var level = Assert.Single(result.Levels, l => l.PackagePath == move.To.Level);
+        Assert.Contains("/Landscape_", level.PackagePath, StringComparison.Ordinal);
+        Assert.True(level.Report.ClearedGrassSamples > 0);
         Assert.Equal([op.NewName], level.Report.AddedActors);
         // The only line about it is the collision check: this coastal rock is a shell whose open underside stands above the
         // farm's ground there (RockCollisionRealTests), so players could get inside it.
@@ -64,7 +70,7 @@ public sealed class ExportFidelityRealTests
 
         // Read back as the game reads it: the actor stands exactly where the viewport drew it (same record, same matrix).
         using var written = Open(paks, result.StagingDirectory);
-        var actor = LevelDocument.Load(new Cue4ParseLevelReader(written, Plain), Farm).FindActor(op.NewName)!;
+        var actor = LevelDocument.Load(new Cue4ParseLevelReader(written, Plain), level.PackagePath).FindActor(op.NewName)!;
         var expected = studio.ToTransform(); // MapPageViewModel.RefreshAddedActors draws transform.ToTransform()
         var actual = actor.WorldTransform;
         Assert.True(FVector.Distance(expected.Translation, actual.Translation) < 1f, $"off by {FVector.Distance(expected.Translation, actual.Translation)} cm");
@@ -78,7 +84,7 @@ public sealed class ExportFidelityRealTests
             Assert.Equal(x, y, 0.1f);
         }
 
-        // No tile offset to add: SCUM stores a tile's bounds absolute (position 0), and the export grew them over the rock.
+        // No tile offset to add: SCUM stores a tile's bounds absolute (position 0), and the terrain tile's cover the rock.
         var tile = WorldTileInfo.TryRead(CookedPackage.Load(Path.Combine([result.StagingDirectory, .. level.VirtualPath.Split('/')])))!;
         Assert.Equal((0, 0, 0), tile.Position);
         Assert.True(tile.BoundsMin.X <= studio.Location.X && studio.Location.X <= tile.BoundsMax.X && tile.BoundsMin.Y <= studio.Location.Y && studio.Location.Y <= tile.BoundsMax.Y,

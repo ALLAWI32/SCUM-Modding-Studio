@@ -1,5 +1,6 @@
 using System.Numerics;
 using CUE4Parse.UE4.Assets.Exports.Texture;
+using Microsoft.Extensions.Logging.Abstractions;
 using ScumStudio.App.Services;
 using ScumStudio.Assets.Catalog;
 using ScumStudio.Assets.Textures;
@@ -11,8 +12,9 @@ namespace ScumStudio.Tests.Level;
 /// <summary>
 /// <see cref="IslandMap"/>'s calibration against the game itself. Real game files only (<c>SCUM_PAKS</c>, key from this
 /// PC's store): every landscape tile's World Composition bounds must sit in the cell its name gives, the tiles must span
-/// the calibrated square, the outposts must sit in their cells, and the game's map texture must decode as a square and,
-/// as the app decodes it, show sea and land where the terrain has them.
+/// the calibrated square, the outposts must sit in their cells, the game's map texture must decode as a square and, as the
+/// app shows it, show sea and land where the terrain has them, and the studio's map must be turned as the game's spawn
+/// screen turns it, its cells under the game's own sector labels.
 /// </summary>
 public sealed class IslandMapRealTests
 {
@@ -87,12 +89,88 @@ public sealed class IslandMapRealTests
             return;
         }
 
-        // As the app decodes it, every open-sea point must be bluer than every inland one. On the reference export of the
-        // texture the gap is +31 this way up and -31 to -81 in the seven other orientations.
-        var image = IslandMapPicture.FromCatalog(catalog)!.Decode()!;
+        // As the Spawns map shows it (the PNG the app makes, laid out by IslandMap), every open-sea point must be bluer than
+        // every inland one. On the reference export of the texture the gap is +31 this way up and -31 to -81 in the seven
+        // other orientations.
+        var image = AsTheAppShowsIt(catalog);
         var sea = OpenSea.Select(p => Blue(image, p)).ToList();
         var land = Inland.Select(p => Blue(image, p)).ToList();
         Assert.True(sea.Min() > land.Max(), $"blue over green: sea {string.Join(", ", sea.Select(b => b.ToString("F1")))}; land {string.Join(", ", land.Select(b => b.ToString("F1")))}");
+    }
+
+    [Fact]
+    public void TheStudioMapIsTurnedLikeTheGamesSpawnScreen()
+    {
+        using var catalog = Open();
+        if (catalog is null)
+        {
+            return;
+        }
+
+        // Discord 2026-10-17, "the map is inverted": the game's spawn screen (the sector picker every player sees) draws the
+        // island map texture turned 180 degrees under its sector buttons, D4 at the top left down to Z0 at the bottom right.
+        var screen = GameMapScreen.Read(catalog);
+        Assert.Equal("IslandMap", screen.MapTexture);
+        Assert.Equal(180f, screen.MapAngle);
+        Assert.Equal(25, screen.Sectors.Count);
+        Assert.Equal("D4", screen.Sectors[(0, 0)]);
+        Assert.Equal("D0", screen.Sectors[(0, 4)]);
+        Assert.Equal("Z4", screen.Sectors[(4, 0)]);
+        Assert.Equal("Z0", screen.Sectors[(4, 4)]);
+
+        // The studio's picture is that texture turned the same way: its pixel (x, y) is the stored texture's (w-1-x, h-1-y).
+        var stored = IslandMapPicture.FromCatalog(catalog)!.Decode()!;
+        var shown = AsTheAppShowsIt(catalog);
+        var (w, h) = (stored.Width, stored.Height);
+        Assert.Equal((w, h), (shown.Width, shown.Height));
+        for (var y = 0; y < h; y += 61)
+        {
+            for (var x = 0; x < w; x += 59)
+            {
+                var (at, from) = (((y * w) + x) * 4, ((((h - 1 - y) * w) + (w - 1 - x)) * 4));
+                Assert.True(shown.Rgba.AsSpan(at, 4).SequenceEqual(stored.Rgba.AsSpan(from, 4)), $"pixel ({x}, {y})");
+            }
+        }
+
+        // Every cell's centre, and every place sublevel lying in its named cell (outposts, airfields, towns), is drawn
+        // under the game's button of that name.
+        foreach (var cell in MapCell.All)
+        {
+            var (minX, minY, maxX, maxY) = IslandMap.CellRect(cell);
+            Assert.Equal(screen.ButtonOf(cell), ButtonAt(IslandMap.ToMap((minX + maxX) / 2f, (minY + maxY) / 2f)));
+        }
+
+        var places = Tiles(catalog, WorldPackageKind.Poi).Where(t => !IsEmptyBox(t.Tile!) && IslandMap.CellAt(t.Tile!.Center.X, t.Tile.Center.Y) == t.Cell).ToList();
+        Assert.True(places.Count > 1000, $"{places.Count} place sublevels");
+        var wrong = places.Where(t => screen.ButtonOf(t.Cell!.Value) != ButtonAt(IslandMap.ToMap(t.Tile!.Center.X, t.Tile.Center.Y)))
+            .Select(t => $"{t.Name} at {t.Tile!.Center}: drawn under {ButtonAt(IslandMap.ToMap(t.Tile.Center.X, t.Tile.Center.Y))}, the game labels {t.Cell} at {screen.ButtonOf(t.Cell!.Value)}").ToList();
+        Assert.True(wrong.Count == 0, string.Join(Environment.NewLine, wrong.Take(20)));
+    }
+
+    // The spawn screen's button (row, column) over the picture position.
+    private static (int Row, int Column)? ButtonAt((double U, double V) at) =>
+        (Math.Clamp((int)(at.V * 5), 0, 4), Math.Clamp((int)(at.U * 5), 0, 4));
+
+    // The game's map picture exactly as the Spawns map shows it: the PNG IslandMapPicture makes in its cache.
+    private static TextureImage AsTheAppShowsIt(AssetCatalog catalog)
+    {
+        var folder = Directory.CreateTempSubdirectory("scumstudio-islandmap-real-").FullName;
+        try
+        {
+            var result = new IslandMapPicture(folder, NullLogger.Instance, terrainDirectory: null).GetAsync(catalog).GetAwaiter().GetResult();
+            Assert.Equal(IslandMapSource.Game, result.Source);
+            return ImageFiles.Load(result.PngPath!);
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(folder, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+        }
     }
 
     [Fact]

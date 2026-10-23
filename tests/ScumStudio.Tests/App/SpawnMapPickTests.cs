@@ -79,18 +79,25 @@ public sealed class SpawnMapPickTests
         var (window, map, page) = Show();
         map.SelectedId = 1;
 
-        // Held: two presses, one release, one move of 2 m to the right (the picture's right is +X).
+        // Held: two presses, one release, one move of 2 m to the right. The map is turned like the game's (D4 top left): the
+        // picture's right is -X and its bottom -Y, so the place moves the way the arrow points on screen.
+        var before = map.ScreenOf(1)!.Value;
         window.KeyPressQwerty(PhysicalKey.ArrowRight, RawInputModifiers.None);
         window.KeyPressQwerty(PhysicalKey.ArrowRight, RawInputModifiers.None);
         Assert.Empty(page.Moves);
         window.KeyReleaseQwerty(PhysicalKey.ArrowRight, RawInputModifiers.None);
-        Assert.Equal(new Vector2(10_200f, 0f), Assert.Single(page.Moves).To);
+        Assert.Equal(new Vector2(9_800f, 0f), Assert.Single(page.Moves).To);
+        var moved = map.WorldToScreen(9_800f, 0f) - before;
+        Assert.True(moved.X > 1 && Math.Abs(moved.Y) < 0.01, $"drawn moved {moved} on screen");
 
         // Shift 10 m, Ctrl 10 cm; each starts from where the last one put it while the page records it.
         Key(window, PhysicalKey.ArrowDown, RawInputModifiers.Shift);
-        Assert.Equal(new Vector2(10_200f, 1000f), page.Moves[^1].To);
+        Assert.Equal(new Vector2(9_800f, -1000f), page.Moves[^1].To);
+        Assert.True(map.WorldToScreen(9_800f, -1000f).Y > map.WorldToScreen(9_800f, 0f).Y, "down on screen");
         Key(window, PhysicalKey.ArrowUp, RawInputModifiers.Control);
-        Assert.Equal(new Vector2(10_200f, 990f), page.Moves[^1].To);
+        Assert.Equal(new Vector2(9_800f, -990f), page.Moves[^1].To);
+        Key(window, PhysicalKey.ArrowLeft, RawInputModifiers.Control);
+        Assert.Equal(new Vector2(9_810f, -990f), page.Moves[^1].To);
 
         Key(window, PhysicalKey.Q, RawInputModifiers.None);
         Key(window, PhysicalKey.E, RawInputModifiers.Shift);
@@ -107,28 +114,33 @@ public sealed class SpawnMapPickTests
     public void DraggingThePickedPlacesArrowTurnsItOnce()
     {
         var (window, map, page) = Show();
-        map.SelectedId = 0; // faces 90 degrees: its arrow points down the map (+Y)
+        // Faces 90 degrees (+Y). The map is turned like the game's (D4 top left, +Y up): its arrow points up the map.
+        map.SelectedId = 0;
         var centre = map.ScreenOf(0)!.Value;
         var tip = map.TurnHandle!.Value;
-        Assert.InRange(tip.Y - centre.Y, 20, 24);
+        Assert.InRange(centre.Y - tip.Y, 20, 24);
         Assert.InRange(Math.Abs(tip.X - centre.X), 0, 0.01);
+        Assert.True(map.WorldToScreen(0f, 10_000f).Y < centre.Y, "+Y is up the map");
 
-        // Dragged round to the right of it: it faces 0 degrees, a turn of -90 raised once on release; nothing moved.
+        // Dragged round to the left of it (+X on the turned map): it faces 0 degrees, a turn of -90 raised once on release;
+        // nothing moved.
         window.MouseMove(tip);
         window.MouseDown(tip, MouseButton.Left);
-        window.MouseMove(centre + new Vector(30, 30));
-        window.MouseMove(centre + new Vector(40, 0.2));
+        window.MouseMove(centre + new Vector(-30, -30));
+        window.MouseMove(centre + new Vector(-40, 0.2));
         Assert.Empty(page.Turns);
-        window.MouseUp(centre + new Vector(40, 0.2), MouseButton.Left);
+        window.MouseUp(centre + new Vector(-40, 0.2), MouseButton.Left);
 
         Assert.Equal([new SpawnMapTurn(0, -90f)], page.Turns);
         Assert.Empty(page.Moves);
         Assert.Equal(0, map.SelectedId);
 
-        // While the page records it, the arrow stays where it was turned (it does not jump back for a moment).
+        // While the page records it, the arrow stays where it was turned (it does not jump back for a moment), pointing at
+        // the place 100 m along +X.
         var arrow = map.TurnHandle!.Value - centre;
-        Assert.InRange(arrow.X, 20, 24);
+        Assert.InRange(arrow.X, -24, -20);
         Assert.InRange(Math.Abs(arrow.Y), 0, 0.01);
+        Assert.True(map.ScreenOf(1)!.Value.X < centre.X, "the place at +X is to the left");
         window.Close();
     }
 
@@ -145,9 +157,13 @@ public sealed class SpawnMapPickTests
         // Before: the closest zoom was 25 cm a pixel (4 px per metre). Now 50 px per metre: a point lands within 2 cm.
         Assert.Equal(100.0 / SpawnMap.ClosestCmPerPixel, map.PixelsPerMetre, 3);
 
-        window.MouseMove(at + new Vector(50, 0)); // 1 m to the right of the point at 0, 0
-        Assert.Contains(IslandMap.CellAt(100f, 0f)!.Value.ToString(), map.CursorText, StringComparison.Ordinal);
-        Assert.Contains((1.0).ToString("0.00", System.Globalization.CultureInfo.CurrentCulture), map.CursorText, StringComparison.Ordinal);
+        // 1 m to the right of the point at 0, 0 and 2 m up: the map is turned like the game's, so X -1 m and Y +2 m.
+        window.MouseMove(at + new Vector(50, -100));
+        var culture = System.Globalization.CultureInfo.CurrentCulture;
+        Assert.Contains(IslandMap.CellAt(-100f, 200f)!.Value.ToString(), map.CursorText, StringComparison.Ordinal);
+        Assert.Contains((-1.0).ToString("0.00", culture), map.CursorText, StringComparison.Ordinal);
+        Assert.Contains((2.0).ToString("0.00", culture), map.CursorText, StringComparison.Ordinal);
+        Assert.DoesNotContain((-2.0).ToString("0.00", culture), map.CursorText, StringComparison.Ordinal);
         window.Close();
     }
 

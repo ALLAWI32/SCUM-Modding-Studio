@@ -1,4 +1,5 @@
 using System.Numerics;
+using ScumStudio.Core.Geometry;
 using ScumStudio.Core.Mathematics;
 using ScumStudio.Formats.Packages;
 using ScumStudio.Level.Editing;
@@ -43,13 +44,22 @@ public sealed record StudioPart(string Attachment, string Label, string Socket, 
 {
     /// <summary>True for a wheel: it rolls on the car's physics bones, its place is not data.</summary>
     public bool IsWheel => Game is null || Socket.StartsWith("b_Wheel", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The model the game gives the part (its template's <c>MeshSetup.Mesh</c>; <see cref="Mesh"/> too names a clone's copy
+    /// of a painted mesh by the game's model it copies), or null for a part added to the car.
+    /// </summary>
+    public string? GameMesh { get; init; }
+
+    /// <summary>True when the project shows another model of the game for the part (<see cref="PartsStudio.SwapMesh"/>).</summary>
+    public bool IsSwapped => Mesh is not null && GameMesh is not null && !string.Equals(Mesh, GameMesh, StringComparison.OrdinalIgnoreCase);
 }
 
 /// <summary>
 /// The parts of one vehicle clone, journaled (owner 2026-10-12: "every part of the car editable like Blender"): a part's
 /// place is its ParentSocket on the clone's own copy of the vehicle mesh (<see cref="VehicleSockets"/>; the skeleton stays
 /// the game's), hide = scale 0.001 (the part keeps its function), remove = its slot empty in every cloned spawn preset,
-/// another model = <c>MeshSetup.Mesh</c>, a new part = a renamed copy of the vehicle's roof rack with its own model and
+/// another model = <c>MeshSetup.Mesh</c> (the export fits it where the game's model was, <see cref="PartModelFit"/>), a new part = a renamed copy of the vehicle's roof rack with its own model and
 /// socket in a new slot of the part that holds the roof rack (<see cref="VehicleAttachmentEdits"/>). Each user step is
 /// one <see cref="BatchOp"/>. No UI: the Vehicles page drives it.
 /// </summary>
@@ -78,21 +88,49 @@ public sealed class PartsStudio(CloneAssetOp clone, Func<string, CookedPackage?>
         Clone.Packages.FirstOrDefault(p => string.Equals(p.Old, stockAttachment, StringComparison.OrdinalIgnoreCase))?.New;
 
     /// <summary>
-    /// The part drawn from <paramref name="stockAttachment"/> (or a part "Add part…" bolted on, by its own package), or null
-    /// when the clone has no copy of it.
+    /// The part drawn from <paramref name="stockAttachment"/> (or by the clone's own copy of it, as a part shown with another
+    /// model is, or a part "Add part…" bolted on, by its own package), or null when the clone has no copy of it.
     /// </summary>
     public StudioPart? Select(string stockAttachment)
     {
-        if ((CloneOf(stockAttachment) ?? (IsAdded(stockAttachment) ? stockAttachment : null)) is not { } attachment || read(attachment) is not { } part)
+        var own = Clone.Packages.FirstOrDefault(p => string.Equals(p.New, stockAttachment, StringComparison.OrdinalIgnoreCase));
+        if ((CloneOf(stockAttachment) ?? own?.New ?? (IsAdded(stockAttachment) ? stockAttachment : null)) is not { } attachment || read(attachment) is not { } part)
         {
             return null;
         }
 
         var cdo = Defaults(part);
         var socket = Current(attachment, cdo, VehicleAttachmentEdits.SocketPath, VehicleAttachmentEdits.ParentSocketOf(part) ?? string.Empty);
-        var mesh = Current(attachment, cdo, VehicleAttachmentEdits.MeshPath, VehicleAttachmentEdits.MeshOf(part) ?? string.Empty);
+        var ownMesh = VehicleAttachmentEdits.MeshOf(part) ?? string.Empty;
+        var mesh = Current(attachment, cdo, VehicleAttachmentEdits.MeshPath, ownMesh);
         var game = GameSocket(socket) ?? AddedSocket(socket);
-        return new StudioPart(attachment, VehicleParts.Label(VehicleAttachmentEdits.ClassPath(attachment)), socket, game, game is null || Mesh is null ? game : Placed(game), mesh.Length > 0 ? mesh : null);
+        return new StudioPart(attachment, VehicleParts.Label(VehicleAttachmentEdits.ClassPath(attachment)), socket, game, game is null || Mesh is null ? game : Placed(game),
+            mesh.Length > 0 ? GamePath(mesh) : null)
+        {
+            GameMesh = ownMesh.Length > 0 && !IsAdded(attachment) ? GamePath(ownMesh) : null,
+        };
+    }
+
+    /// <summary>The game's object path of a model the clone renamed (a painted part's copy of its mesh), else the path itself.</summary>
+    private string GamePath(string objectPath)
+    {
+        var package = VehicleParts.PackageOf(objectPath);
+        return Clone.Packages.FirstOrDefault(p => string.Equals(p.New, package, StringComparison.OrdinalIgnoreCase)) is { } pair
+            ? pair.Old + "." + PackageMap.Leaf(pair.Old)
+            : objectPath;
+    }
+
+    /// <summary>
+    /// Where a part shown with another model draws it, in the space of the game's model (<see cref="PartModelFit.Fit"/>,
+    /// as the export writes it): null when the part has its own model or a size cannot be read.
+    /// </summary>
+    public static FTransform? ModelFit(StudioPart part, Func<string, BoundingBox?> boundsOf)
+    {
+        ArgumentNullException.ThrowIfNull(part);
+        ArgumentNullException.ThrowIfNull(boundsOf);
+        return part.IsSwapped && boundsOf(part.GameMesh!) is { } game && boundsOf(part.Mesh!) is { } model
+            ? PartModelFit.Fit(game, model, PartModelFit.IsWheelSocket(part.Socket))
+            : null;
     }
 
     /// <summary>The parts "Add part…" bolted onto this clone (each a renamed copy of its roof rack), where the project has them now.</summary>
@@ -274,11 +312,22 @@ public sealed class PartsStudio(CloneAssetOp clone, Func<string, CookedPackage?>
             new Vector3(at[0], at[1], at[2]), Get(VehicleSockets.Rotation, Vector3.Zero), Get(VehicleSockets.Scale, Vector3.One), OnMesh: true);
     }
 
-    /// <summary>The step that shows another model of the game for the part (same kind of model: static or skeletal).</summary>
+    /// <summary>
+    /// The step that shows another model of the game for the part (same kind of model: static or skeletal). The export
+    /// fits it in place of the part's own (<see cref="PartModelFit"/>); with <paramref name="boundsOf"/>, a model that
+    /// cannot be fitted (its size or the part's cannot be read) is refused here.
+    /// </summary>
     /// <exception cref="InvalidOperationException">A model of the other kind.</exception>
-    public BatchOp? SwapMesh(StudioPart part, string meshObjectPath, Func<string, string?> classOf)
+    /// <exception cref="PartRefusedException">A model that cannot be fitted in place of the part's own.</exception>
+    public BatchOp? SwapMesh(StudioPart part, string meshObjectPath, Func<string, string?> classOf, Func<string, BoundingBox?>? boundsOf = null)
     {
         Editable(part, needsMesh: false);
+        var wanted = part with { Mesh = meshObjectPath };
+        if (boundsOf is not null && wanted.IsSwapped && ModelFit(wanted, boundsOf) is null)
+        {
+            throw new PartRefusedException("Studio.Parts.ModelNoSize", $"{meshObjectPath} cannot be fitted in place of {part.GameMesh}.");
+        }
+
         var package = read(part.Attachment) ?? throw new InvalidOperationException($"{part.Attachment} cannot be read.");
         var edit = VehicleAttachmentEdits.SwapMesh(package, meshObjectPath, classOf);
         var old = state.GetAssetValue(part.Attachment, edit.Export, edit.Path)?.Current ?? VehicleAttachmentEdits.MeshOf(package) ?? string.Empty;

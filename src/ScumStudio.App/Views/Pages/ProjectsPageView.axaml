@@ -145,6 +145,78 @@
           </Border>
         </Grid>
 
+        <!-- Copies of the open project (Discord, salvador.garcia and pheidian): a new project from it, and named snapshots to go back to. -->
+        <Border Classes="card" x:Name="VersionsCard" IsVisible="{Binding Session.HasProject}">
+          <StackPanel Spacing="12">
+            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12">
+              <Border Grid.Column="0" Classes="iconTile"><c:GlyphIcon Kind="Icon.History" IconSize="20" HorizontalAlignment="Center" VerticalAlignment="Center" /></Border>
+              <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                <TextBlock Text="{Tr Projects.Versions}" Classes="h2" />
+                <TextBlock Text="{Tr Projects.Versions.Caption}" Classes="caption wrap" />
+              </StackPanel>
+            </Grid>
+            <Grid ColumnDefinitions="*,*" ColumnSpacing="16">
+              <StackPanel Grid.Column="0" Spacing="6">
+                <TextBlock Text="{Tr Projects.Copy.Name}" Classes="label" />
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                  <TextBox x:Name="DuplicateNameBox" Text="{Binding DuplicateName}" ToolTip.Tip="{Tr Projects.Copy.Name.Tip}" />
+                  <Button Grid.Column="1" x:Name="DuplicateButton" Command="{Binding DuplicateCommand}" ToolTip.Tip="{Tr Projects.Copy.Tip}">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                      <c:GlyphIcon Kind="Icon.Copy" IconSize="14" />
+                      <TextBlock Text="{Tr Projects.Copy}" />
+                    </StackPanel>
+                  </Button>
+                </Grid>
+                <TextBlock Text="{Tr Projects.Copy.Caption}" Classes="caption wrap" />
+              </StackPanel>
+              <StackPanel Grid.Column="1" Spacing="6">
+                <TextBlock Text="{Tr Projects.Snapshot.Name}" Classes="label" />
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                  <TextBox x:Name="SnapshotNameBox" Text="{Binding SnapshotName}" Watermark="{Tr Projects.Snapshot.Watermark}" ToolTip.Tip="{Tr Projects.Snapshot.Name.Tip}" />
+                  <Button Grid.Column="1" x:Name="SaveSnapshotButton" Command="{Binding SaveSnapshotCommand}" ToolTip.Tip="{Tr Projects.Snapshot.Save.Tip}">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                      <c:GlyphIcon Kind="Icon.Plus" IconSize="14" />
+                      <TextBlock Text="{Tr Projects.Snapshot.Save}" />
+                    </StackPanel>
+                  </Button>
+                </Grid>
+                <TextBlock Text="{Tr Projects.Snapshot.Caption}" Classes="caption wrap" />
+              </StackPanel>
+            </Grid>
+            <TextBlock Text="{Tr Projects.Snapshot.None}" Classes="caption wrap" IsVisible="{Binding !HasSnapshots}" />
+            <ScrollViewer MaxHeight="280" HorizontalScrollBarVisibility="Disabled" IsVisible="{Binding HasSnapshots}">
+              <ItemsControl x:Name="SnapshotList" ItemsSource="{Binding Snapshots}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="vm:SnapshotRowViewModel">
+                    <StackPanel Spacing="6" Margin="0,4">
+                      <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
+                        <c:GlyphIcon Kind="Icon.History" IconSize="14" VerticalAlignment="Center" />
+                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                          <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Snapshot.Path}" />
+                          <TextBlock Text="{Binding Details}" Classes="caption" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Snapshot.Path}" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                          <Button Classes="ghost small" Content="{Tr Projects.Snapshot.OpenAsNew}" Command="{Binding OpenAsNewCommand}" ToolTip.Tip="{Tr Projects.Snapshot.OpenAsNew.Tip}" />
+                          <Button Classes="small" Content="{Tr Projects.Snapshot.Restore}" Command="{Binding RestoreCommand}" ToolTip.Tip="{Tr Projects.Snapshot.Restore.Tip}" />
+                        </StackPanel>
+                      </Grid>
+                      <Border Classes="card" Padding="10,8" IsVisible="{Binding IsConfirming}">
+                        <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
+                          <TextBlock Text="{Binding ConfirmText}" Classes="wrap" VerticalAlignment="Center" FontSize="12.5" />
+                          <Button Grid.Column="1" Classes="accent small" Content="{Tr Projects.Snapshot.Restore}" Command="{Binding ConfirmRestoreCommand}"
+                                  VerticalAlignment="Center" ToolTip.Tip="{Tr Projects.Snapshot.Confirm.Tip}" />
+                          <Button Grid.Column="2" Classes="ghost small" Content="{Tr Projects.Snapshot.Cancel}" Command="{Binding CancelRestoreCommand}"
+                                  VerticalAlignment="Center" ToolTip.Tip="{Tr Projects.Snapshot.Cancel.Tip}" />
+                        </Grid>
+                      </Border>
+                    </StackPanel>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </ScrollViewer>
+          </StackPanel>
+        </Border>
+
         <!-- Export: only with a project open; without one, a single line says so. -->
         <StackPanel Spacing="8">
           <TextBlock Text="{Tr Projects.ExportSection}" Classes="section" />
@@ -190,11 +262,13 @@
 
                 <StackPanel Spacing="8" IsVisible="{Binding HasExportResult}">
                   <Separator />
-                  <Grid ColumnDefinitions="*,Auto">
+                  <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
                     <TextBlock Text="{Tr Projects.LastExport}" Classes="h2" VerticalAlignment="Center" />
-                    <Button Grid.Column="1" Classes="small" Content="{Tr Common.OpenFolder}" Command="{Binding OpenExportFolderCommand}" ToolTip.Tip="{Tr Projects.OpenExportFolder.Tip}" />
+                    <Button Grid.Column="1" Classes="small" x:Name="OpenProblemListButton" Content="{Tr Projects.OpenProblemList}" Command="{Binding OpenProblemListCommand}"
+                            IsVisible="{Binding ProblemListPath, Converter={x:Static ObjectConverters.IsNotNull}}" ToolTip.Tip="{Tr Projects.OpenProblemList.Tip}" />
+                    <Button Grid.Column="2" Classes="small" Content="{Tr Common.OpenFolder}" Command="{Binding OpenExportFolderCommand}" ToolTip.Tip="{Tr Projects.OpenExportFolder.Tip}" />
                   </Grid>
-                  <ItemsControl ItemsSource="{Binding ExportRows}">
+                  <ItemsControl ItemsSource="{Binding ExportRows}" x:Name="ExportRowsList">
                     <ItemsControl.ItemTemplate>
                       <DataTemplate x:DataType="vm:PropertyRow">
                         <Grid ColumnDefinitions="140,*" ColumnSpacing="8" Margin="0,3">
@@ -204,8 +278,17 @@
                       </DataTemplate>
                     </ItemsControl.ItemTemplate>
                   </ItemsControl>
-                  <Border Classes="badge warn" HorizontalAlignment="Left" IsVisible="{Binding HasExportWarnings}">
+                  <Border Classes="badge warn" HorizontalAlignment="Left">
+                    <Border.IsVisible>
+                      <MultiBinding Converter="{x:Static BoolConverters.And}">
+                        <Binding Path="HasExportWarnings" />
+                        <Binding Path="ProblemListPath" Converter="{x:Static ObjectConverters.IsNull}" />
+                      </MultiBinding>
+                    </Border.IsVisible>
                     <TextBlock Text="{Tr Projects.Warnings}" />
+                  </Border>
+                  <Border Classes="badge error" HorizontalAlignment="Left" IsVisible="{Binding ProblemListPath, Converter={x:Static ObjectConverters.IsNotNull}}">
+                    <TextBlock Text="{Tr Projects.Row.ProblemList}" />
                   </Border>
                   <ItemsControl ItemsSource="{Binding ExportWarnings}" IsVisible="{Binding HasExportWarnings}">
                     <ItemsControl.ItemTemplate>
@@ -215,6 +298,38 @@
                     </ItemsControl.ItemTemplate>
                   </ItemsControl>
                 </StackPanel>
+              </StackPanel>
+            </Border>
+
+            <!-- Check my install (hexter_98, youngpiegus): what stands between the export and the game, in words. -->
+            <Border Classes="card" x:Name="InstallCard">
+              <StackPanel Spacing="10">
+                <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12">
+                  <Border Grid.Column="0" Classes="iconTile"><c:GlyphIcon Kind="Icon.Check" IconSize="20" HorizontalAlignment="Center" VerticalAlignment="Center" /></Border>
+                  <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                    <TextBlock Text="{Tr Install.Title}" Classes="h2" />
+                    <TextBlock Text="{Tr Install.Caption}" Classes="caption wrap" />
+                  </StackPanel>
+                  <Button Grid.Column="2" x:Name="CheckInstallButton" VerticalAlignment="Center" Command="{Binding CheckInstallCommand}" ToolTip.Tip="{Tr Install.Check.Tip}">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                      <c:GlyphIcon Kind="Icon.Search" IconSize="14" />
+                      <TextBlock Text="{Tr Install.Check}" />
+                    </StackPanel>
+                  </Button>
+                </Grid>
+                <ItemsControl x:Name="InstallRowsList" ItemsSource="{Binding InstallRows}" IsVisible="{Binding HasInstallRows}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:InstallRowViewModel">
+                      <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10" Margin="0,3">
+                        <Border Classes="badge" Classes.ok="{Binding IsOk}" Classes.warn="{Binding IsWarning}" Classes.error="{Binding IsProblem}"
+                                HorizontalAlignment="Left" VerticalAlignment="Top">
+                          <TextBlock Text="{Binding Badge}" />
+                        </Border>
+                        <SelectableTextBlock Grid.Column="1" Text="{Binding Text}" TextWrapping="Wrap" FontSize="12.5" />
+                      </Grid>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
               </StackPanel>
             </Border>
 

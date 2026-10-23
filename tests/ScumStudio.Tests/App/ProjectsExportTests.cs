@@ -4,6 +4,7 @@ using ScumStudio.Core.Abstractions;
 using ScumStudio.Level.Economy;
 using ScumStudio.Level.Editing;
 using ScumStudio.Level.Export;
+using ScumStudio.Level.Projects;
 using ScumStudio.Modding.Crafting;
 using ScumStudio.Pak.Inspection;
 using ScumStudio.Tests.Level;
@@ -46,7 +47,7 @@ public sealed class ProjectsExportTests
         await page.ExportCommand.ExecuteAsync(null);
 
         var result = Assert.Single(page.LastExport);
-        Assert.Equal(Path.Combine(output, "Client", "pakchunk900-Outpost_cleanup_P.pak"), result.PakPath);
+        Assert.Equal(Path.Combine(output, "Outpost_cleanup", "Client", "pakchunk900-Outpost_cleanup_P.pak"), result.PakPath); // the mod's own folder
         Assert.True(File.Exists(result.PakPath));
         Assert.Equal(2, PakInspector.ReadIndex(result.PakPath!).Entries.Count);
         Assert.Equal(new[] { "StaticMeshActor_1" }, Assert.Single(result.Levels).Report.RemovedActors);
@@ -56,7 +57,7 @@ public sealed class ProjectsExportTests
         Assert.True(page.HasExportWarnings); // loose game files carry no stock .sig
         Assert.Contains(page.ExportWarnings, w => w.Contains(".sig", StringComparison.Ordinal));
         Assert.Equal(output, ctx.Services.Settings.Load().ClientModsOutputFolder);
-        Assert.Equal(output, page.LastExportFolder);
+        Assert.Equal(Path.Combine(output, "Outpost_cleanup"), page.LastExportFolder);
         Assert.True(page.OpenExportFolderCommand.CanExecute(null));
         Assert.Contains(ctx.Services.Notifications.Toasts, t => t.Title.Contains("Export finished", StringComparison.Ordinal));
 
@@ -82,7 +83,7 @@ public sealed class ProjectsExportTests
 
         var (results, installed) = await ModExportService.QuickExportAsync(ctx.Services, project, ctx.Combine("exports"), ProgressSink.Null);
         var client = Assert.Single(results);
-        Assert.Equal(Path.Combine(ctx.Combine("exports"), "Client", "pakchunk900-Quick_P.pak"), client.PakPath);
+        Assert.Equal(Path.Combine(ctx.Combine("exports"), "Quick", "Client", "pakchunk900-Quick_P.pak"), client.PakPath);
         Assert.True(File.Exists(client.PakPath));
         Assert.Empty(installed); // no server cook configured, nothing copied
 
@@ -107,7 +108,7 @@ public sealed class ProjectsExportTests
         await ctx.Services.Workspace.OpenLooseAsync(game, ProgressSink.Null);
         var project = await ctx.Services.Projects.CreateAsync(ctx.Combine("projects"), "Crafts");
         var output = ctx.Combine("out");
-        var client = Directory.CreateDirectory(Path.Combine(output, "Client")).FullName;
+        var client = Directory.CreateDirectory(ProjectExporter.ExportFolder(output, "Crafts", pages: false, ProjectSourceRole.Client)).FullName;
         var old = Path.Combine(client, CraftablesExporter.PakFileName("Crafts", ProjectExporter.DefaultPakChunkIndex));
         Assert.NotNull(ModExportService.Blocker(ctx.Services, project)); // a new project has nothing to export
 
@@ -141,10 +142,11 @@ public sealed class ProjectsExportTests
 
         var output = ctx.Combine("out");
         Assert.Empty(await ModExportService.ExportAsync(ctx.Services, new ModExportRequest(project, output, null, false), ProgressSink.Null));
-        var server = Path.Combine(output, ProjectExporter.ServerFolderName, EconomyOverride.FileName);
+        var serverFolder = ProjectExporter.ExportFolder(output, "Prices", pages: false, ProjectSourceRole.Server);
+        var server = Path.Combine(serverFolder, EconomyOverride.FileName);
         Assert.Equal(ctx.Services.Economy.Text, File.ReadAllText(server));
-        Assert.Equal(ctx.Services.Economy.Text, File.ReadAllText(Path.Combine(output, ProjectExporter.ClientFolderName, EconomyOverride.FileName)));
-        Assert.Contains("REPLACES", File.ReadAllText(Path.Combine(output, ProjectExporter.ServerFolderName, EconomyOverride.ReadmeName)), StringComparison.Ordinal);
+        Assert.Equal(ctx.Services.Economy.Text, File.ReadAllText(Path.Combine(ProjectExporter.ExportFolder(output, "Prices", pages: false, ProjectSourceRole.Client), EconomyOverride.FileName)));
+        Assert.Contains("REPLACES", File.ReadAllText(Path.Combine(serverFolder, EconomyOverride.ReadmeName)), StringComparison.Ordinal);
         Assert.Contains(ctx.Services.Notifications.Toasts, t => (t.Message ?? string.Empty).Contains(server, StringComparison.Ordinal));
     }
 
@@ -166,7 +168,7 @@ public sealed class ProjectsExportTests
         Assert.NotNull(store.LoadError);
 
         var output = ctx.Combine("out");
-        var server = Path.Combine(output, ProjectExporter.ServerFolderName, EconomyOverride.FileName);
+        var server = Path.Combine(ProjectExporter.ExportFolder(output, "Bad prices", pages: false, ProjectSourceRole.Server), EconomyOverride.FileName);
         Assert.Null(ModExportService.Blocker(ctx.Services, project));
         await ModExportService.ExportAsync(ctx.Services, new ModExportRequest(project, output, null, false), ProgressSink.Null);
         Assert.False(File.Exists(server));

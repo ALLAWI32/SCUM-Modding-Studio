@@ -36,6 +36,19 @@ public static class ProjectTextures
 
             File.Move(temp, full, overwrite: true);
         }
+        else
+        {
+            // The same picture saved again (Apply decals over stickers nudged and put back): its time is this save's, so a check
+            // that compares it with what it was made from (DecalChecks) sees it as new (review 3.5.1).
+            try
+            {
+                File.SetLastWriteTimeUtc(full, DateTime.UtcNow);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // a read-only picture keeps its time: the pixels are the same
+            }
+        }
 
         return file;
     }

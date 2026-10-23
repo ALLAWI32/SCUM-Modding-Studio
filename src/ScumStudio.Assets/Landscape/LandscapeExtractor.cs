@@ -196,28 +196,51 @@ public static class LandscapeExtractor
         }
 
         var surface = new LandscapeSurface(component.Name, (sectionBaseX, sectionBaseY), sizeQuads, toWorld, worldZ, packed);
+        var mesh = BuildMesh(surface, step, step, options.ComputeNormals, options.PackedNormals);
+        var name = component.Name;
+        return new LandscapeComponentMesh(name, (sectionBaseX, sectionBaseY), sizeQuads, mesh, mesh.Bounds.Min.Z, mesh.Bounds.Max.Z)
+        {
+            Surface = options.KeepSurface ? surface : null,
+            Layers = options.ReadLayers ? LandscapeLayerReader.Read(component, options.ReadGrass) : null,
+        };
+    }
 
+    /// <summary>
+    /// The world-space grid mesh of a component at vertex step <paramref name="step"/> (every <paramref name="step"/>-th
+    /// sample, the last one clamped to the edge), built from its full-resolution <paramref name="surface"/>: what
+    /// <see cref="ExtractComponent"/> returns for that step. With a coarser <paramref name="edgeStep"/> the vertices on the
+    /// component's border take the height a mesh of <paramref name="edgeStep"/> draws there (straight between its border
+    /// vertices), so a component drawn finer near the camera meets its neighbours drawn at <paramref name="edgeStep"/>
+    /// without a crack; the inner vertices keep their own heights.
+    /// </summary>
+    /// <param name="surface">The component's heights and normals.</param>
+    /// <param name="step">Vertex step in quads (1 = every sample).</param>
+    /// <param name="edgeStep">Step of the border (at least <paramref name="step"/>).</param>
+    /// <param name="computeNormals">Give the mesh vertex normals.</param>
+    /// <param name="packedNormals">Take them from the heightmap's packed normals (seamless) rather than from the triangles.</param>
+    public static MeshData BuildMesh(LandscapeSurface surface, int step, int edgeStep = 0, bool computeNormals = true, bool packedNormals = true)
+    {
+        ArgumentNullException.ThrowIfNull(surface);
+        var sizeQuads = surface.ComponentSizeQuads;
+        step = Math.Max(1, step);
+        edgeStep = Math.Max(step, edgeStep);
         var vertsPerSide = VertsPerSide(sizeQuads, step);
         var textureSize = AlbedoTextureSize(sizeQuads);
         var positions = new float[vertsPerSide * vertsPerSide * 3];
         var uvs = new float[vertsPerSide * vertsPerSide * 2];
-        var minZ = float.MaxValue;
-        var maxZ = float.MinValue;
         for (var vy = 0; vy < vertsPerSide; vy++)
         {
             var y = VertexQuad(vy, step, sizeQuads);
             for (var vx = 0; vx < vertsPerSide; vx++)
             {
                 var x = VertexQuad(vx, step, sizeQuads);
-                var world = Vector3.Transform(new Vector3(x, y, localZ[y * n + x]), toWorld);
+                var world = Vector3.Transform(new Vector3(x, y, 0f), surface.ToWorld);
                 var i = vy * vertsPerSide + vx;
                 positions[i * 3] = world.X;
                 positions[i * 3 + 1] = world.Y;
-                positions[i * 3 + 2] = world.Z;
+                positions[i * 3 + 2] = edgeStep > step ? BorderHeight(surface, x, y, edgeStep) : surface.HeightAt(x, y);
                 uvs[i * 2] = TextureCoordinate(x, textureSize);
                 uvs[i * 2 + 1] = TextureCoordinate(y, textureSize);
-                minZ = MathF.Min(minZ, world.Z);
-                maxZ = MathF.Max(maxZ, world.Z);
             }
         }
 
@@ -239,9 +262,9 @@ public static class LandscapeExtractor
         }
 
         float[]? normals = null;
-        if (options.ComputeNormals)
+        if (computeNormals)
         {
-            if (options.PackedNormals)
+            if (packedNormals)
             {
                 normals = new float[positions.Length];
                 for (var vy = 0; vy < vertsPerSide; vy++)
@@ -263,13 +286,35 @@ public static class LandscapeExtractor
             }
         }
 
-        var name = component.Name;
-        var mesh = MeshData.Create(name, positions, indices, normals, uvs, [new MeshSection("Landscape", 0, indices.Length)]);
-        return new LandscapeComponentMesh(name, (sectionBaseX, sectionBaseY), sizeQuads, mesh, minZ, maxZ)
+        return MeshData.Create(surface.Name, positions, indices, normals, uvs, [new MeshSection("Landscape", 0, indices.Length)]);
+    }
+
+    /// <summary>
+    /// Height of sample (<paramref name="x"/>, <paramref name="y"/>) as a mesh of vertex step <paramref name="edgeStep"/>
+    /// draws it on the component's border: its own height inside the component and at the border vertices of that mesh,
+    /// otherwise straight between the two border vertices around it.
+    /// </summary>
+    private static float BorderHeight(LandscapeSurface surface, int x, int y, int edgeStep)
+    {
+        var size = surface.ComponentSizeQuads;
+        var alongX = y == 0 || y == size;
+        var alongY = x == 0 || x == size;
+        if (alongX == alongY)
         {
-            Surface = options.KeepSurface ? surface : null,
-            Layers = options.ReadLayers ? LandscapeLayerReader.Read(component, options.ReadGrass) : null,
-        };
+            return surface.HeightAt(x, y); // inside, or a corner
+        }
+
+        var q = alongX ? x : y;
+        var a = Math.Min(q / edgeStep * edgeStep, size);
+        var b = Math.Min(a + edgeStep, size);
+        if (q == a || b == a)
+        {
+            return surface.HeightAt(x, y);
+        }
+
+        var t = (q - a) / (float)(b - a);
+        var (ha, hb) = alongX ? (surface.HeightAt(a, y), surface.HeightAt(b, y)) : (surface.HeightAt(x, a), surface.HeightAt(x, b));
+        return ha + ((hb - ha) * t);
     }
 
     /// <summary>

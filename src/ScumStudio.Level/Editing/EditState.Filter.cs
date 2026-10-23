@@ -35,6 +35,8 @@ public sealed partial class EditState
             copy._holes.Clear();
         }
 
+        copy._subZones.RemoveAll(s => !level(s.Zone.Level));
+
         foreach (var key in copy._clones.Keys.Where(k => !asset(k)).ToList())
         {
             copy._clones.Remove(key);

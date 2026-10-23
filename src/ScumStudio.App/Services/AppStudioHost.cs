@@ -133,11 +133,22 @@ public sealed class AppStudioHost : IStudioHost
     public JournalEntry? Redo() => OnUiThread(() => _services.Projects.Redo());
 
     /// <inheritdoc />
-    public Task<IReadOnlyList<ExportResult>> ExportAsync(ExportOptions options, bool includeServer, CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<ExportResult>> ExportAsync(ExportOptions options, bool includeServer, CancellationToken cancellationToken)
     {
         var project = Project ?? throw new InvalidOperationException("No project is open.");
         var request = new ModExportRequest(project, options.OutputDirectory, options.ModName, includeServer, options.PakChunkIndex);
-        return ModExportService.ExportAsync(_services, request, ProgressSink.Null, cancellationToken);
+        var results = await ModExportService.ExportAsync(_services, request, ProgressSink.Null, cancellationToken).ConfigureAwait(false);
+
+        // The server pak refused (the client's passed): the tool's answer says so with the client pak's warnings, never as a
+        // client-only export (review 3.5.1).
+        if (results.ServerRefused is not { } refused || results.Count == 0)
+        {
+            return results;
+        }
+
+        var note = $"Server: {Path.GetFileName(refused.PakPath) ?? "the server pak"} was NOT written: the package check found {refused.Result.Problems.Count} problem(s) "
+                   + $"(report: {refused.ReportPath ?? "-"}; all of them: {refused.ListPath ?? "-"}). The earlier server pak in the Server folder does not have these edits.";
+        return [results[0] with { Warnings = [.. results[0].Warnings, note] }, .. results.Skip(1)];
     }
 
     /// <inheritdoc />

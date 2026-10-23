@@ -18,9 +18,9 @@ public static class EditOpRemap
         typeof(RemoveAddedInstanceOp), typeof(AddStaticMeshActorOp), typeof(AddBlueprintActorOp), typeof(RemoveAddedActorOp),
         typeof(CloneAssetOp), typeof(RemoveAssetCloneOp), typeof(SetAssetValueOp), typeof(ReplaceAssetOp), typeof(BatchOp),
         typeof(BendActorOp), typeof(SwaySegmentOp), typeof(SetSpawnPointsOp), typeof(ReplaceMeshOp), typeof(SetLootOp), typeof(SetClearGrassOp),
-        typeof(DeleteComponentsOp), typeof(RestoreComponentsOp), typeof(SetSpawnChoiceOp), typeof(AddSpawnPlaceOp),
+        typeof(SetNoLootOp), typeof(DeleteComponentsOp), typeof(RestoreComponentsOp), typeof(SetSpawnChoiceOp), typeof(AddSpawnPlaceOp),
         typeof(SetEconomyEntryOp), typeof(SetEconomySettingOp), typeof(SetEconomySectionOp), typeof(ReplaceEconomyOp),
-        typeof(TerrainHoleOp),
+        typeof(TerrainHoleOp), typeof(AddSubZoneOp), typeof(RemoveSubZoneOp),
     };
 
     /// <summary>
@@ -77,6 +77,7 @@ public static class EditOpRemap
             ReplaceMeshOp mesh => mesh with { Target = A(mesh.Target) },
             SetLootOp loot => loot with { Target = A(loot.Target) },
             SetClearGrassOp grass => grass with { Target = A(grass.Target) },
+            SetNoLootOp noLoot => noLoot with { Target = A(noLoot.Target) },
             DeleteComponentsOp parts => parts with { Target = A(parts.Target) },
             RestoreComponentsOp parts => parts with { Target = A(parts.Target) },
             SetSpawnChoiceOp choice => choice with { Target = A(choice.Target) },
@@ -85,6 +86,7 @@ public static class EditOpRemap
             SetEconomySectionOp section => traders.TryGetValue(section.Trader, out var renamed) ? section with { Trader = renamed } : section,
             SetEconomySettingOp or ReplaceEconomyOp => op, // a share carries the economy as a file of its own, never these
             TerrainHoleOp hole => hole, // a place on the ground: no names to follow
+            AddSubZoneOp or RemoveSubZoneOp => op, // a box in a stock zone: no names to follow
             _ => throw new NotSupportedException($"Edits of type {op.GetType().Name} cannot be shared by this version."),
         };
     }

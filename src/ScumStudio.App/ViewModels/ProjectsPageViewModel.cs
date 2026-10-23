@@ -223,6 +223,11 @@ public sealed partial class ProjectsPageViewModel : PageViewModel, IDisposable
     [NotifyCanExecuteChangedFor(nameof(OpenExportFolderCommand))]
     private string? _lastExportFolder;
 
+    /// <summary>The problem list of the last export when the package check refused it (for "Open package-check.txt"), else null.</summary>
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(OpenProblemListCommand))]
+    private string? _problemListPath;
+
     /// <summary>Results of the last export (one per cook).</summary>
     public IReadOnlyList<ExportResult> LastExport { get; private set; } = [];
 
@@ -349,16 +354,22 @@ public sealed partial class ProjectsPageViewModel : PageViewModel, IDisposable
         }
 
         RefreshExportState();
+        RefreshVersions();
     }
 
     /// <inheritdoc />
-    public override void OnNavigatedTo() => Refresh();
+    public override void OnNavigatedTo()
+    {
+        Refresh();
+        RefreshVersions(force: true);
+    }
 
     /// <inheritdoc />
     public override void OnLanguageChanged()
     {
         base.OnLanguageChanged();
         Refresh();
+        RefreshVersions(force: true);
     }
 
     /// <inheritdoc />
@@ -496,8 +507,7 @@ public sealed partial class ProjectsPageViewModel : PageViewModel, IDisposable
             return;
         }
 
-        var exports = Directory.Exists(Path.Combine(ExportFolder, "Client")) ? Path.Combine(ExportFolder, "Client") : ExportFolder;
-        if (await _services.Dialogs.OpenFileAsync(Loc.T("Mods.Pick"), "pak", Loc.T("Mods.PakFiles"), exports).ConfigureAwait(true) is not { } pak)
+        if (await _services.Dialogs.OpenFileAsync(Loc.T("Mods.Pick"), "pak", Loc.T("Mods.PakFiles"), ExportFolder).ConfigureAwait(true) is not { } pak)
         {
             return;
         }
@@ -536,15 +546,34 @@ public sealed partial class ProjectsPageViewModel : PageViewModel, IDisposable
 
         var folder = Path.GetFullPath(ExportFolder.Trim());
         var request = new ModExportRequest(project, folder, string.IsNullOrWhiteSpace(ExportModName) ? null : ExportModName.Trim(), ExportServer) { IncludeCraftables = ExportCraftables };
-        var (ok, results) = await _services.Operations.RunAsync(Loc.F("Projects.Exporting", project.Manifest.Name),
-            (progress, ct) => ModExportService.ExportAsync(_services, request, progress, ct)).ConfigureAwait(true);
+        ModValidationException? refused = null;
+        var (ok, results) = await _services.Operations.RunAsync(Loc.F("Projects.Exporting", project.Manifest.Name), async (progress, ct) =>
+        {
+            try
+            {
+                return await ModExportService.ExportAsync(_services, request, progress, ct).ConfigureAwait(false);
+            }
+            catch (ModValidationException ex)
+            {
+                refused = ex;
+                throw;
+            }
+        }).ConfigureAwait(true);
+        if (refused is not null)
+        {
+            // Open folder goes where the NOT EXPORTED report and the check list are, as after a successful export (review 3.5.1).
+            ShowRefusal(refused, ProjectExporter.ModFolder(folder, request.ModName ?? project.Manifest.Name, pages: false));
+            return;
+        }
+
         if (!ok || results is not { Count: > 0 })
         {
             return; // nothing was left to build (the export said what it removed)
         }
 
         LastExport = results;
-        LastExportFolder = folder;
+        LastExportFolder = ProjectExporter.ModFolder(folder, request.ModName ?? project.Manifest.Name, pages: false); // the mod's own folder: Client and Server inside
+        ProblemListPath = null;
         var rows = new List<PropertyRow>();
         var warnings = new List<string>();
         foreach (var result in results)
@@ -562,22 +591,86 @@ public sealed partial class ProjectsPageViewModel : PageViewModel, IDisposable
             warnings.AddRange(result.Warnings.Select(w => $"{result.Role}: {w}"));
         }
 
+        // The client pak passed, the server's was refused (review 3.5.1): the card says that pak was NOT written and where its
+        // problems are, as for a refused client pak; the Server folder keeps the earlier server pak, which lacks these edits.
+        if (results.ServerRefused is { } serverRefused)
+        {
+            var server = ProjectSourceRole.Server;
+            rows.Add(new PropertyRow(Loc.F("Projects.Row.Pak", server), Loc.F("Projects.Row.Refused", serverRefused.Result.Problems.Count, Path.GetFileName(serverRefused.PakPath) ?? string.Empty)));
+            if (serverRefused.ListPath is { } problems)
+            {
+                rows.Add(new PropertyRow(Loc.T("Projects.Row.ProblemList"), problems));
+                ProblemListPath = File.Exists(problems) ? problems : null;
+            }
+
+            if (serverRefused.ReportPath is { } serverReport)
+            {
+                rows.Add(new PropertyRow(Loc.F("Projects.Row.RoleReport", server), serverReport));
+            }
+
+            warnings.AddRange(serverRefused.Result.Problems.Take(ProjectExporter.RefusalProblemsShown).Select(p => $"{server}: {p}"));
+        }
+
         rows.Add(new PropertyRow(Loc.T("Projects.Row.Report"), results[0].ReportPath ?? string.Empty));
-        rows.Add(new PropertyRow(Loc.T("Projects.Row.Install"), ModExportService.InstallNote(results)));
-        warnings.AddRange(ModExportService.ParityProblems(results));
+        rows.Add(new PropertyRow(Loc.T("Projects.Row.Install"), ModExportService.InstallNote(results, results.ServerRefused)));
+
+        // Check my install, in one line: is this export in the game's ~mods yet, and does anything there stand in its way.
+        var installLine = await InstallCheckService.ToastLineAsync(_services, project, folder, request.ModName, InstallCheckService.ClientPaks(results)).ConfigureAwait(true);
+        if (installLine is not null)
+        {
+            rows.Add(new PropertyRow(Loc.T("Projects.Row.InstallCheck"), installLine));
+        }
+
+        warnings.AddRange(ModExportService.ParityProblems(results, results.ServerRefused));
         ExportRows = rows;
         ExportWarnings = warnings;
         _services.UpdateSettings(s => s with { ClientModsOutputFolder = folder });
 
         if (warnings.Count > 0)
         {
-            _services.Notifications.Warning(Loc.T("Projects.ExportWarnings"), Loc.F("Projects.ExportWarningsDetail", warnings.Count, folder));
+            _services.Notifications.Warning(Loc.T("Projects.ExportWarnings"), Loc.F("Projects.ExportWarningsDetail", warnings.Count, folder)
+                + (installLine is null ? string.Empty : " · " + installLine));
         }
         else
         {
-            _services.Notifications.Success(Loc.T("Projects.Exported"), $"{results[0].PakPath ?? folder} · {ModExportService.InstallNote(results)}");
+            _services.Notifications.Success(Loc.T("Projects.Exported"), $"{results[0].PakPath ?? folder} · {ModExportService.InstallNote(results, results.ServerRefused)}"
+                + (installLine is null ? string.Empty : " · " + installLine));
         }
     }
+
+    /// <summary>
+    /// The package check refused the export: the Last export card says what happened (no pak, the problems, the report) in
+    /// place of the earlier export's rows (Discord, O Piqueno, 3.4.0: the card kept showing the
+    /// earlier pak as the last export).
+    /// </summary>
+    private void ShowRefusal(ModValidationException refused, string folder)
+    {
+        LastExport = [];
+        LastExportFolder = folder;
+        ProblemListPath = refused.ListPath is { } list && File.Exists(list) ? list : null;
+        var role = ProjectSourceRole.Client;
+        var rows = new List<PropertyRow>
+        {
+            new(Loc.F("Projects.Row.Pak", role), Loc.F("Projects.Row.Refused", refused.Result.Problems.Count, Path.GetFileName(refused.PakPath) ?? string.Empty)),
+        };
+        if (refused.ListPath is { } problems)
+        {
+            rows.Add(new PropertyRow(Loc.T("Projects.Row.ProblemList"), problems));
+        }
+
+        if (refused.ReportPath is { } report)
+        {
+            rows.Add(new PropertyRow(Loc.T("Projects.Row.Report"), report));
+        }
+
+        ExportRows = rows;
+        ExportWarnings = [.. refused.Result.Problems.Take(ProjectExporter.RefusalProblemsShown)];
+    }
+
+    private bool CanOpenProblemList() => ProblemListPath is { } list && File.Exists(list);
+
+    [RelayCommand(CanExecute = nameof(CanOpenProblemList))]
+    private void OpenProblemList() => Reveal(ProblemListPath!, select: false, ModPackageValidator.ListFileName);
 
     private bool CanOpenExportFolder() => !string.IsNullOrEmpty(LastExportFolder) && Directory.Exists(LastExportFolder);
 

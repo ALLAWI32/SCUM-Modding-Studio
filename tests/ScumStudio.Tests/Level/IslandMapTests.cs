@@ -7,16 +7,61 @@ namespace ScumStudio.Tests.Level;
 /// into picture positions and map cells. Facts from the game files (HANDOFF): the A_0 outpost's tile bounds
 /// (-640862,-575097)..(-603362,-537597) and the landscape tile Landscape_A_0_1 (-922838,-600177)..(-828600,-523800), whose
 /// terrain (the Map page's terrain cache) spans (-904800,-600000)..(-828600,-523800); 20 x 20 such tiles make the island.
+/// The picture is shown as the game's spawn screen shows it: the texture turned 180 degrees, D4 top-left, Z0 bottom-right
+/// (Discord 2026-10-17, "the map is inverted"; the real-file proof is IslandMapRealTests).
 /// </summary>
 public sealed class IslandMapTests
 {
+    // The game's spawn screen sector buttons (UI_SpawnSectorSelector's UniformGrid, read from the paks of 2026-10-17):
+    // row 0 at the top, column 0 at the left.
+    private static readonly string[][] GameButtons =
+    [
+        ["D4", "D3", "D2", "D1", "D0"],
+        ["C4", "C3", "C2", "C1", "C0"],
+        ["B4", "B3", "B2", "B1", "B0"],
+        ["A4", "A3", "A2", "A1", "A0"],
+        ["Z4", "Z3", "Z2", "Z1", "Z0"],
+    ];
+
     [Fact]
     public void CornersMapToThePictureCorners()
     {
-        // World X grows to the picture's right, world Y down.
-        Assert.Equal((0d, 0d), Round(IslandMap.ToMap(IslandMap.MinCm, IslandMap.MinCm)));
-        Assert.Equal((1d, 1d), Round(IslandMap.ToMap(IslandMap.MinCm + IslandMap.SizeCm, IslandMap.MinCm + IslandMap.SizeCm)));
-        Assert.Equal((1d, 0d), Round(IslandMap.ToMap(IslandMap.MinCm + IslandMap.SizeCm, IslandMap.MinCm)));
+        // Turned like the game's map: world X grows to the picture's left, world Y up; the min corner is bottom right.
+        Assert.Equal((1d, 1d), Round(IslandMap.ToMap(IslandMap.MinCm, IslandMap.MinCm)));
+        Assert.Equal((0d, 0d), Round(IslandMap.ToMap(IslandMap.MinCm + IslandMap.SizeCm, IslandMap.MinCm + IslandMap.SizeCm)));
+        Assert.Equal((0d, 1d), Round(IslandMap.ToMap(IslandMap.MinCm + IslandMap.SizeCm, IslandMap.MinCm)));
+        Assert.Equal((IslandMap.MinCm, IslandMap.MinCm), IslandMap.ToWorld(1, 1));
+        Assert.Equal((IslandMap.MinCm + IslandMap.SizeCm, IslandMap.MinCm), IslandMap.ToWorld(0, 1));
+    }
+
+    [Fact]
+    public void EveryCellSitsUnderTheGamesButtonWithItsName()
+    {
+        foreach (var cell in MapCell.All)
+        {
+            var (minX, minY, maxX, maxY) = IslandMap.CellRect(cell);
+            var (u, v) = IslandMap.ToMap((minX + maxX) / 2f, (minY + maxY) / 2f);
+            Assert.Equal($"{cell.Column}{cell.Row}", GameButtons[(int)(v * 5)][(int)(u * 5)]);
+        }
+    }
+
+    [Theory]
+    [InlineData(0f)]
+    [InlineData(30f)]
+    [InlineData(90f)]
+    [InlineData(-135f)]
+    [InlineData(200f)]
+    public void ScreenYawIsTheWayThePlaceFacesOnThePicture(float yaw)
+    {
+        // A step along the place's facing (world cm) and the same step as the picture shows it.
+        var (x, y) = (12_345f, -6_789f);
+        var (dx, dy) = (MathF.Cos(yaw * MathF.PI / 180f) * 1000f, MathF.Sin(yaw * MathF.PI / 180f) * 1000f);
+        var (u0, v0) = IslandMap.ToMap(x, y);
+        var (u1, v1) = IslandMap.ToMap(x + dx, y + dy);
+        var screen = IslandMap.ScreenYaw(yaw) * Math.PI / 180;
+        var (su, sv) = ((u1 - u0) / Math.Sqrt(((u1 - u0) * (u1 - u0)) + ((v1 - v0) * (v1 - v0))), (v1 - v0) / Math.Sqrt(((u1 - u0) * (u1 - u0)) + ((v1 - v0) * (v1 - v0))));
+        Assert.Equal(Math.Cos(screen), su, 4);
+        Assert.Equal(Math.Sin(screen), sv, 4);
     }
 
     [Fact]
@@ -28,10 +73,11 @@ public sealed class IslandMapTests
         Assert.Equal(76200f, IslandMap.CellCm / 4f);
         Assert.Equal(619200f, IslandMap.MinCm + IslandMap.SizeCm);
 
-        // Checked on the game's picture (2048 px export): the A_0 outpost compound is drawn around pixel (380, 468).
+        // Checked on the game's picture (2048 px export, as stored): the A_0 outpost compound is drawn around pixel (380, 468),
+        // so on the picture turned as the game shows it around (2048 - 380, 2048 - 468).
         var (u, v) = IslandMap.ToMap(-622112f, -556347f);
-        Assert.InRange(Math.Abs((u * 2048) - 380), 0, 4);
-        Assert.InRange(Math.Abs((v * 2048) - 468), 0, 4);
+        Assert.InRange(Math.Abs((u * 2048) - (2048 - 380)), 0, 4);
+        Assert.InRange(Math.Abs((v * 2048) - (2048 - 468)), 0, 4);
     }
 
     [Fact]
@@ -86,12 +132,12 @@ public sealed class IslandMapTests
     }
 
     [Fact]
-    public void ThePictureShowsZZeroTopLeftAndDFourBottomRight()
+    public void ThePictureShowsDFourTopLeftAndZZeroBottomRightLikeTheGame()
     {
-        var (minX, minY, maxX, maxY) = IslandMap.CellRect(MapCell.Parse("Z_0"));
+        var (minX, minY, maxX, maxY) = IslandMap.CellRect(MapCell.Parse("D_4"));
         var (u, v) = IslandMap.ToMap((minX + maxX) / 2f, (minY + maxY) / 2f);
         Assert.Equal((0.1, 0.1), (Math.Round(u, 3), Math.Round(v, 3)));
-        (minX, minY, maxX, maxY) = IslandMap.CellRect(MapCell.Parse("D_4"));
+        (minX, minY, maxX, maxY) = IslandMap.CellRect(MapCell.Parse("Z_0"));
         (u, v) = IslandMap.ToMap((minX + maxX) / 2f, (minY + maxY) / 2f);
         Assert.Equal((0.9, 0.9), (Math.Round(u, 3), Math.Round(v, 3)));
     }

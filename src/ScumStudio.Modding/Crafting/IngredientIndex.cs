@@ -60,15 +60,20 @@ public sealed partial class IngredientIndex
     private readonly AssetCatalog _catalog;
     private readonly ItemSetups _setups;
     private readonly Dictionary<string, IngredientTag> _byName;
+    private readonly Dictionary<string, IReadOnlyList<string>> _members;
     private readonly ConcurrentDictionary<string, (IReadOnlyList<IngredientInstance> Instances, string? StoredIn)> _instances = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, bool> _countsUses = new(StringComparer.OrdinalIgnoreCase);
 
     private IngredientIndex(AssetCatalog catalog)
     {
         _catalog = catalog;
         _setups = ItemSetups.Of(catalog);
         var items = CraftablesPlanner.Items(catalog);
-        var counts = items.AsParallel().SelectMany(ItemTags).GroupBy(t => t, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(g => g.Key, g => g.Count(), StringComparer.OrdinalIgnoreCase);
+        _members = items.AsParallel().SelectMany(i => ItemTags(i).Select(t => (Tag: t, Item: i))).AsSequential()
+            .GroupBy(m => m.Tag, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => (IReadOnlyList<string>)g.Select(m => m.Item).Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(PackageMap.Leaf, StringComparer.OrdinalIgnoreCase).ToList(), StringComparer.OrdinalIgnoreCase);
+        var counts = _members.ToDictionary(m => m.Key, m => m.Value.Count, StringComparer.OrdinalIgnoreCase);
         var entries = (catalog.Index ?? catalog.BuildIndex(resolveClasses: false)).Entries;
         Tags = entries.Where(e => e.PackagePath.StartsWith(RecipeIngredients.TagFolder + "/", StringComparison.OrdinalIgnoreCase))
             .Select(e => ReadTag(catalog, e.PackagePath, counts))
@@ -93,6 +98,50 @@ public sealed partial class IngredientIndex
 
     /// <summary>The tag named <paramref name="name"/>, or null.</summary>
     public IngredientTag? Tag(string name) => _byName.GetValueOrDefault(name);
+
+    /// <summary>
+    /// The items of the game that satisfy <paramref name="tag"/> (their entity setup, or a parent setup, lists it), by name;
+    /// empty for a tag no item lists (a station's, or one only a mod's item carries).
+    /// </summary>
+    public IReadOnlyList<string> Members(string tag) => _members.GetValueOrDefault(tag) ?? [];
+
+    /// <summary>
+    /// True when <paramref name="item"/> is used up by uses or pieces: its entity setup (or a parent setup) has a
+    /// <c>DiscreteUsageItemEntityComponentSetup</c> (glue, a repair kit, a cement bag) or a <c>StackableItemEntityComponentSetup</c>
+    /// (arrows, paper). The game gives the <c>CICM_Uses</c> consumption method only to tags of such items (69 of the 75 items
+    /// behind its 32 <c>CICM_Uses</c> tags, SCUM 1.3.4); 417 of the 487 items behind its tags of the default method (whole
+    /// items) have neither.
+    /// </summary>
+    public bool CountsUses(string item) => _countsUses.GetOrAdd(PackageMap.Normalize(item), p => _setups.SetupOf(p) is { } setup && HasUsesSetup(_catalog, setup));
+
+    /// <summary>The entity component setup classes that make an item count by uses or pieces (<see cref="CountsUses"/>).</summary>
+    internal static readonly string[] UsesSetupClasses = ["DiscreteUsageItemEntityComponentSetup", "StackableItemEntityComponentSetup"];
+
+    private static bool HasUsesSetup(AssetCatalog catalog, string setup)
+    {
+        string? package = setup;
+        for (var depth = 0; depth < 16 && package is not null; depth++)
+        {
+            CookedPackage cooked;
+            try
+            {
+                cooked = ModdableAssets.ReadPackage(catalog, package);
+            }
+            catch (Exception ex) when (ex is IOException or InvalidDataException or ArgumentException or FormatException)
+            {
+                return false;
+            }
+
+            if (Enumerable.Range(0, cooked.Exports.Count).Any(i => UsesSetupClasses.Contains(cooked.GetExportClassName(i), StringComparer.Ordinal)))
+            {
+                return true;
+            }
+
+            package = ItemSetups.ParentBlueprint(cooked);
+        }
+
+        return false;
+    }
 
     /// <summary>The names of the tags <paramref name="item"/> satisfies (its setup's list, or the nearest parent setup's).</summary>
     public IReadOnlyList<string> ItemTags(string item) =>

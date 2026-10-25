@@ -79,9 +79,11 @@ public static partial class CloneFamilyPlanner
     /// <summary>
     /// Plans an item clone (weapon, magazine, ammunition, projectile): the item and its <c>_ES</c>, and with
     /// <paramref name="includePaint"/> the meshes it shows that wear paint and that paint (the clone's colour is its own).
+    /// <paramref name="includeMaterials"/> every mesh it shows that wears a material instance, and those instances (so a texture of
+    /// the clone can be replaced without touching the stock item: an ordinary item's materials are no paint, so they stay shared otherwise).
     /// </summary>
     /// <exception cref="ArgumentException">Invalid or already used name.</exception>
-    public static ClonePlan PlanItem(AssetCatalog catalog, string itemPackage, string newName, bool includePaint = true)
+    public static ClonePlan PlanItem(AssetCatalog catalog, string itemPackage, string newName, bool includePaint = true, bool includeMaterials = false)
     {
         ArgumentNullException.ThrowIfNull(catalog);
         var template = PackageMap.Normalize(itemPackage);
@@ -106,11 +108,11 @@ public static partial class CloneFamilyPlanner
             packages.Add(new(es, newPrimary + "_ES"));
         }
 
-        if (includePaint)
+        if (includePaint || includeMaterials)
         {
             var leaf = PackageMap.Leaf(template);
-            packages.AddRange(PaintPackages(catalog, packages.Select(p => p.Key))
-                .Select(p => new KeyValuePair<string, string>(p, PackageMap.Folder(p) + "/" + RenameLeaf(PackageMap.Leaf(p), leaf, newName))));
+            packages.AddRange(PaintPackages(catalog, packages.Select(p => p.Key), includeMaterials)
+                .Select(p => new KeyValuePair<string, string>(p, PackageMap.Folder(p) + "/" + CopyLeaf(PackageMap.Leaf(p), leaf, newName))));
         }
 
         Validate(catalog, template, packages);
@@ -282,7 +284,7 @@ public static partial class CloneFamilyPlanner
     /// asset, so a clone that is to be painted on its own needs copies of both (the copied meshes then use the copied paint,
     /// the copied Blueprints the copied meshes). Meshes without paint stay shared.
     /// </summary>
-    public static IReadOnlyList<string> PaintPackages(AssetCatalog catalog, IEnumerable<string> family)
+    public static IReadOnlyList<string> PaintPackages(AssetCatalog catalog, IEnumerable<string> family, bool anyMaterial = false)
     {
         ArgumentNullException.ThrowIfNull(catalog);
         ArgumentNullException.ThrowIfNull(family);
@@ -298,7 +300,7 @@ public static partial class CloneFamilyPlanner
                     continue;
                 }
 
-                var paints = ModdableAssets.ReadImportedPackages(catalog, imported).Where(m => IsPaint(catalog, m, paintCache, 0)).ToList();
+                var paints = ModdableAssets.ReadImportedPackages(catalog, imported).Where(m => anyMaterial ? IsMaterialInstance(catalog, m) : IsPaint(catalog, m, paintCache, 0)).ToList();
                 if (paints.Count == 0)
                 {
                     continue;
@@ -310,6 +312,34 @@ public static partial class CloneFamilyPlanner
         }
 
         return result;
+    }
+
+    /// <summary>A material instance of the game (any parent): what <c>anyMaterial</c> copies instead of paint only.</summary>
+    private static bool IsMaterialInstance(AssetCatalog catalog, string package)
+    {
+        if (!package.StartsWith("/Game/", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        try
+        {
+            return catalog.GetExports(package).Any(e => e.ClassName == "MaterialInstanceConstant");
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or FileNotFoundException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// The copy's leaf: <see cref="RenameLeaf"/>, and when the name does not hold the item's token (a shared MI_Plastic) the new
+    /// name is appended, so the copy never lands on the stock package's own path.
+    /// </summary>
+    private static string CopyLeaf(string leaf, string token, string newName)
+    {
+        var renamed = RenameLeaf(leaf, token, newName);
+        return string.Equals(renamed, leaf, StringComparison.OrdinalIgnoreCase) ? leaf + "_" + newName : renamed;
     }
 
     private static bool IsMesh(AssetCatalog catalog, string package)

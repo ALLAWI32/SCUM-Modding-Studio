@@ -146,7 +146,7 @@ public sealed class VehicleStudioRealTests(ITestOutputHelper output)
             Assert.True(HeadlessUi.PumpUntil(() => vehicles.Preview is not null && vehicles.HasPaints, TimeSpan.FromSeconds(60)));
             vehicles.StudioTab = StudioTab.Textures;
             var outer = vehicles.Paints.Single(p => p.MaterialPath.EndsWith(".MI_Rager_Outer", StringComparison.Ordinal));
-            vehicles.TextureMaterial = outer;
+            vehicles.TextureMaterial = vehicles.TextureMaterials.First(m => m.MaterialPath == outer.MaterialPath);
             Assert.True(HeadlessUi.PumpUntil(() => vehicles.TextureSlots.Count > 0 && vehicles.TextureSlots.All(s => s.HasPicture), TimeSpan.FromSeconds(30)));
             output.WriteLine(string.Join("\n", vehicles.TextureSlots.Select(s => $"{s.Label} | {s.Status} | {s.Info}")));
             Assert.Contains(vehicles.TextureSlots, s => s.Label.StartsWith("Colour", StringComparison.Ordinal));

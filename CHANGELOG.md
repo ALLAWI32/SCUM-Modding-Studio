@@ -3,6 +3,17 @@
 All notable changes are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [semantic versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **Textures for any item, and for weapons in the Studio**: the Items page (and magazines, ammunition) now shows a
+  Textures panel for its model's own materials, not only paint, so a clone's picture can be swapped without touching the
+  stock item's texture. Weapons gain the vehicle Studio's tab bar (Materials | Textures); Decals and Parts stay
+  vehicle-only. `item clone --materials` copies an item's meshes and material instances (not only paint) so
+  `item texture` has a clone copy to edit. New CLI commands `item textures` (list a clone's texture slots) and
+  `item texture <parameter> <picture>` (replace one, or `--reset` it) mirror the Studio panel and record the same
+  project-journal edits.
+
 ## [3.6.0] - 2026-10-22
 
 ### Added

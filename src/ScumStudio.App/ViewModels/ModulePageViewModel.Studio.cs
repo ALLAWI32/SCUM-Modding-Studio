@@ -33,14 +33,23 @@ public abstract partial class ModulePageViewModel
     /// <summary>The studio tab shown.</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(StudioTool), nameof(IsStudioMaterials), nameof(IsStudioTextures), nameof(IsStudioDecals), nameof(IsStudioParts),
-        nameof(ShowMaterialsPanel), nameof(StudioToolHint))]
+        nameof(ShowMaterialsPanel), nameof(ShowTexturesPanel), nameof(StudioToolHint))]
     private StudioTab _studioTab;
 
-    /// <summary>The studio's tabs are offered (vehicles; a weapon has its materials only).</summary>
-    public bool HasStudioTabs => IsVehicleModule;
+    /// <summary>
+    /// The studio's tabs are offered: a vehicle gets Materials | Textures | Decals | Parts, a weapon Materials | Textures (its
+    /// clone can wear a picture of its own, every stored value stays the stock weapon's).
+    /// </summary>
+    public bool HasStudioTabs => IsVehicleModule || IsWeaponModule;
 
     /// <summary>The panel beside the 3D view is shown: a model with paint, or any vehicle (its parts and decals need no paint).</summary>
-    public bool ShowStudioPanel => HasPaints || (IsVehicleModule && HasPreview);
+    public bool ShowStudioPanel => HasPaints || HasTextureMaterials || (IsVehicleModule && HasPreview);
+
+    /// <summary>
+    /// A page without studio tabs (the Items page) has no paint to show: its Textures panel stands alone, listing every
+    /// material of the model (an item's materials are no paint).
+    /// </summary>
+    public bool IsTexturesOnly => !HasStudioTabs && HasTextureMaterials && !HasPaints;
 
     /// <summary>What the left mouse button does on the tab shown, over the 3D view.</summary>
     public string StudioToolHint => StudioTool switch
@@ -61,8 +70,11 @@ public abstract partial class ModulePageViewModel
         _ => PreviewTool.Orbit,
     };
 
-    /// <summary>The paint list is shown (the Materials tab, or a weapon).</summary>
-    public bool ShowMaterialsPanel => !IsVehicleModule || StudioTab == StudioTab.Materials;
+    /// <summary>The paint list is shown (the Materials tab, or a page without studio tabs).</summary>
+    public bool ShowMaterialsPanel => HasStudioTabs ? StudioTab == StudioTab.Materials : !IsTexturesOnly;
+
+    /// <summary>The Textures panel is shown (its tab, or alone on a page without tabs).</summary>
+    public bool ShowTexturesPanel => HasStudioTabs ? IsStudioTextures : IsTexturesOnly;
 
     /// <summary>The Materials tab is shown (a radio button's two-way binding).</summary>
     public bool IsStudioMaterials

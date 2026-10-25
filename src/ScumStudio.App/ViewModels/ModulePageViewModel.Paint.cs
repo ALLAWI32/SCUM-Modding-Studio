@@ -53,7 +53,7 @@ public abstract partial class ModulePageViewModel
 
     /// <summary>The selected vehicle's paints.</summary>
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(HasPaints), nameof(ShowStudioPanel))]
+    [NotifyPropertyChangedFor(nameof(HasPaints), nameof(ShowStudioPanel), nameof(ShowMaterialsPanel), nameof(ShowTexturesPanel), nameof(IsTexturesOnly))]
     private IReadOnlyList<PaintMaterialViewModel> _paints = [];
 
     /// <summary>Paint changes not applied yet.</summary>
@@ -109,6 +109,7 @@ public abstract partial class ModulePageViewModel
             if (_paintCarry is null)
             {
                 Paints = []; // another vehicle (a new armour kit keeps the panel while it loads)
+                TextureMaterials = [];
                 _paintPixels.Clear();
                 _paintDragPixels.Clear();
             }
@@ -127,6 +128,7 @@ public abstract partial class ModulePageViewModel
         // Not magazines: an AK's magazine wears the AK's own material, so painting it painted the whole gun (owner).
         if (!IsVehicleModule && item.Asset.Kind is not ScumStudio.Modding.Catalog.ModdableKind.Weapon)
         {
+            ShowTextureOnlyMaterials(item, model); // an item, a magazine, a round: no paint, but its pictures can be replaced
             return;
         }
 
@@ -226,11 +228,34 @@ public abstract partial class ModulePageViewModel
             }
 
             ShowPaints(paints);
+            if (paints.Count == 0)
+            {
+                ShowTextureOnlyMaterials(item, model); // a gun without paint still has pictures
+            }
         }
         catch (Exception ex) when (ex is FileNotFoundException or FormatException or InvalidDataException or IOException or InvalidOperationException)
         {
             _services.Logger.LogWarning("Paint of {Vehicle}: {Message}", item.Name, ex.Message);
         }
+    }
+
+    /// <summary>
+    /// Lists every material the model's parts wear in the Textures panel. A clone offers only the materials it has its own copy
+    /// of (made with the clone: items copy them all), as the paint list does, so a replaced picture never reaches the stock item.
+    /// </summary>
+    private void ShowTextureOnlyMaterials(ModuleItemViewModel item, PreviewModel model)
+    {
+        var own = item.IsClone && _services.Projects.Current?.State.FindCloneOf(item.PackagePath) is { } clone
+            ? clone.Packages.Select(p => p.Old).ToHashSet(StringComparer.OrdinalIgnoreCase)
+            : null;
+        TextureMaterials =
+        [
+            .. model.Parts.Select(p => p.Material)
+                .Where(m => m.Length > 0 && m.Contains('.', StringComparison.Ordinal))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Where(m => own is null || own.Contains(m[..m.LastIndexOf('.')]))
+                .Select(m => new TextureMaterialViewModel(m, PathLeaf(m))),
+        ];
     }
 
     /// <summary>Puts <paramref name="paints"/> in the panel: each change repaints the 3D view and is a Ctrl+Z step.</summary>

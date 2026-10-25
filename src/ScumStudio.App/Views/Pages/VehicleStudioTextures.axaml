@@ -10,10 +10,10 @@
 
     <!-- 1. Which part: the material (a paint slot of the vehicle) and the parts that wear it -->
     <TextBlock Text="{Tr Studio.Textures.Step.Material}" Classes="caption" FontWeight="SemiBold" Margin="0,4,0,0" />
-    <ComboBox x:Name="TextureMaterialPicker" ItemsSource="{Binding Paints}" SelectedItem="{Binding TextureMaterial}" HorizontalAlignment="Stretch"
+    <ComboBox x:Name="TextureMaterialPicker" ItemsSource="{Binding TextureMaterials}" SelectedItem="{Binding TextureMaterial}" HorizontalAlignment="Stretch"
               ToolTip.Tip="{Tr Studio.Textures.Slots.Tip}">
       <ComboBox.ItemTemplate>
-        <DataTemplate x:DataType="vm:PaintMaterialViewModel">
+        <DataTemplate x:DataType="vm:TextureMaterialViewModel">
           <TextBlock Text="{Binding Name}" />
         </DataTemplate>
       </ComboBox.ItemTemplate>

@@ -447,7 +447,8 @@ public abstract partial class ModulePageViewModel : PageViewModel, ISearchablePa
         {
             plan = await Task.Run(() => item.Asset.Kind == ModdableKind.Vehicle
                 ? CloneFamilyPlanner.PlanVehicle(catalog, template, name, new VehicleCloneOptions { IncludeAttachments = IncludeAttachments, IncludeSpawnPresets = IncludeSpawnPresets })
-                : CloneFamilyPlanner.PlanItem(catalog, template, name)).ConfigureAwait(true);
+                : CloneFamilyPlanner.PlanItem(catalog, template, name,
+                    includeMaterials: item.Asset.Kind is ModdableKind.Item or ModdableKind.Magazine or ModdableKind.Ammo)).ConfigureAwait(true);
         }
         catch (ArgumentException ex)
         {

@@ -25,9 +25,17 @@ public abstract partial class ModulePageViewModel
 {
     private int _textureLoads;
 
-    /// <summary>The paint material whose textures are listed.</summary>
+    /// <summary>The material whose textures are listed.</summary>
     [ObservableProperty]
-    private PaintMaterialViewModel? _textureMaterial;
+    private TextureMaterialViewModel? _textureMaterial;
+
+    /// <summary>The materials the picker offers: the paint slots of a vehicle or weapon, else every material of the model's parts.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasTextureMaterials), nameof(ShowStudioPanel), nameof(ShowMaterialsPanel), nameof(ShowTexturesPanel), nameof(IsTexturesOnly))]
+    private IReadOnlyList<TextureMaterialViewModel> _textureMaterials = [];
+
+    /// <summary>There is a material to list.</summary>
+    public bool HasTextureMaterials => TextureMaterials.Count > 0;
 
     /// <summary>The texture slots of <see cref="TextureMaterial"/>.</summary>
     [ObservableProperty]
@@ -38,9 +46,12 @@ public abstract partial class ModulePageViewModel
     public bool HasTextureSlots => TextureSlots.Count > 0;
 
     partial void OnPaintsChanged(IReadOnlyList<PaintMaterialViewModel> value) =>
+        TextureMaterials = [.. value.Select(p => new TextureMaterialViewModel(p.MaterialPath, p.Name))];
+
+    partial void OnTextureMaterialsChanged(IReadOnlyList<TextureMaterialViewModel> value) =>
         TextureMaterial = value.FirstOrDefault(p => p.MaterialPath == TextureMaterial?.MaterialPath) ?? value.FirstOrDefault();
 
-    partial void OnTextureMaterialChanged(PaintMaterialViewModel? value) => _ = LoadTextureSlotsAsync(value);
+    partial void OnTextureMaterialChanged(TextureMaterialViewModel? value) => _ = LoadTextureSlotsAsync(value);
 
     /// <summary>
     /// Replaces texture <paramref name="parameter"/> of <paramref name="materialPath"/> (the stock material a preview part
@@ -333,7 +344,28 @@ public abstract partial class ModulePageViewModel
 
     private static string PathLeaf(string objectPath) => objectPath[(objectPath.LastIndexOf('.') + 1)..];
 
-    private async Task LoadTextureSlotsAsync(PaintMaterialViewModel? paint)
+    /// <summary>
+    /// The package and export key the material's values are edited in: the selected clone's own copy of it, else the game's
+    /// (null when it cannot be read).
+    /// </summary>
+    private (string? Package, string? Export) MaterialKey(AssetCatalog catalog, string materialPath)
+    {
+        var stock = materialPath[..materialPath.LastIndexOf('.')];
+        var own = SelectedItem is { IsClone: true } item && _services.Projects.Current?.State.FindCloneOf(item.PackagePath) is { } clone
+            ? clone.Packages.FirstOrDefault(p => string.Equals(p.Old, stock, StringComparison.OrdinalIgnoreCase))?.New
+            : null;
+        var package = own ?? stock;
+        try
+        {
+            return (package, TunableReader.ExportKeys(ReadForEditing(catalog, package))[0]);
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or FileNotFoundException or InvalidOperationException or ArgumentException or KeyNotFoundException)
+        {
+            return (null, null);
+        }
+    }
+
+    private async Task LoadTextureSlotsAsync(TextureMaterialViewModel? paint)
     {
         var load = ++_textureLoads;
         if (paint is null || _catalog is not { } catalog)
@@ -344,7 +376,11 @@ public abstract partial class ModulePageViewModel
 
         try
         {
-            var slots = await Task.Run(() => ReadTextureSlots(catalog, paint.MaterialPath)).ConfigureAwait(true);
+            var (slots, package, export) = await Task.Run(() =>
+            {
+                var (pkg, exp) = MaterialKey(catalog, paint.MaterialPath);
+                return (ReadTextureSlots(catalog, paint.MaterialPath), pkg, exp);
+            }).ConfigureAwait(true);
             if (load != _textureLoads)
             {
                 return;
@@ -353,7 +389,8 @@ public abstract partial class ModulePageViewModel
             var state = _services.Projects.Current?.State;
             var list = slots.Select(s =>
             {
-                var replaced = state?.GetAssetValue(paint.ColourValue.Package, paint.ColourValue.Tunable.Export, MaterialParameters.PathOf("TextureParameterValues", s.Parameter))?.Current;
+                var replaced = package is null || export is null ? null
+                    : state?.GetAssetValue(package, export, MaterialParameters.PathOf("TextureParameterValues", s.Parameter))?.Current;
                 var pixels = replaced is null ? null : state!.GetAssetValue(replaced[..replaced.LastIndexOf('.')], replaced[(replaced.LastIndexOf('.') + 1)..], TextureWrites.PixelsPath)?.Current;
                 return new TextureSlotViewModel(s, TextureWrites.Parse(pixels)?.File, ReplaceSlotAsync, SaveSlotPngAsync, ResetSlotAsync);
             }).ToList();

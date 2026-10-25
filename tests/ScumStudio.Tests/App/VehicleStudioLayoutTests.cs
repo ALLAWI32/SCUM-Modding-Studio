@@ -89,11 +89,15 @@ public sealed partial class VehicleStudioLayoutTests
             weapons.ShowPreviewTab = true;
             await weapons.PreviewCompletion;
             HeadlessUi.Pump();
-            Assert.False(weapons.HasStudioTabs);
+            // A weapon gets Materials | Textures (its clone can wear a picture of its own); decals and parts stay vehicle-only.
+            Assert.True(weapons.HasStudioTabs);
             Assert.Equal(PreviewTool.Orbit, weapons.StudioTool);
             Assert.True(weapons.ShowMaterialsPanel);
             var weaponView = HeadlessUi.Find<ModulePageView>(window).Single(v => ReferenceEquals(v.DataContext, weapons));
-            Assert.False(HeadlessUi.FindNamed<Border>(weaponView, "StudioTabs")!.IsVisible);
+            Assert.True(HeadlessUi.FindNamed<Border>(weaponView, "StudioTabs")!.IsVisible);
+            Assert.True(HeadlessUi.FindNamed<ToggleButton>(weaponView, "StudioTexturesTab")!.IsVisible);
+            Assert.False(HeadlessUi.FindNamed<ToggleButton>(weaponView, "StudioDecalsTab")!.IsVisible);
+            Assert.False(HeadlessUi.FindNamed<ToggleButton>(weaponView, "StudioPartsTab")!.IsVisible);
         }
         finally
         {

@@ -423,13 +423,13 @@
                             ToolTip.Tip="{Tr Common.Splitter.Tip}" />
               <Border Grid.Column="2" Margin="0,6,6,6" IsVisible="{Binding ShowStudioPanel}" Classes="panel">
                 <DockPanel>
-                  <!-- Vehicles studio tabs; a weapon keeps its materials only -->
+                  <!-- Studio tabs: vehicles get all four, a weapon Materials and Textures -->
                   <Border x:Name="StudioTabs" DockPanel.Dock="Top" Classes="segmented" Margin="12,10,12,0" HorizontalAlignment="Left" IsVisible="{Binding HasStudioTabs}">
                     <StackPanel Orientation="Horizontal">
                       <ToggleButton x:Name="StudioMaterialsTab" Click="OnStudioTabClick" IsChecked="{Binding IsStudioMaterials}" Content="{Tr Studio.Tab.Materials}" ToolTip.Tip="{Tr Studio.Tab.Materials.Tip}" />
                       <ToggleButton x:Name="StudioTexturesTab" Click="OnStudioTabClick" IsChecked="{Binding IsStudioTextures}" Content="{Tr Studio.Tab.Textures}" ToolTip.Tip="{Tr Studio.Tab.Textures.Tip}" />
-                      <ToggleButton x:Name="StudioDecalsTab" Click="OnStudioTabClick" IsChecked="{Binding IsStudioDecals}" Content="{Tr Studio.Tab.Decals}" ToolTip.Tip="{Tr Studio.Tab.Decals.Tip}" />
-                      <ToggleButton x:Name="StudioPartsTab" Click="OnStudioTabClick" IsChecked="{Binding IsStudioParts}" Content="{Tr Studio.Tab.Parts}" ToolTip.Tip="{Tr Studio.Tab.Parts.Tip}" />
+                      <ToggleButton x:Name="StudioDecalsTab" IsVisible="{Binding IsVehicleModule}" Click="OnStudioTabClick" IsChecked="{Binding IsStudioDecals}" Content="{Tr Studio.Tab.Decals}" ToolTip.Tip="{Tr Studio.Tab.Decals.Tip}" />
+                      <ToggleButton x:Name="StudioPartsTab" IsVisible="{Binding IsVehicleModule}" Click="OnStudioTabClick" IsChecked="{Binding IsStudioParts}" Content="{Tr Studio.Tab.Parts}" ToolTip.Tip="{Tr Studio.Tab.Parts.Tip}" />
                     </StackPanel>
                   </Border>
                   <StackPanel DockPanel.Dock="Top" Margin="12,10,12,4" Spacing="2" IsVisible="{Binding ShowMaterialsPanel}">
@@ -534,7 +534,7 @@
                       </ItemsControl.ItemTemplate>
                     </ItemsControl>
                   </ScrollViewer>
-                  <ScrollViewer x:Name="StudioTexturesPanel" HorizontalScrollBarVisibility="Disabled" IsVisible="{Binding IsStudioTextures}">
+                  <ScrollViewer x:Name="StudioTexturesPanel" HorizontalScrollBarVisibility="Disabled" IsVisible="{Binding ShowTexturesPanel}">
                     <v:VehicleStudioTextures />
                   </ScrollViewer>
                   <v:VehicleStudioDecals x:Name="StudioDecalsPanel" IsVisible="{Binding IsStudioDecals}" />

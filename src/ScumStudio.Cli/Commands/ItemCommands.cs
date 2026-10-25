@@ -16,7 +16,7 @@ namespace ScumStudio.Cli.Commands;
 /// <c>stats</c> read the game files; <c>set</c> and <c>clone</c> record journal operations in a project (exported by
 /// <c>project export</c> together with the map edits).
 /// </summary>
-internal sealed class ItemCommands : ICommandModule
+internal sealed partial class ItemCommands : ICommandModule
 {
     /// <inheritdoc />
     public Command Build()
@@ -26,6 +26,8 @@ internal sealed class ItemCommands : ICommandModule
         item.AddCommand(BuildStats());
         item.AddCommand(BuildSet());
         item.AddCommand(BuildClone());
+        item.AddCommand(BuildTextures());
+        item.AddCommand(BuildTexture());
         return item;
     }
 
@@ -171,7 +173,8 @@ internal sealed class ItemCommands : ICommandModule
         var aes = AesOption();
         var noAttachments = new Option<bool>("--no-attachments", "Vehicles: keep the stock attachment classes.");
         var noPresets = new Option<bool>("--no-presets", "Vehicles: do not clone the manual spawn presets.");
-        var command = new Command("clone", "Record a clone of a stock vehicle/item family under a new name in the project journal.") { project, source, template, name, aes, noAttachments, noPresets };
+        var materials = new Option<bool>("--materials", "Items: also copy the meshes and every material they wear, so 'item texture' can give the clone its own pictures (a plain item shares its materials with the stock item otherwise).");
+        var command = new Command("clone", "Record a clone of a stock vehicle/item family under a new name in the project journal.") { project, source, template, name, aes, noAttachments, noPresets, materials };
         command.SetHandler((InvocationContext ctx) =>
         {
             var logger = CliHost.CreateLogger<ItemCommands>();
@@ -196,7 +199,7 @@ internal sealed class ItemCommands : ICommandModule
                             IncludeAttachments = !parse.GetValueForOption(noAttachments),
                             IncludeSpawnPresets = !parse.GetValueForOption(noPresets),
                         })
-                        : CloneFamilyPlanner.PlanItem(catalog, path, parse.GetValueForArgument(name));
+                        : CloneFamilyPlanner.PlanItem(catalog, path, parse.GetValueForArgument(name), includeMaterials: parse.GetValueForOption(materials));
                 }
                 catch (ArgumentException ex)
                 {

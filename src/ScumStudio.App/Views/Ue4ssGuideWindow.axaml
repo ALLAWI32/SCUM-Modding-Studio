@@ -1,0 +1,99 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="ScumStudio.App.Views.Ue4ssGuideWindow"
+        Title="{Tr Guide.WindowTitle}" Width="860" Height="780" MinWidth="520" MinHeight="400"
+        Background="{DynamicResource Bg0Brush}">
+  <DockPanel Margin="16">
+    <Grid DockPanel.Dock="Bottom" ColumnDefinitions="*,Auto" Margin="0,12,0,0">
+      <TextBlock x:Name="CopiedText" Classes="caption" VerticalAlignment="Center" />
+      <Button x:Name="CloseButton" Grid.Column="1" Classes="accent" Content="{Tr Guide.Close}" Click="OnCloseClick" ToolTip.Tip="{Tr Guide.Close.Tip}" />
+    </Grid>
+
+    <ScrollViewer HorizontalScrollBarVisibility="Disabled">
+      <StackPanel Spacing="14" Margin="0,0,12,0">
+        <TextBlock Text="{Tr Guide.Title}" Classes="h2" TextWrapping="Wrap" />
+        <SelectableTextBlock Text="{Tr Guide.Intro}" Classes="wrap" TextWrapping="Wrap" />
+        <Border Classes="panel" Padding="12">
+          <SelectableTextBlock Text="{Tr Guide.Warning}" Classes="wrap" TextWrapping="Wrap" />
+        </Border>
+
+        <StackPanel Spacing="4">
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <TextBlock Text="1." FontWeight="SemiBold" />
+            <TextBlock Text="{Tr Guide.S1.T}" FontWeight="SemiBold" TextWrapping="Wrap" />
+          </StackPanel>
+          <SelectableTextBlock Text="{Tr Guide.S1.X}" Classes="wrap" TextWrapping="Wrap" />
+        </StackPanel>
+        <StackPanel Spacing="4">
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <TextBlock Text="2." FontWeight="SemiBold" />
+            <TextBlock Text="{Tr Guide.S2.T}" FontWeight="SemiBold" TextWrapping="Wrap" />
+          </StackPanel>
+          <SelectableTextBlock Text="{Tr Guide.S2.X}" Classes="wrap" TextWrapping="Wrap" />
+        </StackPanel>
+        <StackPanel Spacing="4">
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <TextBlock Text="3." FontWeight="SemiBold" />
+            <TextBlock Text="{Tr Guide.S3.T}" FontWeight="SemiBold" TextWrapping="Wrap" />
+          </StackPanel>
+          <SelectableTextBlock Text="{Tr Guide.S3.X}" Classes="wrap" TextWrapping="Wrap" />
+        </StackPanel>
+        <StackPanel Spacing="4">
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <TextBlock Text="4." FontWeight="SemiBold" />
+            <TextBlock Text="{Tr Guide.S4.T}" FontWeight="SemiBold" TextWrapping="Wrap" />
+          </StackPanel>
+          <SelectableTextBlock Text="{Tr Guide.S4.X}" Classes="wrap" TextWrapping="Wrap" />
+          <SelectableTextBlock Text="{Tr Guide.S4.Wine}" Classes="caption wrap" TextWrapping="Wrap" />
+        </StackPanel>
+        <StackPanel Spacing="6">
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <TextBlock Text="5." FontWeight="SemiBold" />
+            <TextBlock Text="{Tr Guide.S5.T}" FontWeight="SemiBold" TextWrapping="Wrap" />
+          </StackPanel>
+          <SelectableTextBlock Text="{Tr Guide.S5.X}" Classes="wrap" TextWrapping="Wrap" />
+          <Border Classes="panel" Padding="12">
+            <SelectableTextBlock x:Name="SettingsBlock" FontFamily="Cascadia Mono,Consolas,Menlo,monospace" FontSize="13" />
+          </Border>
+          <Button x:Name="CopyButton" HorizontalAlignment="Left" Content="{Tr Guide.Copy}" Click="OnCopyClick" ToolTip.Tip="{Tr Guide.Copy.Tip}" />
+          <SelectableTextBlock Text="{Tr Guide.S5.After}" Classes="caption wrap" TextWrapping="Wrap" />
+        </StackPanel>
+        <StackPanel Spacing="4">
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <TextBlock Text="6." FontWeight="SemiBold" />
+            <TextBlock Text="{Tr Guide.S6.T}" FontWeight="SemiBold" TextWrapping="Wrap" />
+          </StackPanel>
+          <SelectableTextBlock Text="{Tr Guide.S6.X}" Classes="wrap" TextWrapping="Wrap" />
+        </StackPanel>
+        <StackPanel Spacing="4">
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <TextBlock Text="7." FontWeight="SemiBold" />
+            <TextBlock Text="{Tr Guide.S7.T}" FontWeight="SemiBold" TextWrapping="Wrap" />
+          </StackPanel>
+          <SelectableTextBlock Text="{Tr Guide.S7.X}" Classes="wrap" TextWrapping="Wrap" />
+        </StackPanel>
+        <StackPanel Spacing="4">
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <TextBlock Text="8." FontWeight="SemiBold" />
+            <TextBlock Text="{Tr Guide.S8.T}" FontWeight="SemiBold" TextWrapping="Wrap" />
+          </StackPanel>
+          <SelectableTextBlock Text="{Tr Guide.S8.X}" Classes="wrap" TextWrapping="Wrap" />
+        </StackPanel>
+        <StackPanel Spacing="4">
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <TextBlock Text="9." FontWeight="SemiBold" />
+            <TextBlock Text="{Tr Guide.S9.T}" FontWeight="SemiBold" TextWrapping="Wrap" />
+          </StackPanel>
+          <SelectableTextBlock Text="{Tr Guide.S9.X}" Classes="wrap" TextWrapping="Wrap" />
+        </StackPanel>
+        <StackPanel Spacing="4">
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <TextBlock Text="10." FontWeight="SemiBold" />
+            <TextBlock Text="{Tr Guide.S10.T}" FontWeight="SemiBold" TextWrapping="Wrap" />
+          </StackPanel>
+          <SelectableTextBlock Text="{Tr Guide.S10.X}" Classes="wrap" TextWrapping="Wrap" />
+        </StackPanel>
+      </StackPanel>
+    </ScrollViewer>
+  </DockPanel>
+</Window>

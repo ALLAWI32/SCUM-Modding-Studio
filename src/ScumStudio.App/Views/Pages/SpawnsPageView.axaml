@@ -307,6 +307,48 @@
           <ScrollViewer HorizontalScrollBarVisibility="Disabled">
             <StackPanel Margin="14,12,14,16" Spacing="10">
 
+              <!-- Place NPCs (owner: NPC spawning is hard to follow): who, how many posts, then a click on the map. No weight list. -->
+              <Border x:Name="NpcWizard" Classes="card" IsVisible="{Binding IsNpcsTab}">
+                <StackPanel Spacing="8">
+                  <TextBlock Text="{Tr Spawns.NpcWizard.Title}" Classes="h2" />
+                  <TextBlock Text="{Tr Spawns.NpcWizard.Hint}" Classes="caption wrap" />
+                  <TextBlock Text="{Tr Spawns.NpcWizard.Step1}" FontWeight="SemiBold" />
+                  <ComboBox x:Name="NpcKindBox" ItemsSource="{Binding NpcKinds}" SelectedItem="{Binding SelectedNpcKind}" HorizontalAlignment="Stretch"
+                            IsEnabled="{Binding !IsLoadingNpcKinds}" PlaceholderText="{Tr Spawns.NpcWizard.Loading}" ToolTip.Tip="{Tr Spawns.NpcWizard.Kind.Tip}">
+                    <ComboBox.ItemTemplate>
+                      <DataTemplate x:DataType="vm:NpcKindOption">
+                        <StackPanel Spacing="1">
+                          <TextBlock Text="{Binding Title}" FontSize="12" />
+                          <TextBlock Text="{Binding Detail}" Classes="caption" TextWrapping="Wrap" />
+                        </StackPanel>
+                      </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                  </ComboBox>
+                  <CheckBox x:Name="NpcOwnCopyBox" Content="{Tr Spawns.NpcWizard.OwnCopy}" IsChecked="{Binding NpcOwnCopy}" ToolTip.Tip="{Tr Spawns.NpcWizard.OwnCopy.Tip}" />
+                  <ComboBox x:Name="NpcCharacterBox" ItemsSource="{Binding NpcCharacters}" SelectedItem="{Binding SelectedNpcCharacter}" HorizontalAlignment="Stretch"
+                            IsVisible="{Binding NpcOwnCopy}" ToolTip.Tip="{Tr Spawns.NpcWizard.Character.Tip}">
+                    <ComboBox.ItemTemplate>
+                      <DataTemplate x:DataType="vm:NpcCharacterOption">
+                        <TextBlock Text="{Binding Title}" FontSize="12" />
+                      </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                  </ComboBox>
+                  <TextBlock Text="{Tr Spawns.NpcWizard.Step2}" FontWeight="SemiBold" />
+                  <ComboBox x:Name="NpcPostsBox" ItemsSource="{Binding NpcPostChoices}" SelectedItem="{Binding NpcPosts}" HorizontalAlignment="Stretch" ToolTip.Tip="{Tr Spawns.NpcWizard.Posts.Tip}" />
+                  <TextBlock Text="{Tr Spawns.NpcWizard.Step3}" FontWeight="SemiBold" />
+                  <TextBlock x:Name="NpcSummaryText" Text="{Binding NpcSummary}" Classes="caption wrap" IsVisible="{Binding HasNpcKind}" />
+                  <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                    <Button x:Name="PickNpcPlaceButton" Classes="accent" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                            Command="{Binding PickNpcPlaceCommand}" IsVisible="{Binding !IsNpcPlacing}" ToolTip.Tip="{Tr Spawns.NpcWizard.Pick.Tip}">
+                      <TextBlock Text="{Tr Spawns.NpcWizard.Pick}" />
+                    </Button>
+                    <TextBlock x:Name="NpcWaitingText" Text="{Tr Spawns.NpcWizard.Waiting}" Classes="wrap" VerticalAlignment="Center" IsVisible="{Binding IsNpcPlacing}" />
+                    <Button Grid.Column="1" x:Name="CancelNpcPlaceButton" Classes="ghost" Content="{Tr Spawns.NpcWizard.Cancel}"
+                            Command="{Binding CancelNpcPlaceCommand}" IsVisible="{Binding IsNpcPlacing}" ToolTip.Tip="{Tr Spawns.NpcWizard.Cancel.Tip}" />
+                  </Grid>
+                </StackPanel>
+              </Border>
+
               <!-- The picked place (owner: "full control of each spawn place"): where it is, what it spawns, move, turn, remove, Map page. -->
               <Border x:Name="PointCard" Classes="card" IsVisible="{Binding HasPoint}">
                 <StackPanel Spacing="8">

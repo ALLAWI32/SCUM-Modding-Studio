@@ -2,7 +2,6 @@ using ScumStudio.Assets.Catalog;
 using ScumStudio.Core.Mathematics;
 using ScumStudio.Level.Editing;
 using ScumStudio.Modding.Tuning;
-using TransformValue = ScumStudio.Level.Model.TransformValue;
 
 namespace ScumStudio.Level.Spawns;
 
@@ -167,81 +166,13 @@ public static class NpcGuards
         IReadOnlyList<SpawnPlace>? zones = null, IReadOnlyDictionary<string, string>? stockValues = null)
     {
         ArgumentNullException.ThrowIfNull(routes);
-        ArgumentNullException.ThrowIfNull(type);
-        ArgumentNullException.ThrowIfNull(zoneCopy);
-        ArgumentNullException.ThrowIfNull(zoneRows);
-        ArgumentNullException.ThrowIfNull(taken);
         if (routes.Count == 0 || routes.Any(r => r.Path.Count == 0))
         {
             throw new ArgumentException("No sentry route to replace.", nameof(routes));
         }
 
-        var own = zoneRows.Entries.Where(e => e.Name.Equals(type.Name, StringComparison.OrdinalIgnoreCase) && e.Path is not null).ToList();
-        if (own.Count == 0 || !zoneRows.IsEditable)
-        {
-            throw new ArgumentException($"{zoneRows.Name} has no stored row for {type.Name}.", nameof(zoneRows));
-        }
-
-        var names = new HashSet<string>(taken, StringComparer.OrdinalIgnoreCase);
-        string Name(SpawnPlaceKind kind)
-        {
-            var name = SpawnPlaces.NewName(kind, names);
-            names.Add(name);
-            return name;
-        }
-
-        var ops = new List<EditOp>();
-        var all = new List<FVector>();
-        foreach (var route in routes)
-        {
-            ops.Add(new DeleteActorOp(route.Spawner));
-            var posts = Posts(route.Path, postsPerRobot);
-            all.AddRange(posts);
-            ops.Add(new AddSpawnPlaceOp(Name(SpawnPlaceKind.CharacterGroup), SpawnPlaceKind.CharacterGroup, PostType,
-                new TransformValue(posts[0], FRotator.Zero, FVector.One), Points: posts.Select(p => p - posts[0]).ToList()));
-        }
-
-        // The guard zone's own settings: only the chosen NPC encounter keeps a weight.
-        ops.Add(zoneCopy);
-        var export = zoneCopy.NewPrimary[(zoneCopy.NewPrimary.LastIndexOf('/') + 1)..];
-        foreach (var row in zoneRows.Entries.Where(e => e.Path is not null))
-        {
-            var mine = own.Contains(row);
-            var weight = mine ? (row.Weight > 0f ? row.Weight : 100f) : 0f;
-            if (weight != row.Weight)
-            {
-                ops.Add(new SetAssetValueOp(zoneCopy.NewPrimary, export, row.Path!, nameof(TunableKind.Float), TunableValue.Format(row.Weight), TunableValue.Format(weight)));
-            }
-        }
-
-        // As the game's NPC-only settings: one encounter at a time (a value the stock settings do not store is added).
-        foreach (var (path, kind, value) in NpcOnlyValues)
-        {
-            var old = stockValues?.GetValueOrDefault(path) ?? string.Empty;
-            if (!TunableValue.AreEqual(kind, old, value))
-            {
-                ops.Add(new SetAssetValueOp(zoneCopy.NewPrimary, export, path, kind.ToString(), old, value));
-            }
-        }
-
-        var (min, max) = (new FVector(all.Min(p => p.X), all.Min(p => p.Y), all.Min(p => p.Z)), new FVector(all.Max(p => p.X), all.Max(p => p.Y), all.Max(p => p.Z)));
-        var center = (min + max) * 0.5f;
-
-        // The guard area as a sub-zone of the smallest stock zone that holds every post: the posts' box and a margin.
-        if ((zones ?? []).Where(z => z is { Kind: SpawnPlaceKind.Zone, Index: >= 0, Name: null } && all.All(p => SpawnChoices.ZonesAt([z], p).Count > 0))
-                .OrderBy(z => z.SizeX * z.SizeY).FirstOrDefault() is { } parent)
-        {
-            var reach = new FVector(MathF.Max(((max.X - min.X) * 0.5f) + ZoneMargin, MinZoneHalfSize), MathF.Max(((max.Y - min.Y) * 0.5f) + ZoneMargin, MinZoneHalfSize),
-                ((max.Z - min.Z) * 0.5f) + ZoneMargin);
-            ops.Add(new AddSubZoneOp(new ActorRef(SpawnPlaces.StaticDataPath, parent.ActorName), new SubZone(center - reach, center + reach, zoneCopy.NewPrimary, SubZonePriority)));
-            return ops;
-        }
-
-        // No stock zone there: a zone of its own. A zone is an ellipse: through the corners of the posts' box (its half sizes
-        // times the square root of 2), and a margin.
-        var half = new FVector(MathF.Max(((max.X - min.X) * 0.5f * MathF.Sqrt(2f)) + ZoneMargin, MinZoneHalfSize), MathF.Max(((max.Y - min.Y) * 0.5f * MathF.Sqrt(2f)) + ZoneMargin, MinZoneHalfSize), 1f);
-        ops.Add(new AddSpawnPlaceOp(Name(SpawnPlaceKind.Zone), SpawnPlaceKind.Zone, zoneCopy.NewPrimary,
-            new TransformValue(center, FRotator.Zero, new FVector(half.X / 100f, half.Y / 100f, 1f)))); // a zone's size is its scale in metres
-        return ops;
+        // Each robot goes and its route becomes a group of posts; the area and the settings are the shared placement plan.
+        var groups = routes.Select(r => new NpcPostGroup(Posts(r.Path, postsPerRobot), new DeleteActorOp(r.Spawner))).ToList();
+        return NpcPlacement.Plan(groups, type, zoneCopy, zoneRows, taken, zones, stockValues);
     }
 }

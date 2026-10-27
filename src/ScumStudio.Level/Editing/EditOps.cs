@@ -51,6 +51,7 @@ namespace ScumStudio.Level.Editing;
 [JsonDerivedType(typeof(SetEconomySectionOp), "setEconomySection")]
 [JsonDerivedType(typeof(ReplaceEconomyOp), "replaceEconomy")]
 [JsonDerivedType(typeof(TerrainHoleOp), "terrainHole")]
+[JsonDerivedType(typeof(SetGuardSpawnsOp), "setGuardSpawns")]
 public abstract record EditOp
 {
     /// <summary>The operation that exactly undoes this one.</summary>
@@ -912,6 +913,31 @@ public sealed record AddSpawnPlaceOp(string NewName, SpawnPlaceKind Kind, string
 
     /// <inheritdoc />
     public override int GetHashCode() => HashCode.Combine(NewName, Kind, Setting, Transform, Tags?.Count ?? 0, Points?.Count ?? 0);
+}
+
+/// <summary>
+/// Sets, changes or removes a named set of guard posts (<see cref="GuardSpawnSet"/>): armed guards a server Lua mod spawns while a
+/// player is near. A set is replaced as a whole (<paramref name="Old"/> is what the project has now, null for a new set;
+/// <paramref name="New"/> is null to remove it), so adding a post, moving it and changing the timings are all one undo step each.
+/// </summary>
+/// <param name="Name">The set's name (<see cref="GuardSpawns.IsValidName"/>).</param>
+/// <param name="Old">The set before, or null when there was none.</param>
+/// <param name="New">The set after, or null to remove it.</param>
+public sealed record SetGuardSpawnsOp(string Name, GuardSpawnSet? Old, GuardSpawnSet? New) : EditOp
+{
+    /// <inheritdoc />
+    public override EditOp Inverse() => this with { Old = New, New = Old };
+
+    /// <inheritdoc />
+    public override string Describe() => New is null
+        ? $"Remove guard spawns {Name}"
+        : string.Create(CultureInfo.InvariantCulture, $"Guard spawns {Name}: {New.Posts.Count} post(s)");
+
+    /// <inheritdoc />
+    public override IReadOnlyList<string> GetTouchedLevels() => [];
+
+    /// <inheritdoc />
+    public override ActorRef? GetPrimaryTarget() => null;
 }
 
 /// <summary>

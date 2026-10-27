@@ -1,0 +1,89 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:ScumStudio.App.ViewModels"
+             xmlns:c="using:ScumStudio.App.Controls"
+             x:Class="ScumStudio.App.Views.WelcomeView"
+             x:DataType="vm:WelcomeViewModel">
+  <Border Classes="dialog" Width="640" MaxHeight="760">
+    <DockPanel>
+      <!-- Header -->
+      <Border DockPanel.Dock="Top" Padding="24,20,24,16" BorderBrush="{DynamicResource StrokeSubtleBrush}" BorderThickness="0,0,0,1">
+        <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="14">
+          <Border Classes="iconTile" Width="44" Height="44" CornerRadius="{DynamicResource SmallCornerRadius}">
+            <c:GlyphIcon Kind="Icon.Home" IconSize="22" HorizontalAlignment="Center" VerticalAlignment="Center" />
+          </Border>
+          <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
+            <TextBlock Text="{Tr Welcome.Title}" Classes="h1" FontSize="19" />
+            <TextBlock Text="{Binding StepText}" Classes="muted" FontSize="12.5" />
+          </StackPanel>
+          <Button x:Name="SkipButton" Grid.Column="2" Classes="ghost" Content="{Tr Welcome.Skip}" Command="{Binding SkipCommand}" VerticalAlignment="Top" ToolTip.Tip="{Tr Welcome.Skip.Tip}" />
+        </Grid>
+      </Border>
+
+      <!-- Footer -->
+      <Border DockPanel.Dock="Bottom" Padding="24,14" BorderBrush="{DynamicResource StrokeSubtleBrush}" BorderThickness="0,1,0,0" Background="{DynamicResource Bg1Brush}">
+        <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
+          <Button x:Name="BackButton" Content="{Tr Welcome.Back}" Classes="ghost" HorizontalAlignment="Left" Command="{Binding BackCommand}" ToolTip.Tip="{Tr Welcome.Back.Tip}" />
+          <Button x:Name="NextButton" Grid.Column="2" Classes="accent" Content="{Tr Welcome.Next}" Command="{Binding NextCommand}" IsVisible="{Binding ShowNext}" ToolTip.Tip="{Tr Welcome.Next.Tip}" />
+          <Button x:Name="FinishButton" Grid.Column="2" Classes="accent" Content="{Tr Welcome.Finish}" Command="{Binding FinishCommand}" IsEnabled="{Binding IsDone}" IsVisible="{Binding IsSetupStep}" ToolTip.Tip="{Tr Welcome.Finish.Tip}" />
+        </Grid>
+      </Border>
+
+      <StackPanel Margin="24,18" Spacing="12">
+
+        <!-- 1. Language -->
+        <StackPanel Spacing="10" IsVisible="{Binding IsLanguageStep}">
+          <TextBlock Text="{Tr Welcome.Language.Title}" Classes="h2" />
+          <TextBlock Text="{Tr Welcome.Language.Hint}" Classes="caption wrap" />
+          <ListBox x:Name="LanguageList" ItemsSource="{Binding Languages}" SelectedItem="{Binding SelectedLanguage}" MaxHeight="440" ToolTip.Tip="{Tr Welcome.Language.Tip}">
+            <ListBox.ItemTemplate>
+              <DataTemplate x:DataType="LanguageOption">
+                <TextBlock Text="{Binding NativeName}" FontSize="15" />
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+        </StackPanel>
+
+        <!-- 2. Game -->
+        <StackPanel Spacing="10" IsVisible="{Binding IsGameStep}">
+          <TextBlock Text="{Tr Welcome.Game.Title}" Classes="h2" />
+          <TextBlock Text="{Tr Welcome.Game.Hint}" Classes="caption wrap" />
+          <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+            <TextBox x:Name="GamePathBox" Text="{Binding GamePath}" Watermark="...\steamapps\common\SCUM\SCUM\Content\Paks" ToolTip.Tip="{Tr Welcome.Game.Path.Tip}" />
+            <Button x:Name="BrowseGameButton" Grid.Column="1" Content="{Tr Common.Browse}" Command="{Binding BrowseGameCommand}" ToolTip.Tip="{Tr Common.BrowseFolder.Tip}" />
+          </Grid>
+          <TextBlock x:Name="GameStatusText" Text="{Binding GameStatus}" Classes="caption wrap" />
+          <Button x:Name="DetectButton" HorizontalAlignment="Left" Content="{Tr Welcome.Detect}" Command="{Binding DetectCommand}" ToolTip.Tip="{Tr Welcome.Detect.Tip}" />
+        </StackPanel>
+
+        <!-- 3. Server -->
+        <StackPanel Spacing="10" IsVisible="{Binding IsServerStep}">
+          <TextBlock Text="{Tr Welcome.Server.Title}" Classes="h2" />
+          <TextBlock Text="{Tr Welcome.Server.Hint}" Classes="caption wrap" />
+          <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8" IsEnabled="{Binding !NoServer}">
+            <TextBox x:Name="ServerPathBox" Text="{Binding ServerPath}" Watermark="...\SCUMServer\SCUM\Content\Paks" ToolTip.Tip="{Tr Welcome.Server.Path.Tip}" />
+            <Button x:Name="BrowseServerButton" Grid.Column="1" Content="{Tr Common.Browse}" Command="{Binding BrowseServerCommand}" ToolTip.Tip="{Tr Common.BrowseFolder.Tip}" />
+          </Grid>
+          <TextBlock Text="{Binding ServerStatus}" Classes="caption wrap" IsVisible="{Binding !NoServer}" />
+          <CheckBox x:Name="NoServerBox" IsChecked="{Binding NoServer}" Content="{Tr Welcome.NoServer}" ToolTip.Tip="{Tr Welcome.NoServer.Tip}" />
+        </StackPanel>
+
+        <!-- 4. Setup -->
+        <StackPanel Spacing="10" IsVisible="{Binding IsSetupStep}">
+          <TextBlock Text="{Tr Welcome.Setup.Title}" Classes="h2" />
+          <ItemsControl ItemsSource="{Binding Rows}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate x:DataType="vm:WelcomeRow">
+                <Grid ColumnDefinitions="28,*" Margin="0,3">
+                  <TextBlock Text="{Binding Mark}" FontSize="16" VerticalAlignment="Top" />
+                  <TextBlock Grid.Column="1" Text="{Binding Text}" TextWrapping="Wrap" />
+                </Grid>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+          <ProgressBar IsIndeterminate="True" IsVisible="{Binding IsBusy}" />
+        </StackPanel>
+      </StackPanel>
+    </DockPanel>
+  </Border>
+</UserControl>

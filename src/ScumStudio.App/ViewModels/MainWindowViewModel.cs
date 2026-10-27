@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using System.ComponentModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -17,7 +17,7 @@ namespace ScumStudio.App.ViewModels;
 public sealed partial class MainWindowViewModel : ViewModelBase, IDisposable
 {
     /// <summary>Navigation keys in rail order.</summary>
-    public static IReadOnlyList<string> PageKeys { get; } = ["map", "vehicles", "weapons", "items", "spawns", "economy", "craftables", "assets", "projects", "settings"];
+    public static IReadOnlyList<string> PageKeys { get; } = ["home", "map", "spawns", "vehicles", "weapons", "items", "craftables", "economy", "server", "assets", "projects", "settings"];
 
     private readonly List<IDisposable> _disposables = [];
 
@@ -27,14 +27,16 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IDisposable
         Services = services;
         NavItems =
         [
-            new NavItemViewModel("map", "Map", "Icon.Map", null, () => Track(CreateMap(services))),
-            new NavItemViewModel("vehicles", "Vehicles", "Icon.Vehicle", null, () => Track(new VehiclesPageViewModel(services, OpenSetup))),
+            new NavItemViewModel("home", "Home", "Icon.Home", null, () => Track(new HomePageViewModel(services, key => NavigateTo(key), OpenSetup, OpenWelcome))),
+            new NavItemViewModel("map", "Map", "Icon.Map", null, () => Track(CreateMap(services)), groupKey: "world"),
+            new NavItemViewModel("spawns", "Spawns", "Icon.Pin", null, () => Track(CreateSpawns(services))),
+            new NavItemViewModel("vehicles", "Vehicles", "Icon.Vehicle", null, () => Track(new VehiclesPageViewModel(services, OpenSetup)), groupKey: "content"),
             new NavItemViewModel("weapons", "Weapons", "Icon.Weapon", null, () => Track(new WeaponsPageViewModel(services, OpenSetup))),
             new NavItemViewModel("items", "Items", "Icon.Basket", null, () => Track(new ItemsPageViewModel(services, OpenSetup))),
-            new NavItemViewModel("spawns", "Spawns", "Icon.Pin", null, () => Track(CreateSpawns(services))),
-            new NavItemViewModel("economy", "Economy", "Icon.Coins", null, () => Track(CreateEconomy(services))),
             new NavItemViewModel("craftables", "Craftables", "Icon.Cube3d", null, () => Track(new CraftablesPageViewModel(services, OpenSetup))),
-            new NavItemViewModel("assets", "Assets", "Icon.Assets", null, () => Track(new AssetsPageViewModel(services, OpenSetup, PlaceInMap, MakeCraftable))),
+            new NavItemViewModel("economy", "Economy", "Icon.Coins", null, () => Track(CreateEconomy(services))),
+            new NavItemViewModel("server", "Server", "Icon.Server", null, () => Track(new ServerPageViewModel(services)), groupKey: "server"),
+            new NavItemViewModel("assets", "Assets", "Icon.Assets", null, () => Track(new AssetsPageViewModel(services, OpenSetup, PlaceInMap, MakeCraftable)), groupKey: "tools"),
             new NavItemViewModel("projects", "Projects", "Icon.Projects", null, () => Track(new ProjectsPageViewModel(services))),
             new NavItemViewModel("settings", "Settings", "Icon.Settings", null, () => Track(new SettingsPageViewModel(services, OpenSetup))),
         ];
@@ -119,6 +121,14 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IDisposable
     [ObservableProperty]
     private SetupViewModel? _setup;
 
+    /// <summary>First-run wizard visibility.</summary>
+    [ObservableProperty]
+    private bool _isWelcomeOpen;
+
+    /// <summary>First-run wizard content.</summary>
+    [ObservableProperty]
+    private WelcomeViewModel? _welcome;
+
     /// <summary>Placeholder text of the search box for the current page.</summary>
     public string SearchWatermark => CurrentPage switch
     {
@@ -139,7 +149,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IDisposable
             var settings = Services.Settings.Load();
             if (string.IsNullOrWhiteSpace(settings.GamePaksFolder) && !Services.UiState.Current.SetupCompleted)
             {
-                OpenSetup();
+                OpenWelcome();
             }
 
             if (Services.UiState.Current.ReopenLastProject && !string.IsNullOrWhiteSpace(settings.LastProjectPath) && Level.Projects.Project.Exists(settings.LastProjectPath))
@@ -251,6 +261,14 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IDisposable
         {
             _ = craftables.AddAsync(objectPath);
         }
+    }
+
+    /// <summary>Shows the first-run wizard (language, game, server, then everything else by itself).</summary>
+    [RelayCommand]
+    public void OpenWelcome()
+    {
+        Welcome = new WelcomeViewModel(Services, CloseWelcome);
+        IsWelcomeOpen = true;
     }
 
     /// <summary>Shows the setup overlay.</summary>
@@ -434,6 +452,19 @@ public sealed partial class MainWindowViewModel : ViewModelBase, IDisposable
         catch (Exception ex) when (ex is InvalidOperationException or IOException)
         {
             Services.Notifications.Error(Loc.T("Shell.RedoFailed"), ex.Message);
+        }
+    }
+
+    private void CloseWelcome(bool done)
+    {
+        IsWelcomeOpen = false;
+        Welcome = null;
+        RefreshPills();
+        if (done)
+        {
+            Services.Notifications.Success(Loc.T("Shell.SetupSaved"), Loc.T("Shell.SetupSavedDetail"));
+            NavigateTo("home");
+            _ = ConnectAsync();
         }
     }
 

@@ -1,4 +1,4 @@
-using Avalonia.Controls;
+﻿using Avalonia.Controls;
 using Avalonia.Controls.Templates;
 using ScumStudio.App.ViewModels;
 using ScumStudio.App.Views;
@@ -14,6 +14,7 @@ public sealed class ViewLocator : IDataTemplate
 {
     private static readonly Dictionary<Type, Func<Control>> Views = new()
     {
+        [typeof(HomePageViewModel)] = () => new HomePageView(),
         [typeof(MapPageViewModel)] = () => new MapPageView(),
         [typeof(VehiclesPageViewModel)] = () => new ModulePageView(),
         [typeof(WeaponsPageViewModel)] = () => new ModulePageView(),
@@ -22,10 +23,12 @@ public sealed class ViewLocator : IDataTemplate
         [typeof(EconomyPageViewModel)] = () => new EconomyPageView(),
         [typeof(CraftablesPageViewModel)] = () => new CraftablesPageView(),
         [typeof(AssetsPageViewModel)] = () => new AssetsPageView(),
+        [typeof(ServerPageViewModel)] = () => new ServerPageView(),
         [typeof(ProjectsPageViewModel)] = () => new ProjectsPageView(),
         [typeof(SettingsPageViewModel)] = () => new SettingsPageView(),
         [typeof(SharePageViewModel)] = () => new SharePageView(),
         [typeof(SetupViewModel)] = () => new SetupView(),
+        [typeof(WelcomeViewModel)] = () => new WelcomeView(),
     };
 
     /// <summary>Returns the view type for a view model type, or null.</summary>
@@ -49,5 +52,5 @@ public sealed class ViewLocator : IDataTemplate
     }
 
     /// <inheritdoc />
-    public bool Match(object? data) => data is PageViewModel or SetupViewModel;
+    public bool Match(object? data) => data is PageViewModel or SetupViewModel or WelcomeViewModel;
 }

@@ -907,7 +907,7 @@
         <Panel x:Name="ViewportContent">
           <c:ViewportGrid Background="{DynamicResource ViewportBrush}" AxisXBrush="{DynamicResource AxisXBrush}" AxisYBrush="{DynamicResource AxisYBrush}" IsVisible="{Binding !HasView}" />
           <c:LevelViewport x:Name="Viewport3d" Scene="{Binding PreparedScene}" PickParts="{Binding PickParts}" BrushMode="{Binding ViewportBrushMode}" BrushRadius="{Binding BrushRadius}"
-                           HoleMode="{Binding HoleTool}" GroundOutlines="{Binding HoleOutlines}" TerrainHoles="{Binding CutHoles}" BrushSpots="{Binding PaintSpots}" BrushOnGround="{Binding BrushOnGround}" SelectedId="{Binding SelectedActorId, Mode=TwoWay}" SelectedInstance="{Binding SelectedInstanceKey, Mode=TwoWay}" SelectionHoldUntil="{Binding SelectionHoldUntil}" Backdrop="{Binding WorldBackdrop}" ShowBackdrop="{Binding !Isolate}" KeepCamera="{Binding IsWorldMode}" Quality="{Binding RenderQuality}" TimeOfDay="{Binding TimeOfDay}" Lighting="{Binding Lighting}" AnimateWater="{Binding AnimateWater}" KindIds="{Binding HighlightIds}" KindInstances="{Binding KindSelectionInstances}" InstanceTransforms="{Binding InstanceTransforms}"
+                           HoleMode="{Binding HoleTool}" GuardMode="{Binding GuardTool}" GuardOverlay="{Binding GuardOverlay}" GroundOutlines="{Binding HoleOutlines}" TerrainHoles="{Binding CutHoles}" BrushSpots="{Binding PaintSpots}" BrushOnGround="{Binding BrushOnGround}" SelectedId="{Binding SelectedActorId, Mode=TwoWay}" SelectedInstance="{Binding SelectedInstanceKey, Mode=TwoWay}" SelectionHoldUntil="{Binding SelectionHoldUntil}" Backdrop="{Binding WorldBackdrop}" ShowBackdrop="{Binding !Isolate}" KeepCamera="{Binding IsWorldMode}" Quality="{Binding RenderQuality}" TimeOfDay="{Binding TimeOfDay}" Lighting="{Binding Lighting}" AnimateWater="{Binding AnimateWater}" KindIds="{Binding HighlightIds}" KindInstances="{Binding KindSelectionInstances}" InstanceTransforms="{Binding InstanceTransforms}"
                            HiddenIds="{Binding HiddenActorIds}" HiddenInstances="{Binding HiddenInstanceKeys}" HiddenPinKinds="{Binding HiddenPinKinds}" PinOverrides="{Binding PinOverrides}"
                            ActorTransforms="{Binding ActorTransforms}" Clones="{Binding Clones}" Orientation="{Binding Orientation}" CanScale="{Binding GizmoCanScale}"
                            SelectedRootWorld="{Binding SelectedRootWorld}" TranslationSnap="{Binding TranslationSnap}" RotationSnap="{Binding RotationSnap}"
@@ -1089,6 +1089,81 @@
                 <TextBlock Text="{Binding HolePlaceText}" Classes="caption wrap" MaxWidth="320" VerticalAlignment="Center" />
               </StackPanel>
             </WrapPanel>
+          </Border>
+          <!-- The guard tool's switch (owner, 2026-10-26), in the viewport's bottom right corner: not a header item, so the toolbar's groups stay as they are. -->
+          <Border Classes="overlayCard" x:Name="GuardToolHost" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="10" Padding="4"
+                  IsVisible="{Binding HasView}">
+            <ToggleButton x:Name="GuardToolButton" Classes="ghost" Padding="8,4" IsChecked="{Binding GuardTool}" ToolTip.Tip="{Tr Map.GuardPosts.Tool.Tip}">
+              <StackPanel Orientation="Horizontal" Spacing="5">
+                <c:GlyphIcon Kind="Icon.Pin" IconSize="13" />
+                <TextBlock Text="{Tr Map.GuardPosts.Title}" />
+              </StackPanel>
+            </ToggleButton>
+          </Border>
+          <!-- The guard tool (owner, 2026-10-26): armed guards for a server mod, put with a click on the 3D map; a set is a group of posts that wake together. -->
+          <Border Classes="overlayCard" x:Name="GuardBar" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="10" Padding="10,8" MaxWidth="440"
+                  IsVisible="{Binding GuardTool}">
+            <ScrollViewer MaxHeight="440" VerticalScrollBarVisibility="Auto">
+            <StackPanel Spacing="6">
+              <TextBlock Text="{Tr Map.GuardPosts.Caption}" Classes="caption wrap" />
+              <WrapPanel ItemSpacing="8" LineSpacing="4">
+                <TextBlock Text="{Tr Map.GuardPosts.Title}" FontWeight="SemiBold" VerticalAlignment="Center" />
+                <ComboBox x:Name="GuardSetBox" ItemsSource="{Binding GuardSetNames}" SelectedItem="{Binding SelectedGuardSet}" MinWidth="130" ToolTip.Tip="{Tr Map.GuardPosts.Set.Tip}" />
+                <Button x:Name="GuardNewSetButton" Classes="ghost" Padding="8,4" Content="{Tr Map.GuardPosts.NewSet}" Command="{Binding NewGuardSetCommand}" ToolTip.Tip="{Tr Map.GuardPosts.NewSet.Tip}" />
+                <Button x:Name="GuardDeleteSetButton" Classes="ghost" Padding="8,4" Content="{Tr Map.GuardPosts.DeleteSet}" Command="{Binding DeleteGuardSetCommand}" ToolTip.Tip="{Tr Map.GuardPosts.DeleteSet.Tip}" />
+              </WrapPanel>
+              <WrapPanel ItemSpacing="8" LineSpacing="4">
+                <TextBlock Text="{Tr Map.GuardPosts.Level}" Classes="caption" VerticalAlignment="Center" />
+                <ComboBox x:Name="GuardLevelBox" ItemsSource="{Binding GuardLevels}" SelectedItem="{Binding GuardLevel}" ToolTip.Tip="{Tr Map.GuardPosts.Level.Tip}" />
+                <Border Classes="segmented" VerticalAlignment="Center">
+                  <StackPanel Orientation="Horizontal">
+                    <ToggleButton x:Name="GuardAutoButton" IsChecked="{Binding IsGuardFloorAuto}" Content="{Tr Map.GuardPosts.Floor.AutoMode}" ToolTip.Tip="{Tr Map.GuardPosts.Floor.AutoMode.Tip}" />
+                    <ToggleButton x:Name="GuardSurfaceButton" IsChecked="{Binding IsGuardFloorSurface}" Content="{Tr Map.GuardPosts.Floor.Auto}" ToolTip.Tip="{Tr Map.GuardPosts.Floor.Auto.Tip}" />
+                    <ToggleButton x:Name="GuardFixedButton" IsChecked="{Binding IsGuardFloorFixed}" Content="{Tr Map.GuardPosts.Floor.Fixed}" ToolTip.Tip="{Tr Map.GuardPosts.Floor.Fixed.Tip}" />
+                  </StackPanel>
+                </Border>
+                <NumericUpDown x:Name="GuardFloorBox" Value="{Binding GuardFloorMeters}" Minimum="-1000" Maximum="1000" Increment="0.5" FormatString="0.0" Width="140"
+                               IsVisible="{Binding IsGuardFloorFixed}" ToolTip.Tip="{Tr Map.GuardPosts.Floor.Height.Tip}" />
+              </WrapPanel>
+              <WrapPanel ItemSpacing="8" LineSpacing="4" IsVisible="{Binding IsGuardFloorAuto}">
+                <Button x:Name="GuardFloorUpButton" Classes="ghost" Padding="8,2" Content="▲" Command="{Binding GuardFloorUpCommand}" ToolTip.Tip="{Tr Map.GuardPosts.FloorUp.Tip}" />
+                <Button x:Name="GuardFloorDownButton" Classes="ghost" Padding="8,2" Content="▼" Command="{Binding GuardFloorDownCommand}" ToolTip.Tip="{Tr Map.GuardPosts.FloorDown.Tip}" />
+                <TextBlock x:Name="GuardFloorText" Text="{Binding GuardFloorText}" Classes="caption mono" VerticalAlignment="Center" />
+              </WrapPanel>
+              <TextBlock Text="{Binding GuardPostsText}" Classes="caption" />
+              <ListBox x:Name="GuardPostList" ItemsSource="{Binding GuardPostRows}" SelectedItem="{Binding SelectedGuardPost}" MaxHeight="130" ToolTip.Tip="{Tr Map.GuardPosts.Posts.Tip}">
+                <ListBox.ItemTemplate>
+                  <DataTemplate x:DataType="vm:GuardPostRow">
+                    <TextBlock Text="{Binding Text}" Classes="mono" FontSize="12" />
+                  </DataTemplate>
+                </ListBox.ItemTemplate>
+              </ListBox>
+              <WrapPanel ItemSpacing="8" LineSpacing="4">
+                <ComboBox x:Name="GuardPostLevelBox" ItemsSource="{Binding GuardLevels}" SelectedItem="{Binding SelectedGuardPostLevel}" ToolTip.Tip="{Tr Map.GuardPosts.PostLevel.Tip}" />
+                <Button x:Name="GuardRemovePostButton" Classes="ghost" Padding="8,4" Content="{Tr Map.GuardPosts.Remove}" Command="{Binding RemoveGuardPostCommand}" ToolTip.Tip="{Tr Map.GuardPosts.Remove.Tip}" />
+                <Button x:Name="GuardSnapPostButton" Classes="ghost" Padding="8,4" Content="{Tr Map.GuardPosts.Resnap}" Command="{Binding SnapGuardPostCommand}" ToolTip.Tip="{Tr Map.GuardPosts.Resnap.Tip}" />
+              </WrapPanel>
+              <WrapPanel ItemSpacing="8" LineSpacing="4">
+                <TextBlock Text="{Tr Map.GuardPosts.Pos}" Classes="caption" VerticalAlignment="Center" />
+                <NumericUpDown x:Name="GuardPostXBox" Value="{Binding SelectedGuardPostX}" Minimum="-10000000" Maximum="10000000" Increment="50" FormatString="0.##" Width="150" ToolTip.Tip="{Tr Map.GuardPosts.PosX.Tip}" />
+                <NumericUpDown x:Name="GuardPostYBox" Value="{Binding SelectedGuardPostY}" Minimum="-10000000" Maximum="10000000" Increment="50" FormatString="0.##" Width="150" ToolTip.Tip="{Tr Map.GuardPosts.PosY.Tip}" />
+                <NumericUpDown x:Name="GuardPostZBox" Value="{Binding SelectedGuardPostZ}" Minimum="-10000000" Maximum="10000000" Increment="10" FormatString="0.##" Width="140" ToolTip.Tip="{Tr Map.GuardPosts.PosZ.Tip}" />
+              </WrapPanel>
+              <WrapPanel ItemSpacing="8" LineSpacing="4">
+                <TextBlock Text="{Tr Map.GuardPosts.Reach}" Classes="caption" VerticalAlignment="Center" />
+                <NumericUpDown x:Name="GuardReachBox" Value="{Binding GuardReachMeters}" Minimum="0" Maximum="1000" Increment="5" FormatString="0" Width="100" ToolTip.Tip="{Tr Map.GuardPosts.Reach.Tip}" />
+                <TextBlock Text="{Tr Map.GuardPosts.Idle}" Classes="caption" VerticalAlignment="Center" />
+                <NumericUpDown x:Name="GuardIdleBox" Value="{Binding GuardIdleSeconds}" Minimum="10" Maximum="86400" Increment="10" FormatString="0" Width="110" ToolTip.Tip="{Tr Map.GuardPosts.Idle.Tip}" />
+                <TextBlock Text="{Tr Map.GuardPosts.Respawn}" Classes="caption" VerticalAlignment="Center" />
+                <NumericUpDown x:Name="GuardRespawnBox" Value="{Binding GuardRespawnSeconds}" Minimum="10" Maximum="86400" Increment="30" FormatString="0" Width="110" ToolTip.Tip="{Tr Map.GuardPosts.Respawn.Tip}" />
+              </WrapPanel>
+              <WrapPanel ItemSpacing="8" LineSpacing="4">
+                <Button x:Name="GuardInstallButton" Classes="accent" Padding="8,4" Content="{Tr Map.GuardPosts.Install}" Command="{Binding InstallGuardModCommand}" ToolTip.Tip="{Tr Map.GuardPosts.Install.Tip}" />
+                <Button x:Name="GuardFileButton" Classes="ghost" Padding="8,4" Content="{Tr Map.GuardPosts.WriteFile}" Command="{Binding WriteGuardFileCommand}" ToolTip.Tip="{Tr Map.GuardPosts.WriteFile.Tip}" />
+              </WrapPanel>
+              <TextBlock Text="{Tr Map.GuardPosts.Hint}" Classes="caption wrap" />
+            </StackPanel>
+            </ScrollViewer>
           </Border>
           <!-- The hole tool's warning list (owner, 2026-10-16): at its first use in each project, until "Do not show again". -->
           <Border Classes="overlayCard" x:Name="HoleWarningCard" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="10" Padding="16,12" MaxWidth="560"

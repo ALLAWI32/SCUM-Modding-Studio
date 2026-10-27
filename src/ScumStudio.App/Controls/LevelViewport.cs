@@ -1403,7 +1403,7 @@ public sealed partial class LevelViewport : OpenGlControlBase
             DrawShapeHandles(_renderer);
             SyncHoles();
             DrawGroundOutlines(_renderer.Overlay);
-            if (BrushMode && !HoleMode && _brushPointGl is { } brushAt)
+            if (BrushMode && !HoleMode && !GuardMode && _brushPointGl is { } brushAt)
             {
                 // Over the ground, not a flat disc cut by every slope; about a point every half metre on big circles.
                 var radius = (float)BrushRadius * 100f;
@@ -1418,6 +1418,11 @@ public sealed partial class LevelViewport : OpenGlControlBase
             if (BrushMode && BrushSpots is { Count: > 0 } spots)
             {
                 _renderer.Overlay.AddRange(SpotMarks(spots));
+            }
+
+            if (GuardOverlay is { } guards)
+            {
+                _renderer.Overlay.AddRange(GuardLines(guards));
             }
 
             if (_snappedTo is not null && preview is not null && _snapPiece is { } snapped)
@@ -1733,9 +1738,10 @@ public sealed partial class LevelViewport : OpenGlControlBase
     protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
     {
         base.OnPropertyChanged(change);
-        if (change.Property == GroundOutlinesProperty || change.Property == TerrainHolesProperty || change.Property == HoleModeProperty)
+        if (change.Property == GroundOutlinesProperty || change.Property == TerrainHolesProperty || change.Property == HoleModeProperty
+            || change.Property == GuardOverlayProperty || change.Property == GuardModeProperty)
         {
-            RequestNextFrameRendering(); // the hole's outline moved, or a hole was cut or filled
+            RequestNextFrameRendering(); // the hole's outline moved, or a hole was cut or filled; a guard post moved or was added
             return;
         }
 
@@ -2295,11 +2301,16 @@ public sealed partial class LevelViewport : OpenGlControlBase
         var (origin, direction) = _camera.ScreenRay(brush.X, brush.Y, Math.Max(1, w), Math.Max(1, h));
         var centre = BrushCentre(origin, direction, pick);
         _brushPointGl = centre;
+        var guardGrabbed = HandleGuardStroke(origin, direction, brush.Paint); // a guard post under the cursor is picked and dragged, no new one put
         if (brush.Paint)
         {
             var stroke = (UeToGl.ToUePoint(_brushFromGl ?? centre), UeToGl.ToUePoint(centre));
             _brushFromGl = centre;
-            Dispatcher.UIThread.Post(() => BrushPainted?.Invoke(this, stroke));
+            if (!guardGrabbed)
+            {
+                Dispatcher.UIThread.Post(() => BrushPainted?.Invoke(this, stroke));
+            }
+
             if (_brushEndPending)
             {
                 _brushEndPending = false;
@@ -2317,6 +2328,8 @@ public sealed partial class LevelViewport : OpenGlControlBase
     private void PostBrushStrokeEnded()
     {
         var at = _brushPointGl is { } gl ? UeToGl.ToUePoint(gl) : (FVector?)null;
+        _guardGrab = null; // the stroke is over: the next press picks again
+        _guardGrabTried = false;
         Dispatcher.UIThread.Post(() =>
         {
             BrushStrokeEnded?.Invoke(this, EventArgs.Empty);

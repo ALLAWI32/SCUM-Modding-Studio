@@ -55,6 +55,9 @@ internal interface ISpawnSource
     /// <summary>A copy of the zone settings <paramref name="zonePackage"/> under a free name (<see cref="ZoneCopies"/>); throws when refused.</summary>
     CloneAssetOp ZoneCopy(string zonePackage, IReadOnlyCollection<string> planned);
 
+    /// <summary>An own copy of one NPC of <paramref name="type"/> (<see cref="NpcCopies"/>); throws when refused.</summary>
+    NpcCopy NpcCopy(NpcGuardType type, string character, IReadOnlyCollection<string> planned);
+
     /// <summary>A 3D model of a character Blueprint by name, else the stand-in of its kind; null when there is none.</summary>
     PreviewModel? Preview(string? blueprint, SpawnCategory category);
 }

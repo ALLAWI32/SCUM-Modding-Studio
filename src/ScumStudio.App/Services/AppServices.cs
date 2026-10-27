@@ -33,6 +33,9 @@ public sealed record AppServicesOptions
     /// <summary>Mirror the log to standard output.</summary>
     public bool LogToConsole { get; init; } = true;
 
+    /// <summary>The user's system language (default: the OS's UI culture); the first-run wizard preselects the matching interface language. Tests pass the invariant culture so they stay English.</summary>
+    public System.Globalization.CultureInfo? SystemCulture { get; init; }
+
     /// <summary>Where new projects go and are listed from (default: <c>Documents/ScumStudio Projects</c>; tests use a temporary one).</summary>
     public string? ProjectsFolder { get; init; }
 }
@@ -53,6 +56,7 @@ public sealed class AppServices : IDisposable
         Dialogs = options.Dialogs ?? new NullDialogService();
         _locatorFactory = options.LocatorFactory ?? (logger => new GameLocator(logger: logger));
         FindKeyOnline = options.KeyFinder ?? OnlineKeyFinder.FindAsync;
+        SystemCulture = options.SystemCulture ?? System.Globalization.CultureInfo.CurrentUICulture;
 
         Log = new LogPanelViewModel(Dispatcher);
         var logFile = options.LogToFile ? Path.Combine(DataDirectory, "logs", "scumstudio.log") : null;
@@ -89,6 +93,9 @@ public sealed class AppServices : IDisposable
 
     /// <summary>Finds the game's AES key online, or null (see <see cref="OnlineKeyFinder"/>).</summary>
     public Func<CancellationToken, Task<string?>> FindKeyOnline { get; }
+
+    /// <summary>The user's system language, to preselect the interface language on the first run.</summary>
+    public System.Globalization.CultureInfo SystemCulture { get; }
 
     /// <summary>UI dispatcher.</summary>
     public IUiDispatcher Dispatcher { get; }

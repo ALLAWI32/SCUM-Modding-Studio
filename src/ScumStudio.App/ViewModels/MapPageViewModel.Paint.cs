@@ -151,7 +151,7 @@ public sealed partial class MapPageViewModel
     public bool BrushOnGround => (BrushPaint && !PaintOnObjects) || HoleTool;
 
     /// <summary>The viewport's brush events are on: the brush, or the hole tool riding on them.</summary>
-    public bool ViewportBrushMode => BrushSelect || HoleTool;
+    public bool ViewportBrushMode => BrushSelect || HoleTool || GuardTool;
 
     /// <summary>The spacing range as text ("1–3 m", or "3.5 m" when both ends are the same).</summary>
     public string PaintSpacingText => Math.Abs(PaintSpacingMax - PaintSpacing) < 0.05
@@ -302,6 +302,7 @@ public sealed partial class MapPageViewModel
         else
         {
             HoleTool = false; // one tool at a time under the cursor
+            GuardTool = false;
         }
 
         OnPropertyChanged(nameof(ViewportBrushMode));

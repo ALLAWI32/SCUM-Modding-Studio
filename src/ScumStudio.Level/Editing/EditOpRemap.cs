@@ -20,7 +20,7 @@ public static class EditOpRemap
         typeof(BendActorOp), typeof(SwaySegmentOp), typeof(SetSpawnPointsOp), typeof(ReplaceMeshOp), typeof(SetLootOp), typeof(SetClearGrassOp),
         typeof(SetNoLootOp), typeof(DeleteComponentsOp), typeof(RestoreComponentsOp), typeof(SetSpawnChoiceOp), typeof(AddSpawnPlaceOp),
         typeof(SetEconomyEntryOp), typeof(SetEconomySettingOp), typeof(SetEconomySectionOp), typeof(ReplaceEconomyOp),
-        typeof(TerrainHoleOp), typeof(AddSubZoneOp), typeof(RemoveSubZoneOp),
+        typeof(TerrainHoleOp), typeof(AddSubZoneOp), typeof(RemoveSubZoneOp), typeof(SetGuardSpawnsOp),
     };
 
     /// <summary>
@@ -87,6 +87,7 @@ public static class EditOpRemap
             SetEconomySettingOp or ReplaceEconomyOp => op, // a share carries the economy as a file of its own, never these
             TerrainHoleOp hole => hole, // a place on the ground: no names to follow
             AddSubZoneOp or RemoveSubZoneOp => op, // a box in a stock zone: no names to follow
+            SetGuardSpawnsOp => op, // posts on the ground: the set's own name, no actor to follow
             _ => throw new NotSupportedException($"Edits of type {op.GetType().Name} cannot be shared by this version."),
         };
     }

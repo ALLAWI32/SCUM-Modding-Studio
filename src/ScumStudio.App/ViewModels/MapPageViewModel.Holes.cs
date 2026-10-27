@@ -118,6 +118,7 @@ public sealed partial class MapPageViewModel
         if (value)
         {
             BrushSelect = false;
+            GuardTool = false; // one tool at a time under the cursor
             _ = HoleTiles(); // read the tiles' bounds while the user aims
             _ = LoadHolePlacesAsync(); // and where a hole can be seen
             var key = TerrainHoleWarning.KeyOf(_services.Projects.Current);

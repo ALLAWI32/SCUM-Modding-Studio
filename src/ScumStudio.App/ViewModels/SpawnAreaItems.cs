@@ -83,6 +83,9 @@ internal sealed class CatalogSpawnSource : ISpawnSource
     }
 
     /// <inheritdoc />
+    public NpcCopy NpcCopy(NpcGuardType type, string character, IReadOnlyCollection<string> planned) => NpcCopies.Plan(_catalog, type, character, planned);
+
+    /// <inheritdoc />
     public PreviewModel? Preview(string? blueprint, SpawnCategory category)
     {
         var loader = new MeshPreviewLoader(_catalog, _logger);

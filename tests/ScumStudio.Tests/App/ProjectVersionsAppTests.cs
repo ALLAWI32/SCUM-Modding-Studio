@@ -310,6 +310,11 @@ public sealed class ProjectVersionsAppTests
         {
             var map = (MapPageViewModel)vm.NavigateTo("map")!;
             await map.LoadCompletion;
+            for (var i = 0; i < 40 && HeadlessUi.FindNamed<Avalonia.Controls.Button>(window, "ResetSectorButton") is null; i++)
+            {
+                HeadlessUi.Pump(); // the app starts on Home: the map's view is built a moment after the switch
+            }
+
             var button = HeadlessUi.FindNamed<Avalonia.Controls.Button>(window, "ResetSectorButton")!;
             Assert.False(button.IsEffectivelyVisible); // no project: nothing to reset
             await ctx.Services.Projects.CreateAsync(ctx.Combine("projects"), "Reset view");

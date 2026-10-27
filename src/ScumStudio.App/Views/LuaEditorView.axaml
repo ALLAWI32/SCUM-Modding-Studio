@@ -1,0 +1,88 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:ScumStudio.App.ViewModels"
+             x:Class="ScumStudio.App.Views.LuaEditorView"
+             x:DataType="vm:LuaEditorViewModel">
+  <Grid Margin="16" ColumnDefinitions="330,*,360" ColumnSpacing="14">
+
+    <!-- Catalog -->
+    <TabControl x:Name="LeftTabs">
+      <TabItem Header="{Tr Lua.Tab.Catalog}" ToolTip.Tip="{Tr Lua.Tab.Catalog.Tip}">
+        <DockPanel Margin="0,8,0,0">
+          <StackPanel DockPanel.Dock="Top" Spacing="6" Margin="0,0,0,8">
+            <TextBox x:Name="SearchBox" Text="{Binding Search}" Watermark="{Tr Lua.Search}" ToolTip.Tip="{Tr Lua.Search.Tip}" />
+            <ComboBox x:Name="GroupPicker" ItemsSource="{Binding Groups}" SelectedItem="{Binding SelectedGroup}"
+                      HorizontalAlignment="Stretch" ToolTip.Tip="{Tr Lua.Group.Tip}">
+              <ComboBox.ItemTemplate>
+                <DataTemplate x:DataType="vm:LuaGroupOption">
+                  <TextBlock Text="{Binding Name}" />
+                </DataTemplate>
+              </ComboBox.ItemTemplate>
+            </ComboBox>
+            <TextBlock Text="{Tr Lua.Legend}" Classes="caption wrap" />
+          </StackPanel>
+          <ListBox x:Name="CatalogList" ItemsSource="{Binding Rows}" SelectedItem="{Binding Selected}" ToolTip.Tip="{Tr Lua.List.Tip}">
+            <ListBox.ItemTemplate>
+              <DataTemplate x:DataType="vm:LuaApiRow">
+                <TextBlock Text="{Binding Display}" TextTrimming="CharacterEllipsis" />
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+        </DockPanel>
+      </TabItem>
+      <TabItem Header="{Tr Lua.Tab.Game}" ToolTip.Tip="{Tr Lua.Tab.Game.Tip}">
+        <DockPanel Margin="0,8,0,0">
+          <StackPanel DockPanel.Dock="Top" Spacing="6" Margin="0,0,0,8">
+            <TextBox x:Name="GameSearchBox" Text="{Binding GameSearch}" Watermark="{Tr Lua.Game.Search}" ToolTip.Tip="{Tr Lua.Game.Search.Tip}" />
+            <TextBlock Text="{Binding DumpLine}" Classes="caption wrap" />
+          </StackPanel>
+          <Button x:Name="InsertHookButton" DockPanel.Dock="Bottom" Margin="0,8,0,0" Command="{Binding InsertGameHookCommand}"
+                  IsEnabled="{Binding HasGameSelected}" Content="{Tr Lua.Game.Hook}" ToolTip.Tip="{Tr Lua.Game.Hook.Tip}" />
+          <ListBox x:Name="GameList" ItemsSource="{Binding GameRows}" SelectedItem="{Binding GameSelected}" FontFamily="Cascadia Mono,Consolas,Menlo,monospace" FontSize="12"
+                   ToolTip.Tip="{Tr Lua.Game.List.Tip}" />
+        </DockPanel>
+      </TabItem>
+    </TabControl>
+
+    <!-- Editor -->
+    <Grid Grid.Column="1" RowDefinitions="Auto,*,Auto,140,Auto" RowSpacing="8">
+      <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto" ColumnSpacing="8">
+        <ComboBox x:Name="ModPicker" ItemsSource="{Binding Mods}" MinWidth="160" PlaceholderText="{Tr Lua.Mods}" ToolTip.Tip="{Tr Lua.Mods.Tip}" SelectionChanged="OnModPicked" />
+        <TextBox x:Name="NameBox" Grid.Column="1" Text="{Binding ModName}" Watermark="{Tr Lua.Name}" ToolTip.Tip="{Tr Lua.Name.Tip}" />
+        <Button x:Name="NewButton" Grid.Column="2" Command="{Binding NewScriptCommand}" Content="{Tr Lua.New}" ToolTip.Tip="{Tr Lua.New.Tip}" />
+        <Button x:Name="CheckButton" Grid.Column="3" Command="{Binding CheckCommand}" Content="{Tr Lua.Check}" ToolTip.Tip="{Tr Lua.Check.Tip}" />
+        <Button x:Name="SaveButton" Grid.Column="4" Classes="accent" Command="{Binding SaveCommand}" Content="{Tr Lua.Save}" ToolTip.Tip="{Tr Lua.Save.Tip}" />
+      </Grid>
+      <TextBox x:Name="CodeBox" Grid.Row="1" Text="{Binding Code}" AcceptsReturn="True" AcceptsTab="True" TextWrapping="NoWrap"
+               FontFamily="Cascadia Mono,Consolas,Menlo,monospace" FontSize="13" VerticalContentAlignment="Top"
+               ScrollViewer.HorizontalScrollBarVisibility="Auto" ScrollViewer.VerticalScrollBarVisibility="Auto"
+               Watermark="{Tr Lua.Code.Hint}" ToolTip.Tip="{Tr Lua.Code.Tip}" />
+      <TextBlock Grid.Row="2" Text="{Tr Lua.Findings}" Classes="section" />
+      <ListBox x:Name="FindingList" Grid.Row="3" ItemsSource="{Binding Findings}" ToolTip.Tip="{Tr Lua.Findings.Tip}">
+        <ListBox.ItemTemplate>
+          <DataTemplate x:DataType="vm:LuaFindingRow">
+            <TextBlock Text="{Binding Text}" TextWrapping="Wrap" />
+          </DataTemplate>
+        </ListBox.ItemTemplate>
+      </ListBox>
+      <TextBlock Grid.Row="4" Text="{Binding Status}" Classes="caption wrap" />
+    </Grid>
+
+    <!-- Details of the picked function -->
+    <ScrollViewer Grid.Column="2" HorizontalScrollBarVisibility="Disabled">
+      <StackPanel Spacing="8" Margin="0,0,10,0" IsVisible="{Binding HasSelected}">
+        <TextBlock Text="{Binding SelectedTitle}" Classes="h2" TextWrapping="Wrap" />
+        <TextBlock Text="{Binding SelectedStatus}" Classes="caption" />
+        <TextBlock Text="{Tr Lua.Call}" Classes="section" />
+        <SelectableTextBlock Text="{Binding SelectedSignature}" FontFamily="Cascadia Mono,Consolas,Menlo,monospace" FontSize="12" TextWrapping="Wrap" />
+        <TextBlock Text="{Tr Lua.About}" Classes="section" />
+        <SelectableTextBlock Text="{Binding SelectedText}" Classes="wrap" TextWrapping="Wrap" />
+        <TextBlock Text="{Tr Lua.Example}" Classes="section" />
+        <Border Classes="panel" Padding="8">
+          <SelectableTextBlock Text="{Binding SelectedSnippet}" FontFamily="Cascadia Mono,Consolas,Menlo,monospace" FontSize="12" TextWrapping="NoWrap" />
+        </Border>
+        <Button x:Name="InsertButton" Classes="accent" HorizontalAlignment="Left" Command="{Binding InsertCommand}" Content="{Tr Lua.Insert}" ToolTip.Tip="{Tr Lua.Insert.Tip}" />
+      </StackPanel>
+    </ScrollViewer>
+  </Grid>
+</UserControl>

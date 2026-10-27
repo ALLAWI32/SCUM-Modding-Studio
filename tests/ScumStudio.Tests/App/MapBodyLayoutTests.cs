@@ -41,7 +41,9 @@ public sealed class MapBodyLayoutTests
             HeadlessUi.Pump();
             var view = HeadlessUi.FindNamed<Border>(window, "Viewport")!;
             Assert.False(HeadlessUi.FindNamed<Border>(window, "LeftPanel")!.IsVisible, "F11 hides the World tree");
-            Assert.True(view.Bounds.Width > width - 100, $"maximized, the view is {view.Bounds.Width} wide");
+            // The left rail takes 200 px (54 when the window is narrow): the view fills the rest.
+            var rail = width >= MainWindowViewModel.CompactHeaderWidth ? 200 : 54;
+            Assert.True(view.Bounds.Width > width - rail - 100, $"maximized, the view is {view.Bounds.Width} wide");
 
             window.KeyPress(Key.F11, RawInputModifiers.None, PhysicalKey.F11, null);
             HeadlessUi.Pump();

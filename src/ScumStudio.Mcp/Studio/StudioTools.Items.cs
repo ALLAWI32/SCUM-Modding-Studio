@@ -363,5 +363,88 @@ public sealed partial class StudioTools
                 }));
             })
         { Title = "Asset details", ReadOnly = true, Idempotent = true };
+
+        yield return new McpTool("dump_asset",
+            "Dumps the properties of one export as JSON (CUE4Parse serialisation): Blueprint defaults, data assets and DataTables " +
+            "(prices, trader entries, quest rewards …). For a DataTable use rowFilter to keep only the rows whose name or content " +
+            "contains the text. Find packages with search_assets, the export names with get_asset.",
+            ToolSchema.Object()
+                .String("path", "Package or object path (/Game/A/B or /Game/A/B.Export). A package path dumps its main asset.", required: true)
+                .String("export", "Export name inside the package (default: the main asset). Overrides an object path's export.")
+                .String("rowFilter", "DataTable only: keep the rows whose name or content contains this text (case-insensitive).")
+                .Integer("maxChars", "Cut the JSON after this many characters (default 60000).", minimum: 1000, maximum: 400000)
+                .Build(),
+            (call, _) =>
+            {
+                var catalog = RequireCatalog();
+                var path = call.RequireString("path");
+                var export = call.GetString("export");
+                var rowFilter = call.GetString("rowFilter");
+                var maxChars = call.GetInt("maxChars", 60000);
+                var package = AssetPaths.SplitObjectPath(path).PackagePath;
+                if (!catalog.PackageExists(package))
+                {
+                    throw new ToolArgumentException($"Package not found: {package}");
+                }
+
+                var target = export is { Length: > 0 } ? package + "." + export : path;
+                CUE4Parse.UE4.Assets.Exports.UObject obj;
+                try
+                {
+                    obj = catalog.LoadObject(target);
+                }
+                catch (Exception ex) when (ex is KeyNotFoundException or InvalidDataException or FormatException or InvalidOperationException)
+                {
+                    throw new ToolArgumentException($"Could not read {target}: {ex.Message}", ex);
+                }
+
+                var json = AssetJson.Serialize(obj);
+                var truncated = false;
+                if (!string.IsNullOrWhiteSpace(rowFilter) && System.Text.Json.Nodes.JsonNode.Parse(json) is { } root)
+                {
+                    var rows = FindRows(root);
+                    if (rows is not null)
+                    {
+                        foreach (var name in rows.Where(r => !r.Key.Contains(rowFilter, StringComparison.OrdinalIgnoreCase)
+                                     && !(r.Value?.ToJsonString().Contains(rowFilter, StringComparison.OrdinalIgnoreCase) ?? false))
+                                     .Select(r => r.Key).ToList())
+                        {
+                            rows.Remove(name);
+                        }
+                    }
+
+                    json = root.ToJsonString(McpJson.Indented);
+                }
+
+                if (json.Length > maxChars)
+                {
+                    json = json[..maxChars];
+                    truncated = true;
+                }
+
+                return Task.FromResult(McpToolResult.Text(truncated
+                    ? json + $"\n… cut at {maxChars} characters; raise maxChars or narrow it with export / rowFilter."
+                    : json));
+            })
+        { Title = "Dump asset", ReadOnly = true, Idempotent = true };
+    }
+
+    /// <summary>The row object of a serialised DataTable (the first object under a "Rows" key), or null.</summary>
+    private static System.Text.Json.Nodes.JsonObject? FindRows(System.Text.Json.Nodes.JsonNode node)
+    {
+        switch (node)
+        {
+            case System.Text.Json.Nodes.JsonObject obj:
+                if (obj.TryGetPropertyValue("Rows", out var rows) && rows is System.Text.Json.Nodes.JsonObject rowObject)
+                {
+                    return rowObject;
+                }
+
+                return obj.Select(p => p.Value).Where(v => v is not null).Select(v => FindRows(v!)).FirstOrDefault(r => r is not null);
+            case System.Text.Json.Nodes.JsonArray array:
+                return array.Where(v => v is not null).Select(v => FindRows(v!)).FirstOrDefault(r => r is not null);
+            default:
+                return null;
+        }
     }
 }

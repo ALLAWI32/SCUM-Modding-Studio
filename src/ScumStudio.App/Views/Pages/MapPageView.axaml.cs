@@ -31,11 +31,20 @@ public partial class MapPageView : UserControl
         // The hole tool rides on the brush's ground events: a click or drag puts the hole down, hovering moves its outline,
         // the wheel sizes it.
         Viewport3d.HoleWheel += (_, notches) => _viewModel?.ResizeHole(notches);
+        // The guard tool: a press on a post's pole picks it, the held button drags it along its floor.
+        Viewport3d.GuardMarkerGrabbed += (_, marker) => _viewModel?.GrabGuardPost(marker.Set, marker.Index);
+        Viewport3d.GuardMarkerDragged += (_, at) => _viewModel?.DragGuardPost(at);
         Viewport3d.BrushPainted += (_, stroke) =>
         {
             if (_viewModel is { HoleTool: true } holes)
             {
                 holes.PlaceHole(stroke.To);
+                return;
+            }
+
+            if (_viewModel is { GuardTool: true } guards)
+            {
+                guards.NoteGuardDab(stroke.To); // the post goes down when the click ends
                 return;
             }
 
@@ -69,13 +78,18 @@ public partial class MapPageView : UserControl
         };
         Viewport3d.BrushStrokeEnded += (_, _) =>
         {
+            _viewModel?.EndGuardStroke();
             StopPaintTimer();
             _viewModel?.EndPaintStroke();
         };
         // Hovering in paint mode marks the spots a click would plant and those it would leave out.
         Viewport3d.BrushHovered += (_, at) =>
         {
-            if (_viewModel is { HoleTool: true } holes)
+            if (_viewModel is { GuardTool: true } guards)
+            {
+                guards.HoverGuard(at);
+            }
+            else if (_viewModel is { HoleTool: true } holes)
             {
                 holes.HoverHole(at);
             }

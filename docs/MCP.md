@@ -114,6 +114,24 @@ Units are centimetres. The axes are X forward, Y right, Z up. Rotations are `[pi
 | `remove_item_clone` | app + CLI | edit (destructive, undoable) | Removes a clone made by clone_item (its edited values are reset first; journaled). |
 | `search_assets` | app + CLI | read | Searches the game files by package path words (e.g. 'barrel', 'SM_Rock', 'Outpost wall'); optionally only one class (StaticMesh, SkeletalMesh, Texture2D, Material, MaterialInstanceConstant, BlueprintGeneratedClass, World …). |
 | `get_asset` | app + CLI | read | Exports (objects) of one package with their classes. |
+| `dump_asset` | app + CLI | read | Dumps the properties of one export as JSON (Blueprint defaults, data assets, DataTables); `rowFilter` keeps only the DataTable rows that contain a text, `maxChars` cuts long output. |
+| `place_zombie_spawns` | app + CLI | edit (undoable) | Places zombie spawn points in a level. |
+| `list_npc_kinds` | app + CLI | read | Lists the armed NPC kinds that place_npcs can put down. |
+| `place_npcs` | app + CLI | edit (undoable) | Places armed NPC posts with an area of their own (the game's encounters may not spawn them on a server). |
+| `set_guard_spawns` | app + CLI | edit (undoable) | Sets server-side guard posts (journaled): what spawns where, in which dungeon, how many. Written to the server as a Lua mod by write_guard_mod. |
+| `list_guard_spawns` | app + CLI | read | Lists the guard posts of the project. |
+| `remove_guard_spawns` | app + CLI | edit (destructive, undoable) | Removes guard posts. |
+| `write_guard_mod` | app + CLI | files | Writes the guard posts as a UE4SS Lua mod into the server folder. |
+| `list_loot_presets` | app + CLI | read | Lists the game's loot presets (what searching a container gives). |
+| `set_loot` | app + CLI | edit (undoable) | Assigns a loot preset to a placed container. |
+| `list_loot_tags` | app + CLI | read | Lists the loot tags and rarities a preset's groups can use. |
+| `read_loot_zones` | app + CLI | files | Reads the loot zones of the server (rectangles with changed presets). |
+| `write_loot_zone` | app + CLI | files | Writes a loot zone: in a rectangle a preset's groups, chance and counts are changed (the server's JSON loot customization). |
+| `remove_loot_zone` | app + CLI | files | Removes a loot zone from the server. |
+| `lua_catalog` | app + CLI | read | The checked catalogue of Lua functions for the server: what works on a live server and what crashed it. Read it first. |
+| `lua_game_functions` | app + CLI | read | Searches the server's class dump for game functions by name. |
+| `check_lua` | app + CLI | read | Checks a Lua mod: syntax, unknown game functions, known unsafe calls. Nothing is run. |
+| `write_lua_mod` | app + CLI | files | Saves a Lua mod into the server's UE4SS Mods folder (never starts or stops the server). |
 | `navigate` | app | view (UI only) | Shows a page of the ScumStudio window. |
 | `show_levels` | app | view (UI only) | Loads levels into the Map page's 3D viewport (the user sees them; edits of the project are shown live). Give level names or a cell (a whole cell loads its POI sublevels and terrain). |
 | `select_actor` | app | view (UI only) | Selects an actor in the 3D viewport and entity list (its level must be shown, see show_levels) and frames the camera on it. |

@@ -442,7 +442,7 @@ public sealed partial class SpawnsPageViewModel
 
     /// <summary>A click on the map with the New place tool: a new spawn place (not a copy) there, on the ground when known.</summary>
     [RelayCommand]
-    private Task PlaceAt(Vector2 world) => AddPlaceAsync(world);
+    private Task PlaceAt(Vector2 world) => IsNpcPlacing ? PlaceNpcsAsync(world) : AddPlaceAsync(world);
 
     internal async Task AddPlaceAsync(Vector2 world)
     {

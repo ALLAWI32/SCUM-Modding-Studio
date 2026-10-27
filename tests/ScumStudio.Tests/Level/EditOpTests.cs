@@ -55,6 +55,7 @@ public sealed class EditOpTests
             new SetEconomySettingOp("traders-unlimited-stock", 17, "\"0\"", "\"1\""),
             new SetEconomySectionOp("A_3_Armory_1", 5, null, "[]"),
             new ReplaceEconomyOp("{\r\n\t\"economy-override\":\r\n\t{\r\n\t}\r\n}", null),
+            new SetGuardSpawnsOp("Dungeon", null, new GuardSpawnSet("Dungeon", [new GuardPost(new FVector(456300f, -234600f, 8301f), 4), new GuardPost(new FVector(1f, 2f, 3f), 5)], 3500f, 120, 600)),
         ];
         return ops.Select(o => new object[] { o });
     }
@@ -91,9 +92,9 @@ public sealed class EditOpTests
     public void DescribesItself(EditOp op)
     {
         Assert.False(string.IsNullOrWhiteSpace(op.Describe()));
-        if (op is not EconomyOp)
+        if (op is not (EconomyOp or SetGuardSpawnsOp))
         {
-            Assert.NotEmpty(op.GetTouchedLevels()); // an economy edit changes the project's EconomyOverride.json, no level
+            Assert.NotEmpty(op.GetTouchedLevels()); // an economy edit changes the project's EconomyOverride.json, a guard set goes to the server as Lua: no level
         }
     }
 

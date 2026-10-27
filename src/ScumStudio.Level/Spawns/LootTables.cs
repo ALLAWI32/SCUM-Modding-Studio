@@ -43,6 +43,12 @@ public sealed class LootTables
     /// <summary>Nodes of the tree (every row of every table).</summary>
     public int NodeCount => _rarity.Count;
 
+    /// <summary>Every tag of the tree (a branch such as <c>ItemLootTreeNodes.Military.Weapons</c>, or one item).</summary>
+    public IReadOnlyCollection<string> Tags => _rarity.Keys;
+
+    /// <summary>True when <paramref name="tag"/> has tags below it (a group); false for one item or a tag the tree does not have.</summary>
+    public bool IsBranch(string tag) => _children.ContainsKey(tag);
+
     /// <summary>Reads every loot tree table of <paramref name="catalog"/>.</summary>
     public static LootTables Read(AssetCatalog catalog)
     {

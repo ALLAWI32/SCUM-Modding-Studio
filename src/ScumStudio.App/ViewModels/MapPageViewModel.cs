@@ -2011,6 +2011,7 @@ public sealed partial class MapPageViewModel : PageViewModel, ISearchablePage, I
         SyncPaintPalette();
         RefreshEdits();
         RefreshHoles();
+        RefreshGuardSets();
     }
 
     private void OnCatalogChanged(object? sender, EventArgs e)

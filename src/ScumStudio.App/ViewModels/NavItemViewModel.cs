@@ -7,8 +7,9 @@ public sealed class NavItemViewModel : ViewModelBase
     private PageViewModel? _page;
 
     /// <summary>Creates an entry.</summary>
-    public NavItemViewModel(string key, string title, string iconKey, string? badge, Func<PageViewModel> factory)
+    public NavItemViewModel(string key, string title, string iconKey, string? badge, Func<PageViewModel> factory, string? groupKey = null)
     {
+        GroupKey = groupKey;
         Key = key;
         _title = title;
         IconKey = iconKey;
@@ -18,6 +19,15 @@ public sealed class NavItemViewModel : ViewModelBase
 
     /// <summary>Navigation key.</summary>
     public string Key { get; }
+
+    /// <summary>The group this entry starts in the left rail (world, content, server, tools), or null when it belongs to the group above.</summary>
+    public string? GroupKey { get; }
+
+    /// <summary>True when this entry opens a group in the rail.</summary>
+    public bool HasGroup => GroupKey is not null;
+
+    /// <summary>The group's name in the current UI language (string key <c>Nav.group.&lt;key&gt;</c>).</summary>
+    public string GroupTitle => GroupKey is null ? string.Empty : Localization.Loc.Instance.Or($"Nav.group.{GroupKey}", GroupKey);
 
     private readonly string _title;
 
@@ -47,6 +57,7 @@ public sealed class NavItemViewModel : ViewModelBase
     {
         OnPropertyChanged(nameof(Title));
         OnPropertyChanged(nameof(Tip));
+        OnPropertyChanged(nameof(GroupTitle));
         _page?.OnLanguageChanged();
     }
 }

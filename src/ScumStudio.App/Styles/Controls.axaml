@@ -585,6 +585,75 @@
     <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
   </Style>
 
+  <!-- Page tabs (the Server page, the Lua editor's catalog): the default header is as large as a page title. -->
+  <Style Selector="TabItem">
+    <Setter Property="FontSize" Value="13.5" />
+    <Setter Property="FontWeight" Value="Medium" />
+    <Setter Property="MinHeight" Value="34" />
+    <Setter Property="Padding" Value="14,0" />
+  </Style>
+
+  <!-- The left rail: grouped task pages. A row is a Border inside the item, so a group caption above it is not part of the selection. -->
+  <Style Selector="Border.sideBar">
+    <Setter Property="Width" Value="200" />
+  </Style>
+  <Style Selector="Border.sideBar.compact">
+    <Setter Property="Width" Value="54" />
+  </Style>
+  <Style Selector="ListBox.sideNav">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="Padding" Value="6,6" />
+  </Style>
+  <Style Selector="ListBox.sideNav ListBoxItem">
+    <Setter Property="Padding" Value="0" />
+    <Setter Property="MinHeight" Value="0" />
+    <Setter Property="Margin" Value="0" />
+    <Setter Property="Cursor" Value="Hand" />
+  </Style>
+  <Style Selector="ListBox.sideNav ListBoxItem /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="Transparent" />
+  </Style>
+  <Style Selector="ListBox.sideNav ListBoxItem:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="Transparent" />
+  </Style>
+  <Style Selector="ListBox.sideNav ListBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter, ListBox.sideNav ListBoxItem:selected:pointerover /template/ ContentPresenter#PART_ContentPresenter, ListBox.sideNav ListBoxItem:selected:focus /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Background" Value="Transparent" />
+  </Style>
+  <Style Selector="ListBox.sideNav Border.navRow">
+    <Setter Property="Background" Value="Transparent" />
+    <Setter Property="CornerRadius" Value="8" />
+    <Setter Property="Height" Value="34" />
+    <Setter Property="Margin" Value="0,1" />
+    <Setter Property="Padding" Value="12,0" />
+  </Style>
+  <Style Selector="ListBox.sideNav ListBoxItem:pointerover Border.navRow">
+    <Setter Property="Background" Value="{DynamicResource Surface2Brush}" />
+  </Style>
+  <Style Selector="ListBox.sideNav ListBoxItem:selected Border.navRow, ListBox.sideNav ListBoxItem:selected:pointerover Border.navRow">
+    <Setter Property="Background" Value="{DynamicResource SurfaceBrush}" />
+  </Style>
+  <Style Selector="ListBox.sideNav TextBlock.navLabel">
+    <Setter Property="Foreground" Value="{DynamicResource TextMutedBrush}" />
+  </Style>
+  <Style Selector="ListBox.sideNav ListBoxItem:pointerover TextBlock.navLabel, ListBox.sideNav ListBoxItem:selected TextBlock.navLabel">
+    <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
+  </Style>
+  <Style Selector="ListBox.sideNav Border.navIndicator">
+    <Setter Property="Background" Value="Transparent" />
+  </Style>
+  <Style Selector="ListBox.sideNav ListBoxItem:selected Border.navIndicator">
+    <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
+  </Style>
+  <Style Selector="ListBox.sideNav c|GlyphIcon">
+    <Setter Property="Foreground" Value="{DynamicResource TextMutedBrush}" />
+  </Style>
+  <Style Selector="ListBox.sideNav ListBoxItem:pointerover c|GlyphIcon">
+    <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
+  </Style>
+  <Style Selector="ListBox.sideNav ListBoxItem:selected c|GlyphIcon">
+    <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+  </Style>
+
   <!-- ===================================================================================== Lists -->
   <Style Selector="ListBox.plain">
     <Setter Property="Background" Value="Transparent" />

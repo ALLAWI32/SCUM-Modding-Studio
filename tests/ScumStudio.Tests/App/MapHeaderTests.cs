@@ -185,7 +185,8 @@ public sealed class MapHeaderTests
 
                     var view = Bounds(viewport, window);
                     Assert.True(view.Top >= box.Bottom, $"{at}: the view starts at {view.Top}, under the header's bottom {box.Bottom}");
-                    Assert.True(viewport.IsEffectivelyVisible && view.Width > 300 && view.Height > 200, $"{at}: the view is {view}");
+                    Assert.True(viewport.IsEffectivelyVisible && view.Width > 300 && view.Height > 150, // 150: next to the left rail the densest toolbar wraps once more at 1280 x 720
+                         $"{at}: the view is {view}");
                 }
             }
         }

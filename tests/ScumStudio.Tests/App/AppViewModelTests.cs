@@ -203,9 +203,9 @@ public sealed class AppViewModelTests
         using var ctx = AppTestContext.Create();
         using var vm = new MainWindowViewModel(ctx.Services);
 
-        Assert.Equal(["Map", "Vehicles", "Weapons", "Items", "Spawns", "Economy", "Craftables", "Assets", "Projects", "Settings"], vm.NavItems.Select(n => n.Title));
+        Assert.Equal(["Home", "Map", "Spawns", "Vehicles", "Weapons", "Items", "Craftables", "Economy", "Server", "Assets", "Projects", "Settings"], vm.NavItems.Select(n => n.Title));
         Assert.Equal(MainWindowViewModel.PageKeys, vm.NavItems.Select(n => n.Key));
-        Assert.Equal("map", vm.CurrentPage?.Key);
+        Assert.Equal("home", vm.CurrentPage?.Key); // the app starts on Home
         Assert.Equal(PillState.Off, vm.GamePill.State);
         Assert.Equal("not set", vm.GamePill.Value);
         Assert.Equal(PillState.Off, vm.KeyPill.State);
@@ -246,12 +246,13 @@ public sealed class AppViewModelTests
         using var vm = new MainWindowViewModel(ctx.Services);
 
         await vm.InitializeAsync();
-        Assert.True(vm.IsSetupOpen);
-        Assert.NotNull(vm.Setup);
-
-        vm.Setup!.CancelCommand.Execute(null);
+        Assert.True(vm.IsWelcomeOpen); // the first-run wizard, not the long setup dialog
+        Assert.NotNull(vm.Welcome);
         Assert.False(vm.IsSetupOpen);
-        Assert.Null(vm.Setup);
+
+        vm.Welcome!.SkipCommand.Execute(null);
+        Assert.False(vm.IsWelcomeOpen);
+        Assert.Null(vm.Welcome);
         Assert.True(ctx.Services.UiState.Current.SetupCompleted);
 
         // Every page has a usable empty state without a game folder.
@@ -267,6 +268,7 @@ public sealed class AppViewModelTests
         using var again = new MainWindowViewModel(ctx.Services);
         await again.InitializeAsync();
         Assert.False(again.IsSetupOpen);
+        Assert.False(again.IsWelcomeOpen);
     }
 
     [Fact]

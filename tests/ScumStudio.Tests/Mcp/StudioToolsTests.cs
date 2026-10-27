@@ -250,5 +250,9 @@ public sealed class StudioToolsTests(ITestOutputHelper output)
 
         var asset = Client.Structured(await client.CallAsync("get_asset", new { path = "/Game/ConZ_Files/Items/Weapons/Ranged_Weapons/Weapon_RPG7" }));
         Assert.Equal("BlueprintGeneratedClass", asset["mainClass"]!.GetValue<string>());
+
+        var dump = Client.Text(await client.CallAsync("dump_asset", new { path = "/Game/ConZ_Files/Items/Weapons/Ranged_Weapons/Weapon_RPG7", maxChars = 5000 }));
+        Assert.Contains("Weapon_RPG7", dump, StringComparison.Ordinal);
+        await client.CallAsync("dump_asset", new { path = "/Game/ConZ_Files/Nope/Missing" }, expectError: true);
     }
 }

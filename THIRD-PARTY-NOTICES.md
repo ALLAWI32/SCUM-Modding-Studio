@@ -9,12 +9,16 @@ into this repository.
 | [CUE4Parse](https://github.com/FabianFG/CUE4Parse) 1.2.2, CUE4Parse-Conversion 1.2.1 | reading Unreal Engine pak files and cooked assets (meshes, textures, levels) | Apache-2.0 |
 | [UAssetAPI](https://github.com/atenfyr/UAssetAPI) 1.1.0 | reading/writing cooked `.uasset`/`.umap` packages | MIT |
 | [Avalonia](https://github.com/AvaloniaUI/Avalonia) 11.3.22 (+ Desktop, Themes.Fluent, Controls.ColorPicker, Fonts.Inter, Diagnostics, Headless) | cross-platform desktop UI | MIT |
+| [MoonSharp](https://github.com/moonsharp-devs/moonsharp) 2.0.0 | syntax check of the Lua server mods in the Lua editor (parsing only, nothing is run) | BSD-3-Clause |
 | [CommunityToolkit.Mvvm](https://github.com/CommunityToolkit/dotnet) 8.3.2 | MVVM helpers | MIT |
 | [Silk.NET](https://github.com/dotnet/Silk.NET) 2.23.0 (OpenGL, Core, Maths, Windowing) | OpenGL bindings and offscreen window contexts | MIT |
 | [System.CommandLine](https://github.com/dotnet/command-line-api) 2.0.0-beta4 | command-line parsing | MIT |
 | [SixLabors.ImageSharp](https://github.com/SixLabors/ImageSharp) | PNG encoding of decoded textures and render snapshots | Six Labors Split License (Apache-2.0 terms apply to open-source / small-revenue use; see the project's licence page) |
 | Microsoft.Extensions.Logging.Abstractions, System.Security.Cryptography.ProtectedData | logging facade, Windows DPAPI | MIT |
 | xunit, xunit.runner.visualstudio, Microsoft.NET.Test.Sdk | tests only | Apache-2.0 / MIT |
+
+UE4SS (https://github.com/UE4SS-RE/RE-UE4SS) is not bundled: the Server page downloads the official release from its GitHub
+releases at the user's request and checks it before installing. It keeps its own licence (MIT).
 
 Transitive dependencies of CUE4Parse (Newtonsoft.Json, K4os LZ4, ZstdSharp, Oodle.NET, Zlib-ng.NET, BouncyCastle,
 Serilog, Blake3, LZMA-SDK) keep their respective licences (MIT / Apache-2.0 / BSD).

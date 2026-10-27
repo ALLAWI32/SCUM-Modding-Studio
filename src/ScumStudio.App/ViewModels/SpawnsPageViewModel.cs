@@ -229,6 +229,7 @@ public sealed partial class SpawnsPageViewModel : PageViewModel, ISearchablePage
         RefreshList();
         FilterTypes();
         OnCategoryChanged();
+        ShowNpcWizard();
     }
 
     partial void OnFilterTextChanged(string value) => RefreshList();
@@ -451,6 +452,7 @@ public sealed partial class SpawnsPageViewModel : PageViewModel, ISearchablePage
 
         _ = LoadPlacesAsync();
         _ = LoadPictureAsync();
+        ResetNpcKinds();
     }
 
     private void OnCatalogChanged(object? sender, EventArgs e) => _services.Dispatcher.Post(() =>

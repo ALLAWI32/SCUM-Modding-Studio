@@ -3,6 +3,90 @@
 All notable changes are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project uses [semantic versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **The Server page is four tabs: Mods, Lua editor, Loot, Log.** The Lua editor and the loot editor are part of the page now (they were separate
+  windows opened by buttons); each is made when its tab is first shown, so the server's class dump is read only then. The long row of buttons is
+  down to Install, Switch off, Cloud server guide and Refresh. Both editors still open in a window of their own from code (the same views).
+- **The pages moved from the title strip to a rail on the left, in groups.** Twelve tabs did not fit one strip (the names showed only above
+  2040 px, so never on a 1920 screen). The rail groups them by task: Home; World (Map, Spawns); Content (Vehicles, Weapons, Items, Craftables,
+  Economy); Server; Tools (Assets, Projects, Settings). It shows the names from 1700 px of window width and icons only below (with thin lines
+  between the groups); the title strip keeps the wordmark, the search field, Share, Support, updates and the project. Every page, setting and
+  shortcut works as before; the Map's busiest toolbar wraps once more on a 1280 x 720 window because the rail takes 54 px.
+- **A first-run wizard and a Home page.** A new user no longer meets the long setup dialog. The wizard asks four things in order: the interface
+  language (preselected from the system language, switches the program at once), the game folder and the dedicated server folder (both found in
+  the Steam libraries by themselves, the server optional), then does the rest by itself with a result line per part: the folders are saved
+  (the mod folders are the `~mods` folders of the game and of the server), the game's key is looked up online and checked on the game's files, the server's
+  UE4SS is looked at. **Home** is the first page: one list of what is set up and what is left (game files, key, server, UE4SS, class dump, loot
+  presets, project), with a button on each open item. The detailed setup dialog stays in Settings. The wizard, Home, the rail's group names and
+  the Server page's tabs are translated into all ten languages.
+- **Server page: a loot editor in its own window ("Loot").** Loot groups and chances for the searchable containers of a place, written as the
+  server's own loot customization (`SCUM\Saved\Config\WindowsServer\Loot\Spawners\Presets\Override\<zone>` with the `Zones.json` rectangle the
+  zone covers), so a dungeon's crate pile gives what the owner says while the rest of the island keeps the game's loot. Pick one of the game's
+  exported presets (the `#ExportDefaultItemSpawnerPresets` files), change its chance, how many items one search gives (from one to a set), the
+  zone/place rules (off by default: outside the game's own zones nothing drops while they apply) and its loot groups: a rarity (the game's weight,
+  Abundant 32 down to Extremely Rare 1) and loot tree tags or item ids, searched in the game's loot tree. The zone's rectangle can be taken from the
+  posts of a guard set. **To my server** checks and writes it; the admin then types `#ReloadLootCustomizationsAndResetSpawners` in the game chat
+  (no restart). MCP tools `read_loot_zones`, `list_loot_tags`, `write_loot_zone` and `remove_loot_zone` do the same for an AI client. The editor is translated into
+  all ten languages.
+- **MCP tools `list_loot_presets` and `set_loot`**: an AI client gives a container the project placed the loot a search of it yields, as
+  the Map page's loot panel does. `list_loot_presets` lists the game's `SpawnerPresets2/.../Examine_X` presets (with `details`: their chance and
+  loot groups), `set_loot` sets one or more of them (each preset is one pick with its own chance); one journal step, undo restores the old loot.
+- **Server page: a Lua editor in its own window.** A catalog of what a server Lua mod can call (UE4SS inside SCUM Server): functions, events
+  (hooks), ready pieces and rules, about 40 entries, each marked **tried on the owner's server**, **exists but not tried to the end** or
+  **does not work / crashes the server**, with a description (English and Russian), the call and an example that goes into the script at the
+  caret. A second tab lists the game's own functions from the server's class dump (`ue4ss\scum_dump.txt`, written by the ScumStudioDump mod;
+  thousands of names) and inserts a `RegisterHook` on one. **Check** parses the script (syntax errors with their line, nothing runs),
+  looks every `/Script/...:Function` up in the dump and warns about the mistakes that crashed or froze the owner's server (`%d` on a
+  float, writing a soft class pointer, a player used inside a hook with no delay, `FindAllOf` in a loop off the game thread).
+  **To my server** checks and writes `Mods\<Name>\Scripts\main.lua` and switches the mod on; scripts are the server's own files, not part of
+  a project. MCP tools `lua_catalog`, `lua_game_functions`, `check_lua` and `write_lua_mod` give an AI client the same; the embedded
+  Claude skill tells it to read the catalog first.
+- **Map page: "Guard posts", a constructor for armed guards put on the 3D map.** The game's own NPC encounters did not spawn armed
+  NPCs on the owner's server (not even at the island's stock bases), but spawning the guard Blueprint (`BP_Guard_Lvl_3` to `_5`)
+  from a UE4SS Lua mod works and the guard gets its own AI. The new tool (button in the viewport's bottom right corner) puts a post
+  where a click hits the 3D map. Its height is found by itself ("Auto floor"): every surface under the click, from the roof down,
+  is looked at and the post stands on the topmost floor that has a ceiling over it (the top floor inside a building, else the ground),
+  with arrows to take another floor; "On the surface" keeps where the cursor hit, "Floor at" one typed height. A post is picked by
+  clicking its pole (the poles are drawn through roofs), dragged along its floor with the button held, or set by its X, Y and Z
+  (one undo step each); "Floor under it" puts a post back on the found floor. Posts live in named sets (a dungeon, a base) with how far outside the posts a player wakes them, when they leave
+  and how fast a killed guard's post refills; each change is one undo step and is saved in the project (`SetGuardSpawnsOp`, no pak
+  involved). **Put on my server** writes the mod `GuardSpawns` into the server's UE4SS `Mods` folder and switches it on (a running
+  server reloads a changed mod by itself); **Write file** puts the `main.lua` into the project folder for a server the app cannot
+  reach. The viewport draws every post (green, amber and red for guard 3, 4 and 5; white for the picked one) and the circle that
+  wakes the picked set. MCP tools `set_guard_spawns`, `list_guard_spawns`, `remove_guard_spawns` and `write_guard_mod` do the same
+  for an AI client; the embedded Claude skill names them.
+- **MCP tools `place_npcs`, `list_npc_kinds` and `place_zombie_spawns`**: an AI client sets the spawns of a place it has built, as the Spawns
+  page does. `place_npcs` writes the wizard's plan (one group of posts, an area over them with its own copy of the zone settings, or
+  `ownCopyOf` a character for an own copy of its whole chain) from a list of points or a ring around a point, `place_zombie_spawns`
+  adds zombie spawn points (interior or exterior), and both take a floor height `z` for built floors. Each call is one undo step.
+  The embedded Claude skill and the MCP instructions name them.
+- **Spawns > NPCs: a "Place NPCs" wizard.** Three plain steps replace the zone, encounter, preset and character weight lists: who
+  (a kind of armed NPC, shown as "Military Base", medium threat, "Guard Lvl 3, Guard Lvl 4" instead of the game's
+  `MTZ_POI_Military_Base_NPC_Encounter`), how many spawn posts, then one click on the island map. The app lays the posts around the
+  point, gives the area its own copy of the zone settings that spawn only the chosen NPCs and records it all as one undo step; a
+  sentence under the choice says what the game will do (1 to 3 NPCs while a player walks in, then a rest of 20 to 30 minutes).
+  The robot-to-guards replacement on the Map page shares the same plan (`NpcPlacement`).
+  **Own copy of one NPC**: a tick box copies the whole chain of the chosen NPC under new names (`..._Own`): the zone settings, the
+  encounter, the character preset, the character Blueprint and its common data, as one clone that the exporter builds with the other
+  clones. The copies point at each other and nothing else points at them, and the stock chain is not in the pak, so every other
+  guard of the island is untouched; the copied encounter and zone settings spawn only that character (the other presets weigh 0).
+  Checked on the game's own files: the five packages are built and exported, reference each other and leave the stock ones out.
+- **MCP tool `dump_asset`**: the properties of an export as JSON, DataTables included (with `rowFilter` to keep only some rows), so an
+  AI client can read prices, trader entries and other game data, not just the list of exports.
+- **Server page: Lua mods that run inside the dedicated server** (through UE4SS). The page installs the official UE4SS from GitHub
+  next to `SCUMServer.exe` (SHA-256 checked, set up for a server), adds ready mods (announcements every few minutes, a message when
+  a player joins, an event log of joins, leaves and deaths, the game time on request (a player writes `!time` in the chat and gets the time on his screen only), a list of the game's classes and functions), edits and switches them,
+  and shows UE4SS's log. The hooks and calls were found in a running SCUM Server and tried there. Also `scumstudio server ...` on
+  the command line. See [docs/SERVER-MODS.md](docs/SERVER-MODS.md).
+- **Cloud server guide**: the Server page has a **Cloud server** button that opens a window (in every UI language) with the steps
+  for installing UE4SS on a rented server where the app cannot reach the files: what to ask the host, what to download and upload,
+  the settings to copy (a Copy button), BattlEye off, adding mods, checking the log and what to do when the server freezes.
+- **Names of the stored values are translated** (Items, Weapons, Vehicles): "Damage per shot" is "Урон за выстрел", "Schaden pro
+  Schuss", "每发伤害" and so on. About 500 words of the game's value names and 20 whole names are translated into every UI language;
+  a name with a word that has no translation stays English as a whole.
+
 ## [3.6.0] - 2026-10-22
 
 ### Added

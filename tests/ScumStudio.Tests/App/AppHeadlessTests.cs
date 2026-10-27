@@ -1,4 +1,4 @@
-using Avalonia.Controls;
+﻿using Avalonia.Controls;
 using Avalonia.Controls.Presenters;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
@@ -30,8 +30,10 @@ public sealed class AppHeadlessTests
         ["economy"] = typeof(EconomyPageView),
         ["craftables"] = typeof(CraftablesPageView),
         ["assets"] = typeof(AssetsPageView),
+        ["server"] = typeof(ServerPageView),
         ["projects"] = typeof(ProjectsPageView),
         ["settings"] = typeof(SettingsPageView),
+        ["home"] = typeof(HomePageView),
     };
 
     [AvaloniaFact]
@@ -47,9 +49,9 @@ public sealed class AppHeadlessTests
         {
             var nav = HeadlessUi.FindNamed<ListBox>(window, "NavList");
             Assert.NotNull(nav);
-            Assert.Equal(10, nav!.ItemCount);
+            Assert.Equal(12, nav!.ItemCount);
             var texts = HeadlessUi.Find<TextBlock>(window).Select(t => t.Text).ToHashSet();
-            foreach (var title in new[] { "Map", "Vehicles", "Weapons", "Items", "Spawns", "Economy", "Craftables", "Assets", "Projects", "Settings" })
+            foreach (var title in new[] { "Home", "Map", "Spawns", "Vehicles", "Weapons", "Items", "Craftables", "Economy", "Server", "Assets", "Projects", "Settings" })
             {
                 Assert.Contains(title, texts);
             }

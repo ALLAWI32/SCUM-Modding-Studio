@@ -153,7 +153,7 @@ public sealed partial class TunableRowViewModel : ObservableObject
     public Tunable Tunable { get; }
 
     /// <summary>Readable name (<c>DamagePerShot</c> → "Damage per shot").</summary>
-    public string Label => Tunable.Name.Contains(' ', StringComparison.Ordinal) ? Tunable.Name : Humanize(Tunable.Name); // a name with spaces is already words ("Torque at 3250 rpm")
+    public string Label => Tunable.Name.Contains(' ', StringComparison.Ordinal) ? Tunable.Name : LocalizedLabel(Tunable.Name); // a name with spaces is already words ("Torque at 3250 rpm")
 
     /// <summary>Raw property path (tooltip).</summary>
     public string PathText => $"{Tunable.Export} › {Tunable.Path} ({Tunable.Kind})";
@@ -296,6 +296,61 @@ public sealed partial class TunableRowViewModel : ObservableObject
         TunableKind.Enum or TunableKind.Part => text.Trim(),
         _ => text,
     };
+
+    /// <summary>
+    /// The label in the UI language: the words of <see cref="Humanize"/> looked up one by one (<c>Tunable.Word.&lt;word&gt;</c>), so
+    /// "DamagePerShot" is "Урон на выстрел" in Russian. Acronyms and numbers stay; a name with a word that has no translation stays
+    /// English as a whole (a half-translated label reads worse than an English one).
+    /// </summary>
+    public static string LocalizedLabel(string name)
+    {
+        var english = Humanize(name);
+        if (Localization.Loc.Instance.Language == Localization.Loc.DefaultLanguage)
+        {
+            return english;
+        }
+
+        if (Localization.Loc.Instance.Or("Tunable.Name." + name, string.Empty) is { Length: > 0 } whole)
+        {
+            return whole; // a name translated as a whole (the word-by-word order reads badly for it)
+        }
+
+        var n = name.TrimStart('_');
+        if (n.Length > 1 && n[0] == 'b' && char.IsUpper(n[1]))
+        {
+            n = n[1..];
+        }
+
+        var parts = new List<string>();
+        foreach (System.Text.RegularExpressions.Match match in Words().Matches(n))
+        {
+            var w = match.Value;
+            if (w.All(char.IsDigit) || w.Length > 1 && w.All(c => char.IsUpper(c) || char.IsDigit(c)))
+            {
+                parts.Add(w);
+                continue;
+            }
+
+            var word = Localization.Loc.Instance.Or("Tunable.Word." + w.ToLowerInvariant(), string.Empty);
+            if (word.Length == 0)
+            {
+                return english;
+            }
+
+            if (word != "—")
+            {
+                parts.Add(word);
+            }
+        }
+
+        if (parts.Count == 0)
+        {
+            return english;
+        }
+
+        var label = string.Join(' ', parts);
+        return char.ToUpper(label[0], CultureInfo.CurrentCulture) + label[1..];
+    }
 
     /// <summary>"_maxPushForce" → "Max push force", "bAutoBrake" → "Auto brake", "MaxRPM" → "Max RPM".</summary>
     public static string Humanize(string name)

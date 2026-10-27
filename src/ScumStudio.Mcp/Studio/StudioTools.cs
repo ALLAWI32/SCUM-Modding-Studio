@@ -32,6 +32,9 @@ public sealed partial class StudioTools
         "delete_actors, delete_all_of_kind, move_actor, duplicate_actor, add_static_mesh, copy_actor_to_level, restore_actors. " +
         "Building: list_object_categories / list_objects (sizes), ground_height, place_objects (many objects in one undoable step, each " +
         "resting on the terrain or on what stands there, so nothing floats) and scatter_objects (forests, bushes, rocks planted like the game). " +
+        "Spawns: place_zombie_spawns (zombie spawn points), list_npc_kinds and place_npcs (armed NPC posts with an area of their own: the game's " +
+        "encounters may not spawn them on a server), and guard posts that do spawn: set_guard_spawns, list_guard_spawns, remove_guard_spawns, write_guard_mod (a server Lua mod). " +
+        "Loot: list_loot_presets and set_loot (what searching a placed container gives, as game loot presets), and the server loot zones that really work for a dungeon: read_loot_zones, list_loot_tags, write_loot_zone, remove_loot_zone (a preset's groups, chance and counts changed inside a rectangle). Server Lua mods (UE4SS): lua_catalog (read it first: what works on the owner's server and what crashed it), lua_game_functions, check_lua, write_lua_mod. " +
         "5) Vehicles and weapons: list_items, get_item_values, set_item_values, clone_item (new name; the clone is registered so " +
         "#SpawnItem <Name> / #SpawnVehicle BPC_<Name> work), remove_item_clone. 6) export_mod builds pakchunk900-<Name>_P.pak " +
         "(+ server pak) for the user to copy into SCUM\\Content\\Paks. Units: centimetres; axes X forward, Y right, Z up; " +
@@ -73,6 +76,10 @@ public sealed partial class StudioTools
         tools.AddRange(CoreTools());
         tools.AddRange(MapTools());
         tools.AddRange(BuildTools());
+        tools.AddRange(SpawnTools());
+        tools.AddRange(LuaTools());
+        tools.AddRange(LootTools());
+        tools.AddRange(LootZoneTools());
         tools.AddRange(ItemTools());
         tools.AddRange(AssetTools());
         if (_host.Ui is not null)

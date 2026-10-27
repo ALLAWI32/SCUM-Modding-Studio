@@ -1,4 +1,4 @@
-using CommunityToolkit.Mvvm.ComponentModel;
+﻿using CommunityToolkit.Mvvm.ComponentModel;
 
 namespace ScumStudio.App.ViewModels;
 
@@ -36,11 +36,13 @@ public abstract partial class PageViewModel : ViewModelBase
     /// <summary>Icon resource key of the page (same glyph as its workspace tab).</summary>
     public virtual string IconKey => Key switch
     {
+        "home" => "Icon.Home",
         "map" => "Icon.Map",
         "vehicles" => "Icon.Vehicle",
         "weapons" => "Icon.Weapon",
         "items" => "Icon.Basket",
         "assets" => "Icon.Assets",
+        "server" => "Icon.Server",
         "projects" => "Icon.Projects",
         "settings" => "Icon.Settings",
         _ => "Icon.Info",

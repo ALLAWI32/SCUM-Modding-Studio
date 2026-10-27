@@ -47,7 +47,7 @@
 
       <!-- ===================================================================== Title strip -->
       <Border Grid.Row="0" Background="{DynamicResource Bg0Brush}" BorderBrush="{DynamicResource StrokeBrush}" BorderThickness="0,0,0,1">
-        <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto">
+        <Grid ColumnDefinitions="Auto,*,Auto,Auto">
 
           <!-- Wordmark: blaze tick, stencil SCUM, tracked STUDIO. -->
           <StackPanel Grid.Column="0" Orientation="Horizontal" Margin="14,0,16,0" VerticalAlignment="Center"
@@ -59,33 +59,8 @@
                        LetterSpacing="2.8" Foreground="{DynamicResource TextMutedBrush}" VerticalAlignment="Center" Margin="8,3,0,0" />
           </StackPanel>
 
-          <!-- Workspace tabs. -->
-          <ListBox Grid.Column="1" x:Name="NavList" Classes="nav" ItemsSource="{Binding NavItems}" SelectedItem="{Binding SelectedNavItem}"
-                   ScrollViewer.HorizontalScrollBarVisibility="Disabled">
-            <ListBox.ItemsPanel>
-              <ItemsPanelTemplate>
-                <StackPanel Orientation="Horizontal" />
-              </ItemsPanelTemplate>
-            </ListBox.ItemsPanel>
-            <ListBox.ItemTemplate>
-              <DataTemplate x:DataType="vm:NavItemViewModel">
-                <Panel ToolTip.Tip="{Binding Tip}">
-                  <StackPanel Orientation="Horizontal" Spacing="7" VerticalAlignment="Center">
-                    <c:GlyphIcon Kind="{Binding IconKey}" IconSize="15" VerticalAlignment="Center" />
-                    <TextBlock Text="{Binding Title}" VerticalAlignment="Center" FontWeight="Medium" FontSize="12.5"
-                               IsVisible="{Binding !$parent[ListBox].((vm:MainWindowViewModel)DataContext).IsCompactHeader}" />
-                    <Border Classes="badge" IsVisible="{Binding HasBadge}">
-                      <TextBlock Text="{Binding Badge}" />
-                    </Border>
-                  </StackPanel>
-                  <Border Classes="navIndicator" Height="2" VerticalAlignment="Bottom" Margin="-12,0" />
-                </Panel>
-              </DataTemplate>
-            </ListBox.ItemTemplate>
-          </ListBox>
-
           <!-- Command field: Ctrl+K focuses it. -->
-          <Panel Grid.Column="2" MaxWidth="440" MinWidth="90" Margin="14,0" HorizontalAlignment="Stretch" VerticalAlignment="Center">
+          <Panel Grid.Column="1" MaxWidth="440" MinWidth="90" Margin="14,0" HorizontalAlignment="Stretch" VerticalAlignment="Center">
             <TextBox x:Name="GlobalSearch" Classes="search" Text="{Binding SearchText}" Watermark="{Binding SearchWatermark}"
                      Padding="30,4,52,4" ToolTip.Tip="{Tr Shell.Search.Tip}">
               <TextBox.KeyBindings>
@@ -100,7 +75,7 @@
           </Panel>
 
           <!-- Support (PayPal, e-mail, report a problem), updates (always there: "Up to date", or lit up when a newer release is out) and the project. -->
-          <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center" Margin="0,0,6,0">
+          <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center" Margin="0,0,6,0">
             <Button x:Name="DiscordButton" Classes="ghost" Padding="8,3" Command="{Binding OpenDiscordCommand}" ToolTip.Tip="{Tr Discord.Button.Tip}">
               <c:GlyphIcon Kind="Icon.Discord" IconSize="15" Foreground="{DynamicResource DiscordBrush}" />
             </Button>
@@ -133,7 +108,7 @@
               </StackPanel>
             </Button>
           </StackPanel>
-          <Button Grid.Column="4" Classes="ghost square" Margin="0,0,8,0" Command="{Binding OpenSetupCommand}"
+          <Button Grid.Column="3" Classes="ghost square" Margin="0,0,8,0" Command="{Binding OpenSetupCommand}"
                   ToolTip.Tip="{Tr Shell.Setup.Tip}">
             <c:GlyphIcon Kind="Icon.Plug" IconSize="15" />
           </Button>
@@ -141,7 +116,54 @@
       </Border>
 
       <!-- ===================================================================== Page -->
-      <c:PageDeck x:Name="PageHost" Grid.Row="1" Current="{Binding CurrentPage}" />
+      <Grid Grid.Row="1" ColumnDefinitions="Auto,*">
+        <!-- Task pages in groups; icons only on a narrow window. -->
+        <Border Grid.Column="0" Classes="sideBar" Classes.compact="{Binding IsCompactHeader}" Background="{DynamicResource Bg0Brush}"
+                BorderBrush="{DynamicResource StrokeBrush}" BorderThickness="0,0,1,0">
+          <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+            <ListBox x:Name="NavList" Classes="sideNav" ItemsSource="{Binding NavItems}" SelectedItem="{Binding SelectedNavItem}"
+                     ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+              <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="vm:NavItemViewModel">
+                  <StackPanel ToolTip.Tip="{Binding Tip}">
+                    <!-- A group caption with the names shown; a thin line instead in the icon-only rail. -->
+                    <TextBlock Text="{Binding GroupTitle}" Classes="colHeader" Margin="12,12,0,4">
+                      <TextBlock.IsVisible>
+                        <MultiBinding Converter="{x:Static BoolConverters.And}">
+                          <Binding Path="HasGroup" />
+                          <Binding Path="!$parent[ListBox].((vm:MainWindowViewModel)DataContext).IsCompactHeader" />
+                        </MultiBinding>
+                      </TextBlock.IsVisible>
+                    </TextBlock>
+                    <Border Height="1" Margin="8,9,8,6" Background="{DynamicResource StrokeSubtleBrush}">
+                      <Border.IsVisible>
+                        <MultiBinding Converter="{x:Static BoolConverters.And}">
+                          <Binding Path="HasGroup" />
+                          <Binding Path="$parent[ListBox].((vm:MainWindowViewModel)DataContext).IsCompactHeader" />
+                        </MultiBinding>
+                      </Border.IsVisible>
+                    </Border>
+                    <Border Classes="navRow">
+                      <Panel>
+                        <Border Classes="navIndicator" Width="3" Height="16" CornerRadius="2" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="-9,0,0,0" />
+                        <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+                          <c:GlyphIcon Kind="{Binding IconKey}" IconSize="16" VerticalAlignment="Center" />
+                          <TextBlock Classes="navLabel" Text="{Binding Title}" VerticalAlignment="Center" FontWeight="Medium" FontSize="13"
+                                     IsVisible="{Binding !$parent[ListBox].((vm:MainWindowViewModel)DataContext).IsCompactHeader}" />
+                          <Border Classes="badge" IsVisible="{Binding HasBadge}">
+                            <TextBlock Text="{Binding Badge}" />
+                          </Border>
+                        </StackPanel>
+                      </Panel>
+                    </Border>
+                  </StackPanel>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+          </ScrollViewer>
+        </Border>
+        <c:PageDeck x:Name="PageHost" Grid.Column="1" Current="{Binding CurrentPage}" />
+      </Grid>
 
       <!-- ===================================================================== Console -->
       <Border x:Name="LogPanel" Grid.Row="2" Height="220" IsVisible="{Binding IsLogOpen}"
@@ -289,6 +311,12 @@
     <Panel x:Name="SetupOverlay" IsVisible="{Binding IsSetupOpen}" ZIndex="20">
       <Border Background="{DynamicResource ScrimBrush}" />
       <ContentControl Content="{Binding Setup}" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="24" />
+    </Panel>
+
+    <!-- ===================================================================== First-run wizard -->
+    <Panel x:Name="WelcomeOverlay" IsVisible="{Binding IsWelcomeOpen}" ZIndex="22">
+      <Border Background="{DynamicResource ScrimBrush}" />
+      <ContentControl Content="{Binding Welcome}" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="24" />
     </Panel>
 
     <!-- ===================================================================== Update card -->

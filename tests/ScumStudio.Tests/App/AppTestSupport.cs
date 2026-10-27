@@ -48,6 +48,7 @@ internal sealed class AppTestContext : IDisposable
             ToastLifetime = null,
             LocatorFactory = logger => new GameLocator(new GameLocatorOptions { SteamRoots = [emptySteam], ServerSearchRoots = [] }, logger),
             KeyFinder = keyFinder ?? (_ => Task.FromResult<string?>(null)),
+            SystemCulture = System.Globalization.CultureInfo.InvariantCulture, // the first-run wizard then keeps the tests English
             ProjectsFolder = Path.Combine(directory, "projects"), // never the real Documents\ScumStudio Projects
         });
         return new AppTestContext(directory, services);

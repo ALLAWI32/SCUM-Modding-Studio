@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Runtime.InteropServices;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -30,7 +30,7 @@ public sealed partial class MainWindowViewModel
     public const string DiscordUrl = "https://discord.gg/ympctW5SYG";
 
     /// <summary>Below this window width the title strip shows the tabs as icons only (their names stay in the tooltips).</summary>
-    public const double CompactHeaderWidth = 1880; // ten tabs (Items): German and Russian names with the Share label need ~1865 px
+    public const double CompactHeaderWidth = 1700; // the left rail shows its names from here; below it only the icons (and the Share label and the project caption of the title strip step aside too)
 
     /// <summary>True in a narrow window: the tab labels and the "Project" caption hide so the search field and the buttons never overlap.</summary>
     [ObservableProperty]

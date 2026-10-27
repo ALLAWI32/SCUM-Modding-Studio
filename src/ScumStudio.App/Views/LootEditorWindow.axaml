@@ -1,0 +1,10 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:ScumStudio.App.ViewModels"
+        xmlns:local="using:ScumStudio.App.Views"
+        x:Class="ScumStudio.App.Views.LootEditorWindow"
+        x:DataType="vm:LootEditorViewModel"
+        Title="{Tr Loot.WindowTitle}" Width="1440" Height="860" MinWidth="980" MinHeight="560"
+        Background="{DynamicResource Bg0Brush}">
+  <local:LootEditorView />
+</Window>

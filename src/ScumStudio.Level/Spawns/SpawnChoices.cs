@@ -59,6 +59,14 @@ public sealed record SpawnWeightList(string Package, string Export, SpawnCategor
     public bool IsEditable => Entries.Count > 0 && Entries.All(e => e.Path is not null);
 }
 
+/// <summary>One character preset an encounter class stores, and where its weight is.</summary>
+/// <param name="Package">The encounter's package.</param>
+/// <param name="Export">The encounter's defaults export (<c>Default__X_C</c>).</param>
+/// <param name="Preset">The preset's object path (<c>/Game/…/Guard_Class_03.Guard_Class_03</c>).</param>
+/// <param name="Path">The weight's tunable path (<c>_possibleCharacters[1].Value</c>).</param>
+/// <param name="Weight">The stock weight.</param>
+public sealed record EncounterPreset(string Package, string Export, string Preset, string Path, float Weight);
+
 /// <summary>An encounter the game can put in a zone's settings, with what it spawns.</summary>
 /// <param name="EncounterClass">The class path (<c>/Game/…/MTZ_Village_NPC_Encounter.MTZ_Village_NPC_Encounter_C</c>).</param>
 /// <param name="Kind">What it spawns, from its presets (<see cref="SpawnChoices.KindOf"/>).</param>
@@ -507,6 +515,45 @@ public static class SpawnChoices
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// The character presets an encounter class stores in its own defaults (<c>_possibleCharacters</c>), in stored order, with
+    /// the path of each weight. Empty when the class stores none (it draws from a parent class's, which a copy of the class
+    /// alone cannot change) or its package cannot be read.
+    /// </summary>
+    /// <param name="catalog">The game files.</param>
+    /// <param name="encounterClass">The encounter class path (<c>/Game/…/X.X_C</c>).</param>
+    public static IReadOnlyList<EncounterPreset> StoredPresets(AssetCatalog catalog, string encounterClass)
+    {
+        ArgumentNullException.ThrowIfNull(catalog);
+        ArgumentNullException.ThrowIfNull(encounterClass);
+        if (PresetsOf(catalog, encounterClass) is not { } stored || !stored.Package.Equals(PackageOf(encounterClass), StringComparison.OrdinalIgnoreCase))
+        {
+            return [];
+        }
+
+        var result = new List<EncounterPreset>();
+        for (var i = 0; i < stored.Map.Entries.Count; i++)
+        {
+            var entry = stored.Map.Entries[i];
+            if (entry.Key is ObjectValue key && key.Index != 0 && entry.Value is FloatValue weight)
+            {
+                result.Add(new EncounterPreset(stored.Package, stored.Export, stored.Read.Package.GetFullPath(key.Index), $"_possibleCharacters[{i}].Value", weight.Value));
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>The character Blueprints (class paths) of the preset <paramref name="preset"/> (an object path <c>/Game/…/X.X</c> or its package).</summary>
+    /// <param name="catalog">The game files.</param>
+    /// <param name="preset">The <c>EncounterCharacterSpawnPreset</c>.</param>
+    public static IReadOnlyList<string> PresetCharacters(AssetCatalog catalog, string preset)
+    {
+        ArgumentNullException.ThrowIfNull(catalog);
+        ArgumentNullException.ThrowIfNull(preset);
+        return CharactersOf(catalog, PackageOf(preset));
     }
 
     private static IEnumerable<string> PresetPaths((string Package, string Export, (CookedPackage Package, string[] Keys) Read, MapValue Map) stored) =>

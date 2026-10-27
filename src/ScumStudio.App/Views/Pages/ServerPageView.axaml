@@ -1,0 +1,88 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:ScumStudio.App.ViewModels"
+             xmlns:c="using:ScumStudio.App.Controls"
+             xmlns:v="using:ScumStudio.App.Views"
+             x:Class="ScumStudio.App.Views.Pages.ServerPageView"
+             x:DataType="vm:ServerPageViewModel">
+  <Grid Margin="24,20,24,24" RowDefinitions="Auto,Auto,*" RowSpacing="10">
+    <StackPanel Spacing="4">
+      <TextBlock Text="{Binding Title}" Classes="h1" />
+      <TextBlock Text="{Binding Subtitle}" Classes="muted wrap" />
+    </StackPanel>
+
+    <!-- The server and UE4SS -->
+    <Grid Grid.Row="1" ColumnDefinitions="*,Auto,Auto,Auto,Auto" ColumnSpacing="8">
+      <TextBlock Text="{Binding ServerLine}" Classes="caption wrap" VerticalAlignment="Center" />
+      <Button x:Name="InstallButton" Grid.Column="1" Command="{Binding InstallUe4ssCommand}" Content="{Tr Server.Install}" ToolTip.Tip="{Tr Server.Install.Tip}" />
+      <Button x:Name="SwitchButton" Grid.Column="2" Command="{Binding SwitchUe4ssCommand}" IsEnabled="{Binding HasUe4ss}" Content="{Binding SwitchLabel}" ToolTip.Tip="{Tr Server.Switch.Tip}" />
+      <Button x:Name="GuideButton" Grid.Column="3" Click="OnGuideClick" Content="{Tr Guide.Open}" ToolTip.Tip="{Tr Guide.Open.Tip}" />
+      <Button x:Name="RefreshButton" Grid.Column="4" Command="{Binding RefreshCommand}" Content="{Tr Server.Refresh}" ToolTip.Tip="{Tr Server.Refresh.Tip}" />
+    </Grid>
+
+    <TabControl Grid.Row="2" x:Name="ServerTabs" SelectedIndex="{Binding SelectedTab}">
+      <TabItem x:Name="ModsTab" Header="{Tr Server.Tab.Mods}" ToolTip.Tip="{Tr Server.Tab.Mods.Tip}">
+      <Grid ColumnDefinitions="260,*" ColumnSpacing="16" Margin="0,12,0,0">
+        <!-- Mods of the server -->
+        <DockPanel>
+          <TextBlock DockPanel.Dock="Top" Text="{Tr Server.Mods}" Classes="section" Margin="0,0,0,6" />
+          <StackPanel DockPanel.Dock="Bottom" Spacing="6" Margin="0,8,0,0">
+            <ComboBox x:Name="TemplatePicker" ItemsSource="{Binding Templates}" SelectedItem="{Binding SelectedTemplate}" HorizontalAlignment="Stretch"
+                      IsEnabled="{Binding CanEdit}" ToolTip.Tip="{Tr Server.Template.Tip}">
+              <ComboBox.ItemTemplate>
+                <DataTemplate x:DataType="vm:ServerTemplateViewModel">
+                  <TextBlock Text="{Binding Title}" TextTrimming="CharacterEllipsis" />
+                </DataTemplate>
+              </ComboBox.ItemTemplate>
+            </ComboBox>
+            <Button x:Name="AddButton" Command="{Binding AddTemplateCommand}" IsEnabled="{Binding CanEdit}" Content="{Tr Server.Add}" ToolTip.Tip="{Tr Server.Add.Tip}" />
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <Button x:Name="ToggleButton" Command="{Binding ToggleModCommand}" IsEnabled="{Binding HasSelectedMod}" Content="{Tr Server.Toggle}" ToolTip.Tip="{Tr Server.Toggle.Tip}" />
+              <Button x:Name="RemoveButton" Command="{Binding RemoveCommand}" IsEnabled="{Binding HasSelectedMod}" Content="{Tr Server.Remove}" ToolTip.Tip="{Tr Server.Remove.Tip}" />
+            </StackPanel>
+          </StackPanel>
+          <ListBox x:Name="ModList" ItemsSource="{Binding Mods}" SelectedItem="{Binding SelectedMod}" ToolTip.Tip="{Tr Server.List.Tip}">
+            <ListBox.ItemTemplate>
+              <DataTemplate x:DataType="vm:ServerModViewModel">
+                <TextBlock Text="{Binding Display}" />
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+        </DockPanel>
+
+        <!-- Editor -->
+        <Grid Grid.Column="1" RowDefinitions="Auto,*,Auto" RowSpacing="8">
+          <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+            <TextBlock Text="{Tr Server.Note}" Classes="caption wrap" VerticalAlignment="Center" />
+            <Button x:Name="SaveButton" Grid.Column="1" Command="{Binding SaveCommand}" IsEnabled="{Binding HasSelectedMod}" Content="{Tr Server.Save}" ToolTip.Tip="{Tr Server.Save.Tip}" />
+          </Grid>
+          <TextBox x:Name="CodeBox" Grid.Row="1" Text="{Binding Code}" AcceptsReturn="True" AcceptsTab="True" TextWrapping="NoWrap"
+                   IsEnabled="{Binding HasSelectedMod}"
+                   FontFamily="Cascadia Mono,Consolas,Menlo,monospace" FontSize="13" VerticalContentAlignment="Top"
+                   ScrollViewer.HorizontalScrollBarVisibility="Auto" ScrollViewer.VerticalScrollBarVisibility="Auto"
+                   Watermark="{Tr Server.Code.Hint}" ToolTip.Tip="{Tr Server.Code.Tip}" />
+          <TextBlock Grid.Row="2" Text="{Binding Status}" Classes="caption wrap" />
+        </Grid>
+      </Grid>
+      </TabItem>
+      <TabItem x:Name="LuaTab" Header="{Tr Server.Tab.Lua}" ToolTip.Tip="{Tr Server.Tab.Lua.Tip}">
+        <v:LuaEditorView DataContext="{Binding LuaEditor}" />
+      </TabItem>
+      <TabItem x:Name="LootTab" Header="{Tr Server.Tab.Loot}" ToolTip.Tip="{Tr Server.Tab.Loot.Tip}">
+        <v:LootEditorView DataContext="{Binding LootEditor}" />
+      </TabItem>
+      <TabItem x:Name="LogTab" Header="{Tr Server.Tab.Log}" ToolTip.Tip="{Tr Server.Tab.Log.Tip}">
+        <Grid RowDefinitions="Auto,*" RowSpacing="8" Margin="0,12,0,0">
+          <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+            <TextBlock Text="{Tr Server.Log}" Classes="section" VerticalAlignment="Center" />
+            <Button x:Name="ReadLogButton" Grid.Column="1" Command="{Binding ReadLogCommand}" Content="{Tr Server.Log.Read}" ToolTip.Tip="{Tr Server.Log.Read.Tip}" />
+          </Grid>
+          <TextBox x:Name="LogBox" Grid.Row="1" Text="{Binding LogText}" IsReadOnly="True" AcceptsReturn="True" TextWrapping="NoWrap"
+                   FontFamily="Cascadia Mono,Consolas,Menlo,monospace" FontSize="12" VerticalContentAlignment="Top"
+                   ScrollViewer.HorizontalScrollBarVisibility="Auto" ScrollViewer.VerticalScrollBarVisibility="Auto"
+                   ToolTip.Tip="{Tr Server.Log.Tip}" />
+        </Grid>
+      </TabItem>
+    </TabControl>
+  </Grid>
+</UserControl>

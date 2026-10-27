@@ -1,0 +1,33 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:ScumStudio.App.ViewModels"
+             x:Class="ScumStudio.App.Views.Pages.HomePageView"
+             x:DataType="vm:HomePageViewModel">
+  <ScrollViewer HorizontalScrollBarVisibility="Disabled">
+    <StackPanel Margin="24,20,24,24" Spacing="12" MaxWidth="900" HorizontalAlignment="Left">
+      <StackPanel Spacing="4">
+        <TextBlock Text="{Binding Title}" Classes="h1" />
+        <TextBlock Text="{Binding Subtitle}" Classes="muted wrap" />
+      </StackPanel>
+      <TextBlock x:Name="SummaryText" Text="{Binding Summary}" Classes="h2" />
+      <ItemsControl ItemsSource="{Binding Rows}">
+        <ItemsControl.ItemTemplate>
+          <DataTemplate x:DataType="vm:HomeRow">
+            <Border Classes="panel" Padding="14,10" Margin="0,0,0,8">
+              <Grid ColumnDefinitions="32,200,*,Auto" ColumnSpacing="12">
+                <TextBlock Text="{Binding Mark}" FontSize="18" VerticalAlignment="Center" />
+                <TextBlock Grid.Column="1" Text="{Binding Title}" FontWeight="SemiBold" VerticalAlignment="Center" />
+                <SelectableTextBlock Grid.Column="2" Text="{Binding Detail}" TextWrapping="Wrap" VerticalAlignment="Center" />
+                <Button Grid.Column="3" Content="{Binding ActionLabel}" Command="{Binding RunCommand}" IsVisible="{Binding HasAction}" ToolTip.Tip="{Tr Home.Action.Tip}" />
+              </Grid>
+            </Border>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+      <StackPanel Orientation="Horizontal" Spacing="8">
+        <Button x:Name="RefreshButton" Content="{Tr Home.Refresh}" Command="{Binding RefreshCommand}" ToolTip.Tip="{Tr Home.Refresh.Tip}" />
+        <Button x:Name="WizardButton" Content="{Tr Home.Wizard}" Command="{Binding OpenWizardCommand}" IsVisible="{Binding CanOpenWizard}" ToolTip.Tip="{Tr Home.Wizard.Tip}" />
+      </StackPanel>
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>

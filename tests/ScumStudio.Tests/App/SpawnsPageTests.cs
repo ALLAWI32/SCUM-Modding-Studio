@@ -293,6 +293,16 @@ public sealed class SpawnsPageTests
             return new CloneAssetOp(ZoneCopies.Kind, zonePackage, copy, [new PackagePair(zonePackage, copy)]);
         }
 
+        // A made-up own copy: the zone settings and the encounter under _Own (no character or data of their own).
+        public NpcCopy NpcCopy(NpcGuardType type, string character, IReadOnlyCollection<string> planned)
+        {
+            var encounter = type.EncounterClass[..type.EncounterClass.IndexOf('.', StringComparison.Ordinal)];
+            var pairs = new[] { type.ZonePackage, encounter }.Select(p => new PackagePair(p, p + "_Own")).ToList();
+            var copy = new CloneAssetOp(ZoneCopies.Kind, type.ZonePackage, pairs[0].New, pairs);
+            var leaf = encounter[(encounter.LastIndexOf('/') + 1)..] + "_Own";
+            return new NpcCopy(copy, new NpcGuardType($"{pairs[1].New}.{leaf}_C", [character + "_Own"], pairs[0].New), []);
+        }
+
         public PreviewModel? Preview(string? blueprint, SpawnCategory category) => null;
 
         public static SpawnPlace Zone(int index, string settings, float x, float y) =>

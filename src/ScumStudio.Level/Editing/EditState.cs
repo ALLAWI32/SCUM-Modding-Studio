@@ -30,6 +30,7 @@ public sealed partial class EditState
     private readonly Dictionary<(ActorRef Actor, string Property), string> _choices = new(TransformKeyComparer.Instance);
     private readonly List<TerrainHole> _holes = [];
     private readonly List<(ActorRef Zone, SubZone SubZone)> _subZones = [];
+    private readonly Dictionary<string, GuardSpawnSet> _guardSets = new(StringComparer.OrdinalIgnoreCase);
 
     // The new spawn places of _added, for readers on another thread: replaced on every change, never changed.
     private volatile AddSpawnPlaceOp[] _newPlaces = [];
@@ -38,7 +39,14 @@ public sealed partial class EditState
     public bool IsEmpty =>
         _deletedActors.Count == 0 && _deletedInstances.Count == 0 && _transforms.Count == 0 && _instanceTransforms.Count == 0 && _added.Count == 0
         && _addedInstances.Count == 0 && _clones.Count == 0 && _values.Count == 0 && _replacements.Count == 0 && _bends.Count == 0 && _segmentSways.Count == 0 && _spawnPoints.Count == 0
-        && _meshes.Count == 0 && _loot.Count == 0 && _deletedComponents.Count == 0 && _choices.Count == 0 && _holes.Count == 0 && _subZones.Count == 0;
+        && _meshes.Count == 0 && _loot.Count == 0 && _deletedComponents.Count == 0 && _choices.Count == 0 && _holes.Count == 0 && _subZones.Count == 0
+        && _guardSets.Count == 0;
+
+    /// <summary>The project's guard sets (see <see cref="SetGuardSpawnsOp"/>), by name. They go to the server as a Lua mod, not into the pak.</summary>
+    public IReadOnlyDictionary<string, GuardSpawnSet> GuardSets => _guardSets;
+
+    /// <summary>The guard set called <paramref name="name"/>, or null.</summary>
+    public GuardSpawnSet? GetGuardSet(string name) => _guardSets.GetValueOrDefault(name);
 
     /// <summary>Sub-zones added to stock threat zones (see <see cref="AddSubZoneOp"/>), oldest first.</summary>
     public IReadOnlyList<(ActorRef Zone, SubZone SubZone)> SubZones => _subZones;
@@ -305,6 +313,12 @@ public sealed partial class EditState
                     : IndexOfSubZone(add.Zone, add.SubZone) >= 0 ? $"{add.Zone} already has this sub-zone." : null;
             case RemoveSubZoneOp remove:
                 return IndexOfSubZone(remove.Zone, remove.SubZone) >= 0 ? null : $"{remove.Zone} has no such sub-zone.";
+            case SetGuardSpawnsOp guards:
+                return !GuardSpawns.IsValidName(guards.Name) ? "A guard set's name is letters, digits, _ and - (at most 24)."
+                    : guards.Old is null && guards.New is null ? "A guard set edit changes something."
+                    : guards.New is { } made && made.Name != guards.Name ? "The guard set carries another name than the edit."
+                    : guards.New?.Validate()
+                    ?? (Equals(GetGuardSet(guards.Name), guards.Old) ? null : $"The guard set {guards.Name} is not as expected (edit is out of date).");
             case TerrainHoleOp hole:
                 return hole.Hole.Validate()
                        ?? (hole.Cut == _holes.Contains(hole.Hole) ? $"The {hole.Hole} is {(hole.Cut ? "already cut" : "not cut")}." : null);
@@ -621,6 +635,17 @@ public sealed partial class EditState
                 break;
             case RemoveSubZoneOp remove:
                 _subZones.RemoveAt(IndexOfSubZone(remove.Zone, remove.SubZone));
+                break;
+            case SetGuardSpawnsOp guards:
+                if (guards.New is { } guardSet)
+                {
+                    _guardSets[guards.Name] = guardSet;
+                }
+                else
+                {
+                    _guardSets.Remove(guards.Name);
+                }
+
                 break;
             case TerrainHoleOp hole:
                 if (hole.Cut)

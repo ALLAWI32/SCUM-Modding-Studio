@@ -1,0 +1,103 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:ScumStudio.App.ViewModels"
+             x:Class="ScumStudio.App.Views.LootEditorView"
+             x:DataType="vm:LootEditorViewModel">
+  <Grid Margin="16" ColumnDefinitions="300,*,340" ColumnSpacing="14">
+
+    <!-- Zone and presets -->
+    <ScrollViewer HorizontalScrollBarVisibility="Disabled">
+      <StackPanel Spacing="8" Margin="0,0,8,0">
+        <TextBlock Text="{Binding ServerLine}" Classes="caption wrap" />
+        <TextBlock Text="{Tr Loot.NoDefaults}" Classes="caption wrap" IsVisible="{Binding !HasDefaults}" />
+        <SelectableTextBlock Text="{x:Static vm:LootEditorViewModel.ExportChatCommand}" FontFamily="Cascadia Mono,Consolas,Menlo,monospace" IsVisible="{Binding !HasDefaults}" />
+
+        <TextBlock Text="{Tr Loot.Zone}" Classes="section" />
+        <ComboBox x:Name="ZonePicker" ItemsSource="{Binding Zones}" SelectedItem="{Binding SelectedZone}" HorizontalAlignment="Stretch" PlaceholderText="{Tr Loot.Zones}" ToolTip.Tip="{Tr Loot.Zones.Tip}" />
+        <TextBox x:Name="ZoneNameBox" Text="{Binding ZoneName}" Watermark="{Tr Loot.ZoneName}" ToolTip.Tip="{Tr Loot.ZoneName.Tip}" />
+        <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto" ColumnSpacing="6" RowSpacing="6">
+          <TextBox x:Name="X1Box" Text="{Binding X1}" Watermark="X1" ToolTip.Tip="{Tr Loot.Corner.Tip}" />
+          <TextBox x:Name="Y1Box" Grid.Column="1" Text="{Binding Y1}" Watermark="Y1" ToolTip.Tip="{Tr Loot.Corner.Tip}" />
+          <TextBox x:Name="X2Box" Grid.Row="1" Text="{Binding X2}" Watermark="X2" ToolTip.Tip="{Tr Loot.Corner.Tip}" />
+          <TextBox x:Name="Y2Box" Grid.Row="1" Grid.Column="1" Text="{Binding Y2}" Watermark="Y2" ToolTip.Tip="{Tr Loot.Corner.Tip}" />
+        </Grid>
+        <Grid ColumnDefinitions="*,70,Auto" ColumnSpacing="6">
+          <ComboBox x:Name="GuardSetPicker" ItemsSource="{Binding GuardSets}" SelectedItem="{Binding SelectedGuardSet}" HorizontalAlignment="Stretch" PlaceholderText="{Tr Loot.GuardSet}" ToolTip.Tip="{Tr Loot.GuardSet.Tip}" />
+          <TextBox x:Name="MarginBox" Grid.Column="1" Text="{Binding Margin}" ToolTip.Tip="{Tr Loot.Margin.Tip}" />
+          <Button x:Name="ZoneFromGuardsButton" Grid.Column="2" Command="{Binding ZoneFromGuardsCommand}" Content="{Tr Loot.FromGuards}" ToolTip.Tip="{Tr Loot.FromGuards.Tip}" />
+        </Grid>
+
+        <TextBlock Text="{Tr Loot.Changed}" Classes="section" Margin="0,8,0,0" />
+        <ListBox x:Name="ChangedList" ItemsSource="{Binding ChangedPresets}" SelectedItem="{Binding SelectedPreset}" MaxHeight="190" ToolTip.Tip="{Tr Loot.Changed.Tip}" />
+        <StackPanel Orientation="Horizontal" Spacing="6">
+          <Button x:Name="RemovePresetButton" Command="{Binding RemovePresetCommand}" IsEnabled="{Binding HasPreset}" Content="{Tr Loot.RemovePreset}" ToolTip.Tip="{Tr Loot.RemovePreset.Tip}" />
+          <Button x:Name="RemoveZoneButton" Command="{Binding RemoveZoneCommand}" Content="{Tr Loot.RemoveZone}" ToolTip.Tip="{Tr Loot.RemoveZone.Tip}" />
+        </StackPanel>
+
+        <TextBlock Text="{Tr Loot.GamePresets}" Classes="section" Margin="0,8,0,0" />
+        <TextBox x:Name="DefaultSearchBox" Text="{Binding DefaultSearch}" Watermark="{Tr Loot.Search}" ToolTip.Tip="{Tr Loot.Search.Tip}" />
+        <ListBox x:Name="DefaultList" ItemsSource="{Binding DefaultRows}" SelectedItem="{Binding SelectedDefault}" MaxHeight="230" FontSize="12" ToolTip.Tip="{Tr Loot.GamePresets.Tip}" />
+        <Button x:Name="AddPresetButton" Command="{Binding AddPresetCommand}" IsEnabled="{Binding HasDefaults}" Content="{Tr Loot.AddPreset}" ToolTip.Tip="{Tr Loot.AddPreset.Tip}" />
+      </StackPanel>
+    </ScrollViewer>
+
+    <!-- The preset -->
+    <Grid Grid.Column="1" RowDefinitions="Auto,Auto,*,Auto,Auto" RowSpacing="8">
+      <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+        <TextBlock Text="{Binding SelectedPreset}" Classes="h2" TextTrimming="CharacterEllipsis" />
+        <Button x:Name="SaveButton" Grid.Column="1" Classes="accent" Command="{Binding SaveCommand}" Content="{Tr Loot.Save}" ToolTip.Tip="{Tr Loot.Save.Tip}" />
+      </Grid>
+      <Grid Grid.Row="1" ColumnDefinitions="Auto,90,Auto,120,Auto,120" RowDefinitions="Auto,Auto" ColumnSpacing="8" RowSpacing="6" IsEnabled="{Binding HasPreset}">
+        <TextBlock Text="{Tr Loot.Chance}" VerticalAlignment="Center" />
+        <TextBox x:Name="ProbabilityBox" Grid.Column="1" Text="{Binding ProbabilityText}" ToolTip.Tip="{Tr Loot.Chance.Tip}" />
+        <TextBlock Grid.Column="2" Text="{Tr Loot.QuantityMin}" VerticalAlignment="Center" />
+        <NumericUpDown x:Name="QuantityMinBox" Grid.Column="3" Value="{Binding QuantityMin}" Minimum="0" Maximum="50" FormatString="0" ToolTip.Tip="{Tr Loot.QuantityMin.Tip}" />
+        <TextBlock Grid.Column="4" Text="{Tr Loot.QuantityMax}" VerticalAlignment="Center" />
+        <NumericUpDown x:Name="QuantityMaxBox" Grid.Column="5" Value="{Binding QuantityMax}" Minimum="0" Maximum="50" FormatString="0" ToolTip.Tip="{Tr Loot.QuantityMax.Tip}" />
+        <StackPanel Grid.Row="1" Grid.ColumnSpan="6" Orientation="Horizontal" Spacing="14">
+          <CheckBox x:Name="FilterZoneBox" IsChecked="{Binding FilterByZone}" Content="{Tr Loot.FilterZone}" ToolTip.Tip="{Tr Loot.FilterZone.Tip}" />
+          <CheckBox x:Name="LocationChanceBox" IsChecked="{Binding ApplyLocationProbability}" Content="{Tr Loot.LocationChance}" ToolTip.Tip="{Tr Loot.LocationChance.Tip}" />
+          <CheckBox x:Name="LocationDamageBox" IsChecked="{Binding ApplyLocationDamage}" Content="{Tr Loot.LocationDamage}" ToolTip.Tip="{Tr Loot.LocationDamage.Tip}" />
+          <CheckBox x:Name="DuplicatesBox" IsChecked="{Binding AllowDuplicates}" Content="{Tr Loot.Duplicates}" ToolTip.Tip="{Tr Loot.Duplicates.Tip}" />
+        </StackPanel>
+      </Grid>
+      <DockPanel Grid.Row="2" IsEnabled="{Binding HasPreset}">
+        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="8" Margin="0,0,0,6">
+          <TextBlock Text="{Tr Loot.Groups}" Classes="section" VerticalAlignment="Center" />
+          <Button x:Name="AddGroupButton" Command="{Binding AddGroupCommand}" Content="{Tr Loot.AddGroup}" ToolTip.Tip="{Tr Loot.AddGroup.Tip}" />
+          <Button x:Name="RemoveGroupButton" Command="{Binding RemoveGroupCommand}" Content="{Tr Loot.RemoveGroup}" ToolTip.Tip="{Tr Loot.RemoveGroup.Tip}" />
+        </StackPanel>
+        <ListBox x:Name="GroupList" ItemsSource="{Binding Groups}" SelectedItem="{Binding SelectedGroup}" ToolTip.Tip="{Tr Loot.Groups.Tip}">
+          <ListBox.ItemTemplate>
+            <DataTemplate x:DataType="vm:LootGroupRow">
+              <Grid ColumnDefinitions="150,50,*" ColumnSpacing="8">
+                <ComboBox ItemsSource="{x:Static vm:LootGroupRow.Rarities}" SelectedItem="{Binding Rarity}" HorizontalAlignment="Stretch" ToolTip.Tip="{Tr Loot.Rarity.Tip}" />
+                <TextBlock Grid.Column="1" Text="{Binding WeightText}" VerticalAlignment="Center" ToolTip.Tip="{Tr Loot.Weight.Tip}" />
+                <TextBox Grid.Column="2" Text="{Binding EntriesText}" AcceptsReturn="True" TextWrapping="NoWrap" MinHeight="60" MaxHeight="150"
+                         FontFamily="Cascadia Mono,Consolas,Menlo,monospace" FontSize="12" ToolTip.Tip="{Tr Loot.Entries.Tip}" />
+              </Grid>
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
+      </DockPanel>
+      <TextBlock Grid.Row="3" Text="{Tr Loot.Hint}" Classes="caption wrap" />
+      <StackPanel Grid.Row="4" Spacing="4">
+        <TextBlock Text="{Binding Status}" Classes="caption wrap" />
+        <TextBlock Text="{Tr Loot.AfterSave}" Classes="caption wrap" />
+        <SelectableTextBlock Text="{x:Static vm:LootEditorViewModel.ReloadChatCommand}" FontFamily="Cascadia Mono,Consolas,Menlo,monospace" />
+      </StackPanel>
+    </Grid>
+
+    <!-- The loot tree -->
+    <DockPanel Grid.Column="2">
+      <StackPanel DockPanel.Dock="Top" Spacing="6" Margin="0,0,0,8">
+        <TextBlock Text="{Tr Loot.Tree}" Classes="section" />
+        <Button x:Name="LoadTreeButton" Command="{Binding LoadTreeCommand}" Content="{Tr Loot.LoadTree}" ToolTip.Tip="{Tr Loot.LoadTree.Tip}" />
+        <TextBlock Text="{Binding TreeLine}" Classes="caption wrap" />
+        <TextBox x:Name="TagSearchBox" Text="{Binding TagSearch}" Watermark="{Tr Loot.TagSearch}" ToolTip.Tip="{Tr Loot.TagSearch.Tip}" />
+      </StackPanel>
+      <Button x:Name="AddTagButton" DockPanel.Dock="Bottom" Margin="0,8,0,0" Command="{Binding AddTagCommand}" Content="{Tr Loot.AddTag}" ToolTip.Tip="{Tr Loot.AddTag.Tip}" />
+      <ListBox x:Name="TagList" ItemsSource="{Binding TagRows}" SelectedItem="{Binding SelectedTag}" FontFamily="Cascadia Mono,Consolas,Menlo,monospace" FontSize="11" ToolTip.Tip="{Tr Loot.TagList.Tip}" />
+    </DockPanel>
+  </Grid>
+</UserControl>

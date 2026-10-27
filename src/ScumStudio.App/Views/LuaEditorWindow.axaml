@@ -1,0 +1,10 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:ScumStudio.App.ViewModels"
+        xmlns:local="using:ScumStudio.App.Views"
+        x:Class="ScumStudio.App.Views.LuaEditorWindow"
+        x:DataType="vm:LuaEditorViewModel"
+        Title="{Tr Lua.WindowTitle}" Width="1380" Height="820" MinWidth="900" MinHeight="520"
+        Background="{DynamicResource Bg0Brush}">
+  <local:LuaEditorView />
+</Window>
